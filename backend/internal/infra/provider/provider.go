@@ -861,6 +861,32 @@ type ImageEditAdapter interface {
 }
 
 // ImageAssetStore archives generated images as local resources that the backend can read reliably.
+// ImageRequestOptions are the client image parameters checked against a
+// provider before routing; empty strings mean "not specified".
+type ImageRequestOptions struct {
+	Edit           bool
+	Count          int
+	InputImages    int
+	HasMask        bool
+	Size           string
+	AspectRatio    string
+	Resolution     string
+	Quality        string
+	ResponseFormat string
+	OutputFormat   string
+	Background     string
+	Streaming      bool
+	PartialImages  int
+}
+
+// ImageRequestValidator is implemented by every image-capable provider. The
+// gateway drops routes whose provider rejects the request and returns the
+// first rejection (a RequestScopedError-style 400) when none remain.
+type ImageRequestValidator interface {
+	Adapter
+	ValidateImageRequest(options ImageRequestOptions) error
+}
+
 type ImageAssetStore interface {
 	SaveImage(ctx context.Context, data []byte) (media.Asset, error)
 	PublicImageURL(id string) string
@@ -1225,6 +1251,15 @@ func (r *Registry) DeviceOAuth(value account.Provider) (DeviceOAuthAdapter, bool
 		return nil, false
 	}
 	result, ok := adapter.(DeviceOAuthAdapter)
+	return result, ok
+}
+
+func (r *Registry) ImageRequestValidator(value account.Provider) (ImageRequestValidator, bool) {
+	adapter, ok := r.Get(value)
+	if !ok {
+		return nil, false
+	}
+	result, ok := adapter.(ImageRequestValidator)
 	return result, ok
 }
 
