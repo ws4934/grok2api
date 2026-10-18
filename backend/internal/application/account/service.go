@@ -146,6 +146,13 @@ type quotaRefreshResult struct {
 	Modes      []string
 }
 
+// quotaModeSnapshotAdapter is a quota adapter whose single-mode sync reads
+// the provider's complete quota snapshot (ChatGPT conversation/init). A
+// per-mode refresh then stores and reconciles every window it returned.
+type quotaModeSnapshotAdapter interface {
+	QuotaModeSyncReadsSnapshot()
+}
+
 type QuotaRefreshStats struct {
 	Pending int
 	Queued  int
@@ -3071,10 +3078,12 @@ func (s *Service) refreshQuotaMode(ctx context.Context, id uint64, mode string) 
 	var windows []accountdomain.QuotaWindow
 	var syncedAt time.Time
 	var tier accountdomain.WebTier
-	if value.Provider == accountdomain.ProviderConsole {
-		// Console /usage always returns Chat, Image and Video together. Persist the
-		// response as one authoritative snapshot so each media route observes the
-		// same upstream usage generation.
+	_, snapshotSync := adapter.(quotaModeSnapshotAdapter)
+	if value.Provider == accountdomain.ProviderConsole || snapshotSync {
+		// Console /usage always returns Chat, Image and Video together, ChatGPT
+		// conversation/init every limited feature. Persist the response as one
+		// authoritative snapshot so each route observes the same upstream usage
+		// generation and traffic on one mode keeps the others current.
 		var snapshot provider.QuotaSnapshot
 		snapshot, err = adapter.SyncQuota(ctx, value)
 		if err == nil {
@@ -3086,7 +3095,7 @@ func (s *Service) refreshQuotaMode(ctx context.Context, id uint64, mode string) 
 					break
 				}
 			}
-			if window.Mode == "" {
+			if window.Mode == "" && !snapshotSync {
 				err = fmt.Errorf("Console usage 响应缺少 %s 额度", mode)
 			}
 		}
@@ -3110,14 +3119,21 @@ func (s *Service) refreshQuotaMode(ctx context.Context, id uint64, mode string) 
 	if syncedAt.IsZero() {
 		syncedAt = s.now()
 	}
-	if value.Provider == accountdomain.ProviderConsole {
+	if value.Provider == accountdomain.ProviderConsole || snapshotSync {
 		if err := s.accounts.ReplaceQuotaWindows(ctx, id, tier, syncedAt, windows); err != nil {
 			return quotaRefreshResult{}, err
 		}
 	} else if err := s.accounts.SaveQuotaWindows(ctx, id, tier, syncedAt, windows); err != nil {
 		return quotaRefreshResult{}, err
 	}
-	return quotaRefreshResult{Credential: value, Windows: windows}, nil
+	result := quotaRefreshResult{Credential: value, Windows: windows}
+	if snapshotSync {
+		// The snapshot covers every declared mode: RefreshQuotaMode reconciles
+		// them all and cancels recovery of a mode that is no longer limited.
+		definition, _ := s.providers.Definition(value.Provider)
+		result.Modes = definition.Profile.QuotaModes
+	}
+	return result, nil
 }
 
 func quotaSyncKey(accountID uint64, mode string) string {

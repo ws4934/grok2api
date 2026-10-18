@@ -561,6 +561,10 @@ func (a *Adapter) SyncQuota(ctx context.Context, credential account.Credential) 
 	return snapshot, nil
 }
 
+// QuotaModeSyncReadsSnapshot tells the account service that SyncQuotaMode is
+// a filtered SyncQuota, so a per-mode refresh stores every returned window.
+func (a *Adapter) QuotaModeSyncReadsSnapshot() {}
+
 func (a *Adapter) SyncQuotaMode(ctx context.Context, credential account.Credential, mode string) (account.QuotaWindow, error) {
 	snapshot, err := a.SyncQuota(ctx, credential)
 	if err != nil {
