@@ -252,6 +252,7 @@ export function EgressSources({ scopeLabel }: { scopeLabel: (scope: EgressScope)
   const [pageSize, setPageSize] = useState(20);
   const [search, setSearch] = useState("");
   const [scopeFilter, setScopeFilter] = useState("");
+  const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: channelsApi.list });
   const sourcesQuery = useQuery({ queryKey: ["egress-sources"], queryFn: () => listEgressSources() });
 
   const invalidate = () => {
@@ -327,6 +328,7 @@ export function EgressSources({ scopeLabel }: { scopeLabel: (scope: EgressScope)
                   { value: "grok_console", label: scopeLabel("grok_console") },
                   { value: "grok_web_asset", label: scopeLabel("grok_web_asset") },
                   { value: "grok_console_asset", label: scopeLabel("grok_console_asset") },
+                  ...(channelsQuery.data ?? []).map((channel) => ({ value: channel.descriptor.id, label: scopeLabel(channel.descriptor.id) })),
                 ],
               }]} />
             </div>

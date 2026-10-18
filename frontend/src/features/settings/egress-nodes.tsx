@@ -268,6 +268,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
                     { value: "grok_console", label: scopeLabel("grok_console") },
                     { value: "grok_web_asset", label: scopeLabel("grok_web_asset") },
                     { value: "grok_console_asset", label: scopeLabel("grok_console_asset") },
+                    ...(channelsQuery.data ?? []).map((channel) => ({ value: channel.descriptor.id, label: channel.descriptor.name })),
                   ] },
                   { id: "enabled", label: t("settings.egress.enabled"), value: enabledFilter, onChange: (value) => { setEnabledFilter(value); setPage(1); setSelected(new Map()); }, options: [
                     { value: "enabled", label: t("common.enable") },
