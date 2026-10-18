@@ -65,8 +65,19 @@ func (e *voiceFailure) Error() string              { return e.upstream.Error() }
 func (e *voiceFailure) Unwrap() error              { return e.upstream }
 func (e *voiceFailure) HTTPStatusCode() int        { return http.StatusBadGateway }
 func (e *voiceFailure) RequestScopedFailure() bool { return true }
+
+// PublicErrorMessage quotes at most 300 characters of the upstream body; an
+// HTML error page stays in the diagnostics.
 func (e *voiceFailure) PublicErrorMessage() string {
-	return fmt.Sprintf("ChatGPT %s failed: HTTP %d %s", e.upstream.Endpoint, e.upstream.Status, e.upstream.Message)
+	message := fmt.Sprintf("ChatGPT %s failed: HTTP %d", e.upstream.Endpoint, e.upstream.Status)
+	detail := []rune(strings.Join(strings.Fields(e.upstream.Message), " "))
+	if len(detail) > 300 {
+		detail = append(detail[:299], '…')
+	}
+	if len(detail) > 0 && detail[0] != '<' {
+		message += " " + string(detail)
+	}
+	return message
 }
 
 // voiceError keeps a backend (5xx) failure of a voice endpoint on the
