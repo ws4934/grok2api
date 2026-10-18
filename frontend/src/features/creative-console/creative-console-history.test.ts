@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { historyStorageKey, loadImageHistory, loadVideoHistory, persistImageHistory, persistStoredList, type ImageHistoryRecord } from "./creative-console-history.ts";
+import { historyStorageKey, imageJobRequestId, loadImageHistory, loadVideoHistory, persistImageHistory, persistStoredList, type ImageHistoryRecord } from "./creative-console-history.ts";
 
 function memoryStorage(quotaChars = Number.POSITIVE_INFINITY) {
   const values = new Map<string, string>();
@@ -23,6 +23,13 @@ describe("history storage keys", () => {
     assert.equal(historyStorageKey("chat", "key 1"), "grok2api:creative-console:chat-history:key%201");
     assert.equal(historyStorageKey("image", "7"), "grok2api:creative-console:image-history:7");
     assert.equal(historyStorageKey("video", "7"), "grok2api:creative-console:video-history:7");
+  });
+});
+
+describe("image job request IDs", () => {
+  it("uses the record ID for the first image and suffixes the extra ones", () => {
+    assert.equal(imageJobRequestId("rec_1", 0), "rec_1");
+    assert.equal(imageJobRequestId("rec_1", 3), "rec_1-3");
   });
 });
 

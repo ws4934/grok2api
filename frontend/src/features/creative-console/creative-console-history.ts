@@ -39,6 +39,11 @@ const imageStatuses = ["generating", "completed", "failed", "interrupted"] as co
 const videoStatuses = ["submitting", "generating", "completed", "failed", "interrupted"] as const;
 const videoActions = ["generate", "edit", "extend"] as const;
 
+// Image N of a record is submitted with this X-Request-ID, which its audit records carry; jobIds[N] is that image's job.
+export function imageJobRequestId(recordId: string, index: number): string {
+  return index === 0 ? recordId : `${recordId}-${index}`;
+}
+
 export function historyStorageKey(kind: "chat" | "image" | "video", scope: string): string {
   return `grok2api:creative-console:${kind}-history:${encodeURIComponent(scope)}`;
 }

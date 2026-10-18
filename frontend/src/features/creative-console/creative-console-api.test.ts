@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { apiErrorFromResponse, describeError, imageGenerationBody, imageJobState } from "./creative-console-api.ts";
+import { apiErrorFromResponse, describeError, getImageJob, imageGenerationBody, imageJobState } from "./creative-console-api.ts";
 
 describe("image generation body", () => {
   it("sends size and quality on basic routes, defaulting both to auto", () => {
@@ -48,10 +48,15 @@ describe("api errors", () => {
 
 describe("image job state", () => {
   it("maps Responses statuses to settled outcomes", () => {
-    assert.deepEqual(imageJobState({ status: "queued" }, "resp_img_1"), { done: false, succeeded: false });
-    assert.deepEqual(imageJobState({ status: "in_progress" }, "resp_img_1"), { done: false, succeeded: false });
-    assert.deepEqual(imageJobState({ status: "completed" }, "resp_img_1"), { done: true, succeeded: true });
-    assert.deepEqual(imageJobState({ status: "failed", error: { code: "result_uncertain", message: "maybe drawn" } }, "resp_img_1"), { done: true, succeeded: false, error: { message: "maybe drawn", code: "result_uncertain", requestId: "resp_img_1" } });
-    assert.deepEqual(imageJobState({ status: "cancelled" }, "resp_img_2"), { done: true, succeeded: false, error: { message: "cancelled", code: undefined, requestId: "resp_img_2" } });
+    assert.deepEqual(imageJobState({ status: "queued" }, "rec_1"), { done: false, succeeded: false });
+    assert.deepEqual(imageJobState({ status: "in_progress" }, "rec_1"), { done: false, succeeded: false });
+    assert.deepEqual(imageJobState({ status: "completed" }, "rec_1"), { done: true, succeeded: true });
+    assert.deepEqual(imageJobState({ id: "resp_img_1", status: "failed", error: { code: "result_uncertain", message: "maybe drawn" } }, "rec_1"), { done: true, succeeded: false, error: { message: "maybe drawn", code: "result_uncertain", requestId: "rec_1" } });
+    assert.deepEqual(imageJobState({ status: "cancelled" }, "rec_1-1"), { done: true, succeeded: false, error: { message: "cancelled", code: undefined, requestId: "rec_1-1" } });
+  });
+
+  it("reports the submit request ID, not the job ID, for a vanished job", async (t) => {
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ error: { code: "not_found", message: "gone" } }), { status: 404 }));
+    assert.deepEqual(await getImageJob({ apiKey: "k", id: "resp_img_1", requestId: "rec_1-2" }), { done: true, succeeded: false, error: { message: "gone", code: "not_found", requestId: "rec_1-2" } });
   });
 });

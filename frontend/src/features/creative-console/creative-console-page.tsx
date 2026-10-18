@@ -48,6 +48,7 @@ import {
 import {
   finiteTimestamp,
   historyStorageKey,
+  imageJobRequestId,
   isLocalRecord,
   loadImageHistory,
   loadStoredList,
@@ -955,7 +956,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
     let failure: ApiErrorDetail | undefined;
     try {
       for (let index = 0; index < record.params.count; index += 1) {
-        const requestId = index === 0 ? record.id : `${record.id}-${index}`;
+        const requestId = imageJobRequestId(record.id, index);
         try {
           jobIds.push(await submitImageJob({ apiKey: key, model: record.model, prompt: record.prompt, params: record.params, requestId }));
         } catch (error) {
@@ -1085,7 +1086,7 @@ function ImageJobPoller({ record, apiKey, onSettle }: { record: ImageHistoryReco
   const settled = useRef(false);
   const query = useQuery({
     queryKey: ["creative-console", "image-jobs", ...jobIds],
-    queryFn: ({ signal }) => Promise.all(jobIds.map((id) => getImageJob({ apiKey, id, signal }))),
+    queryFn: ({ signal }) => Promise.all(jobIds.map((id, index) => getImageJob({ apiKey, id, requestId: imageJobRequestId(record.id, index), signal }))),
     enabled: Boolean(apiKey) && jobIds.length > 0,
     refetchInterval: (current) => current.state.data?.every((state) => state.done) ? false : 4000,
   });

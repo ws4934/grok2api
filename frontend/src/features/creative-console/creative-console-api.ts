@@ -130,23 +130,24 @@ export async function submitImageJob(input: { apiKey: string; model: string; pro
 
 export type ImageJobState = { done: boolean; succeeded: boolean; error?: ApiErrorDetail };
 
-export async function getImageJob(input: { apiKey: string; id: string; signal?: AbortSignal }): Promise<ImageJobState> {
+// requestId is the X-Request-ID the job was submitted with: audits record that, not the job ID.
+export async function getImageJob(input: { apiKey: string; id: string; requestId: string; signal?: AbortSignal }): Promise<ImageJobState> {
   try {
     const payload = await publicApiRequest(input.apiKey, `/responses/${encodeURIComponent(input.id)}`, { signal: input.signal });
-    return imageJobState(payload, input.id);
+    return imageJobState(payload, input.requestId);
   } catch (error) {
     // A job that no longer exists (deleted or expired) ends the wait instead of polling forever.
-    if (error instanceof CreativeApiError && error.status === 404) return { done: true, succeeded: false, error: { message: error.message, code: error.code, requestId: input.id } };
+    if (error instanceof CreativeApiError && error.status === 404) return { done: true, succeeded: false, error: { message: error.message, code: error.code, requestId: input.requestId } };
     throw error;
   }
 }
 
-export function imageJobState(payload: unknown, id: string): ImageJobState {
+export function imageJobState(payload: unknown, requestId: string): ImageJobState {
   const status = isRecord(payload) && typeof payload.status === "string" ? payload.status : "";
   if (status === "completed") return { done: true, succeeded: true };
   if (status === "failed" || status === "cancelled" || status === "incomplete") {
     const error = isRecord(payload) && isRecord(payload.error) ? payload.error : {};
-    return { done: true, succeeded: false, error: { message: typeof error.message === "string" && error.message ? error.message : status, code: typeof error.code === "string" ? error.code : undefined, requestId: id } };
+    return { done: true, succeeded: false, error: { message: typeof error.message === "string" && error.message ? error.message : status, code: typeof error.code === "string" ? error.code : undefined, requestId } };
   }
   return { done: false, succeeded: false };
 }
