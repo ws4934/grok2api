@@ -41,6 +41,7 @@ export function AccountAuthDialog({ provider, providerName, help, onClose }: Pro
       setExpired(false);
       setFailed(false);
       setCallbackUrl("");
+      complete.reset();
     },
     onError: (error) => showError(error),
   });
