@@ -20,42 +20,53 @@ var (
 )
 
 // richUIFilter rewrites streamed answer text. Lines that may hold markup are
-// held back until complete; other text passes through immediately.
+// held back until complete; other text passes through immediately, once a
+// line has more than leading whitespace, so fences and markup lines are
+// judged whole.
 type richUIFilter struct {
-	pending string
+	// pending is the held start of the current line; hold keeps it until
+	// the line is complete.
+	pending strings.Builder
+	hold    bool
 	depth   int
 	fence   bool
+	// midLine is set once part of the current line was passed through.
 	midLine bool
 }
 
 // Feed returns the client-visible text for the next chunk of the answer.
 func (f *richUIFilter) Feed(chunk string) string {
-	f.pending += chunk
 	var out strings.Builder
 	for {
-		index := strings.IndexByte(f.pending, '\n')
+		index := strings.IndexByte(chunk, '\n')
 		if index < 0 {
 			break
 		}
-		line := f.pending[:index]
-		f.pending = f.pending[index+1:]
+		f.pending.WriteString(chunk[:index])
+		chunk = chunk[index+1:]
+		line := f.pending.String()
+		f.pending.Reset()
 		if text, keep := f.line(line); keep {
 			out.WriteString(text)
 			out.WriteByte('\n')
 		}
-		f.midLine = false
+		f.midLine, f.hold = false, false
 	}
-	if f.pending != "" && !f.mayHoldMarkup(f.pending) {
-		out.WriteString(f.pending)
-		f.pending, f.midLine = "", true
+	// Text that is not held is passed on, so pending is empty or the
+	// leading whitespace of the line.
+	f.pending.WriteString(chunk)
+	if f.hold = f.hold || f.mayHoldMarkup(chunk); !f.hold && (f.midLine || strings.TrimSpace(chunk) != "") {
+		out.WriteString(f.pending.String())
+		f.pending.Reset()
+		f.midLine = true
 	}
 	return out.String()
 }
 
 // Flush returns the held-back remainder at the end of the answer.
 func (f *richUIFilter) Flush() string {
-	line := f.pending
-	f.pending = ""
+	line := f.pending.String()
+	f.pending.Reset()
 	if line == "" {
 		return ""
 	}
@@ -63,8 +74,8 @@ func (f *richUIFilter) Flush() string {
 	return text
 }
 
-// mayHoldMarkup holds text that may hold markup or an inline code span, so
-// the line is rewritten whole.
+// mayHoldMarkup holds a line whose new text may hold markup or an inline
+// code span, so the line is rewritten whole.
 func (f *richUIFilter) mayHoldMarkup(text string) bool {
 	if f.fence {
 		return strings.HasPrefix(strings.TrimSpace(text), "`")
@@ -72,7 +83,9 @@ func (f *richUIFilter) mayHoldMarkup(text string) bool {
 	return f.depth > 0 || strings.ContainsAny(text, "<`")
 }
 
-// line rewrites one complete line; keep is false for lines that held only markup.
+// line rewrites one complete line, or the rest of a line that was partly
+// passed through, which is prose; keep is false for lines that held only
+// markup.
 func (f *richUIFilter) line(line string) (string, bool) {
 	trimmed := strings.TrimSpace(line)
 	if !f.midLine && strings.HasPrefix(trimmed, "```") {
@@ -86,11 +99,14 @@ func (f *richUIFilter) line(line string) (string, bool) {
 	prose := mapOutsideCode(line, func(s string) string { return s }, func(string) string { return "" })
 	opens := len(richUIOpenTag.FindAllStringIndex(prose, -1))
 	closes := len(richUICloseTag.FindAllStringIndex(prose, -1))
-	markupOnly := opens+closes > 0 && strings.TrimSpace(stripRichUI(prose, true)) == ""
+	markupOnly := !f.midLine && opens+closes > 0 && strings.TrimSpace(stripRichUI(prose, true)) == ""
 	// Containers open and close only on markup lines; on a prose line they
 	// are unwrapped when balanced ("use the <list> tag" stays as written).
 	containers := markupOnly || opens == closes
 	text := mapOutsideCode(line, func(s string) string { return stripRichUI(s, containers) }, func(code string) string { return code })
+	if f.midLine {
+		return text, true
+	}
 	hadMarkup := text != line
 	if markupOnly {
 		f.depth = max(0, f.depth+opens-closes)
@@ -98,7 +114,9 @@ func (f *richUIFilter) line(line string) (string, bool) {
 	if hadMarkup && strings.TrimSpace(text) == "" {
 		return "", false
 	}
-	if (inside || hadMarkup) && !f.midLine {
+	// Content inside containers and lines that open with markup are
+	// dedented; an indented prose line keeps its indent.
+	if inside || hadMarkup && strings.HasPrefix(trimmed, "<") {
 		text = strings.TrimLeft(text, " \t")
 	}
 	if inside && strings.TrimSpace(text) == "" {
