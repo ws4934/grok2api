@@ -2297,7 +2297,9 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 	if options.retryPermanentOnce {
 		refreshKey += ":manual-retry"
 	}
-	result, err, _ := s.refreshes.Do(refreshKey, func() (any, error) {
+	// The shared refresh runs on its own goroutine so a caller can stop waiting
+	// while a started token exchange still completes and is persisted.
+	shared := s.refreshes.DoChan(refreshKey, func() (any, error) {
 		latest, err := s.accounts.Get(ctx, value.ID)
 		if err != nil {
 			return nil, err
@@ -2355,7 +2357,12 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 		if !ok {
 			return nil, fmt.Errorf("Provider %s 未注册", latest.Provider)
 		}
-		refreshed, err := adapter.RefreshCredential(ctx, latest)
+		// The upstream may consume the old refresh token as soon as the exchange
+		// starts. Detach it from the caller so the rotated token is never dropped
+		// by a client disconnect or a caller deadline.
+		refreshCtx, cancelRefresh := context.WithTimeout(context.WithoutCancel(ctx), credentialRefreshTimeout)
+		refreshed, err := adapter.RefreshCredential(refreshCtx, latest)
+		cancelRefresh()
 		if err != nil {
 			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), credentialRefreshStateTTL)
 			s.recordCredentialRefreshFailure(persistCtx, latest, err, !options.retryPermanentOnce, release != nil)
@@ -2388,10 +2395,16 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 		s.WakeCredentialRefresh()
 		return updated, nil
 	})
-	if err != nil {
-		return accountdomain.Credential{}, err
+	var result singleflight.Result
+	select {
+	case <-ctx.Done():
+		return accountdomain.Credential{}, ctx.Err()
+	case result = <-shared:
 	}
-	credential, ok := result.(accountdomain.Credential)
+	if result.Err != nil {
+		return accountdomain.Credential{}, result.Err
+	}
+	credential, ok := result.Val.(accountdomain.Credential)
 	if !ok {
 		return accountdomain.Credential{}, fmt.Errorf("账号凭据刷新返回类型无效")
 	}

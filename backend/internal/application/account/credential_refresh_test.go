@@ -91,19 +91,31 @@ func TestEnsureCredentialPersistsRotatedTokenAfterRequestCancellation(t *testing
 	service.now = func() time.Time { return now }
 	adapter.afterRefresh = cancel
 
-	refreshed, err := service.EnsureCredential(ctx, credential, true)
-	if err != nil {
+	// The caller may stop waiting once its context ends; the rotation must still land.
+	if _, err := service.EnsureCredential(ctx, credential, true); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("refresh after request cancellation = %v", err)
 	}
-	if refreshed.EncryptedAccessToken != "access-1" || refreshed.EncryptedRefreshToken != "refresh-1" {
-		t.Fatalf("refreshed credential = %#v", refreshed)
-	}
-	stored, err := service.accounts.Get(context.Background(), credential.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.EncryptedAccessToken != "access-1" || stored.EncryptedRefreshToken != "refresh-1" || stored.LastRefreshAt == nil {
+	stored := waitForStoredRefreshToken(t, service, credential.ID, "refresh-1")
+	if stored.EncryptedAccessToken != "access-1" || stored.LastRefreshAt == nil {
 		t.Fatalf("rotated credential was not persisted: %#v", stored)
+	}
+}
+
+func waitForStoredRefreshToken(t *testing.T, service *Service, id uint64, want string) accountdomain.Credential {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stored, err := service.accounts.Get(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.EncryptedRefreshToken == want || time.Now().After(deadline) {
+			if stored.EncryptedRefreshToken != want {
+				t.Fatalf("stored refresh token = %q, want %q", stored.EncryptedRefreshToken, want)
+			}
+			return stored
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
