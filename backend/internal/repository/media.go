@@ -28,12 +28,14 @@ type MediaAssetListQuery struct {
 	Filter MediaAssetListFilter
 }
 
-// MediaJobListFilter 表示视频任务列表允许使用的业务筛选条件。
+// MediaJobListFilter 表示媒体任务列表允许使用的业务筛选条件。
 type MediaJobListFilter struct {
-	Status string
+	Kind     string
+	Status   string
+	Provider string
 }
 
-// MediaJobListQuery 表示管理端视频任务列表的查询条件。
+// MediaJobListQuery 表示管理端媒体任务列表的查询条件。
 type MediaJobListQuery struct {
 	Page   PageQuery
 	Filter MediaJobListFilter
@@ -57,13 +59,15 @@ type MediaUploadTicket struct {
 	CreatedAt   time.Time
 }
 
-// MediaJobStats 表示各状态视频任务的聚合统计结果。
+// MediaJobStats 表示各状态媒体任务的聚合统计结果。
 type MediaJobStats struct {
 	TotalJobs  int64
 	Completed  int64
 	Failed     int64
 	InProgress int64
 	Queued     int64
+	Canceled   int64
+	Uncertain  int64
 }
 
 type MediaJobRepository interface {
@@ -73,11 +77,21 @@ type MediaJobRepository interface {
 	UpdateMediaJob(ctx context.Context, value media.Job) error
 	DeleteMediaJob(ctx context.Context, id string) error
 	ListMediaJobs(ctx context.Context, query MediaJobListQuery) ([]media.Job, int64, error)
-	SummarizeMediaJobs(ctx context.Context) (MediaJobStats, error)
+	// SummarizeMediaJobs counts jobs per status; an empty kind counts every kind.
+	SummarizeMediaJobs(ctx context.Context, kind string) (MediaJobStats, error)
 	ListRecoverableMediaJobs(ctx context.Context, limit int) ([]media.Job, error)
 	ListUnrecordedTerminalMediaJobs(ctx context.Context, limit int) ([]media.Job, error)
+	// TryClaimMediaJob takes a queued or lease-expired job and bumps its generation.
 	TryClaimMediaJob(ctx context.Context, id string, now, leaseUntil time.Time, claimToken string) (media.Job, bool, error)
 	MarkMediaJobUsageRecorded(ctx context.Context, id string, recordedAt time.Time) error
+	GetMediaJobByIdempotencyKey(ctx context.Context, clientKeyID uint64, key string) (media.Job, error)
+	// GetMediaJobInput reads the input payload the other reads omit.
+	GetMediaJobInput(ctx context.Context, id string) (string, error)
+	// RenewMediaJobLease extends the claim held by job; ErrNotFound means it was lost.
+	RenewMediaJobLease(ctx context.Context, job media.Job, leaseUntil time.Time) error
+	// CancelMediaJob cancels a job that has sent nothing irreversible; clientKeyID 0
+	// matches any key. ErrConflict means it is running past that point.
+	CancelMediaJob(ctx context.Context, id string, clientKeyID uint64, now time.Time) (media.Job, error)
 }
 
 // MediaAssetRepository 定义媒体资源元数据持久化能力。

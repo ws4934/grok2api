@@ -391,6 +391,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	gatewayService.UpdateRequestTimeout(cfg.Server.RequestTimeout.Value())
 	gatewayService.ConfigureMedia(mediaJobRepo, cfg.Provider.Web.MediaConcurrency)
 	gatewayService.ConfigureMediaAssets(mediaService)
+	gatewayService.UpdateDefaultImageModel(cfg.Provider.ChatGPT.DefaultImageModel)
 	quotaRecoveryService := quotarecoveryapp.NewService(logger, quotaQueue, accountService, cfg.Provider.Web.RecoveryBackoffBase.Value(), cfg.Provider.Web.RecoveryBackoffMax.Value())
 	quotaRecoveryService.SetBulkPool(syncPool)
 	inferenceConcurrency := httpmiddleware.NewConcurrencyGate(cfg.Server.MaxConcurrentRequests)
@@ -428,6 +429,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		egressManager.UpdateClearanceConfig(clearanceConfig(next))
 		consoleAdapter.UpdateConfig(consoleProviderConfig(next))
 		chatgptAdapter.UpdateConfig(chatgptProviderConfig(next))
+		gatewayService.UpdateDefaultImageModel(next.Provider.ChatGPT.DefaultImageModel)
 		egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(next))
 		mediaService.UpdateConfig(mediaConfig(next))
 		quotaRecoveryService.UpdateConfig(next.Provider.Web.RecoveryBackoffBase.Value(), next.Provider.Web.RecoveryBackoffMax.Value())
@@ -708,12 +710,12 @@ func (a *Application) Run(ctx context.Context) error {
 		a.runModelCatalogCatchup(taskCtx)
 		return nil
 	})
-	startBackground("video_recovery", func(taskCtx context.Context) error {
-		a.gateway.RunVideoRecovery(taskCtx)
+	startBackground("media_job_recovery", func(taskCtx context.Context) error {
+		a.gateway.RunMediaRecovery(taskCtx)
 		return nil
 	})
-	startBackground("video_workers", func(taskCtx context.Context) error {
-		a.gateway.RunVideoWorkers(taskCtx)
+	startBackground("media_job_workers", func(taskCtx context.Context) error {
+		a.gateway.RunMediaWorkers(taskCtx)
 		return nil
 	})
 	startBackground("media_cleanup", func(taskCtx context.Context) error {

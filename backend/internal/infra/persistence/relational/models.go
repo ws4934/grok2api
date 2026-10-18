@@ -438,12 +438,13 @@ type mediaJobModel struct {
 	Model          string  `gorm:"size:255;not null;check:chk_media_jobs_model,length(trim(model)) BETWEEN 1 AND 255"`
 	ModelRouteID   uint64  `gorm:"not null;check:chk_media_jobs_model_route_id,model_route_id > 0"`
 	UpstreamModel  string  `gorm:"size:255;not null;check:chk_media_jobs_upstream_model,length(trim(upstream_model)) BETWEEN 1 AND 255"`
-	Operation      string  `gorm:"size:16;not null;default:'generate';check:chk_media_jobs_operation,operation IN ('generate','edit','extend')"`
+	Kind           string  `gorm:"size:16;not null;default:'video';check:chk_media_jobs_kind,kind IN ('video','image')"`
+	Operation      string  `gorm:"size:16;not null;default:'generate';check:chk_media_jobs_operation,(kind = 'video' AND operation IN ('generate','edit','extend')) OR (kind = 'image' AND operation IN ('generate','edit'))"`
 	Prompt         string  `gorm:"type:text;not null;check:chk_media_jobs_prompt,length(prompt) BETWEEN 0 AND 100000"`
-	Seconds        int     `gorm:"not null;check:chk_media_jobs_seconds,seconds BETWEEN 0 AND 15"`
+	Seconds        int     `gorm:"not null;check:chk_media_jobs_seconds,kind <> 'video' OR seconds BETWEEN 0 AND 15"`
 	Size           string  `gorm:"size:32;not null;default:'';check:chk_media_jobs_size,length(trim(size)) BETWEEN 0 AND 32"`
 	Quality        string  `gorm:"size:32;not null;default:'';check:chk_media_jobs_quality,length(trim(quality)) BETWEEN 0 AND 32"`
-	Status         string  `gorm:"size:32;not null;check:chk_media_jobs_status,status IN ('queued','in_progress','completed','failed')"`
+	Status         string  `gorm:"size:32;not null;check:chk_media_jobs_status,status IN ('queued','in_progress','completed','failed','canceled','uncertain')"`
 	Progress       int     `gorm:"not null;check:chk_media_jobs_progress,progress BETWEEN 0 AND 100"`
 	// InputJSON limit 33554432 must stay equal to media.MaxInputJSONBytes (GORM tags require literals).
 	InputJSON string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_input_json,length(input_json) <= 33554432"`
@@ -451,6 +452,19 @@ type mediaJobModel struct {
 	InputImageCount *int   `gorm:"check:chk_media_jobs_input_image_count,input_image_count IS NULL OR input_image_count BETWEEN 0 AND 8"`
 	UpstreamURL     string `gorm:"type:text;not null;default:'';check:chk_media_jobs_upstream_url,length(upstream_url) <= 8192"`
 	ResultAssetID   string `gorm:"size:64;not null;default:'';check:chk_media_jobs_result_asset_id,result_asset_id = '' OR length(trim(result_asset_id)) BETWEEN 16 AND 64"`
+	// ResultAssetIDs is the JSON list of delivered image assets (image jobs).
+	ResultAssetIDs string `gorm:"type:text;not null;default:'[]';check:chk_media_jobs_result_asset_ids,length(result_asset_ids) <= 4096"`
+	ItemCount      int    `gorm:"not null;default:1;check:chk_media_jobs_item_count,item_count BETWEEN 1 AND 10"`
+	CheckpointJSON string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_checkpoint_json,length(checkpoint_json) <= 65536"`
+	Submitted      bool   `gorm:"not null;default:false"`
+	ParamsJSON     string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_params_json,length(params_json) <= 65536"`
+	IdempotencyKey string `gorm:"size:160;not null;default:''"`
+	PayloadHash    string `gorm:"size:64;not null;default:''"`
+	// PriceID/PricingModel/PriceTicks snapshot the reserved quote; NULL ticks = no snapshot.
+	PriceID         uint64 `gorm:"not null;default:0"`
+	PricingModel    string `gorm:"size:255;not null;default:''"`
+	PriceTicks      *int64
+	Generation      int    `gorm:"not null;default:0"`
 	ContentType     string `gorm:"size:128;not null;default:'';check:chk_media_jobs_content_type,length(content_type) <= 128"`
 	ErrorCode       string `gorm:"size:100;not null;default:'';check:chk_media_jobs_error_code,length(error_code) <= 100"`
 	ErrorMessage    string `gorm:"size:512;not null;default:'';check:chk_media_jobs_error_message,length(error_message) <= 512"`

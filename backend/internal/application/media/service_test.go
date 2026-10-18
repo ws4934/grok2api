@@ -227,7 +227,7 @@ func TestSaveInputImageEnforcesSharedInputAssetLimit(t *testing.T) {
 	}
 }
 
-func TestAdminDeleteVideoJobsRemovesTerminalJobAssetAndTicket(t *testing.T) {
+func TestAdminDeleteJobsRemovesTerminalVideoAssetAndTicket(t *testing.T) {
 	ctx := context.Background()
 	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "media-video-delete.db"))
 	if err != nil {
@@ -284,7 +284,7 @@ func TestAdminDeleteVideoJobsRemovesTerminalJobAssetAndTicket(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deleted, err := service.AdminDeleteVideoJobs(ctx, []string{job.ID})
+	deleted, err := service.AdminDeleteJobs(ctx, []string{job.ID})
 	if err != nil || deleted != 1 {
 		t.Fatalf("deleted=%d err=%v", deleted, err)
 	}

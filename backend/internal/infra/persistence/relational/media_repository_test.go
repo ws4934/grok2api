@@ -124,7 +124,7 @@ func TestMediaJobRepositoryListMediaJobsPaginatesAndFilters(t *testing.T) {
 	}
 	assertMediaJobIDs(t, sorted, "media_job_completed_old", "media_job_completed_new", "media_job_failed_newer", "media_job_queued_mid")
 
-	stats, err := jobRepo.SummarizeMediaJobs(ctx)
+	stats, err := jobRepo.SummarizeMediaJobs(ctx, "")
 	if err != nil {
 		t.Fatal(err)
 	}

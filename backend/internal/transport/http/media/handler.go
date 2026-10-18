@@ -1,6 +1,7 @@
 package media
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/application/gateway"
 	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/pkg/mediafile"
@@ -18,11 +20,24 @@ import (
 
 type Handler struct {
 	service     *mediaapp.Service
+	jobs        JobControl
 	ingestSlots chan struct{}
+}
+
+// JobControl runs the job actions that need the gateway's billing and queue.
+type JobControl interface {
+	CancelMediaJob(ctx context.Context, id string) (mediadomain.Job, error)
+	RetryMediaJob(ctx context.Context, id, idempotencyKey string) (mediadomain.Job, error)
 }
 
 func NewHandler(service *mediaapp.Service) *Handler {
 	return &Handler{service: service, ingestSlots: make(chan struct{}, ingestConcurrency)}
+}
+
+// WithJobControl enables the cancel and retry job actions.
+func (h *Handler) WithJobControl(jobs JobControl) *Handler {
+	h.jobs = jobs
+	return h
 }
 
 // RegisterPublic 注册使用不可猜测资源 ID 的公开图片读取与视频上传接收端点。
@@ -43,16 +58,18 @@ func (h *Handler) RegisterAdmin(router *gin.RouterGroup) {
 	router.GET("/media/images/:assetId", h.getAsset)
 	router.POST("/media/inputs/import", h.importInputImageFromURL)
 	router.POST("/media/inputs/upload", h.uploadInputAsset)
-	router.GET("/media/videos", h.listVideos)
-	router.DELETE("/media/videos", h.deleteVideos)
-	router.GET("/media/videos/stats", h.videoStats)
+	router.GET("/media/jobs", h.listJobs)
+	router.DELETE("/media/jobs", h.deleteJobs)
+	router.GET("/media/jobs/stats", h.jobStats)
+	router.POST("/media/jobs/:jobId/cancel", h.cancelJob)
+	router.POST("/media/jobs/:jobId/retry", h.retryJob)
 }
 
 type deleteImagesRequest struct {
 	IDs []string `json:"ids" binding:"required"`
 }
 
-type deleteVideosRequest struct {
+type deleteJobsRequest struct {
 	IDs []string `json:"ids" binding:"required"`
 }
 
@@ -231,67 +248,134 @@ func (h *Handler) deleteImages(c *gin.Context) {
 	response.Success(c, http.StatusOK, gin.H{"deleted": deleted})
 }
 
-func (h *Handler) listVideos(c *gin.Context) {
+func (h *Handler) listJobs(c *gin.Context) {
 	page, pageSize := parsePagination(c)
-	jobs, total, err := h.service.AdminListVideoJobs(c.Request.Context(), page, pageSize, c.Query("search"), c.Query("status"), repository.SortQuery{Field: c.Query("sortBy"), Direction: repository.SortDirection(c.Query("sortOrder"))})
+	filter := repository.MediaJobListFilter{Kind: c.Query("kind"), Status: c.Query("status"), Provider: c.Query("provider")}
+	jobs, total, err := h.service.AdminListJobs(c.Request.Context(), page, pageSize, c.Query("search"), filter, repository.SortQuery{Field: c.Query("sortBy"), Direction: repository.SortDirection(c.Query("sortOrder"))})
 	if errors.Is(err, mediaapp.ErrInvalidFilter) {
 		response.Error(c, http.StatusBadRequest, "invalidFilter", err.Error())
 		return
 	}
 	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "mediaListVideosFailed", "读取视频任务列表失败")
+		response.Error(c, http.StatusInternalServerError, "mediaListJobsFailed", "读取媒体任务列表失败")
 		return
 	}
 	items := make([]mediaJobDTO, 0, len(jobs))
-	for _, j := range jobs {
-		var completedAt *string
-		assetID := ""
-		if j.CompletedAt != nil {
-			formatted := j.CompletedAt.Format("2006-01-02T15:04:05Z")
-			completedAt = &formatted
-		}
-		if j.Status == "completed" {
-			assetID = j.ResultAssetID
-		}
-		items = append(items, mediaJobDTO{
-			ID: j.ID, Model: j.Model, Prompt: j.Prompt, Status: string(j.Status),
-			Progress: j.Progress, Seconds: j.Seconds, Size: j.Size, Quality: j.Quality,
-			AccountName: j.AccountName, ClientKeyName: j.ClientKeyName,
-			CreatedAt:   j.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			CompletedAt: completedAt, ErrorMessage: j.ErrorMessage, AssetID: assetID,
-		})
+	for _, job := range jobs {
+		items = append(items, h.jobDTO(job))
 	}
 	response.Success(c, http.StatusOK, gin.H{"items": items, "page": page, "pageSize": pageSize, "total": total})
 }
 
-func (h *Handler) videoStats(c *gin.Context) {
-	stats, err := h.service.AdminVideoStats(c.Request.Context())
-	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "mediaVideoStatsFailed", "读取视频统计失败")
+func (h *Handler) jobDTO(job mediadomain.Job) mediaJobDTO {
+	var completedAt *string
+	if job.CompletedAt != nil {
+		formatted := job.CompletedAt.Format("2006-01-02T15:04:05Z")
+		completedAt = &formatted
+	}
+	assetID, assetIDs, assetURLs := "", []string{}, []string{}
+	if job.Kind == mediadomain.KindImage {
+		assetIDs = append(assetIDs, job.ResultAssetIDs...)
+		for _, id := range assetIDs {
+			assetURLs = append(assetURLs, h.service.PublicImageURL(id))
+		}
+	} else if job.Status == mediadomain.StatusCompleted && job.ResultAssetID != "" {
+		assetID = job.ResultAssetID
+		assetIDs, assetURLs = []string{assetID}, []string{h.service.PublicVideoURL(assetID)}
+	}
+	return mediaJobDTO{
+		ID: job.ID, Kind: string(job.Kind), Provider: job.Provider, Model: job.Model, Operation: string(job.Operation),
+		Prompt: job.Prompt, Status: string(job.Status), Progress: job.Progress, Seconds: job.Seconds, Size: job.Size, Quality: job.Quality,
+		ItemCount: job.ItemCount, AccountName: job.AccountName, ClientKeyName: job.ClientKeyName,
+		CreatedAt: job.CreatedAt.Format("2006-01-02T15:04:05Z"), CompletedAt: completedAt,
+		ErrorCode: job.ErrorCode, ErrorMessage: job.ErrorMessage, AssetID: assetID, AssetIDs: assetIDs, AssetURLs: assetURLs,
+		Cancellable: job.Status == mediadomain.StatusQueued || (job.Kind == mediadomain.KindImage && job.Status == mediadomain.StatusInProgress && !job.Submitted),
+		Retryable:   job.Status == mediadomain.StatusUncertain,
+	}
+}
+
+func (h *Handler) jobStats(c *gin.Context) {
+	stats, err := h.service.AdminJobStats(c.Request.Context(), c.Query("kind"))
+	if errors.Is(err, mediaapp.ErrInvalidFilter) {
+		response.Error(c, http.StatusBadRequest, "invalidFilter", err.Error())
 		return
 	}
-	response.Success(c, http.StatusOK, videoStatsDTO{
-		TotalJobs: stats.TotalJobs, Completed: stats.Completed, Failed: stats.Failed,
-		InProgress: stats.InProgress, Queued: stats.Queued,
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "mediaJobStatsFailed", "读取媒体任务统计失败")
+		return
+	}
+	response.Success(c, http.StatusOK, jobStatsDTO{
+		TotalJobs: stats.TotalJobs, Queued: stats.Queued, InProgress: stats.InProgress, Completed: stats.Completed,
+		Failed: stats.Failed, Canceled: stats.Canceled, Uncertain: stats.Uncertain,
 	})
 }
 
-func (h *Handler) deleteVideos(c *gin.Context) {
-	var request deleteVideosRequest
+func (h *Handler) deleteJobs(c *gin.Context) {
+	var request deleteJobsRequest
 	if c.ShouldBindJSON(&request) != nil {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	deleted, err := h.service.AdminDeleteVideoJobs(c.Request.Context(), request.IDs)
-	if errors.Is(err, mediaapp.ErrInvalidVideoSelection) || errors.Is(err, mediaapp.ErrActiveVideoSelection) {
-		response.Error(c, http.StatusBadRequest, "invalidVideoSelection", err.Error())
+	deleted, err := h.service.AdminDeleteJobs(c.Request.Context(), request.IDs)
+	if errors.Is(err, mediaapp.ErrInvalidJobSelection) || errors.Is(err, mediaapp.ErrActiveJobSelection) {
+		response.Error(c, http.StatusBadRequest, "invalidJobSelection", err.Error())
 		return
 	}
 	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "mediaDeleteVideosFailed", "删除视频任务失败")
+		response.Error(c, http.StatusInternalServerError, "mediaDeleteJobsFailed", "删除媒体任务失败")
 		return
 	}
 	response.Success(c, http.StatusOK, gin.H{"deleted": deleted})
+}
+
+// cancelJob cancels a queued job, or an image job whose image in flight has
+// not reached the upstream. An ended job is returned unchanged.
+func (h *Handler) cancelJob(c *gin.Context) {
+	if h.jobs == nil {
+		response.Error(c, http.StatusServiceUnavailable, "mediaJobsUnavailable", mediaapp.ErrMediaJobsUnavailable.Error())
+		return
+	}
+	job, err := h.jobs.CancelMediaJob(c.Request.Context(), strings.TrimSpace(c.Param("jobId")))
+	if err != nil {
+		writeJobActionError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, h.jobDTO(job))
+}
+
+// retryJob resubmits an uncertain job as a new job; the optional
+// Idempotency-Key defaults to one retry per job.
+func (h *Handler) retryJob(c *gin.Context) {
+	if h.jobs == nil {
+		response.Error(c, http.StatusServiceUnavailable, "mediaJobsUnavailable", mediaapp.ErrMediaJobsUnavailable.Error())
+		return
+	}
+	key := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if len(key) > 160 {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "Idempotency-Key 不能超过 160 个字符")
+		return
+	}
+	job, err := h.jobs.RetryMediaJob(c.Request.Context(), strings.TrimSpace(c.Param("jobId")), key)
+	if err != nil {
+		writeJobActionError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, h.jobDTO(job))
+}
+
+func writeJobActionError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, gateway.ErrResponseNotFound):
+		response.Error(c, http.StatusNotFound, "mediaJobNotFound", "媒体任务不存在")
+	case errors.Is(err, gateway.ErrMediaJobNotCancellable):
+		response.Error(c, http.StatusConflict, "mediaJobNotCancellable", err.Error())
+	case errors.Is(err, gateway.ErrMediaJobNotRetryable):
+		response.Error(c, http.StatusConflict, "mediaJobNotRetryable", err.Error())
+	case errors.Is(err, gateway.ErrIdempotencyConflict):
+		response.Error(c, http.StatusConflict, "idempotencyConflict", err.Error())
+	default:
+		response.Error(c, http.StatusBadGateway, "mediaJobActionFailed", err.Error())
+	}
 }
 
 func parsePagination(c *gin.Context) (int, int) {

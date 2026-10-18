@@ -116,6 +116,8 @@ var schemaIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_media_assets_expires ON media_assets(expires_at, id) WHERE expires_at IS NOT NULL",
 	"CREATE INDEX IF NOT EXISTS idx_media_upload_tickets_expires ON media_upload_tickets(expires_at, consumed_at)",
 	"CREATE INDEX IF NOT EXISTS idx_media_jobs_result_asset ON media_jobs(result_asset_id) WHERE result_asset_id <> ''",
+	"CREATE INDEX IF NOT EXISTS idx_media_jobs_kind_created ON media_jobs(kind, created_at DESC, id DESC)",
+	mediaJobIdempotencyIndex,
 	// Pending input metadata rows only; keeps startup backfill scans off the full table after migration completes.
 	mediaJobInputMetadataPendingIndex,
 }
@@ -198,6 +200,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	}
 	if err := d.ensureMediaJobConstraints(ctx); err != nil {
 		return fmt.Errorf("迁移 media job 数据库约束: %w", err)
+	}
+	if err := d.ensureMediaJobKindConstraints(ctx); err != nil {
+		return fmt.Errorf("迁移 media job 任务类型约束: %w", err)
 	}
 	if err := d.migrateMediaJobOperations(ctx); err != nil {
 		return fmt.Errorf("迁移 media job 操作类型: %w", err)

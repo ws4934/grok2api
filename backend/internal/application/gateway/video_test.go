@@ -64,7 +64,7 @@ func TestGetVideoExposesOnlyReadableResultAsset(t *testing.T) {
 	}
 	tests := []struct {
 		name  string
-		store videoAssetStore
+		store mediaAssetStore
 		want  string
 	}{
 		{
@@ -128,13 +128,13 @@ func TestRecoverVideoJobsRetriesUsageWithoutRegeneratingVideo(t *testing.T) {
 	}}
 	recorder := &durableVideoAuditRecorder{failures: 1}
 	service := &Service{mediaJobs: repository, audits: recorder}
-	if err := service.RecoverVideoJobs(context.Background()); err == nil {
+	if err := service.RecoverMediaJobs(context.Background()); err == nil {
 		t.Fatal("first durable audit failure was ignored")
 	}
 	if repository.job.UsageRecordedAt != nil {
 		t.Fatal("usage was marked before durable audit commit")
 	}
-	if err := service.RecoverVideoJobs(context.Background()); err != nil {
+	if err := service.RecoverMediaJobs(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if repository.job.UsageRecordedAt == nil || recorder.calls != 2 {
@@ -380,7 +380,7 @@ func TestRecoverVideoJobsRecordsFailedAuditWithEgress(t *testing.T) {
 	}}
 	recorder := &durableVideoAuditRecorder{}
 	service := &Service{mediaJobs: repository, audits: recorder}
-	if err := service.RecoverVideoJobs(context.Background()); err != nil {
+	if err := service.RecoverMediaJobs(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if repository.job.UsageRecordedAt == nil || recorder.calls != 1 {
@@ -405,7 +405,7 @@ func TestRecoverVideoJobsRecordsDetachedAccountSnapshot(t *testing.T) {
 	}}
 	recorder := &durableVideoAuditRecorder{}
 	service := &Service{mediaJobs: repository, audits: recorder}
-	if err := service.RecoverVideoJobs(context.Background()); err != nil {
+	if err := service.RecoverMediaJobs(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if recorder.last.AccountID != nil || recorder.last.AccountName != "deleted account" {
@@ -454,14 +454,14 @@ func TestVideoQueueIsBoundedAndDeduplicated(t *testing.T) {
 	service.ConfigureMedia(&videoUsageRepository{}, 1)
 	capacity := cap(service.mediaQueue)
 	for index := range capacity {
-		if !service.enqueueVideoJob(fmt.Sprintf("video_%d", index)) {
+		if !service.enqueueMediaJob(fmt.Sprintf("video_%d", index)) {
 			t.Fatalf("enqueue %d failed before capacity", index)
 		}
 	}
-	if !service.enqueueVideoJob("video_0") {
+	if !service.enqueueMediaJob("video_0") {
 		t.Fatal("duplicate queued job should be treated as accepted")
 	}
-	if service.enqueueVideoJob("video_overflow") {
+	if service.enqueueMediaJob("video_overflow") {
 		t.Fatal("queue accepted a job beyond its capacity")
 	}
 }
@@ -631,6 +631,14 @@ func (s *videoAssetStoreStub) OpenInputAsset(_ context.Context, id string) (medi
 
 func (*videoAssetStoreStub) ReleaseInputAssets(context.Context, []string) error { return nil }
 
+func (*videoAssetStoreStub) SaveImage(context.Context, []byte) (media.Asset, error) {
+	return media.Asset{}, errors.New("not implemented")
+}
+
+func (*videoAssetStoreStub) OpenImage(context.Context, string) (media.Asset, io.ReadCloser, error) {
+	return media.Asset{}, nil, errors.New("not implemented")
+}
+
 type durableVideoAuditRecorder struct {
 	failures int
 	calls    int
@@ -675,7 +683,7 @@ func (r *videoUsageRepository) ListMediaJobs(context.Context, repository.MediaJo
 	return nil, 0, nil
 }
 
-func (r *videoUsageRepository) SummarizeMediaJobs(context.Context) (repository.MediaJobStats, error) {
+func (r *videoUsageRepository) SummarizeMediaJobs(context.Context, string) (repository.MediaJobStats, error) {
 	return repository.MediaJobStats{}, nil
 }
 
@@ -697,6 +705,22 @@ func (r *videoUsageRepository) TryClaimMediaJob(context.Context, string, time.Ti
 func (r *videoUsageRepository) MarkMediaJobUsageRecorded(_ context.Context, _ string, recordedAt time.Time) error {
 	r.job.UsageRecordedAt = &recordedAt
 	return nil
+}
+
+func (r *videoUsageRepository) GetMediaJobByIdempotencyKey(context.Context, uint64, string) (media.Job, error) {
+	return media.Job{}, repository.ErrNotFound
+}
+
+func (r *videoUsageRepository) GetMediaJobInput(context.Context, string) (string, error) {
+	return r.job.InputJSON, nil
+}
+
+func (r *videoUsageRepository) RenewMediaJobLease(context.Context, media.Job, time.Time) error {
+	return nil
+}
+
+func (r *videoUsageRepository) CancelMediaJob(context.Context, string, uint64, time.Time) (media.Job, error) {
+	return r.job, repository.ErrConflict
 }
 
 func TestResolveVideoAuditStatusCodePrefersUpstream429(t *testing.T) {

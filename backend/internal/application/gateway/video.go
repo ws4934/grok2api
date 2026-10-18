@@ -23,6 +23,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
+	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
 const (
@@ -58,6 +59,8 @@ type VideoInput struct {
 	ReferenceAudios []string
 	// VideoURL is required for edit/extend (official "video").
 	VideoURL string
+	// IdempotencyKey deduplicates repeated creation of the same job per client key.
+	IdempotencyKey string
 }
 
 func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job, error) {
@@ -155,6 +158,14 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err != nil {
 		return media.Job{}, err
 	}
+	hash := payloadHash(struct {
+		Model, Prompt, AspectRatio, Resolution, Input string
+		Operation                                     provider.VideoOperation
+		Duration                                      int
+	}{input.PublicModel, input.Prompt, input.AspectRatio, input.Resolution, inputJSON, operation, input.Duration})
+	if existing, found, err := s.idempotentJob(ctx, input.ClientKey.ID, input.IdempotencyKey, hash); err != nil || found {
+		return existing, err
+	}
 	route, selection, err := s.selectSchedulableEligibleMediaRouteWithQuotaMode(ctx, routes, input.ClientKey, true, func(route model.Route) string {
 		return videoQuotaMode(route.Provider, s.providers.QuotaMode(route.Provider, route.UpstreamModel), input.Resolution)
 	})
@@ -178,13 +189,14 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	}
 	now := time.Now().UTC()
 	job := media.Job{
-		ID: "video_" + token, RequestID: input.RequestID,
+		ID: "video_" + token, Kind: media.KindVideo, ItemCount: 1, RequestID: input.RequestID,
 		ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name,
 		ClientIP:  requestmeta.ClientIP(ctx),
 		AccountID: accountID, AccountName: lease.Credential.Name,
 		Provider: string(route.Provider), Model: externalModel, ModelRouteID: route.ID, UpstreamModel: model.DisplayUpstreamModel(route.Provider, route.UpstreamModel), Operation: operation, Prompt: input.Prompt,
 		Seconds: input.Duration, Size: input.AspectRatio, Quality: input.Resolution,
 		Status: media.StatusQueued, Progress: 0, InputJSON: inputJSON, InputImageCount: len(allRefs), CreatedAt: now, UpdatedAt: now,
+		Price: &pricing, IdempotencyKey: input.IdempotencyKey, PayloadHash: hash,
 	}
 	reserved := false
 	if priced {
@@ -197,9 +209,14 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		if reserved {
 			s.cancelBillingReservation("video_usage_" + job.ID)
 		}
+		if errors.Is(err, repository.ErrConflict) {
+			if existing, found, findErr := s.idempotentJob(ctx, input.ClientKey.ID, input.IdempotencyKey, hash); findErr != nil || found {
+				return existing, findErr
+			}
+		}
 		return media.Job{}, err
 	}
-	if !s.enqueueVideoJob(job.ID) {
+	if !s.enqueueMediaJob(job.ID) {
 		s.logger.Warn("video_job_queue_full", "job_id", job.ID)
 	}
 	return job, nil
@@ -348,39 +365,54 @@ func (s *Service) OpenVideoContent(ctx context.Context, id string, key clientkey
 		return nil, "", 0, ErrResponseAccountUnavailable
 	}
 	downloader, ok := adapter.(provider.VideoContentDownloader)
-	if !ok || s.selector == nil || s.selector.accounts == nil || s.accounts == nil {
+	if !ok {
 		return nil, "", 0, ErrResponseAccountUnavailable
 	}
-	credential, err := s.selector.accounts.Get(ctx, job.AccountID)
+	credential, err := s.jobCredential(ctx, job)
 	if err != nil {
-		return nil, "", 0, ErrResponseAccountUnavailable
-	}
-	credential, err = s.accounts.EnsureCredential(ctx, credential, false)
-	if err != nil {
-		return nil, "", 0, ErrResponseAccountUnavailable
+		return nil, "", 0, err
 	}
 	return downloader.DownloadVideo(ctx, credential, job.UpstreamURL)
 }
 
-func (s *Service) RecoverVideoJobs(ctx context.Context) error {
+// jobCredential loads the account that created a job. Reading or resuming
+// its upstream work needs that exact credential, not a scheduling slot.
+func (s *Service) jobCredential(ctx context.Context, job media.Job) (account.Credential, error) {
+	if job.AccountID == 0 || s.selector == nil || s.selector.accounts == nil || s.accounts == nil {
+		return account.Credential{}, ErrResponseAccountUnavailable
+	}
+	credential, err := s.selector.accounts.Get(ctx, job.AccountID)
+	if err != nil {
+		return account.Credential{}, ErrResponseAccountUnavailable
+	}
+	credential, err = s.accounts.EnsureCredential(ctx, credential, false)
+	if err != nil {
+		return account.Credential{}, ErrResponseAccountUnavailable
+	}
+	return credential, nil
+}
+
+// RecoverMediaJobs records missing usage of finished jobs and requeues jobs
+// that were never started or whose worker lost its lease.
+func (s *Service) RecoverMediaJobs(ctx context.Context) error {
 	if s.mediaJobs == nil {
 		return nil
 	}
-	usageErr := s.reconcileVideoUsage(ctx)
+	usageErr := s.reconcileMediaUsage(ctx)
 	values, err := s.mediaJobs.ListRecoverableMediaJobs(ctx, 1000)
 	if err != nil {
 		return errors.Join(usageErr, err)
 	}
 	for _, job := range values {
-		if !s.enqueueVideoJob(job.ID) {
+		if !s.enqueueMediaJob(job.ID) {
 			break
 		}
 	}
 	return usageErr
 }
 
-// RunVideoWorkers 使用固定 Worker 处理持久化任务，避免突发请求按任务创建无界 goroutine。
-func (s *Service) RunVideoWorkers(ctx context.Context) {
+// RunMediaWorkers 使用固定 Worker 处理持久化任务，避免突发请求按任务创建无界 goroutine。
+func (s *Service) RunMediaWorkers(ctx context.Context) {
 	if s.mediaQueue == nil || s.mediaWorker <= 0 {
 		return
 	}
@@ -395,7 +427,7 @@ func (s *Service) RunVideoWorkers(ctx context.Context) {
 					return
 				case id := <-s.mediaQueue:
 					err := batch.Do(ctx, func(workCtx context.Context) error {
-						s.processVideoJob(workCtx, id)
+						s.processMediaJob(workCtx, id)
 						return nil
 					})
 					s.mediaMu.Lock()
@@ -403,9 +435,9 @@ func (s *Service) RunVideoWorkers(ctx context.Context) {
 					s.mediaMu.Unlock()
 					if err != nil && ctx.Err() == nil {
 						if panicErr, ok := err.(*batch.PanicError); ok {
-							s.logger.Error("video_worker_panicked", "job_id", id, "error", panicErr, "stack", string(panicErr.Stack))
+							s.logger.Error("media_worker_panicked", "job_id", id, "error", panicErr, "stack", string(panicErr.Stack))
 						} else {
-							s.logger.Error("video_worker_failed", "job_id", id, "error", err)
+							s.logger.Error("media_worker_failed", "job_id", id, "error", err)
 						}
 					}
 				}
@@ -415,7 +447,7 @@ func (s *Service) RunVideoWorkers(ctx context.Context) {
 	workers.Wait()
 }
 
-func (s *Service) enqueueVideoJob(id string) bool {
+func (s *Service) enqueueMediaJob(id string) bool {
 	if id == "" || s.mediaQueue == nil {
 		return false
 	}
@@ -435,16 +467,17 @@ func (s *Service) enqueueVideoJob(id string) bool {
 		s.mediaMu.Unlock()
 		full := s.mediaQueueFull.Add(1)
 		if s.logger != nil && (full == 1 || full%100 == 0) {
-			s.logger.Warn("video_queue_full", "count", full, "queued", len(s.mediaQueue), "capacity", cap(s.mediaQueue))
+			s.logger.Warn("media_queue_full", "count", full, "queued", len(s.mediaQueue), "capacity", cap(s.mediaQueue))
 		}
 		return false
 	}
 }
 
-func (s *Service) processVideoJob(ctx context.Context, id string) {
-	job, claimed, err := s.claimVideoJob(ctx, id)
+// processMediaJob claims a job and runs the executor of its kind.
+func (s *Service) processMediaJob(ctx context.Context, id string) {
+	job, claimed, err := s.claimMediaJob(ctx, id)
 	if err != nil {
-		s.logger.Warn("video_job_claim_failed", "job_id", id, "error", err)
+		s.logger.Warn("media_job_claim_failed", "job_id", id, "error", err)
 		return
 	}
 	if !claimed {
@@ -456,6 +489,14 @@ func (s *Service) processVideoJob(ctx context.Context, id string) {
 	} else {
 		route, err = s.models.GetByPublicID(ctx, job.Model)
 	}
+	if job.Kind == media.KindImage {
+		if err != nil {
+			s.endImageJob(ctx, &job, media.StatusFailed, "model_not_found", errors.New("模型路由不存在"), 0)
+			return
+		}
+		s.runImageJob(ctx, job, route)
+		return
+	}
 	if err != nil {
 		s.failVideoJob(ctx, job, "model_not_found", errors.New("模型路由不存在"), 0, nil)
 		return
@@ -463,8 +504,8 @@ func (s *Service) processVideoJob(ctx context.Context, id string) {
 	s.runVideoJob(ctx, job, route)
 }
 
-// RunVideoRecovery 周期认领新建后未启动或执行实例失联后的媒体任务。
-func (s *Service) RunVideoRecovery(ctx context.Context) {
+// RunMediaRecovery 周期认领新建后未启动或执行实例失联后的媒体任务。
+func (s *Service) RunMediaRecovery(ctx context.Context) {
 	ticker := time.NewTicker(videoJobRecoveryInterval)
 	defer ticker.Stop()
 	for {
@@ -472,14 +513,16 @@ func (s *Service) RunVideoRecovery(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.RecoverVideoJobs(ctx); err != nil {
-				s.logger.Warn("video_job_recovery_failed", "error", err)
+			if err := s.RecoverMediaJobs(ctx); err != nil {
+				s.logger.Warn("media_job_recovery_failed", "error", err)
 			}
 		}
 	}
 }
 
-func (s *Service) claimVideoJob(ctx context.Context, id string) (media.Job, bool, error) {
+// claimMediaJob takes the job with the long video lease; image jobs shorten
+// it to their heartbeat lease as soon as they start.
+func (s *Service) claimMediaJob(ctx context.Context, id string) (media.Job, bool, error) {
 	now := time.Now().UTC()
 	claimToken, err := security.NewOpaqueToken(18)
 	if err != nil {
@@ -575,7 +618,20 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		if attempt == 0 {
 			pinnedAccountID = job.AccountID
 		}
-		if pinnedAccountID > 0 && !excluded[pinnedAccountID] {
+		if attempt == 0 && job.Submitted {
+			// The checkpoint belongs to the account that submitted it: resume
+			// there without a scheduling slot, or not at all.
+			credential, resumeErr := s.jobCredential(ctx, job)
+			if resumeErr != nil {
+				if parent.Err() != nil {
+					s.deferVideoJob(parent, job)
+					return
+				}
+				s.endVideoJob(parent, job, media.StatusUncertain, "account_unavailable", errors.New("提交任务的账号已不可用，无法恢复上游任务"), 0, nil)
+				return
+			}
+			lease = &accountLease{Credential: credential, QuotaMode: quotaMode}
+		} else if pinnedAccountID > 0 && !excluded[pinnedAccountID] {
 			lease, err = s.selector.AcquirePinned(ctx, route.Provider, pinnedAccountID, route.ID, route.UpstreamModel, quotaMode, true)
 			if err != nil {
 				excluded[pinnedAccountID] = true
@@ -626,6 +682,11 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			Operation: operation,
 			Prompt:    job.Prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
 			ImageURL: imageURL, ReferenceURLs: referenceURLs, ReferenceAudios: referenceAudios, VideoURL: videoURL,
+			Checkpoint: job.Checkpoint,
+			SaveCheckpoint: func(value string) error {
+				job.Checkpoint, job.Submitted, job.UpdatedAt = value, value != "", time.Now().UTC()
+				return s.mediaJobs.UpdateMediaJob(ctx, job)
+			},
 			Progress: func(value int) {
 				value = min(99, max(1, value))
 				if value-lastProgress < 5 {
@@ -719,6 +780,11 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 
 		// Poll/post-processing failures are bound to the already-created upstream job.
 		if provider.IsMediaPostProcessingError(err) || (hasStage && stage == provider.VideoStagePoll) || !retriableCreate || !attemptPolicy.hasNext(attempt) {
+			if hasStage && stage == provider.VideoStageSubmitted {
+				// The create request may have reached the upstream without returning an ID.
+				s.endVideoJob(parent, job, media.StatusUncertain, "submission_uncertain", err, provider.ErrorHTTPStatusOrZero(err), failureAttempts.snapshot())
+				return
+			}
 			failureCode, publicErr := "generation_failed", err
 			upstreamStatus := 0
 			if hasStatus {
@@ -980,13 +1046,19 @@ func waitVideoOutputRetry(ctx context.Context, attempt int) error {
 	}
 }
 
-func (s *Service) reconcileVideoUsage(ctx context.Context) error {
+func (s *Service) reconcileMediaUsage(ctx context.Context) error {
 	jobs, err := s.mediaJobs.ListUnrecordedTerminalMediaJobs(ctx, 200)
 	if err != nil {
 		return err
 	}
 	var result error
 	for _, job := range jobs {
+		if job.Kind == media.KindImage {
+			if err := s.recordImageJobAudits(ctx, job, 0); err != nil {
+				result = firstError(result, fmt.Errorf("任务 %s: %w", job.ID, err))
+			}
+			continue
+		}
 		durationMS := int64(0)
 		if job.CompletedAt != nil {
 			durationMS = max(int64(0), job.CompletedAt.Sub(job.CreatedAt).Milliseconds())
@@ -1027,10 +1099,16 @@ func (s *Service) recordVideoAudit(ctx context.Context, job media.Job, durationM
 	if operation == "" {
 		operation = provider.VideoOperationGenerate
 	}
-	// ponytail: settles at the price active on completion, not the one
-	// reserved at submission; snapshot it on the job if edits mid-job matter.
-	if pricing, ok := s.pricing.QuoteVideo(account.Provider(job.Provider), job.UpstreamModel, job.Quality, job.Seconds, job.InputImageCount); ok && job.Status == media.StatusCompleted && operation == provider.VideoOperationGenerate {
-		pricing.Apply(&record)
+	// Settle at the quote reserved at submission; jobs created before price
+	// snapshots fall back to the current price.
+	if job.Status == media.StatusCompleted && operation == provider.VideoOperationGenerate {
+		if job.Price != nil {
+			if job.Price.Model != "" {
+				job.Price.Apply(&record)
+			}
+		} else if pricing, ok := s.pricing.QuoteVideo(account.Provider(job.Provider), job.UpstreamModel, job.Quality, job.Seconds, job.InputImageCount); ok {
+			pricing.Apply(&record)
+		}
 	}
 	if durable, ok := s.audits.(interface {
 		CreateDurable(context.Context, audit.Record) error
@@ -1224,12 +1302,18 @@ func videoInputReferences(imageURL string, referenceURLs []string) []string {
 }
 
 func (s *Service) failVideoJob(ctx context.Context, job media.Job, code string, err error, upstreamStatus int, attempts []audit.Attempt) {
+	s.endVideoJob(ctx, job, media.StatusFailed, code, err, upstreamStatus, attempts)
+}
+
+// endVideoJob records a failed or uncertain outcome. Uncertain jobs keep
+// their inputs so an administrator can retry them.
+func (s *Service) endVideoJob(ctx context.Context, job media.Job, status media.Status, code string, err error, upstreamStatus int, attempts []audit.Attempt) {
 	now := time.Now().UTC()
 	message := ""
 	if err != nil {
 		message = err.Error()
 	}
-	job.Status, job.ErrorCode, job.ErrorMessage = media.StatusFailed, code, message
+	job.Status, job.ErrorCode, job.ErrorMessage = status, code, message
 	if len(job.ErrorMessage) > 512 {
 		job.ErrorMessage = job.ErrorMessage[:512]
 	}
@@ -1242,11 +1326,13 @@ func (s *Service) failVideoJob(ctx context.Context, job media.Job, code string, 
 		s.logger.Error("video_usage_record_failed", "job_id", job.ID, "event_id", "video_usage_"+job.ID, "error", auditErr)
 	}
 	s.cancelBillingReservation("video_usage_" + job.ID)
-	s.releaseVideoInputs(job)
+	if status != media.StatusUncertain {
+		s.releaseVideoInputs(job)
+	}
 }
 
 func resolveVideoAuditStatusCode(job media.Job, upstreamStatus int, attempts []audit.Attempt) int {
-	if job.Status != media.StatusFailed {
+	if job.Status == media.StatusCompleted {
 		return http.StatusOK
 	}
 	if upstreamStatus >= 100 && upstreamStatus <= 599 {

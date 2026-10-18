@@ -258,7 +258,7 @@ func TestPutVideoUploadReturns400ForInvalidMIME(t *testing.T) {
 	}
 }
 
-func TestAdminVideoListRejectsInvalidFilters(t *testing.T) {
+func TestAdminJobListRejectsInvalidFilters(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
 	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "media-admin-http.db"))
@@ -280,9 +280,9 @@ func TestAdminVideoListRejectsInvalidFilters(t *testing.T) {
 	NewHandler(service).RegisterAdmin(router.Group("/api/admin/v1"))
 
 	for _, path := range []string{
-		"/api/admin/v1/media/videos?status=unknown",
-		"/api/admin/v1/media/videos?sortBy=input_json&sortOrder=asc",
-		"/api/admin/v1/media/videos?sortBy=createdAt&sortOrder=sideways",
+		"/api/admin/v1/media/jobs?status=unknown",
+		"/api/admin/v1/media/jobs?sortBy=input_json&sortOrder=asc",
+		"/api/admin/v1/media/jobs?sortBy=createdAt&sortOrder=sideways",
 	} {
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))

@@ -1045,7 +1045,7 @@ func videoGenerationResponse(job mediadomain.Job, contentURLs ...string) gin.H {
 			"status": "done", "model": job.Model, "progress": 100,
 			"video": video,
 		}
-	case mediadomain.StatusFailed:
+	case mediadomain.StatusFailed, mediadomain.StatusUncertain, mediadomain.StatusCanceled:
 		return gin.H{
 			"status": "failed",
 			"error":  gin.H{"code": officialVideoErrorCode(job.ErrorCode), "message": job.ErrorMessage},

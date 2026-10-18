@@ -315,8 +315,8 @@ func (a *Application) reconcileStartup(ctx context.Context) {
 		a.logger.Warn("billing_reservation_cleanup_failed", "error", err)
 		a.startup.recordError(err)
 	}
-	if err := a.gateway.RecoverVideoJobs(recoveryCtx); err != nil {
-		a.logger.Warn("video_job_recovery_failed", "error", err)
+	if err := a.gateway.RecoverMediaJobs(recoveryCtx); err != nil {
+		a.logger.Warn("media_job_recovery_failed", "error", err)
 		a.startup.recordError(err)
 	}
 	if _, err := a.accountRepo.PruneExpiredModelQuotaBlocks(recoveryCtx, time.Now().UTC(), 1000); err != nil {

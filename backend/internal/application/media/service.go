@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
@@ -24,10 +25,10 @@ var (
 	ErrAssetNotFound         = errors.New("媒体资源不存在")
 	ErrInvalidImage          = errors.New("图片内容无效")
 	ErrInvalidImageSelection = errors.New("图片选择无效")
-	ErrInvalidVideoSelection = errors.New("视频任务选择无效")
-	ErrActiveVideoSelection  = errors.New("排队中或生成中的视频任务不能删除")
+	ErrInvalidJobSelection   = errors.New("媒体任务选择无效")
+	ErrActiveJobSelection    = errors.New("排队中或生成中的媒体任务不能删除")
 	ErrInvalidFilter         = errors.New("媒体筛选条件无效")
-	ErrMediaJobsUnavailable  = errors.New("视频任务仓储未配置")
+	ErrMediaJobsUnavailable  = errors.New("媒体任务仓储未配置")
 	ErrInputAssetNotFound    = errors.New("临时输入资产不存在或已过期")
 	ErrMediaCapacity         = errors.New("媒体存储容量不足")
 	ErrAssetInUse            = errors.New("媒体资源正被进行中的任务引用")
@@ -68,12 +69,14 @@ type ImageStats struct {
 	TotalBytes  int64
 }
 
-type VideoStats struct {
+type JobStats struct {
 	TotalJobs  int64
 	Completed  int64
 	Failed     int64
 	InProgress int64
 	Queued     int64
+	Canceled   int64
+	Uncertain  int64
 }
 
 func NewService(assets repository.MediaAssetRepository, jobs repository.MediaJobRepository, objects repository.MediaObjectStorage, cleanupLock repository.DistributedLock, cfg Config) *Service {
@@ -295,19 +298,17 @@ func (s *Service) AdminGetAsset(ctx context.Context, id string) (mediadomain.Ass
 	return asset, err
 }
 
-// AdminListVideoJobs 分页返回视频任务列表。
-func (s *Service) AdminListVideoJobs(ctx context.Context, page, pageSize int, search, status string, sort repository.SortQuery) ([]mediadomain.Job, int64, error) {
+// AdminListJobs 分页返回图片与视频任务列表。
+func (s *Service) AdminListJobs(ctx context.Context, page, pageSize int, search string, filter repository.MediaJobListFilter, sort repository.SortQuery) ([]mediadomain.Job, int64, error) {
 	if s.jobs == nil {
 		return nil, 0, ErrMediaJobsUnavailable
 	}
-	status = strings.TrimSpace(status)
-	if !validMediaStatus(status) || !repository.IsValidSort(sort, "prompt", "model", "status", "progress", "spec", "account", "createdAt", "completedAt") {
+	filter.Kind, filter.Status, filter.Provider = strings.TrimSpace(filter.Kind), strings.TrimSpace(filter.Status), strings.TrimSpace(filter.Provider)
+	if !validJobKind(filter.Kind) || !validMediaStatus(filter.Status) || (filter.Provider != "" && !accountdomain.Provider(filter.Provider).IsValid()) ||
+		!repository.IsValidSort(sort, "prompt", "model", "status", "progress", "spec", "account", "createdAt", "completedAt") {
 		return nil, 0, ErrInvalidFilter
 	}
-	return s.jobs.ListMediaJobs(ctx, repository.MediaJobListQuery{
-		Page:   mediaPageQuery(page, pageSize, search, sort),
-		Filter: repository.MediaJobListFilter{Status: status},
-	})
+	return s.jobs.ListMediaJobs(ctx, repository.MediaJobListQuery{Page: mediaPageQuery(page, pageSize, search, sort), Filter: filter})
 }
 
 // AdminImageStats 返回图片统计信息。
@@ -380,36 +381,37 @@ func (s *Service) AdminDeleteImages(ctx context.Context, ids []string) (int, err
 	return deleted, nil
 }
 
-// AdminVideoStats 返回视频任务统计信息。
-func (s *Service) AdminVideoStats(ctx context.Context) (VideoStats, error) {
+// AdminJobStats 返回媒体任务各状态统计；kind 为空时统计全部类型。
+func (s *Service) AdminJobStats(ctx context.Context, kind string) (JobStats, error) {
 	if s.jobs == nil {
-		return VideoStats{}, ErrMediaJobsUnavailable
+		return JobStats{}, ErrMediaJobsUnavailable
 	}
-	stats, err := s.jobs.SummarizeMediaJobs(ctx)
+	if kind = strings.TrimSpace(kind); !validJobKind(kind) {
+		return JobStats{}, ErrInvalidFilter
+	}
+	stats, err := s.jobs.SummarizeMediaJobs(ctx, kind)
 	if err != nil {
-		return VideoStats{}, err
+		return JobStats{}, err
 	}
-	return VideoStats{
-		TotalJobs: stats.TotalJobs, Completed: stats.Completed, Failed: stats.Failed,
-		InProgress: stats.InProgress, Queued: stats.Queued,
-	}, nil
+	return JobStats(stats), nil
 }
 
-// AdminDeleteVideoJobs 删除管理员明确选择的终态视频任务。
-// 成功任务若已归档本地视频，则同步撤销上传票据并删除对象和媒体元数据；审计记录独立保留。
-func (s *Service) AdminDeleteVideoJobs(ctx context.Context, ids []string) (int, error) {
+// AdminDeleteJobs 删除管理员明确选择的终态媒体任务。
+// 视频任务若已归档本地视频，则同步撤销上传票据并删除对象和媒体元数据；
+// 图片任务的结果属于图库，保留不删。审计记录独立保留。
+func (s *Service) AdminDeleteJobs(ctx context.Context, ids []string) (int, error) {
 	if s.jobs == nil {
 		return 0, ErrMediaJobsUnavailable
 	}
 	if len(ids) == 0 || len(ids) > 100 {
-		return 0, ErrInvalidVideoSelection
+		return 0, ErrInvalidJobSelection
 	}
 	unique := make(map[string]struct{}, len(ids))
 	normalized := make([]string, 0, len(ids))
 	for _, rawID := range ids {
 		id := strings.TrimSpace(rawID)
 		if id == "" {
-			return 0, ErrInvalidVideoSelection
+			return 0, ErrInvalidJobSelection
 		}
 		if _, exists := unique[id]; exists {
 			continue
@@ -422,8 +424,8 @@ func (s *Service) AdminDeleteVideoJobs(ctx context.Context, ids []string) (int, 
 		return 0, err
 	}
 	for _, job := range jobs {
-		if job.Status != mediadomain.StatusCompleted && job.Status != mediadomain.StatusFailed {
-			return 0, ErrActiveVideoSelection
+		if !job.Status.Terminal() {
+			return 0, ErrActiveJobSelection
 		}
 	}
 
@@ -483,11 +485,15 @@ func mediaPageQuery(page, pageSize int, search string, sort repository.SortQuery
 
 func validMediaStatus(status string) bool {
 	switch mediadomain.Status(status) {
-	case "", mediadomain.StatusQueued, mediadomain.StatusInProgress, mediadomain.StatusCompleted, mediadomain.StatusFailed:
+	case "", mediadomain.StatusQueued, mediadomain.StatusInProgress, mediadomain.StatusCompleted, mediadomain.StatusFailed, mediadomain.StatusCanceled, mediadomain.StatusUncertain:
 		return true
 	default:
 		return false
 	}
+}
+
+func validJobKind(kind string) bool {
+	return kind == "" || kind == string(mediadomain.KindVideo) || kind == string(mediadomain.KindImage)
 }
 
 // RunCleanup 响应容量阈值并按周期清理最旧媒体资源。
