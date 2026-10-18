@@ -169,6 +169,8 @@ export function CreativeConsolePage() {
     image: modelGroups.image.some((model) => model.publicId === selectedModels.image) ? selectedModels.image : modelGroups.image[0]?.publicId ?? "",
     video: modelGroups.video.some((model) => model.publicId === selectedModels.video) ? selectedModels.video : modelGroups.video[0]?.publicId ?? "",
   }), [modelGroups, selectedModels]);
+  // Video reference voices come from Grok's grok-voice-latest TTS catalog; other TTS routes (chatgpt-tts) can't list them.
+  const grokVoiceRoute = modelGroups.voice.some((model) => model.capability === "tts" && model.publicId === "grok-voice-latest");
 
   const secretMutation = useMutation({
     mutationFn: (id: string) => getClientKeySecret(id),
@@ -260,7 +262,7 @@ export function CreativeConsolePage() {
         <div className="min-h-0 flex-1">
           <div className="h-full" hidden={mode !== "chat"}><ChatPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "chat" ? toolbarElement : null} {...panelProps("chat")} /></div>
           <div className="h-full" hidden={mode !== "image"}><ImagePanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "image" ? toolbarElement : null} {...panelProps("image")} /></div>
-          <div className="h-full" hidden={mode !== "video"}><VideoPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "video" ? toolbarElement : null} {...panelProps("video")} /></div>
+          <div className="h-full" hidden={mode !== "video"}><VideoPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "video" ? toolbarElement : null} grokVoiceRoute={grokVoiceRoute} {...panelProps("video")} /></div>
           <div className="h-full" hidden={mode !== "voice"}><VoicePanel apiKey={apiKey} modelOptions={modelGroups.voice} /></div>
         </div>
       </section>
@@ -1111,7 +1113,7 @@ function ImageJobPoller({ record, apiKey, onSettle }: { record: ImageHistoryReco
   return null;
 }
 
-function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & HistoryPanelProps) {
+function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement, grokVoiceRoute }: CreativePanelProps & HistoryPanelProps & { grokVoiceRoute: boolean }) {
   const { t, i18n } = useTranslation();
   const [action, setAction] = useState<VideoAction>("generate");
   const [prompt, setPrompt] = useState("");
@@ -1155,8 +1157,8 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const voicesQuery = useQuery({
     queryKey: ["creative-console", "video-voices", apiKey],
     queryFn: ({ signal }) => listVoices({ apiKey, model: "grok-voice-latest", signal }),
-    // Reference voices come from the TTS catalog; without a TTS route the request can only 404.
-    enabled: Boolean(apiKey && action === "generate") && modelOptions.some((item) => item.capability === "tts"),
+    // Reference voices come from the grok-voice-latest catalog; without that route the request can only 404.
+    enabled: Boolean(apiKey && action === "generate" && grokVoiceRoute),
     retry: false,
     staleTime: 60_000,
   });
