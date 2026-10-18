@@ -2,11 +2,16 @@ package chatgpt
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
 // identityUpstream accepts only the access token issued by its token endpoint.
@@ -67,5 +72,26 @@ func TestImportExchangesRefreshTokenForUnusableAccessToken(t *testing.T) {
 				t.Fatalf("seed = %+v, err = %v", seed, err)
 			}
 		})
+	}
+}
+
+// A long OAuth error description is cut on a rune boundary.
+func TestOAuthErrorMessageStaysValidUTF8(t *testing.T) {
+	description := strings.Repeat("a", 511) + strings.Repeat("é", 100)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"` + description + `"}`))
+	}))
+	t.Cleanup(server.Close)
+	a, _ := newTestAdapter(t, server)
+	credential := testCredential(t, a, credentials{AccessToken: "AT", RefreshToken: "RT", ClientProfile: oauthProfile})
+	_, err := a.RefreshCredential(context.Background(), credential)
+	var refreshErr *provider.CredentialRefreshError
+	if !errors.As(err, &refreshErr) {
+		t.Fatalf("err = %v", err)
+	}
+	if !utf8.ValidString(refreshErr.Message) || len(refreshErr.Message) > 512 || !strings.HasPrefix(refreshErr.Message, strings.Repeat("a", 511)) {
+		t.Fatalf("message = %q (%d bytes)", refreshErr.Message, len(refreshErr.Message))
 	}
 }

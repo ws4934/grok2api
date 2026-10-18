@@ -389,7 +389,8 @@ func (a *Adapter) exchange(ctx context.Context, credential account.Credential, b
 		}
 		message := v.Description
 		if len(message) > 512 {
-			message = message[:512]
+			// Cut on a rune boundary: PostgreSQL rejects invalid UTF-8.
+			message = strings.ToValidUTF8(message[:512], "")
 		}
 		if message == "" {
 			message = "OAuth token endpoint rejected the exchange"

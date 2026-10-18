@@ -2254,6 +2254,8 @@ func (s *Service) MarkReauthRequired(ctx context.Context, id uint64, reason stri
 	if len(value.LastError) > 512 {
 		value.LastError = value.LastError[:512]
 	}
+	// Drop a rune split by the cut (or any invalid byte): PostgreSQL rejects invalid UTF-8.
+	value.LastError = strings.ToValidUTF8(value.LastError, "")
 	if _, err := s.accounts.Update(ctx, value); err != nil {
 		return mapRepositoryError(err)
 	}
