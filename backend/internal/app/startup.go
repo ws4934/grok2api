@@ -395,8 +395,9 @@ func (a *Application) queueDueWebQuotaRefresh(ctx context.Context) {
 }
 
 // runWebQuotaCatchup periodically syncs stale quota windows of every
-// remote-window provider (Grok Web, ChatGPT, ...). Console keeps its own
-// /usage catch-up in runConsoleQuotaCatchup.
+// remote-window provider (Grok Web, ChatGPT, ...), each with its own
+// staleness (Profile.QuotaStaleAfter). Console keeps its own /usage catch-up
+// in runConsoleQuotaCatchup.
 func (a *Application) runWebQuotaCatchup(ctx context.Context) {
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
@@ -406,15 +407,30 @@ func (a *Application) runWebQuotaCatchup(ctx context.Context) {
 			return
 		case <-timer.C:
 		}
-		ids, err := a.accountRepo.ListStaleQuotaAccountIDs(ctx, staleQuotaCatchupProviders(a.providers), time.Now().UTC().Add(-webQuotaStaleAfter), 100)
-		if err == nil && len(ids) > 0 {
+		now := time.Now().UTC()
+		var err error
+		found, synced := 0, 0
+		for _, catchup := range staleQuotaCatchups(a.providers) {
+			ids, listErr := a.accountRepo.ListStaleQuotaAccountIDs(ctx, []accountdomain.Provider{catchup.provider}, now.Add(-catchup.staleAfter), 100)
+			if listErr != nil {
+				err = listErr
+				continue
+			}
+			if len(ids) == 0 {
+				continue
+			}
 			runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			var succeeded int
-			succeeded, _, err = a.accounts.SyncQuotaAccounts(runCtx, ids)
+			succeeded, _, syncErr := a.accounts.SyncQuotaAccounts(runCtx, ids)
 			cancel()
+			found, synced = found+len(ids), synced+succeeded
+			if syncErr != nil {
+				err = syncErr
+			}
+		}
+		if found > 0 {
 			a.startup.updateReport(func(report *startupReport) {
-				report.StaleWebQuotasFound = len(ids)
-				report.StaleWebQuotasSynced = succeeded
+				report.StaleWebQuotasFound = found
+				report.StaleWebQuotasSynced = synced
 			})
 		}
 		if err != nil && ctx.Err() == nil {
@@ -424,11 +440,21 @@ func (a *Application) runWebQuotaCatchup(ctx context.Context) {
 	}
 }
 
-func staleQuotaCatchupProviders(registry *provider.Registry) []accountdomain.Provider {
-	var values []accountdomain.Provider
+// staleQuotaCatchup syncs a provider's quota windows older than staleAfter.
+type staleQuotaCatchup struct {
+	provider   accountdomain.Provider
+	staleAfter time.Duration
+}
+
+func staleQuotaCatchups(registry *provider.Registry) []staleQuotaCatchup {
+	var values []staleQuotaCatchup
 	for _, value := range registry.Providers() {
 		if kind, _ := registry.QuotaKind(value); kind == provider.QuotaRemoteWindow && value != accountdomain.ProviderConsole {
-			values = append(values, value)
+			staleAfter := webQuotaStaleAfter
+			if definition, ok := registry.Definition(value); ok && definition.Profile.QuotaStaleAfter > 0 {
+				staleAfter = definition.Profile.QuotaStaleAfter
+			}
+			values = append(values, staleQuotaCatchup{provider: value, staleAfter: staleAfter})
 		}
 	}
 	return values

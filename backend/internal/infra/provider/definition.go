@@ -3,6 +3,7 @@ package provider
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
@@ -149,6 +150,9 @@ type ProfileSurface struct {
 	// OfficialPricing bills the provider with the official xAI price list
 	// (domain/audit/pricing.go) when no custom price exists.
 	OfficialPricing bool
+	// QuotaStaleAfter is how old a remote quota window may get before the
+	// background catch-up syncs it again; 0 keeps the shared 30 minutes.
+	QuotaStaleAfter time.Duration
 }
 
 // Definition 是 Provider 注册表的权威静态描述；渠道专属协议仍由各 Adapter 实现。

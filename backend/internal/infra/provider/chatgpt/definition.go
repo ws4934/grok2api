@@ -2,6 +2,7 @@ package chatgpt
 
 import (
 	"slices"
+	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
@@ -30,6 +31,9 @@ func (a *Adapter) Definition() provider.Definition {
 			Name: "ChatGPT", ShortName: "ChatGPT", TierExempt: true,
 			EgressScopes: []egressdomain.Scope{scope}, DefaultMaxConcurrent: 1,
 			QuotaModes: []string{quotaModeReason, quotaModeImage, quotaModeUpload},
+			// Windows carry their reset time and every request refreshes its
+			// window, so idle accounts need only an occasional sync.
+			QuotaStaleAfter: 6 * time.Hour,
 		},
 		ModelNamespace: account.ProviderChatGPT.ModelNamespace(),
 		ModelCatalog:   provider.ModelCatalogRemote,
