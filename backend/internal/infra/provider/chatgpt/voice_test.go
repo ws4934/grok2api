@@ -173,6 +173,9 @@ func TestTranscriptionUsesDictation(t *testing.T) {
 		{"blob", "application/octet-stream", "ID3\x03rest", "blob.mp3:ID3\x03rest:"},
 		{"voice.bin", "audio/mp4", "M4A", "voice.bin.m4a:M4A:"},
 		{"take.M4A", "", "M4A", "take.M4A:M4A:"},
+		{"blob", "application/octet-stream", "\xff\xfb\x90\x00", "blob.mp3:\xff\xfb\x90\x00:"},
+		{"blob", "", "\xff\xf1\x50\x80", "blob.aac:\xff\xf1\x50\x80:"},
+		{"blob", "", "fLaC\x00", "blob.flac:fLaC\x00:"},
 	} {
 		if _, err := a.TranscribeSpeech(context.Background(), provider.STTRequest{Credential: credential, FileName: upload.name, FileMIME: upload.mime, FileData: []byte(upload.data)}); err != nil || upstream.upload != upload.want {
 			t.Fatalf("%s %s: upload = %q, %v", upload.name, upload.mime, upstream.upload, err)

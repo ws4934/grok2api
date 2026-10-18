@@ -296,7 +296,7 @@ func (a *Adapter) TranscribeSpeech(ctx context.Context, request provider.STTRequ
 	if !knownAudioExtension(path.Ext(name)) {
 		mediaType, _, _ := mime.ParseMediaType(request.FileMIME)
 		if _, ok := audioExtensions[mediaType]; !ok {
-			mediaType, _, _ = mime.ParseMediaType(http.DetectContentType(request.FileData))
+			mediaType = sniffAudio(request.FileData)
 		}
 		name += audioExtensions[mediaType]
 	}
@@ -336,6 +336,21 @@ func (a *Adapter) TranscribeSpeech(ctx context.Context, request provider.STTRequ
 		return nil
 	})
 	return result, err
+}
+
+// sniffAudio names the audio type of data. http.DetectContentType knows MP3
+// only behind an ID3 tag, so bare MPEG and ADTS frames and FLAC are checked first.
+func sniffAudio(data []byte) string {
+	switch {
+	case bytes.HasPrefix(data, []byte("fLaC")):
+		return "audio/flac"
+	case len(data) > 1 && data[0] == 0xFF && data[1]&0xF6 == 0xF0:
+		return "audio/aac"
+	case len(data) > 1 && data[0] == 0xFF && data[1]&0xE0 == 0xE0:
+		return "audio/mpeg"
+	}
+	mediaType, _, _ := mime.ParseMediaType(http.DetectContentType(data))
+	return mediaType
 }
 
 // knownAudioExtension reports a file extension dictation accepts.
