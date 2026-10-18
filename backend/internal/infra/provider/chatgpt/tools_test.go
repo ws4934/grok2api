@@ -336,3 +336,23 @@ func stringsOf(value any) []string {
 	}
 	return out
 }
+
+// The Web app's current search format: queries in search_model_queries,
+// results with ref IDs, and <Cite/> components in the answer.
+func TestWebSearchCiteComponentsBecomeLinks(t *testing.T) {
+	results := `data: {"message":{"id":"r","author":{"role":"tool","name":"web.run"},"status":"finished_successfully","content":{"content_type":"text","parts":[""]},"metadata":{"search_model_queries":{"type":"search_model_queries","queries":["go release"]},"search_result_groups":[{"type":"search_result_group","domain":"go.dev","entries":[{"type":"search_result","url":"https://go.dev/doc/devel/release","title":"Release History","attribution":"go.dev","ref_id":{"turn_index":7,"ref_type":"search","ref_index":8}}]}]}}}` + "\n\n"
+	answer := `Go 1.27.2 is out. <Cite refs={["turn7search8","turn7search9"]}/> See <Cite refs={["turn9search1"]}/>notes.`
+	want := "Go 1.27.2 is out. ([go.dev](https://go.dev/doc/devel/release)) See notes."
+	a, _ := newTestAdapter(t, answerUpstream(t, nil, results+answerSnapshots(answer, "{}")+"data: [DONE]\n\n"))
+	credential := testCredential(t, a, credentials{AccessToken: "AT"})
+	object := decodeBody(t, forward(t, a, credential, "responses", `{"model":"gpt-5","tools":[{"type":"web_search"}],"input":"go?"}`, false))
+	search := outputOf(object, "web_search_call")
+	if len(search) != 1 || search[0]["action"].(map[string]any)["query"] != "go release" {
+		t.Fatalf("web_search_call = %v", search)
+	}
+	part := outputOf(object, "message")[0]["content"].([]any)[0].(map[string]any)
+	annotations := part["annotations"].([]any)
+	if part["text"] != want || len(annotations) != 1 || annotations[0].(map[string]any)["url"] != "https://go.dev/doc/devel/release" {
+		t.Fatalf("part = %v", part)
+	}
+}

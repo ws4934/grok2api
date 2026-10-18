@@ -203,8 +203,8 @@ func (a *Adapter) converse(ctx context.Context, credential account.Credential, c
 			return err
 		}
 		// Each attempt filters its own answer: tool calls are sifted out first,
-		// so their arguments keep any markup, then Web UI markup is rewritten
-		// and citation markers become Markdown links.
+		// so their arguments keep any markup, then citations become Markdown
+		// links and the remaining Web UI markup is rewritten.
 		var sieve *toolemu.Sieve
 		if in.Emulated.Enabled() {
 			sieve = toolemu.NewSieve(in.Emulated.Available)
@@ -227,13 +227,13 @@ func (a *Adapter) converse(ctx context.Context, credential account.Credential, c
 				text, calls = sift(sieve, text, flush)
 				t.calls = append(t.calls, calls...)
 			}
-			text = ui.Feed(text)
-			if flush {
-				text += ui.Flush()
-			}
 			text, cited := cites.Feed(text, event.Search)
 			if flush {
 				text += cites.Flush()
+			}
+			text = ui.Feed(text)
+			if flush {
+				text += ui.Flush()
 			}
 			t.search, t.cited = event.Search, append(t.cited, cited...)
 			if err := t.add(true, reasoning); err != nil {

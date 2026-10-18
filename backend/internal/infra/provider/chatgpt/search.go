@@ -1,6 +1,9 @@
 package chatgpt
 
 import (
+	"fmt"
+	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -19,7 +22,12 @@ const (
 	maxMarker = 1024
 	// maxQueries bounds the search queries kept from the stream.
 	maxQueries = 16
+	citeOpen   = "<Cite"
 )
+
+// Newer answers cite with a Web component instead: <Cite refs={["turn0search8"]}/>,
+// where each ref names a search result by its ref_id.
+var citeTag = regexp.MustCompile(`^<Cite\s+refs=\{\[([^\]]*)\]\}\s*/>$`)
 
 // chatSearch is what a reply shows of ChatGPT's own web search, which runs
 // server-side: queries and result groups from the search messages, citation
@@ -29,6 +37,8 @@ type chatSearch struct {
 	queries []string
 	sources []searchSource
 	refs    map[string]citation
+	// results maps result ref IDs (turn0search8) to their page, for <Cite/>.
+	results map[string]citation
 	unsafe  map[string]bool
 }
 
@@ -46,9 +56,16 @@ func (s *chatSearch) used() bool {
 // whose latest content_references replace the earlier ones.
 func (s *chatSearch) note(message map[string]any, answer bool) {
 	metadata, _ := message["metadata"].(map[string]any)
-	for _, raw := range toAnyList(metadata["search_queries"]) {
-		query, _ := raw.(map[string]any)
-		if q := strings.TrimSpace(stringValue(query["q"])); q != "" && len(s.queries) < maxQueries && !slices.Contains(s.queries, q) {
+	queries := toAnyList(metadata["search_queries"])
+	if model, ok := metadata["search_model_queries"].(map[string]any); ok {
+		queries = append(queries, toAnyList(model["queries"])...)
+	}
+	for _, raw := range queries {
+		q, ok := raw.(string)
+		if query, isObject := raw.(map[string]any); isObject {
+			q, ok = stringValue(query["q"]), true
+		}
+		if q = strings.TrimSpace(q); ok && q != "" && len(s.queries) < maxQueries && !slices.Contains(s.queries, q) {
 			s.queries = append(s.queries, q)
 		}
 	}
@@ -56,7 +73,8 @@ func (s *chatSearch) note(message map[string]any, answer bool) {
 		group, _ := raw.(map[string]any)
 		for _, raw := range toAnyList(group["entries"]) {
 			entry, _ := raw.(map[string]any)
-			s.source(stringValue(entry["url"]), stringValue(entry["title"]))
+			page, title := s.source(stringValue(entry["url"]), stringValue(entry["title"]))
+			s.result(entry["ref_id"], page, title, stringValue(entry["attribution"]))
 		}
 	}
 	if !answer {
@@ -106,6 +124,47 @@ func (s *chatSearch) source(raw, title string) (string, string) {
 	return url, title
 }
 
+// result records the page a result ref ID names, labelled by its site.
+func (s *chatSearch) result(rawID any, page, title, site string) {
+	id, _ := rawID.(map[string]any)
+	turn, hasTurn := id["turn_index"].(float64)
+	index, hasIndex := id["ref_index"].(float64)
+	kind := stringValue(id["ref_type"])
+	if page == "" || !hasTurn || !hasIndex || kind == "" {
+		return
+	}
+	if parsed, err := url.Parse(page); err == nil && site == "" {
+		site = strings.TrimPrefix(parsed.Hostname(), "www.")
+	}
+	label := strings.NewReplacer("[", "", "]", "").Replace(searchresult.NormalizeTitle(site, title))
+	if s.results == nil {
+		s.results = map[string]citation{}
+	}
+	s.results[fmt.Sprintf("turn%d%s%d", int(turn), kind, int(index))] = citation{alt: "[" + label + "](" + page + ")", url: page, title: title}
+}
+
+// cite renders a <Cite/> component as Markdown links to the results it
+// names; a component naming no known result comes back unchanged.
+func (s *chatSearch) cite(tag string) (string, []citation) {
+	match := citeTag.FindStringSubmatch(tag)
+	if s == nil || match == nil {
+		return tag, nil
+	}
+	var cited []citation
+	var links []string
+	for _, raw := range strings.Split(match[1], ",") {
+		c, ok := s.results[strings.Trim(strings.TrimSpace(raw), `"'`)]
+		if !ok || s.unsafe[c.url] || slices.ContainsFunc(cited, func(v citation) bool { return v.url == c.url }) {
+			continue
+		}
+		cited, links = append(cited, c), append(links, c.alt)
+	}
+	if len(cited) == 0 {
+		return tag, nil
+	}
+	return "(" + strings.Join(links, ", ") + ")", cited
+}
+
 // block drops a URL that url_moderation flagged as unsafe.
 func (s *chatSearch) block(raw string) {
 	url, ok := searchresult.NormalizeURL(raw)
@@ -147,8 +206,8 @@ func (s *chatSearch) action() map[string]any {
 	return map[string]any{"type": "search", "query": query, "sources": sources}
 }
 
-// citer replaces citation markers in the visible answer with their alt
-// Markdown and returns the citations it resolved.
+// citer replaces citation markers and <Cite/> components in the visible
+// answer with Markdown links and returns the citations it resolved.
 // ponytail: a marker whose reference has not arrived when it completes stays
 // as is; hold it until the next snapshot if ChatGPT sends references late.
 type citer struct{ pending string }
@@ -159,13 +218,38 @@ func (c *citer) Feed(text string, search *chatSearch) (string, []citation) {
 	var cited []citation
 	for {
 		start := strings.IndexRune(c.pending, citeStart)
+		if tag := strings.Index(c.pending, citeOpen); tag >= 0 && (start < 0 || tag < start) {
+			start = tag
+		}
 		if start < 0 {
-			out.WriteString(c.pending)
-			c.pending = ""
+			// Hold a tail that may begin a <Cite/> component.
+			keep := 0
+			for size := len(citeOpen) - 1; size > 0 && keep == 0; size-- {
+				if strings.HasSuffix(c.pending, citeOpen[:size]) {
+					keep = size
+				}
+			}
+			out.WriteString(c.pending[:len(c.pending)-keep])
+			c.pending = c.pending[len(c.pending)-keep:]
 			break
 		}
 		out.WriteString(c.pending[:start])
 		c.pending = c.pending[start:]
+		if strings.HasPrefix(c.pending, citeOpen) {
+			end := strings.Index(c.pending, "/>")
+			if end < 0 && len(c.pending) <= maxMarker {
+				break // the component may still complete
+			}
+			size := len(citeOpen)
+			if end >= 0 {
+				size = end + len("/>")
+			}
+			text, refs := search.cite(c.pending[:size])
+			c.pending = c.pending[size:]
+			out.WriteString(text)
+			cited = append(cited, refs...)
+			continue
+		}
 		end := strings.IndexRune(c.pending, citeEnd)
 		if end < 0 && len(c.pending) <= maxMarker {
 			break // the marker may still complete
