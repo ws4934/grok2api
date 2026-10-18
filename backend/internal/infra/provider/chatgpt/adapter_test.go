@@ -502,7 +502,7 @@ func accountUpstream(t *testing.T, tokenCalls *atomic.Int32) *httptest.Server {
 		case "/backend-api/models":
 			_, _ = w.Write([]byte(`{"models":[{"slug":"gpt-5"},{"slug":"gpt-5-thinking"}]}`))
 		case "/backend-api/conversation/init":
-			_, _ = w.Write([]byte(`{"limits_progress":[{"feature_name":"reason","remaining":0,"reset_at":"2030-01-02T03:04:05Z"},{"feature_name":"image_gen","remaining":5},{"feature_name":"deep_research","remaining":1}]}`))
+			_, _ = w.Write([]byte(`{"limits_progress":[{"feature_name":"reason","remaining":0,"reset_after":"2030-01-02T03:04:05.302546+00:00"},{"feature_name":"image_gen","remaining":5},{"feature_name":"deep_research","remaining":1}]}`))
 		default:
 			t.Errorf("unexpected endpoint %s", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -574,7 +574,7 @@ func TestAccountIdentityModelsAndQuotaWindows(t *testing.T) {
 		t.Fatalf("snapshot = %+v, %v", snapshot, err)
 	}
 	reason := snapshot.Windows[0]
-	if reason.Mode != quotaModeReason || reason.Remaining != 0 || reason.UsagePercent != 100 || reason.ResetAt == nil || reason.AccountID != 7 || snapshot.Windows[1].Remaining != 5 {
+	if reason.Mode != quotaModeReason || reason.Remaining != 0 || reason.UsagePercent != 100 || reason.ResetAt == nil || !reason.ResetAt.Equal(time.Date(2030, 1, 2, 3, 4, 5, 302546000, time.UTC)) || reason.AccountID != 7 || snapshot.Windows[1].Remaining != 5 {
 		t.Fatalf("windows = %+v", snapshot.Windows)
 	}
 	if _, err := a.SyncQuotaMode(ctx, credential, quotaModeUpload); err == nil {

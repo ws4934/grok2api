@@ -552,7 +552,8 @@ func (a *Adapter) SyncQuota(ctx context.Context, credential account.Credential) 
 		if remaining == 0 {
 			window.UsagePercent = 100
 		}
-		if t, err := time.Parse(time.RFC3339, aiString(m, "reset_at", "resets_at")); err == nil {
+		// conversation/init reports the reset as reset_after (an RFC 3339 time).
+		if t, err := time.Parse(time.RFC3339, aiString(m, "reset_after", "reset_at", "resets_at")); err == nil {
 			window.ResetAt = &t
 		}
 		snapshot.Windows = append(snapshot.Windows, window)
