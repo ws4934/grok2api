@@ -183,12 +183,18 @@ func (a *Adapter) converse(ctx context.Context, credential account.Credential, c
 		if err != nil {
 			return err
 		}
+		// Each attempt rewrites the Web UI markup of its own answer.
+		ui := &richUIFilter{}
 		err = NewOpenAIChat(a.image).Stream(ctx, w, request, func(event OpenAIChatEvent) error {
 			reasoning, err := m.take(event.Thinking, &m.reasoning)
 			if err != nil {
 				return err
 			}
-			text, err := m.take(event.Text, &m.text)
+			visible := ui.Feed(event.Text)
+			if event.Done {
+				visible += ui.Flush()
+			}
+			text, err := m.take(visible, &m.text)
 			if err != nil {
 				return err
 			}
