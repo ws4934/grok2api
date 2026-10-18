@@ -617,8 +617,11 @@ func (a *Adapter) CompleteAuthorization(ctx context.Context, challenge provider.
 		return provider.CredentialSeed{}, invalidRequest("invalid OAuth callback URL")
 	}
 	q, err := url.ParseQuery(u.RawQuery)
-	if err != nil || len(q["state"]) != 1 || q.Get("state") != start.State || len(q["code"]) != 1 || q.Get("code") == "" || q.Get("error") != "" {
-		return provider.CredentialSeed{}, invalidRequest("OAuth callback state or code is invalid")
+	if err != nil || len(q["state"]) != 1 || q.Get("state") != start.State || q.Get("error") != "" {
+		return provider.CredentialSeed{}, fmt.Errorf("%w: OAuth callback state mismatch or login denied", provider.ErrAuthorizationDenied)
+	}
+	if len(q["code"]) != 1 || q.Get("code") == "" {
+		return provider.CredentialSeed{}, invalidRequest("OAuth callback has no authorization code")
 	}
 	pending := account.Credential{Provider: account.ProviderChatGPT}
 	c, err := a.exchange(ctx, pending, map[string]string{"client_id": oauthClientID, "grant_type": "authorization_code", "code": q.Get("code"), "redirect_uri": start.RedirectURI, "code_verifier": start.Verifier}, credentials{ClientProfile: oauthProfile})

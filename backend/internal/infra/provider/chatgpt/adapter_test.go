@@ -514,6 +514,11 @@ func TestInteractivePKCELogin(t *testing.T) {
 			t.Fatalf("invalid callback accepted: %s", callback)
 		}
 	}
+	for _, callback := range []string{oauthRedirect + "?state=wrong&code=abc", oauthRedirect + "?state=" + session.State + "&error=access_denied"} {
+		if _, err := a.CompleteAuthorization(ctx, challenge, callback); !errors.Is(err, provider.ErrAuthorizationDenied) {
+			t.Fatalf("%s: %v", callback, err)
+		}
+	}
 	if tokenCalls.Load() != 0 {
 		t.Fatal("invalid callback reached the token endpoint")
 	}
