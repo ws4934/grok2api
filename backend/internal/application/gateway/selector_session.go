@@ -69,7 +69,7 @@ func (s *Selector) beginSelectionSessionForKey(ctx context.Context, provider acc
 
 	for index, candidate := range values {
 		value := applyHealthSnapshot(candidate.Credential, healthOverrides)
-		if !accountScopeAllowsCandidate(s.tierExempt(provider), provider, accountScope, candidate) {
+		if !s.accountScopeAllowsCandidate(provider, accountScope, candidate) {
 			continue
 		}
 		if excluded[value.ID] || value.AuthStatus != account.AuthStatusActive {
@@ -352,7 +352,7 @@ func (session *selectionSession) completeNormalLease(ctx context.Context, lease 
 		}
 	}
 	lease.Billing = candidate.Billing
-	lease.QuotaMode = effectiveQuotaMode(candidate, session.quotaMode)
+	lease.QuotaMode = session.selector.effectiveQuotaMode(candidate, session.quotaMode)
 	return lease, nil
 }
 

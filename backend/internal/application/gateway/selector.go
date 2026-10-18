@@ -442,7 +442,21 @@ func (s *Selector) UpdateExcludeBuildBotFlaggedFromScheduling(value bool) {
 	s.excludeBuildBotFlagged = value
 	s.configMu.Unlock()
 	if changed {
-		s.invalidateProviderCandidateCache(account.ProviderBuild)
+		s.invalidateCachedProviderCandidates()
+	}
+}
+
+// invalidateCachedProviderCandidates drops the candidate caches of every
+// provider with cached candidates.
+func (s *Selector) invalidateCachedProviderCandidates() {
+	s.candidateMu.Lock()
+	providers := make(map[account.Provider]struct{})
+	for key := range s.candidates {
+		providers[key.provider] = struct{}{}
+	}
+	s.candidateMu.Unlock()
+	for provider := range providers {
+		s.invalidateProviderCandidateCache(provider)
 	}
 }
 
@@ -481,16 +495,18 @@ func (s *Selector) maybeFilterBotFlagged(ctx context.Context, provider account.P
 	return s.applyBuildBotFlaggedFilter(ctx, provider, values)
 }
 
+// applyBuildBotFlaggedFilter drops accounts the provider flags as a scheduling
+// risk while the administrator excludes them.
 func (s *Selector) applyBuildBotFlaggedFilter(_ context.Context, provider account.Provider, values []account.RoutingCandidate) ([]account.RoutingCandidate, error) {
-	if provider != account.ProviderBuild || len(values) == 0 {
-		return values, nil
-	}
-	if !s.excludeBuildBotFlaggedEnabled() {
+	risk, ok := s.tierOrders.(interface {
+		SchedulingRisk(account.Provider, account.Credential) bool
+	})
+	if !ok || len(values) == 0 || !s.excludeBuildBotFlaggedEnabled() {
 		return values, nil
 	}
 	filtered := make([]account.RoutingCandidate, 0, len(values))
 	for _, candidate := range values {
-		if source := candidate.Credential.BuildBotFlagSource; source == 1 || source == 2 {
+		if risk.SchedulingRisk(provider, candidate.Credential) {
 			continue
 		}
 		filtered = append(filtered, candidate)
@@ -554,7 +570,7 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 		if forcedEgressNodeID != 0 && value.EgressNodeID != forcedEgressNodeID {
 			continue
 		}
-		if !accountScopeAllowsCandidate(s.tierExempt(provider), provider, accountScope, candidate) {
+		if !s.accountScopeAllowsCandidate(provider, accountScope, candidate) {
 			continue
 		}
 		if excluded[value.ID] || value.AuthStatus != account.AuthStatusActive {
@@ -679,7 +695,7 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 					lease, acquireErr := s.acquirePinnedCapacity(ctx, candidate.Credential, &materialFailures)
 					if acquireErr == nil {
 						lease.Billing = candidate.Billing
-						lease.QuotaMode = effectiveQuotaMode(candidate, quotaMode)
+						lease.QuotaMode = s.effectiveQuotaMode(candidate, quotaMode)
 						return lease, nil
 					}
 					if errors.Is(acquireErr, errRoutingCredentialStale) {
@@ -715,7 +731,7 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 				continue
 			}
 			lease.Billing = candidate.Billing
-			lease.QuotaMode = effectiveQuotaMode(candidate, quotaMode)
+			lease.QuotaMode = s.effectiveQuotaMode(candidate, quotaMode)
 			return lease, nil
 		}
 		return nil, &SelectionUnavailableError{Reason: SelectionSaturated, RetryAfter: time.Second}
@@ -807,7 +823,7 @@ func (s *Selector) completeStickyLease(ctx context.Context, stickyKey string, va
 		}
 	}
 	lease.Billing = candidate.Billing
-	lease.QuotaMode = effectiveQuotaMode(candidate, quotaMode)
+	lease.QuotaMode = s.effectiveQuotaMode(candidate, quotaMode)
 	return lease, nil
 }
 
@@ -868,7 +884,7 @@ func (s *Selector) acquirePinned(ctx context.Context, provider account.Provider,
 		if value.ID != accountID {
 			continue
 		}
-		if !accountScopeAllowsCandidate(s.tierExempt(provider), provider, accountScope, candidate) {
+		if !s.accountScopeAllowsCandidate(provider, accountScope, candidate) {
 			if accountScope.IsRestricted() {
 				return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts, Scope: accountScope, AccountID: accountID, AccountName: value.Name}
 			}
@@ -937,7 +953,7 @@ func (s *Selector) acquirePinned(ctx context.Context, provider account.Provider,
 			return nil, err
 		}
 		lease.Billing = candidate.Billing
-		lease.QuotaMode = effectiveQuotaMode(candidate, quotaMode)
+		lease.QuotaMode = s.effectiveQuotaMode(candidate, quotaMode)
 		return lease, nil
 	}
 	return nil, pinnedUnavailableError(accountID, "")
@@ -956,27 +972,22 @@ func (s *Selector) tierExempt(provider account.Provider) bool {
 	return false
 }
 
-func accountScopeAllowsCandidate(tierExempt bool, provider account.Provider, scope clientkeydomain.AccountScope, candidate account.RoutingCandidate) bool {
-	if tierExempt {
+// accountTier asks the provider registry for the candidate's client-key tier;
+// without a registry every account is unknown.
+func (s *Selector) accountTier(provider account.Provider, candidate account.RoutingCandidate) clientkeydomain.AccountTier {
+	if registry, ok := s.tierOrders.(interface {
+		AccountTier(account.Provider, account.RoutingCandidate) clientkeydomain.AccountTier
+	}); ok {
+		return registry.AccountTier(provider, candidate)
+	}
+	return clientkeydomain.AccountTierUnknown
+}
+
+func (s *Selector) accountScopeAllowsCandidate(provider account.Provider, scope clientkeydomain.AccountScope, candidate account.RoutingCandidate) bool {
+	if scope.Tiers == clientkeydomain.TierScopeAll || s.tierExempt(provider) {
 		return true
 	}
-	tier := clientkeydomain.AccountTierUnknown
-	switch provider {
-	case account.ProviderBuild:
-		if candidate.IsKnownFreeBuild() {
-			tier = clientkeydomain.AccountTierFree
-		} else if account.IsBuildSuper(candidate.Credential, candidate.Billing) {
-			tier = clientkeydomain.AccountTierSuper
-		}
-	case account.ProviderWeb:
-		switch candidate.Credential.WebTier {
-		case account.WebTierBasic:
-			tier = clientkeydomain.AccountTierFree
-		case account.WebTierSuper, account.WebTierHeavy:
-			tier = clientkeydomain.AccountTierSuper
-		}
-	}
-	switch tier {
+	switch s.accountTier(provider, candidate) {
 	case clientkeydomain.AccountTierFree:
 		return scope.Tiers&clientkeydomain.TierScopeFree != 0
 	case clientkeydomain.AccountTierSuper:
@@ -996,17 +1007,16 @@ func annotateSelectionAccountScope(err *error, scope clientkeydomain.AccountScop
 	}
 }
 
-func effectiveQuotaMode(candidate account.RoutingCandidate, fallback string) string {
+// effectiveQuotaMode returns the quota window the candidate spends: its loaded
+// window, else the provider's account-specific mode for the route's mode.
+func (s *Selector) effectiveQuotaMode(candidate account.RoutingCandidate, fallback string) string {
 	if candidate.QuotaWindow != nil && candidate.QuotaWindow.Mode != "" {
 		return candidate.QuotaWindow.Mode
 	}
-	if candidate.Credential.Provider == account.ProviderWeb && fallback == account.QuotaModeWebImageEdit {
-		switch candidate.Credential.WebTier {
-		case account.WebTierSuper, account.WebTierHeavy:
-			return account.QuotaModeWebImageEdit
-		default:
-			return account.QuotaModeWebImagePro
-		}
+	if registry, ok := s.tierOrders.(interface {
+		CandidateQuotaMode(account.Provider, account.RoutingCandidate, string) string
+	}); ok {
+		return registry.CandidateQuotaMode(candidate.Credential.Provider, candidate, fallback)
 	}
 	return fallback
 }
@@ -1017,19 +1027,25 @@ func candidateEgressLeaseCooling(candidate account.RoutingCandidate, credential 
 		(credential.EgressNodeID == 0 || credential.EgressNodeID == block.NodeID) && now.Before(block.CooldownUntil)
 }
 
-// candidateSupportsModel treats a recognized Web catalog entry as an
-// effective capability for tiers that the adapter explicitly allows. This
-// prevents a historical capability snapshot from blocking a newly enabled
-// catalog feature, while unknown/manual Web routes and all other providers
-// retain the persisted snapshot semantics.
+// candidateSupportsModel treats a recognized static-catalog entry (a tier
+// order) as an effective capability for tiers that the adapter explicitly
+// allows. This prevents a historical capability snapshot from blocking a newly
+// enabled catalog feature, while unknown/manual routes and remote-catalog
+// providers retain the persisted snapshot semantics.
 func (s *Selector) candidateSupportsModel(provider account.Provider, upstreamModel, quotaMode string, candidate account.RoutingCandidate) bool {
-	if provider == account.ProviderWeb {
-		order := s.resolveTierOrder(provider, upstreamModel, quotaMode)
-		if len(order) > 0 {
+	if s.staticCatalog(provider) {
+		if order := s.resolveTierOrder(provider, upstreamModel, quotaMode); len(order) > 0 {
 			return webTierInOrder(order, candidate.Credential.WebTier)
 		}
 	}
 	return !candidate.ModelCapabilityKnown || candidate.SupportsModel
+}
+
+// staticCatalog asks the provider registry whether the provider's models come
+// from its built-in catalog, whose tier orders entitle accounts to a model.
+func (s *Selector) staticCatalog(provider account.Provider) bool {
+	registry, ok := s.tierOrders.(interface{ StaticCatalog(account.Provider) bool })
+	return ok && registry.StaticCatalog(provider)
 }
 
 func (s *Selector) MarkSuccess(ctx context.Context, credential account.Credential) {
@@ -1458,7 +1474,7 @@ func (s *Selector) loadLayeredCandidates(ctx context.Context, provider account.P
 				checkTime = time.Now().UTC()
 				continue
 			}
-			values := assembleRoutingCandidates(provider, quotaMode, bases, overlay)
+			values := assembleRoutingCandidates(s.staticModel(provider, quotaMode), bases, overlay)
 			values, filterErr := s.maybeFilterBotFlagged(ctx, provider, values, includeBotFlagged)
 			if filterErr != nil {
 				return nil, filterErr
@@ -2018,13 +2034,24 @@ type routingOverlayLoadResult struct {
 	version routingLayerVersion
 }
 
-func assembleRoutingCandidates(provider account.Provider, quotaMode string, bases []account.RoutingAccountBase, overlay account.RoutingOverlaySnapshot) []account.RoutingCandidate {
+// staticModel asks the provider registry whether every account serves the
+// models of quotaMode; without a registry no model is static.
+func (s *Selector) staticModel(provider account.Provider, quotaMode string) bool {
+	registry, ok := s.tierOrders.(interface {
+		StaticModel(account.Provider, string) bool
+	})
+	return ok && registry.StaticModel(provider, quotaMode)
+}
+
+func assembleRoutingCandidates(staticProviderModel bool, bases []account.RoutingAccountBase, overlay account.RoutingOverlaySnapshot) []account.RoutingCandidate {
 	byAccount := make(map[uint64]account.RoutingAccountOverlay, len(overlay.Values))
 	for _, value := range overlay.Values {
 		byAccount[value.AccountID] = value
 	}
+	// Build Super entitlements share models: one Super account proving support
+	// covers every Super account. IsBuildSuper is false for other providers.
 	sharedSuperBuildModel := false
-	if provider == account.ProviderBuild && !overlay.HasBindings {
+	if !overlay.HasBindings {
 		for _, base := range bases {
 			value, exists := byAccount[base.Credential.ID]
 			if exists && value.SupportsModel && account.IsBuildSuper(base.Credential, base.Billing) {
@@ -2034,8 +2061,6 @@ func assembleRoutingCandidates(provider account.Provider, quotaMode string, base
 		}
 	}
 	result := make([]account.RoutingCandidate, 0, len(bases))
-	staticProviderModel := (provider == account.ProviderConsole && strings.TrimSpace(quotaMode) != "") ||
-		(provider == account.ProviderWeb && account.IsWebImagineQuotaMode(quotaMode))
 	for _, base := range bases {
 		overlayValue := byAccount[base.Credential.ID]
 		if overlay.HasBindings && !overlayValue.Bound {

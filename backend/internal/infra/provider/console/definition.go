@@ -1,6 +1,8 @@
 package console
 
 import (
+	"strings"
+
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
@@ -44,4 +46,10 @@ func (a *Adapter) Definition() provider.Definition {
 		// cannot be fixed by another account or egress.
 		Failure: provider.FailurePolicy{TerminalAuthSchemeForbidden: true, SoftRateLimit: true},
 	}
+}
+
+// StaticModel: every Console account serves the static catalog, and every
+// catalog model resolves to a quota mode.
+func (a *Adapter) StaticModel(quotaMode string) bool {
+	return strings.TrimSpace(quotaMode) != ""
 }

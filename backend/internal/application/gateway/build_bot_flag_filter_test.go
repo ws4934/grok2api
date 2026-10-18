@@ -11,7 +11,7 @@ import (
 )
 
 func TestApplyBuildBotFlaggedFilterOnlyAffectsBuild(t *testing.T) {
-	selector := NewSelector(nil, nil, nil, nil, 0, 0, 0)
+	selector := NewSelector(nil, nil, nil, grokTestRegistry, 0, 0, 0)
 	selector.UpdateExcludeBuildBotFlaggedFromScheduling(true)
 
 	values := []account.RoutingCandidate{
@@ -54,7 +54,7 @@ func TestApplyBuildBotFlaggedFilterOnlyAffectsBuild(t *testing.T) {
 func TestAcquirePinnedBypassesBuildBotFlagSchedulingExclusion(t *testing.T) {
 	repo := newLayeredRepositoryFixture()
 	repo.bases[0].Credential.BuildBotFlagSource = 1
-	selector := NewSelector(repo, memory.NewConcurrencyLimiter(), memory.NewStickyStore(), nil, time.Hour, time.Second, time.Minute)
+	selector := NewSelector(repo, memory.NewConcurrencyLimiter(), memory.NewStickyStore(), grokTestRegistry, time.Hour, time.Second, time.Minute)
 	selector.UpdateExcludeBuildBotFlaggedFromScheduling(true)
 
 	_, err := selector.Acquire(context.Background(), account.ProviderBuild, 0, "model-a", "", "", nil, false)

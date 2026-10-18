@@ -126,6 +126,8 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 		length = len(values)
 	}
 	inFlight := make([]int, length)
+	// Every candidate of a plan belongs to one provider.
+	catalogTiers := len(tierOrder) > 0 && len(values) > 0 && s.staticCatalog(values[0].Credential.Provider)
 	if concurrencyHints == nil {
 		keys := make([]string, length)
 		for position := range length {
@@ -193,7 +195,7 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 		}
 		score := candidateScore{
 			index: index, tier: tierOrderRank(tierOrder, candidate.Credential.WebTier),
-			webCatalogSupport: candidate.Credential.Provider == account.ProviderWeb && len(tierOrder) > 0 && webTierInOrder(tierOrder, candidate.Credential.WebTier),
+			webCatalogSupport: catalogTiers && webTierInOrder(tierOrder, candidate.Credential.WebTier),
 			preferFreeBuild:   preferFreeBuild && candidate.IsKnownFreeBuild(),
 			inFlight:          inFlight[position], lastSelected: s.lastSelectedAt[candidate.Credential.ID],
 		}

@@ -2028,7 +2028,10 @@ func (l *batchConcurrencyLimiter) CurrentMany(_ context.Context, keys []string) 
 	return values, nil
 }
 
-type staticTierOrder struct{ order []account.WebTier }
+type staticTierOrder struct {
+	grokRoutingHooks
+	order []account.WebTier
+}
 
 func (value staticTierOrder) TierOrder(account.Provider, string) []account.WebTier {
 	return value.order
@@ -2039,7 +2042,7 @@ func (staticTierOrder) TierExempt(provider account.Provider) bool {
 	return provider == account.ProviderConsole
 }
 
-type webVideoTierOrder struct{}
+type webVideoTierOrder struct{ grokRoutingHooks }
 
 func (webVideoTierOrder) TierOrder(account.Provider, string) []account.WebTier {
 	return []account.WebTier{account.WebTierBasic, account.WebTierSuper, account.WebTierHeavy}

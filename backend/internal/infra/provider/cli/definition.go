@@ -2,6 +2,7 @@ package cli
 
 import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
@@ -34,4 +35,20 @@ func (a *Adapter) Definition() provider.Definition {
 			FatalHeaderTimeout: true, FatalOriginTLS: true,
 		},
 	}
+}
+
+// AccountTier maps Build billing to client-key tiers.
+func (a *Adapter) AccountTier(candidate account.RoutingCandidate) clientkey.AccountTier {
+	if candidate.IsKnownFreeBuild() {
+		return clientkey.AccountTierFree
+	}
+	if account.IsBuildSuper(candidate.Credential, candidate.Billing) {
+		return clientkey.AccountTierSuper
+	}
+	return clientkey.AccountTierUnknown
+}
+
+// SchedulingRisk reports accounts whose access token carries an xAI bot flag.
+func (a *Adapter) SchedulingRisk(credential account.Credential) bool {
+	return credential.BuildBotFlagSource == 1 || credential.BuildBotFlagSource == 2
 }

@@ -85,7 +85,7 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 			}
 		} else {
 			concurrencyHints := make(map[int]int, min(len(indexes), request.windowSize*segmentedWindowsBeforeFullFallback))
-			cohorts := segmentedCandidateCohorts(values, indexes, now, tierOrder, preferFreeBuild, request.cursor, request.windowSize, segmentedWindowsBeforeFullFallback)
+			cohorts := segmentedCandidateCohorts(values, indexes, now, tierOrder, s.staticCatalog(request.provider), preferFreeBuild, request.cursor, request.windowSize, segmentedWindowsBeforeFullFallback)
 			roundWindows := 0
 			fallbackToFull := false
 			for cohortIndex, bucket := range cohorts {
@@ -177,7 +177,7 @@ func (s *Selector) claimSegmentedPlan(ctx context.Context, plan *candidatePlan, 
 			continue
 		}
 		lease.Billing = candidate.Billing
-		lease.QuotaMode = effectiveQuotaMode(candidate, quotaMode)
+		lease.QuotaMode = s.effectiveQuotaMode(candidate, quotaMode)
 		selected := candidate
 		lease.routingCandidate = &selected
 		lease.selectorObservation = &selectorLeaseObservation{provider: provider, stage: stage}
@@ -187,14 +187,15 @@ func (s *Selector) claimSegmentedPlan(ctx context.Context, plan *candidatePlan, 
 	return result, nil
 }
 
-func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, preferFreeBuild bool, cursor uint64, windowSize, maxWindows int) []segmentedSelectorCohortBucket {
+// catalogTiers marks tierOrder as a static-catalog entitlement (see candidateSupportsModel).
+func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, catalogTiers, preferFreeBuild bool, cursor uint64, windowSize, maxWindows int) []segmentedSelectorCohortBucket {
 	if windowSize <= 0 || maxWindows <= 0 {
 		return nil
 	}
 	cohortFor := func(index int) segmentedSelectorCohort {
 		candidate := values[index]
 		supportsModel, capabilityKnown := candidate.SupportsModel, candidate.ModelCapabilityKnown
-		if candidate.Credential.Provider == account.ProviderWeb && len(tierOrder) > 0 && webTierInOrder(tierOrder, candidate.Credential.WebTier) {
+		if catalogTiers && len(tierOrder) > 0 && webTierInOrder(tierOrder, candidate.Credential.WebTier) {
 			supportsModel, capabilityKnown = true, true
 		}
 		cohort := segmentedSelectorCohort{

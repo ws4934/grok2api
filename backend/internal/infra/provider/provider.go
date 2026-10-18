@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 )
@@ -981,6 +982,34 @@ type QuotaTierOrderAdapter interface {
 	TierOrderForQuotaMode(upstreamModel, quotaMode string) []account.WebTier
 }
 
+// AccountTierAdapter classifies accounts for client-key tier scopes. Without it
+// every account is AccountTierUnknown unless the provider is TierExempt.
+type AccountTierAdapter interface {
+	Adapter
+	AccountTier(candidate account.RoutingCandidate) clientkey.AccountTier
+}
+
+// CandidateQuotaModeAdapter picks the quota window an account spends when it
+// depends on the account (for example its tier) and not only on the model.
+type CandidateQuotaModeAdapter interface {
+	Adapter
+	CandidateQuotaMode(candidate account.RoutingCandidate, quotaMode string) string
+}
+
+// StaticModelAdapter reports quota modes whose models every account of the
+// provider serves, so routing skips the per-account model capability snapshot.
+type StaticModelAdapter interface {
+	Adapter
+	StaticModel(quotaMode string) bool
+}
+
+// SchedulingRiskAdapter flags accounts an administrator may keep out of
+// ordinary scheduling; pinned requests still reach them.
+type SchedulingRiskAdapter interface {
+	Adapter
+	SchedulingRisk(credential account.Credential) bool
+}
+
 // ModelAlias resolves a hidden compatibility model name to one public route and can fix reasoning effort.
 type ModelAlias struct {
 	Alias           string
@@ -1427,6 +1456,49 @@ func (r *Registry) TierOrderForQuotaMode(value account.Provider, upstreamModel, 
 		return nil
 	}
 	return metadata.TierOrder(upstreamModel)
+}
+
+// adapterAs returns the provider's adapter when it implements T.
+func adapterAs[T any](r *Registry, value account.Provider) (T, bool) {
+	var zero T
+	if r == nil {
+		return zero, false
+	}
+	result, ok := r.adapters[value].(T)
+	return result, ok
+}
+
+// AccountTier classifies a routing candidate for client-key tier scopes.
+func (r *Registry) AccountTier(value account.Provider, candidate account.RoutingCandidate) clientkey.AccountTier {
+	if adapter, ok := adapterAs[AccountTierAdapter](r, value); ok {
+		return adapter.AccountTier(candidate)
+	}
+	return clientkey.AccountTierUnknown
+}
+
+// CandidateQuotaMode returns the quota window the candidate spends for quotaMode.
+func (r *Registry) CandidateQuotaMode(value account.Provider, candidate account.RoutingCandidate, quotaMode string) string {
+	if adapter, ok := adapterAs[CandidateQuotaModeAdapter](r, value); ok {
+		return adapter.CandidateQuotaMode(candidate, quotaMode)
+	}
+	return quotaMode
+}
+
+// StaticCatalog reports whether the provider's models come from its built-in catalog.
+func (r *Registry) StaticCatalog(value account.Provider) bool {
+	return r != nil && r.definitions[value].ModelCatalog == ModelCatalogStatic
+}
+
+// StaticModel reports whether every account of the provider serves models of quotaMode.
+func (r *Registry) StaticModel(value account.Provider, quotaMode string) bool {
+	adapter, ok := adapterAs[StaticModelAdapter](r, value)
+	return ok && adapter.StaticModel(quotaMode)
+}
+
+// SchedulingRisk reports whether the provider flags the account as a scheduling risk.
+func (r *Registry) SchedulingRisk(value account.Provider, credential account.Credential) bool {
+	adapter, ok := adapterAs[SchedulingRiskAdapter](r, value)
+	return ok && adapter.SchedulingRisk(credential)
 }
 
 func (r *Registry) PricingModel(value account.Provider, upstreamModel string) string {

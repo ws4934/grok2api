@@ -966,7 +966,7 @@ func TestLayeredRoutingMatchesCombinedRepositoryResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	layered := assembleRoutingCandidates(account.ProviderBuild, "", bases, overlay)
+	layered := assembleRoutingCandidates(staticModelOf(account.ProviderBuild, ""), bases, overlay)
 	if !reflect.DeepEqual(layered, combined) {
 		t.Fatalf("layered = %#v\ncombined = %#v", layered, combined)
 	}
@@ -980,11 +980,11 @@ func TestAssembleRoutingCandidatesAllowsRecognizedStaticConsoleModelWithStaleSna
 		AccountID: 1, ModelCapabilityKnown: true, SupportsModel: false,
 	}}}
 
-	recognized := assembleRoutingCandidates(account.ProviderConsole, "console_image", bases, overlay)
+	recognized := assembleRoutingCandidates(staticModelOf(account.ProviderConsole, "console_image"), bases, overlay)
 	if len(recognized) != 1 || !recognized[0].ModelCapabilityKnown || !recognized[0].SupportsModel {
 		t.Fatalf("recognized static Console model = %#v", recognized)
 	}
-	unknown := assembleRoutingCandidates(account.ProviderConsole, "", bases, overlay)
+	unknown := assembleRoutingCandidates(staticModelOf(account.ProviderConsole, ""), bases, overlay)
 	if len(unknown) != 1 || !unknown[0].ModelCapabilityKnown || unknown[0].SupportsModel {
 		t.Fatalf("unknown Console model = %#v", unknown)
 	}
@@ -998,11 +998,11 @@ func TestAssembleRoutingCandidatesAllowsRecognizedWebImagineModelWithStaleSnapsh
 		AccountID: 1, ModelCapabilityKnown: true, SupportsModel: false,
 	}}}
 
-	recognized := assembleRoutingCandidates(account.ProviderWeb, account.QuotaModeWebImagePro, bases, overlay)
+	recognized := assembleRoutingCandidates(staticModelOf(account.ProviderWeb, account.QuotaModeWebImagePro), bases, overlay)
 	if len(recognized) != 1 || !recognized[0].ModelCapabilityKnown || !recognized[0].SupportsModel {
 		t.Fatalf("recognized Web Imagine model = %#v", recognized)
 	}
-	unknown := assembleRoutingCandidates(account.ProviderWeb, "", bases, overlay)
+	unknown := assembleRoutingCandidates(staticModelOf(account.ProviderWeb, ""), bases, overlay)
 	if len(unknown) != 1 || !unknown[0].ModelCapabilityKnown || unknown[0].SupportsModel {
 		t.Fatalf("unknown Web model = %#v", unknown)
 	}
