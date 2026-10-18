@@ -38,12 +38,20 @@ func (c *streamConverter) textDeltaMessages(delta string) error {
 	return c.writeEvent("content_block_delta", map[string]any{"type": "content_block_delta", "index": c.textIndex, "delta": map[string]any{"type": "text_delta", "text": emit}})
 }
 
+// thinkingStart opens the one thinking block of the message. Content blocks
+// never overlap, so reasoning that first arrives after text closes the text
+// block.
 func (c *streamConverter) thinkingStart(itemID string) error {
 	if !c.options.AnthropicThinking || c.thinkingStarted {
 		return nil
 	}
 	if err := c.start(); err != nil {
 		return err
+	}
+	if c.textStarted {
+		if err := c.closeTextMessages(); err != nil {
+			return err
+		}
 	}
 	c.thinkingStarted = true
 	c.thinkingIndex = c.nextIndex
@@ -61,6 +69,11 @@ func (c *streamConverter) thinkingDelta(delta string) error {
 	}
 	if err := c.thinkingStart(""); err != nil {
 		return err
+	}
+	if c.thinkingClosed {
+		// Reasoning after the thinking block was stopped (it followed
+		// text, say) has no block left to go to.
+		return nil
 	}
 	return c.writeEvent("content_block_delta", map[string]any{
 		"type": "content_block_delta", "index": c.thinkingIndex,
