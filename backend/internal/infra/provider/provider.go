@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"net/http"
 	"slices"
@@ -583,6 +584,11 @@ type VideoRequest struct {
 	// VideoURL is required for edit/extend (official "video" field).
 	VideoURL string
 	Progress func(int)
+	// Checkpoint is the provider state an earlier run of this job saved with
+	// SaveCheckpoint. A provider that persists its upstream job ID polls that
+	// job on recovery instead of creating another one.
+	Checkpoint     string
+	SaveCheckpoint func(string) error
 }
 
 type VideoResult struct {
@@ -843,6 +849,43 @@ type ImageGenerationAdapter interface {
 type ImageEditAdapter interface {
 	Adapter
 	EditImage(ctx context.Context, request ImageEditRequest) (*Response, error)
+}
+
+// ImageJobRequest is one image of a durable image job. A request with
+// ImageURLs is an edit; images and the mask are data URIs or https URLs.
+type ImageJobRequest struct {
+	Credential   account.Credential
+	Model        string
+	Prompt       string
+	ImageURLs    []string
+	MaskURL      string
+	Size         string
+	Quality      string
+	OutputFormat string
+	Background   string
+}
+
+// ImageCheckpoint is the persisted progress of one image. Submitted is saved
+// before the irreversible request is sent and UpstreamID once the upstream
+// accepted it; Submitted without UpstreamID means the outcome is unknown.
+type ImageCheckpoint struct {
+	Submitted  bool     `json:"submitted,omitempty"`
+	UpstreamID string   `json:"upstream_id,omitempty"`
+	Outputs    []string `json:"outputs,omitempty"`
+}
+
+// AsyncImageAdapter draws one image in resumable steps for durable image
+// jobs. SubmitImage calls save right before the irreversible send and once
+// the upstream ID is known; a failure while Submitted is unset never reached
+// the upstream, so another account may retry it.
+type AsyncImageAdapter interface {
+	Adapter
+	SubmitImage(ctx context.Context, request ImageJobRequest, save func(ImageCheckpoint) error) (ImageCheckpoint, error)
+	PollImage(ctx context.Context, request ImageJobRequest, checkpoint ImageCheckpoint) (ImageCheckpoint, error)
+	// FetchImage returns the finished image with the output options applied.
+	FetchImage(ctx context.Context, request ImageJobRequest, checkpoint ImageCheckpoint) ([]byte, error)
+	// ImageUsage estimates the official usage object of delivered images with the given pixel sizes.
+	ImageUsage(prompt string, inputImages int, quality string, outputs []image.Point) map[string]any
 }
 
 // ImageRequestOptions are the client image parameters checked against a
@@ -1397,6 +1440,16 @@ func (r *Registry) ImageEdit(value account.Provider) (ImageEditAdapter, bool) {
 		return nil, false
 	}
 	result, ok := adapter.(ImageEditAdapter)
+	return result, ok
+}
+
+// AsyncImages returns the resumable image capability used by image jobs.
+func (r *Registry) AsyncImages(value account.Provider) (AsyncImageAdapter, bool) {
+	adapter, ok := r.Get(value)
+	if !ok {
+		return nil, false
+	}
+	result, ok := adapter.(AsyncImageAdapter)
 	return result, ok
 }
 

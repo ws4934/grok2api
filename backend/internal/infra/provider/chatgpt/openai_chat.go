@@ -64,7 +64,9 @@ func (c *OpenAIChat) Stream(ctx context.Context, account wireAccount, request wi
 	}
 	headers := c.Image.requirementHeaders(requirements)
 	headers["Accept"] = "text/event-stream"
-	markSubmitted(ctx)
+	if err := markSubmitted(ctx); err != nil {
+		return err
+	}
 	response, err := c.Image.do(ctx, "POST", "/backend-api/conversation", account, payload, headers, true)
 	if err != nil {
 		return err

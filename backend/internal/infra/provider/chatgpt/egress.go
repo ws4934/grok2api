@@ -24,6 +24,7 @@ type environment struct {
 
 type environmentKey struct{}
 type submitKey struct{}
+type conversationKey struct{}
 
 func withEnvironment(ctx context.Context, v environment) context.Context {
 	return context.WithValue(ctx, environmentKey{}, v)
@@ -35,11 +36,25 @@ func environmentFrom(ctx context.Context) environment {
 }
 
 // markSubmitted runs right before the irreversible generation request; from
-// then on the call must not be repeated.
-func markSubmitted(ctx context.Context) {
-	if fn, ok := ctx.Value(submitKey{}).(func()); ok {
-		fn()
+// then on the call must not be repeated. An error aborts before sending.
+func markSubmitted(ctx context.Context) error {
+	if fn, ok := ctx.Value(submitKey{}).(func() error); ok {
+		return fn()
 	}
+	return nil
+}
+
+// withConversationObserver reports the upstream conversation ID as soon as
+// the generation stream reveals it.
+func withConversationObserver(ctx context.Context, observe func(string) error) context.Context {
+	return context.WithValue(ctx, conversationKey{}, observe)
+}
+
+func observeConversation(ctx context.Context, id string) error {
+	if fn, ok := ctx.Value(conversationKey{}).(func(string) error); ok {
+		return fn(id)
+	}
+	return nil
 }
 
 // lease binds ctx to an egress of credential.
@@ -83,18 +98,25 @@ func (a *Adapter) report(ctx context.Context, lease *infraegress.Lease, err erro
 // attempt runs fn on a leased egress. A failure of the egress itself before
 // the generation request was sent is retried once on a fresh lease (the failed
 // node is cooling by then); a sent request is never repeated. submitted, when
-// set, runs once right before the generation request.
-func (a *Adapter) attempt(ctx context.Context, credential account.Credential, submitted func(), fn func(context.Context) error) (bool, error) {
+// set, runs once right before the generation request; its error aborts the send.
+func (a *Adapter) attempt(ctx context.Context, credential account.Credential, submitted func() error, fn func(context.Context) error) (bool, error) {
 	for try := 1; ; try++ {
 		callCtx, lease, err := a.lease(ctx, credential)
 		if err != nil {
 			return false, err
 		}
 		var sent atomic.Bool
-		callCtx = context.WithValue(callCtx, submitKey{}, func() {
-			if !sent.Swap(true) && submitted != nil {
-				submitted()
+		callCtx = context.WithValue(callCtx, submitKey{}, func() error {
+			if sent.Load() {
+				return nil
 			}
+			if submitted != nil {
+				if err := submitted(); err != nil {
+					return err
+				}
+			}
+			sent.Store(true)
+			return nil
 		})
 		err = fn(callCtx)
 		egressFailed := a.report(ctx, lease, err)

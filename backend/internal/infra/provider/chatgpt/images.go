@@ -219,7 +219,11 @@ func (a *Adapter) generateImage(ctx context.Context, credential account.Credenti
 	uploads := map[int]openAIImageReference{}
 	var raw []byte
 	var mime string
-	sent, err := a.attempt(ctx, credential, submitted, func(ctx context.Context) error {
+	var onSubmit func() error
+	if submitted != nil {
+		onSubmit = func() error { submitted(); return nil }
+	}
+	sent, err := a.attempt(ctx, credential, onSubmit, func(ctx context.Context) error {
 		var err error
 		if !prepared {
 			if inputs, mask, err = a.prepareImage(ctx, job); err != nil {
@@ -227,7 +231,16 @@ func (a *Adapter) generateImage(ctx context.Context, credential account.Credenti
 			}
 			prepared = true
 		}
-		raw, mime, err = a.drawImage(ctx, c, job, model, inputs, mask, uploads)
+		w, err := wire(ctx, c)
+		if err != nil {
+			return err
+		}
+		ctx = a.image.withTimezone(ctx, w)
+		id, files, err := a.submitDrawing(ctx, w, job, model, inputs, mask, uploads)
+		if err != nil {
+			return err
+		}
+		raw, mime, err = a.finishDrawing(ctx, w, id, files)
 		return err
 	})
 	if err != nil {
@@ -272,14 +285,9 @@ func (a *Adapter) prepareImage(ctx context.Context, job imageJob) ([]OpenAIImage
 	return inputs, &OpenAIImageInput{Name: "mask.png", MIME: "image/png", Data: selection.png}, nil
 }
 
-// drawImage uploads the inputs, submits the image conversation, waits for the
-// result and downloads the first image.
-func (a *Adapter) drawImage(ctx context.Context, c credentials, job imageJob, model string, inputs []OpenAIImageInput, mask *OpenAIImageInput, uploads map[int]openAIImageReference) ([]byte, string, error) {
-	w, err := wire(ctx, c)
-	if err != nil {
-		return nil, "", err
-	}
-	ctx = a.image.withTimezone(ctx, w)
+// submitDrawing uploads the inputs and submits the image conversation; it
+// returns the conversation ID and any image references the stream carried.
+func (a *Adapter) submitDrawing(ctx context.Context, w wireAccount, job imageJob, model string, inputs []OpenAIImageInput, mask *OpenAIImageInput, uploads map[int]openAIImageReference) (string, []string, error) {
 	upload := func(key int, input OpenAIImageInput) (openAIImageReference, error) {
 		if ref, ok := uploads[key]; ok {
 			return ref, nil
@@ -298,29 +306,29 @@ func (a *Adapter) drawImage(ctx context.Context, c credentials, job imageJob, mo
 	for index, input := range inputs {
 		ref, err := upload(index, input)
 		if err != nil {
-			return nil, "", err
+			return "", nil, err
 		}
 		refs = append(refs, ref)
 	}
 	if mask != nil {
 		ref, err := upload(-1, *mask)
 		if err != nil {
-			return nil, "", err
+			return "", nil, err
 		}
 		masks = append(masks, ref)
 	}
 	scripts, build, err := a.image.bootstrap(ctx, w)
 	if err != nil {
-		return nil, "", err
+		return "", nil, err
 	}
 	requirements, err := a.image.chatRequirements(ctx, w, scripts, build)
 	if err != nil {
-		return nil, "", err
+		return "", nil, err
 	}
 	prompt := job.prompt + (ImageOutputOptions{OutputFormat: job.outputFormat, Background: job.background}).promptSuffix()
 	conduit, err := a.image.prepare(ctx, w, requirements, prompt, model)
 	if err != nil {
-		return nil, "", err
+		return "", nil, err
 	}
 	quality := job.quality
 	if quality == "" {
@@ -328,17 +336,144 @@ func (a *Adapter) drawImage(ctx context.Context, c credentials, job imageJob, mo
 	}
 	id, files, err := a.image.start(ctx, w, requirements, conduit, prompt, model, job.size, quality, refs, masks...)
 	if err != nil {
-		return nil, "", err
+		return "", nil, err
 	}
 	if id == "" {
-		return nil, "", errors.New("upstream submission has no recoverable conversation ID")
+		return "", nil, errors.New("upstream submission has no recoverable conversation ID")
 	}
+	return id, files, nil
+}
+
+// finishDrawing waits for the generated image and downloads the first one.
+func (a *Adapter) finishDrawing(ctx context.Context, w wireAccount, id string, files []string) ([]byte, string, error) {
 	if len(files) == 0 {
+		var err error
 		if files, err = a.image.pollConversation(ctx, w, id); err != nil {
 			return nil, "", err
 		}
 	}
 	return a.image.downloadImageRef(ctx, w, id, files[0])
+}
+
+var _ provider.AsyncImageAdapter = (*Adapter)(nil)
+
+func asyncImageJob(request provider.ImageJobRequest) imageJob {
+	return imageJob{
+		edit: len(request.ImageURLs) > 0, prompt: request.Prompt, count: 1, size: request.Size, quality: request.Quality,
+		outputFormat: request.OutputFormat, background: request.Background, inputs: request.ImageURLs, mask: request.MaskURL,
+	}
+}
+
+// SubmitImage runs the sync path's steps up to the generation request for a
+// durable image job. A request the upstream refused with a 4xx before it
+// started generating is reported unsubmitted, so another account may retry.
+func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequest, save func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error) {
+	var cp provider.ImageCheckpoint
+	job := asyncImageJob(request)
+	if err := a.ValidateImageRequest(job.options()); err != nil {
+		return cp, err
+	}
+	model := a.config().ImageConversationModel
+	if model == "" {
+		return cp, invalidRequest("The ChatGPT image conversation model is not configured")
+	}
+	c, err := a.decrypt(request.Credential)
+	if err != nil {
+		return cp, err
+	}
+	var inputs []OpenAIImageInput
+	var mask *OpenAIImageInput
+	prepared := false
+	uploads := map[int]openAIImageReference{}
+	_, err = a.attempt(ctx, request.Credential, func() error {
+		next := provider.ImageCheckpoint{Submitted: true}
+		if err := save(next); err != nil {
+			return err
+		}
+		cp = next
+		return nil
+	}, func(ctx context.Context) error {
+		var err error
+		if !prepared {
+			if inputs, mask, err = a.prepareImage(ctx, job); err != nil {
+				return err
+			}
+			prepared = true
+		}
+		w, err := wire(ctx, c)
+		if err != nil {
+			return err
+		}
+		ctx = withConversationObserver(a.image.withTimezone(ctx, w), func(id string) error {
+			cp.UpstreamID = id
+			return save(cp)
+		})
+		id, files, err := a.submitDrawing(ctx, w, job, model, inputs, mask, uploads)
+		if err == nil {
+			cp.UpstreamID, cp.Outputs = id, files
+		}
+		return err
+	})
+	var upstream *upstreamError
+	var terminal *imageTerminalError
+	if err != nil && cp.UpstreamID == "" && errors.As(err, &upstream) && !errors.As(err, &terminal) && upstream.Status >= 400 && upstream.Status < 500 {
+		cp.Submitted = false
+	}
+	return cp, err
+}
+
+// PollImage waits for the submitted conversation to produce its image.
+func (a *Adapter) PollImage(ctx context.Context, request provider.ImageJobRequest, cp provider.ImageCheckpoint) (provider.ImageCheckpoint, error) {
+	if len(cp.Outputs) > 0 {
+		return cp, nil
+	}
+	if cp.UpstreamID == "" {
+		return cp, errors.New("image checkpoint has no conversation ID")
+	}
+	c, err := a.decrypt(request.Credential)
+	if err != nil {
+		return cp, err
+	}
+	_, err = a.attempt(ctx, request.Credential, nil, func(ctx context.Context) error {
+		w, err := wire(ctx, c)
+		if err != nil {
+			return err
+		}
+		cp.Outputs, err = a.image.pollConversation(ctx, w, cp.UpstreamID)
+		return err
+	})
+	return cp, err
+}
+
+// FetchImage downloads the first generated image and applies the output options.
+func (a *Adapter) FetchImage(ctx context.Context, request provider.ImageJobRequest, cp provider.ImageCheckpoint) ([]byte, error) {
+	if len(cp.Outputs) == 0 {
+		return nil, errors.New("image checkpoint has no output")
+	}
+	c, err := a.decrypt(request.Credential)
+	if err != nil {
+		return nil, err
+	}
+	var raw []byte
+	var mime string
+	_, err = a.attempt(ctx, request.Credential, nil, func(ctx context.Context) error {
+		w, err := wire(ctx, c)
+		if err != nil {
+			return err
+		}
+		raw, mime, err = a.image.downloadImageRef(ctx, w, cp.UpstreamID, cp.Outputs[0])
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	raw, _, err = (ImageOutputOptions{OutputFormat: request.OutputFormat, Background: request.Background}).apply(raw, mime)
+	return raw, err
+}
+
+// ImageUsage estimates official usage for images delivered by a job.
+func (a *Adapter) ImageUsage(prompt string, inputImages int, quality string, outputs []image.Point) map[string]any {
+	return a.usage(prompt, inputImages, "", quality, outputs)
 }
 
 func (a *Adapter) imageItem(job imageJob, output imageOutput) map[string]any {
@@ -390,11 +525,19 @@ func (j imageJob) described(output imageOutput) map[string]any {
 // the prompt plus a fixed estimate per input image, and the gpt-image patch
 // formula on the stored output sizes.
 func (a *Adapter) imageUsage(job imageJob, outputs []imageOutput) map[string]any {
-	text, _ := countTokens(job.prompt)
-	images := int64(len(job.inputs)) * int64(a.config().VisionTokens)
+	sizes := make([]image.Point, 0, len(outputs))
+	for _, item := range outputs {
+		sizes = append(sizes, image.Pt(item.width, item.height))
+	}
+	return a.usage(job.prompt, len(job.inputs), job.size, job.quality, sizes)
+}
+
+func (a *Adapter) usage(prompt string, inputImages int, size, quality string, outputs []image.Point) map[string]any {
+	text, _ := countTokens(prompt)
+	images := int64(inputImages) * int64(a.config().VisionTokens)
 	var output int64
 	for _, item := range outputs {
-		output += outputImageTokens(item.width, item.height, job.size, job.quality)
+		output += outputImageTokens(item.X, item.Y, size, quality)
 	}
 	input := text + images
 	return map[string]any{

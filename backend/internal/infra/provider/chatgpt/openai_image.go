@@ -331,7 +331,9 @@ func (o *OpenAIImage) start(ctx context.Context, account wireAccount, requiremen
 	headers["X-Conduit-Token"] = conduit
 	headers["Accept"] = "text/event-stream"
 	applyOpenAITimezone(ctx, payload)
-	markSubmitted(ctx)
+	if err := markSubmitted(ctx); err != nil {
+		return "", nil, err
+	}
 	response, err := o.do(ctx, http.MethodPost, "/backend-api/f/conversation", account, payload, headers, true)
 	if err != nil {
 		return "", nil, err
@@ -349,7 +351,13 @@ func (o *OpenAIImage) start(ctx context.Context, account wireAccount, requiremen
 		if terminalErr = openAIImageTerminalError(value, webSessionSecrets(account.Fields, account.Token)...); terminalErr != nil {
 			return true
 		}
+		known := conversationID != ""
 		collectOpenAIGeneratedImageRefs(value, &conversationID, &fileIDs)
+		if !known && conversationID != "" {
+			if terminalErr = observeConversation(ctx, conversationID); terminalErr != nil {
+				return true
+			}
+		}
 		return false
 	})
 	if terminalErr != nil {

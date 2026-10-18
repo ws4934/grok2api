@@ -19,7 +19,8 @@ const (
 const imageModel = "gpt-image-2"
 
 // Definition declares ChatGPT Web: Responses is the canonical conversation
-// protocol, usage is estimated locally, images run synchronously, and a 403 is
+// protocol, usage is estimated locally, images run synchronously or as
+// resumable jobs (AsyncImageAdapter), and a 403 is
 // usually a Cloudflare challenge on the egress rather than an account failure.
 func (a *Adapter) Definition() provider.Definition {
 	return provider.Definition{
