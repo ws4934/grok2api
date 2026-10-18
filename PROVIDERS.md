@@ -136,10 +136,11 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
 | 模型 | 上游 | 额度 | 说明 |
 |---|---|---|---|
 | `chatgpt-transcribe` | 输入框听写 `POST /backend-api/transcribe` | 不占对话额度 | 只返回文字，没有时间戳、逐词结果和语种；只接受上传文件（≤ 25 MB），不接受 URL |
-| `chatgpt-tts` | 朗读 `GET /backend-api/synthesize` | 每次 1 次 `reason` | 输出 `mp3` / `aac` / `opus`；`wav` / `flac` / `pcm` 返回 400；`speed`、`language` 被忽略；`input` ≤ 4096 字符 |
+| `chatgpt-tts` | 朗读 `GET /backend-api/synthesize` | 不占 `reason`（账号没有 `gpt-5-3-mini` 时占 1 次） | 输出 `mp3` / `aac` / `opus`；`wav` / `flac` / `pcm` 返回 400；`speed`、`language` 被忽略；`input` ≤ 4096 字符 |
 
 - **音色**：`voice` 按账号音色的 ID 或显示名匹配，如 `glimmer` 或 `Sol`；`/v1/tts/voices` 列出账号可用的音色。OpenAI 音色名（`alloy` 等）和未知名称使用账号当前选中的音色。
-- **合成流程**：朗读只能播放已保存对话里的消息，临时对话会返回 `404 conversation_inaccessible`。网关新建一个保留历史的对话，把要朗读的文字作为一条 assistant 消息写进去；上游回显这条消息后断开流，按消息 ID 合成，再把对话从历史中隐藏（`is_visible: false`）。文字会以对话形式保存在上游账号里，隐藏失败时日志记录 `chatgpt_speech_conversation_hide_failed`。
+- **语言**：音色都能说多种语言，中文实测可用（转写回来与原文一致）。按 `spoken_language` 查询，中文、日文返回的仍是同样 9 个音色，没有中文专属音色；网页端在中文环境下默认用 `cove`。
+- **合成流程**：网页端所有出声接口（`/synthesize`、`/conversation/{id}/audio_summary/synthesize`、`/generate_audio_paragen`）都绑定对话消息，没有独立的文本转语音接口；朗读只能播放已保存对话里的消息，临时对话会返回 `404 conversation_inaccessible`。网关新建一个保留历史的对话，把要朗读的文字作为一条 assistant 消息写进去，由 `gpt-5-3-mini` 回答收尾（实测不扣 `reason`，`auto` 会扣 1 次）；上游回显这条消息后断开流，按消息 ID 合成，再把对话从历史中隐藏（`is_visible: false`）。文字会以对话形式保存在上游账号里，隐藏失败时日志记录 `chatgpt_speech_conversation_hide_failed`。
 - **实测**（免费账号）：识别约 0.9 秒；合成约 9.5 秒，得到 6.3 秒的 mp3，再识别回来与原文一致。
 - **实时语音**：网页端的 GPT-Live 走 WebRTC（向 `/realtime/vp` 提交 SDP），不在模型列表里，网关未接入。
 

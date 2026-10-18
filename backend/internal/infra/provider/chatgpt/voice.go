@@ -32,6 +32,11 @@ const (
 	maxTranscribeAudio = 25 << 20
 )
 
+// speechModel answers the closing turn of a speech conversation. On free
+// accounts it does not count against the reason quota (checked live), unlike
+// auto, which is used when the account lacks it.
+const speechModel = "gpt-5-3-mini"
+
 // speechFormats are the read aloud formats; OpenAI's wav, flac and pcm have no equivalent.
 var speechFormats = map[string]bool{"mp3": true, "aac": true, "opus": true}
 
@@ -45,8 +50,8 @@ var conversationIDPattern = regexp.MustCompile(`"conversation_id":\s*"([0-9a-f-]
 
 // SynthesizeSpeech reads text aloud. Read aloud only plays messages of a kept
 // conversation, so the text becomes an assistant message of a new
-// conversation (one request against the reason quota), is synthesized by its
-// ID, and the conversation is then hidden from the account's history.
+// conversation, is synthesized by its ID, and the conversation is then hidden
+// from the account's history.
 func (a *Adapter) SynthesizeSpeech(ctx context.Context, request provider.TTSRequest) (provider.TTSResult, error) {
 	text := strings.TrimSpace(request.Text)
 	if text == "" {
@@ -66,13 +71,21 @@ func (a *Adapter) SynthesizeSpeech(ctx context.Context, request provider.TTSRequ
 	if err != nil {
 		return provider.TTSResult{}, err
 	}
+	catalog, err := a.accountCatalog(ctx, request.Credential)
+	if err != nil {
+		return provider.TTSResult{}, err
+	}
+	model := "auto"
+	if _, ok := catalog[speechModel]; ok {
+		model = speechModel
+	}
 	var result provider.TTSResult
 	err = a.call(ctx, request.Credential, c, func(ctx context.Context, w wireAccount) error {
 		voice, err := a.speechVoice(ctx, w, request.VoiceID)
 		if err != nil {
 			return err
 		}
-		conversation, message, err := a.speechConversation(ctx, w, text)
+		conversation, message, err := a.speechConversation(ctx, w, model, text)
 		if err != nil {
 			return err
 		}
@@ -105,8 +118,8 @@ func (a *Adapter) SynthesizeSpeech(ctx context.Context, request provider.TTSRequ
 // speechConversation opens a kept conversation holding text as an assistant
 // message and returns its ID and the message ID. The stream is dropped once
 // ChatGPT echoes the message: the closing reply is not needed.
-func (a *Adapter) speechConversation(ctx context.Context, w wireAccount, text string) (string, string, error) {
-	payload := openAIChatPayload(wireChatRequest{Model: "auto", Messages: []wireMessage{
+func (a *Adapter) speechConversation(ctx context.Context, w wireAccount, model, text string) (string, string, error) {
+	payload := openAIChatPayload(wireChatRequest{Model: model, Messages: []wireMessage{
 		{Role: "user", Content: "Read the next message aloud."},
 		{Role: "assistant", Content: text},
 		{Role: "user", Content: "Reply with OK."},

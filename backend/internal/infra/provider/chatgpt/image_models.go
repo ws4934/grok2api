@@ -90,19 +90,29 @@ func (a *Adapter) resolveImageModel(ctx context.Context, credential account.Cred
 	if a.config().ImageConversationModel != "" {
 		return candidates[0], nil
 	}
-	a.catalogMu.Lock()
-	cached, ok := a.catalogs[credential.ID]
-	a.catalogMu.Unlock()
-	if !ok || time.Since(cached.fetchedAt) > imageCatalogTTL {
-		if _, err := a.ListModels(ctx, credential); err != nil {
-			return "", err
-		}
-		a.catalogMu.Lock()
-		cached = a.catalogs[credential.ID]
-		a.catalogMu.Unlock()
+	catalog, err := a.accountCatalog(ctx, credential)
+	if err != nil {
+		return "", err
 	}
-	if model := pickImageModel(candidates, cached.models); model != "" {
+	if model := pickImageModel(candidates, catalog); model != "" {
 		return model, nil
 	}
 	return "", &upstreamError{Status: http.StatusNotFound, Message: "No conversation model of this account can draw " + upstreamModel, Body: "image model unavailable for account"}
+}
+
+// accountCatalog returns the account's conversation models, each mapped to
+// whether its image tool is enabled, refreshing a stale cached catalog.
+func (a *Adapter) accountCatalog(ctx context.Context, credential account.Credential) (map[string]bool, error) {
+	a.catalogMu.Lock()
+	cached, ok := a.catalogs[credential.ID]
+	a.catalogMu.Unlock()
+	if ok && time.Since(cached.fetchedAt) <= imageCatalogTTL {
+		return cached.models, nil
+	}
+	if _, err := a.ListModels(ctx, credential); err != nil {
+		return nil, err
+	}
+	a.catalogMu.Lock()
+	defer a.catalogMu.Unlock()
+	return a.catalogs[credential.ID].models, nil
 }

@@ -19,7 +19,9 @@ const voicesBody = `{"selected":"breeze","voices":[{"voice":"breeze","name":"Bre
 
 // voiceUpstream serves the voice endpoints and records the speech calls.
 type voiceUpstream struct {
-	mu                         sync.Mutex
+	mu sync.Mutex
+	// models lists the account's conversation models.
+	models                     []string
 	payload                    map[string]any
 	synthesize, hidden, upload string
 	calls                      int
@@ -34,6 +36,12 @@ func (v *voiceUpstream) serve(t *testing.T) *httptest.Server {
 		defer v.mu.Unlock()
 		v.calls++
 		switch {
+		case r.URL.Path == "/backend-api/models":
+			var models []map[string]any
+			for _, slug := range v.models {
+				models = append(models, map[string]any{"slug": slug})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"models": models})
 		case r.URL.Path == "/backend-api/settings/voices":
 			_, _ = w.Write([]byte(voicesBody))
 		case r.URL.Path == "/backend-api/conversation":
@@ -69,7 +77,7 @@ func (v *voiceUpstream) serve(t *testing.T) *httptest.Server {
 }
 
 func TestSpeechReadsTextThroughAHiddenConversation(t *testing.T) {
-	upstream := &voiceUpstream{}
+	upstream := &voiceUpstream{models: []string{"auto", "gpt-5-3-mini"}}
 	a, _ := newTestAdapter(t, upstream.serve(t))
 	credential := testCredential(t, a, credentials{AccessToken: "AT"})
 	result, err := a.SynthesizeSpeech(context.Background(), provider.TTSRequest{Credential: credential, Model: TTSModel, Text: " 你好 ", VoiceID: "Sol", OutputFormat: provider.TTSOutputFormat{Codec: "aac"}})
@@ -78,7 +86,7 @@ func TestSpeechReadsTextThroughAHiddenConversation(t *testing.T) {
 	}
 	messages := upstream.payload["messages"].([]any)
 	spoken := messages[1].(map[string]any)
-	if upstream.payload["history_and_training_disabled"] != false || spoken["author"].(map[string]any)["role"] != "assistant" || spoken["content"].(map[string]any)["parts"].([]any)[0] != "你好" {
+	if upstream.payload["model"] != speechModel || upstream.payload["history_and_training_disabled"] != false || spoken["author"].(map[string]any)["role"] != "assistant" || spoken["content"].(map[string]any)["parts"].([]any)[0] != "你好" {
 		t.Fatalf("payload = %v", upstream.payload)
 	}
 	want := "conversation_id=11111111-2222-3333-4444-555555555555&format=aac&message_id=" + spoken["id"].(string) + "&voice=glimmer"
@@ -92,6 +100,13 @@ func TestSpeechReadsTextThroughAHiddenConversation(t *testing.T) {
 	// OpenAI voice names fall back to the account's voice.
 	if _, err := a.SynthesizeSpeech(context.Background(), provider.TTSRequest{Credential: credential, Text: "hi", VoiceID: "ara"}); err != nil || !strings.Contains(upstream.synthesize, "format=mp3") || !strings.HasSuffix(upstream.synthesize, "voice=breeze") {
 		t.Fatalf("fallback synthesize = %s, %v", upstream.synthesize, err)
+	}
+
+	// Without the speech model the conversation falls back to auto.
+	other := &voiceUpstream{models: []string{"auto", "gpt-6"}}
+	b, _ := newTestAdapter(t, other.serve(t))
+	if _, err := b.SynthesizeSpeech(context.Background(), provider.TTSRequest{Credential: testCredential(t, b, credentials{AccessToken: "AT"}), Text: "hi"}); err != nil || other.payload["model"] != "auto" {
+		t.Fatalf("model = %v, %v", other.payload["model"], err)
 	}
 }
 
@@ -138,7 +153,7 @@ func TestTranscriptionUsesDictation(t *testing.T) {
 
 func TestVoiceRoutesAndQuota(t *testing.T) {
 	a := NewAdapter(Config{}, nil, nil, nil)
-	if a.QuotaMode(STTModel) != "" || a.QuotaMode(TTSModel) != quotaModeReason {
+	if a.QuotaMode(STTModel) != "" || a.QuotaMode(TTSModel) != "" {
 		t.Fatal("voice quota modes")
 	}
 	capabilities := map[string]modeldomain.Capability{}

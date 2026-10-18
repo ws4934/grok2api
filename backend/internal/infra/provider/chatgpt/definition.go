@@ -67,10 +67,10 @@ func Routes() []modeldomain.Route {
 	return values
 }
 
-// QuotaMode follows the Web limits: every chat and speech conversation
-// consumes "reason", every image "image_gen"; dictation has no limit.
+// QuotaMode follows the Web limits: every chat consumes "reason", every image
+// "image_gen"; dictation and speech, answered by speechModel, use neither.
 func (a *Adapter) QuotaMode(upstreamModel string) string {
-	if upstreamModel == STTModel {
+	if upstreamModel == STTModel || upstreamModel == TTSModel {
 		return ""
 	}
 	if len(a.imageCandidates(upstreamModel)) > 0 {
