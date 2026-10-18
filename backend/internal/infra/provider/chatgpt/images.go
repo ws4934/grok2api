@@ -24,6 +24,7 @@ var imageKeepAlive = 15 * time.Second
 
 // imageJob is one Images API request.
 type imageJob struct {
+	model          string
 	edit           bool
 	prompt         string
 	count          int
@@ -57,7 +58,7 @@ type imageOutput struct {
 
 func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGenerationRequest) (*provider.Response, error) {
 	return a.images(ctx, request.Credential, imageJob{
-		prompt: request.Prompt, count: request.Count, size: request.Size, quality: request.Quality, responseFormat: request.ResponseFormat,
+		model: request.Model, prompt: request.Prompt, count: request.Count, size: request.Size, quality: request.Quality, responseFormat: request.ResponseFormat,
 		outputFormat: request.OutputFormat, background: request.Background, streaming: request.Streaming, partialImages: request.PartialImages,
 		aspectRatio: request.AspectRatio, resolution: request.Resolution,
 	})
@@ -65,7 +66,7 @@ func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGener
 
 func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditRequest) (*provider.Response, error) {
 	return a.images(ctx, request.Credential, imageJob{
-		edit: true, prompt: request.Prompt, count: request.Count, size: request.Size, quality: request.Quality, responseFormat: request.ResponseFormat,
+		model: request.Model, edit: true, prompt: request.Prompt, count: request.Count, size: request.Size, quality: request.Quality, responseFormat: request.ResponseFormat,
 		outputFormat: request.OutputFormat, background: request.Background, inputs: request.ImageURLs, mask: request.MaskURL,
 		streaming: request.Streaming, partialImages: request.PartialImages, aspectRatio: request.AspectRatio, resolution: request.Resolution,
 	})
@@ -116,9 +117,9 @@ func (a *Adapter) images(ctx context.Context, credential account.Credential, job
 	if err := a.ValidateImageRequest(job.options()); err != nil {
 		return errorResponse("", http.StatusBadRequest, "invalid_request", err.Error()), nil
 	}
-	model := a.config().ImageConversationModel
+	model := a.imageConversationModel(job.model)
 	if model == "" {
-		return errorResponse("", http.StatusServiceUnavailable, "image_model_unconfigured", "The ChatGPT image conversation model is not configured"), nil
+		return errorResponse("", http.StatusNotFound, "model_not_found", "Unknown ChatGPT image model "+job.model), nil
 	}
 	if a.assets == nil {
 		return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, errors.New("image storage is not configured"))
@@ -359,7 +360,7 @@ var _ provider.AsyncImageAdapter = (*Adapter)(nil)
 
 func asyncImageJob(request provider.ImageJobRequest) imageJob {
 	return imageJob{
-		edit: len(request.ImageURLs) > 0, prompt: request.Prompt, count: 1, size: request.Size, quality: request.Quality,
+		model: request.Model, edit: len(request.ImageURLs) > 0, prompt: request.Prompt, count: 1, size: request.Size, quality: request.Quality,
 		outputFormat: request.OutputFormat, background: request.Background, inputs: request.ImageURLs, mask: request.MaskURL,
 	}
 }
@@ -373,9 +374,9 @@ func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequ
 	if err := a.ValidateImageRequest(job.options()); err != nil {
 		return cp, err
 	}
-	model := a.config().ImageConversationModel
+	model := a.imageConversationModel(job.model)
 	if model == "" {
-		return cp, invalidRequest("The ChatGPT image conversation model is not configured")
+		return cp, invalidRequest("Unknown ChatGPT image model " + job.model)
 	}
 	c, err := a.decrypt(request.Credential)
 	if err != nil {

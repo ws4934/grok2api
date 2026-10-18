@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -544,13 +545,13 @@ func TestAccountIdentityModelsAndQuotaWindows(t *testing.T) {
 	if err != nil || strings.Join(models, ",") != "gpt-5,gpt-5-thinking" {
 		t.Fatalf("models = %v, %v", models, err)
 	}
-	if got := a.NormalizeAccountModelCapabilities(models, nil, credential); got[len(got)-1] != imageModel {
-		t.Fatalf("image route not added: %v", got)
+	if got := a.NormalizeAccountModelCapabilities(models, nil, credential); strings.Join(got[len(models):], ",") != "gpt-image-2,gpt-image-2.5,gpt-image-2.5-flare,gpt-image-2.5-sunburst" {
+		t.Fatalf("image routes not added: %v", got)
 	}
 	if got := a.NormalizeAccountModelCapabilities([]string{"gpt-4o"}, nil, credential); len(got) != 1 {
 		t.Fatalf("image route added without the conversation model: %v", got)
 	}
-	if a.QuotaMode("gpt-5") != quotaModeReason || a.QuotaMode(imageModel) != quotaModeImage {
+	if a.QuotaMode("gpt-5") != quotaModeReason || a.QuotaMode("gpt-image-2") != quotaModeImage {
 		t.Fatal("quota modes")
 	}
 	snapshot, err := a.SyncQuota(ctx, credential)
@@ -655,12 +656,12 @@ func TestImageGenerationSyncAndStream(t *testing.T) {
 	credential := testCredential(t, a, credentials{AccessToken: "AT"})
 	ctx := context.Background()
 
-	response, err := a.GenerateImage(ctx, provider.ImageGenerationRequest{Credential: credential, Model: imageModel, Prompt: "a fox", Count: 2, Quality: "high"})
+	response, err := a.GenerateImage(ctx, provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "a fox", Count: 2, Quality: "high"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := decodeBody(t, response)
-	data := body["data"].([]any)
+	data, _ := body["data"].([]any)
 	if response.StatusCode != 200 || response.QuotaUnits != 2 || len(data) != 2 || data[0].(map[string]any)["b64_json"] == nil || body["size"] != "64x48" || body["quality"] != "high" || body["output_format"] != "png" || submits.Load() != 2 || assets.saved != 2 {
 		t.Fatalf("images = %+v %v (submits %d)", response, body, submits.Load())
 	}
@@ -668,7 +669,7 @@ func TestImageGenerationSyncAndStream(t *testing.T) {
 		t.Fatalf("usage = %v", usage)
 	}
 
-	response, err = a.GenerateImage(ctx, provider.ImageGenerationRequest{Credential: credential, Prompt: "a fox", ResponseFormat: "url", OutputFormat: "jpeg"})
+	response, err = a.GenerateImage(ctx, provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "a fox", ResponseFormat: "url", OutputFormat: "jpeg"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,7 +679,7 @@ func TestImageGenerationSyncAndStream(t *testing.T) {
 
 	imageKeepAlive = 10 * time.Millisecond
 	t.Cleanup(func() { imageKeepAlive = 15 * time.Second })
-	response, err = a.GenerateImage(ctx, provider.ImageGenerationRequest{Credential: credential, Prompt: "a fox", Streaming: true})
+	response, err = a.GenerateImage(ctx, provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "a fox", Streaming: true})
 	if err != nil || response.Header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("stream = %+v, %v", response, err)
 	}
@@ -692,16 +693,16 @@ func TestImageFailuresBeforeAndAfterSubmit(t *testing.T) {
 	var submits atomic.Int32
 	a, _ := newTestAdapter(t, imageUpstream(t, "/backend-api/f/conversation/prepare", http.StatusTooManyRequests, &submits))
 	credential := testCredential(t, a, credentials{AccessToken: "AT"})
-	if response, err := a.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Prompt: "a fox"}); err != nil || response.StatusCode != 429 {
+	if response, err := a.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "a fox"}); err != nil || response.StatusCode != 429 {
 		t.Fatalf("pre-submit rate limit = %+v, %v", response, err)
 	}
 
 	b, _ := newTestAdapter(t, imageUpstream(t, "/backend-api/f/conversation", http.StatusBadGateway, &submits))
 	credential = testCredential(t, b, credentials{AccessToken: "AT"})
-	if response, err := b.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Prompt: "a fox"}); err == nil || response != nil || submits.Load() != 1 {
+	if response, err := b.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "a fox"}); err == nil || response != nil || submits.Load() != 1 {
 		t.Fatalf("post-submit failure = %+v, %v (submits %d)", response, err, submits.Load())
 	}
-	response, err := b.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Prompt: "a fox", Streaming: true})
+	response, err := b.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "a fox", Streaming: true})
 	if err != nil || response.StatusCode != 200 {
 		t.Fatalf("submitted stream = %+v, %v", response, err)
 	}
@@ -709,9 +710,8 @@ func TestImageFailuresBeforeAndAfterSubmit(t *testing.T) {
 		t.Fatalf("submitted stream failure = %v (submits %d)", stream, submits.Load())
 	}
 
-	b.UpdateConfig(Config{})
-	if response, err := b.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Prompt: "a fox"}); err != nil || response.StatusCode != 503 {
-		t.Fatalf("unconfigured image model = %+v, %v", response, err)
+	if response, err := b.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-6", Prompt: "a fox"}); err != nil || response.StatusCode != 404 {
+		t.Fatalf("unknown image model = %+v, %v", response, err)
 	}
 }
 
@@ -727,7 +727,7 @@ func TestRegistryAcceptsChatGPT(t *testing.T) {
 	_, validator := registry.ImageRequestValidator(id)
 	_, preparer := any(a).(provider.CredentialImportPreparer)
 	_, normalizer := any(a).(provider.AccountModelCapabilityNormalizer)
-	if !interactive || !identity || !validator || !preparer || !normalizer || !registry.TierExempt(id) || registry.QuotaMode(id, imageModel) != quotaModeImage {
+	if !interactive || !identity || !validator || !preparer || !normalizer || !registry.TierExempt(id) || registry.QuotaMode(id, "gpt-image-2") != quotaModeImage {
 		t.Fatal("ChatGPT capability surface is incomplete")
 	}
 }
@@ -753,5 +753,27 @@ func TestValidateImageRequest(t *testing.T) {
 		if err := a.ValidateImageRequest(o); !errors.As(err, &scoped) {
 			t.Fatalf("%+v accepted: %v", o, err)
 		}
+	}
+}
+
+func TestImageRoutesDefaultToChatGPTConversationModels(t *testing.T) {
+	a := NewAdapter(Config{}, nil, nil, nil)
+	got := a.NormalizeAccountModelCapabilities([]string{"auto", "gpt-6"}, nil, account.Credential{})
+	if strings.Join(got, ",") != "auto,gpt-6,gpt-image-2.5,gpt-image-2.5-flare,gpt-image-2.5-sunburst" {
+		t.Fatalf("free catalog image routes = %v", got)
+	}
+	got = a.NormalizeAccountModelCapabilities([]string{"auto", "gpt-5-3"}, nil, account.Credential{})
+	if !slices.Contains(got, "gpt-image-2") {
+		t.Fatalf("gpt-image-2 needs gpt-5-3: %v", got)
+	}
+	if a.imageConversationModel("gpt-image-2") != "gpt-5-3" || a.imageConversationModel("gpt-image-2.5-sunburst") != "auto" || a.imageConversationModel("gpt-6") != "" {
+		t.Fatal("default conversation models")
+	}
+	a.UpdateConfig(Config{ImageConversationModel: "gpt-6"})
+	if a.imageConversationModel("gpt-image-2.5") != "gpt-6" || a.QuotaMode("gpt-image-2.5-flare") != quotaModeImage {
+		t.Fatal("configured override")
+	}
+	if len(Routes()) != 8 {
+		t.Fatalf("routes = %d", len(Routes()))
 	}
 }

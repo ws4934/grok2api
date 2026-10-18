@@ -21,8 +21,8 @@ import (
 
 // Config holds the ChatGPT runtime settings the adapter reads per request.
 type Config struct {
-	// ImageConversationModel is the Web model that drives image generation;
-	// empty disables the image routes.
+	// ImageConversationModel overrides the Web model that drives every image
+	// route; empty uses each route's default (gpt-image-2 → gpt-5-3, 2.5 → auto).
 	ImageConversationModel string
 	OutputTokenLimit       int
 	VisionTokens           int

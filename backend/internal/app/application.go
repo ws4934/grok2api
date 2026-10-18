@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -391,7 +392,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	gatewayService.UpdateRequestTimeout(cfg.Server.RequestTimeout.Value())
 	gatewayService.ConfigureMedia(mediaJobRepo, cfg.Provider.Web.MediaConcurrency)
 	gatewayService.ConfigureMediaAssets(mediaService)
-	gatewayService.UpdateDefaultImageModel(cfg.Provider.ChatGPT.DefaultImageModel)
+	gatewayService.UpdateDefaultImageModel(cmp.Or(cfg.Provider.ChatGPT.DefaultImageModel, chatgpt.DefaultImageModel))
 	quotaRecoveryService := quotarecoveryapp.NewService(logger, quotaQueue, accountService, cfg.Provider.Web.RecoveryBackoffBase.Value(), cfg.Provider.Web.RecoveryBackoffMax.Value())
 	quotaRecoveryService.SetBulkPool(syncPool)
 	inferenceConcurrency := httpmiddleware.NewConcurrencyGate(cfg.Server.MaxConcurrentRequests)
@@ -429,7 +430,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		egressManager.UpdateClearanceConfig(clearanceConfig(next))
 		consoleAdapter.UpdateConfig(consoleProviderConfig(next))
 		chatgptAdapter.UpdateConfig(chatgptProviderConfig(next))
-		gatewayService.UpdateDefaultImageModel(next.Provider.ChatGPT.DefaultImageModel)
+		gatewayService.UpdateDefaultImageModel(cmp.Or(next.Provider.ChatGPT.DefaultImageModel, chatgpt.DefaultImageModel))
 		egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(next))
 		mediaService.UpdateConfig(mediaConfig(next))
 		quotaRecoveryService.UpdateConfig(next.Provider.Web.RecoveryBackoffBase.Value(), next.Provider.Web.RecoveryBackoffMax.Value())

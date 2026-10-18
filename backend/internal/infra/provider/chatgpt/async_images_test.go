@@ -16,7 +16,7 @@ func TestAsyncImageStepsCheckpointAroundTheSend(t *testing.T) {
 	ctx := context.Background()
 	var submits atomic.Int32
 	a, assets := newTestAdapter(t, imageUpstream(t, "", 0, &submits))
-	request := provider.ImageJobRequest{Credential: testCredential(t, a, credentials{AccessToken: "AT"}), Model: imageModel, Prompt: "a fox", OutputFormat: "jpeg"}
+	request := provider.ImageJobRequest{Credential: testCredential(t, a, credentials{AccessToken: "AT"}), Model: "gpt-image-2", Prompt: "a fox", OutputFormat: "jpeg"}
 	var saved []provider.ImageCheckpoint
 	save := func(cp provider.ImageCheckpoint) error {
 		if len(saved) == 0 && submits.Load() != 0 {

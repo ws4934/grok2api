@@ -152,8 +152,8 @@ type ProviderConfig struct {
 
 // ChatGPTProviderConfig holds the ChatGPT web provider runtime settings.
 type ChatGPTProviderConfig struct {
-	// ImageConversationModel is the ChatGPT model slug that drives image
-	// generation; empty disables image routes until configured.
+	// ImageConversationModel overrides the ChatGPT model slug that drives
+	// image generation; empty uses each image route's default.
 	ImageConversationModel string `yaml:"imageConversationModel"`
 	OutputTokenLimit       int    `yaml:"outputTokenLimit"`
 	VisionTokens           int    `yaml:"visionTokens"`
