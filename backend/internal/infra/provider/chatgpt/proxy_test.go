@@ -1,6 +1,7 @@
 package chatgpt
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -85,5 +86,28 @@ func TestFailureResponseSeparatesEgressFromAccountFailures(t *testing.T) {
 	}
 	if strings.Contains((&transportError{cause: errors.New("dial http://user:secret@proxy")}).Error(), "secret") {
 		t.Fatal("transport error leaked the proxy address")
+	}
+}
+
+func TestTransferHostTrustAndPublicCheck(t *testing.T) {
+	for _, host := range []string{"chatgpt.com", "files.oaiusercontent.com", "sdmntprwestus.oaiusercontent.com.", "cdn.oaistatic.com"} {
+		if !trustedTransferHost(host) {
+			t.Fatalf("%s should be trusted", host)
+		}
+	}
+	for _, host := range []string{"evilchatgpt.com", "oaiusercontent.com.evil.test", "localhost"} {
+		if trustedTransferHost(host) {
+			t.Fatalf("%s must not be trusted", host)
+		}
+	}
+	if err := validatePublicHost(context.Background(), "localhost"); err == nil || !strings.Contains(err.Error(), "non-public transfer address") {
+		t.Fatalf("localhost transfer = %v", err)
+	}
+}
+
+func TestUpstreamErrorTextCarriesEndpointAndBody(t *testing.T) {
+	err := &upstreamError{Status: 422, Endpoint: "/backend-api/files/x/download", Message: "{\n \"detail\": \"bad file\"\n}"}
+	if got := err.Error(); got != `ChatGPT upstream HTTP 422 at /backend-api/files/x/download: { "detail": "bad file" }` {
+		t.Fatalf("error = %q", got)
 	}
 }

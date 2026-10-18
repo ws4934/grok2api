@@ -41,7 +41,21 @@ type upstreamError struct {
 	RetryAfter string
 }
 
-func (e *upstreamError) Error() string { return fmt.Sprintf("ChatGPT upstream HTTP %d", e.Status) }
+// Error is for logs and admin views only (no PublicErrorMessage): it carries
+// the endpoint and a redacted body excerpt so failures can be diagnosed.
+func (e *upstreamError) Error() string {
+	text := fmt.Sprintf("ChatGPT upstream HTTP %d", e.Status)
+	if e.Endpoint != "" {
+		text += " at " + e.Endpoint
+	}
+	if excerpt := strings.Join(strings.Fields(e.Message), " "); excerpt != "" {
+		if len(excerpt) > 300 {
+			excerpt = excerpt[:300] + "…"
+		}
+		text += ": " + excerpt
+	}
+	return text
+}
 
 const openAIClientVersion = "prod-a194cd50d4416d3c0b47c740f206b12ce60f5887"
 const openAIClientBuild = "6708908"
@@ -140,7 +154,7 @@ func publicTransferClient(proxy string) (*http.Client, error) {
 			return nil, err
 		}
 		for _, ip := range ips {
-			if !netguard.IsPublicAddress(ip) {
+			if !netguard.IsPublicAddress(ip) && !trustedTransferHost(host) {
 				return nil, errors.New("non-public transfer address")
 			}
 		}
@@ -167,7 +181,24 @@ func publicTransferClient(proxy string) (*http.Client, error) {
 		return validatePublicHost(req.Context(), req.URL.Hostname())
 	}}, nil
 }
+// trustedTransferHost reports OpenAI-owned hosts. Their DNS answers are
+// trusted even when a local TUN proxy's fake-ip resolver (Clash, Surge:
+// 198.18.0.0/15) returns reserved addresses; other hosts that signed URLs or
+// redirects point to must resolve to public addresses.
+func trustedTransferHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, domain := range []string{"chatgpt.com", "openai.com", "oaiusercontent.com", "oaistatic.com"} {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
+}
+
 func validatePublicHost(ctx context.Context, host string) error {
+	if trustedTransferHost(host) {
+		return nil
+	}
 	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 	if err != nil {
 		return err
