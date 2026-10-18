@@ -525,7 +525,7 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 	var data []byte
 	stageStarted = time.Now()
 	for attempt := 0; attempt < videoOutputAttempts; attempt++ {
-		if data, err = adapter.FetchImage(ctx, request, cp); err == nil || ctx.Err() != nil || attempt+1 == videoOutputAttempts {
+		if data, err = adapter.FetchImage(ctx, request, cp); err == nil || ctx.Err() != nil || attempt+1 == videoOutputAttempts || isImageOutputFailure(err) {
 			break
 		}
 		if waitErr := waitVideoOutputRetry(ctx, attempt); waitErr != nil {
@@ -553,6 +553,14 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 		s.logger.Error("image_usage_record_failed", "job_id", job.ID, "event_id", imageItemEventID(*job, index), "error", err)
 	}
 	return imageItemOutcome{}
+}
+
+// isImageOutputFailure reports a fetched image that fails the requested output
+// (chatgpt.IsImageOutputError, e.g. not transparent): fetching it again
+// returns the same image.
+func isImageOutputFailure(err error) bool {
+	var output interface{ ImageOutputFailure() bool }
+	return errors.As(err, &output) && output.ImageOutputFailure()
 }
 
 // submitImageItem sends the image from the job's account, failing over to

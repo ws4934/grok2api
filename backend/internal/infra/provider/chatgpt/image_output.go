@@ -78,6 +78,10 @@ type imageOutputError struct{ err error }
 
 func (e *imageOutputError) Error() string { return e.err.Error() }
 func (e *imageOutputError) Unwrap() error { return e.err }
+
+// ImageOutputFailure tells callers outside this package that downloading the
+// same image again cannot satisfy the output options.
+func (e *imageOutputError) ImageOutputFailure() bool { return true }
 func IsImageOutputError(err error) bool {
 	var output *imageOutputError
 	return errors.As(err, &output)

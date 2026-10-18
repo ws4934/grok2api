@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"image"
 	"image/jpeg"
@@ -82,6 +83,18 @@ func TestImageJobScopePreparesInputsOnce(t *testing.T) {
 	}
 	if fresh, _, _ := a.prepareImage(context.Background(), job); &fresh[0] == &inputs[0] {
 		t.Fatal("inputs leaked out of their job scope")
+	}
+}
+
+func TestImageOutputErrorTellsCallersNotToFetchAgain(t *testing.T) {
+	var opaque bytes.Buffer
+	if err := png.Encode(&opaque, image.NewGray(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := (ImageOutputOptions{Background: "transparent"}).apply(opaque.Bytes(), "image/png")
+	var marked interface{ ImageOutputFailure() bool }
+	if !IsImageOutputError(err) || !errors.As(err, &marked) || !marked.ImageOutputFailure() {
+		t.Fatalf("err = %v", err)
 	}
 }
 

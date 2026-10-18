@@ -171,6 +171,29 @@ func TestReconciliationBillsImagesOfACanceledJob(t *testing.T) {
 	}
 }
 
+// outputFailureError is a downloaded image that fails the output options, as
+// chatgpt reports it.
+type outputFailureError struct{}
+
+func (outputFailureError) Error() string            { return "image is not transparent" }
+func (outputFailureError) ImageOutputFailure() bool { return true }
+
+func TestImageJobDoesNotRefetchAnImageFailingTheOutputOptions(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	f.adapter.fetchErr = outputFailureError{}
+	job := f.create(t, ImageJobInput{Background: "transparent"})
+	f.service.processMediaJob(context.Background(), job.ID)
+	fetches := 0
+	for _, call := range f.adapter.Calls() {
+		if call == "fetch" {
+			fetches++
+		}
+	}
+	if stored := f.job(t, job.ID); stored.Status != media.StatusFailed || stored.ErrorCode != "media_download_failed" || fetches != 1 {
+		t.Fatalf("job = %s %s, fetches = %d", stored.Status, stored.ErrorCode, fetches)
+	}
+}
+
 type requestScopedTestError struct{ message string }
 
 func (e requestScopedTestError) Error() string              { return e.message }
