@@ -165,7 +165,11 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 		return result, errors.New("input exceeds gateway estimate limit")
 	}
 	event := uuid.NewString()
-	reserve := tokenCost(result.InputTokens, price.InputPerMillionTicks) + tokenCost(int64(cfg.OutputTokenLimit), price.OutputPerMillionTicks)
+	limit := int64(cfg.OutputTokenLimit)
+	if r.MaxOutputTokens > 0 && int64(r.MaxOutputTokens) < limit {
+		limit = int64(r.MaxOutputTokens)
+	}
+	reserve := tokenCost(result.InputTokens, price.InputPerMillionTicks) + tokenCost(limit, price.OutputPerMillionTicks)
 	// Like the legacy gateway, keep the reservation past the request deadline
 	// plus a crash grace so a slow settlement cannot release it early.
 	_, e = s.execution.billing.ReserveBilling(ctx, key, event, reserve, s.chatTimeout()+10*time.Minute)
@@ -225,7 +229,7 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 		}
 	}
 	if release == nil {
-		return result, errors.New("no available verified channel account")
+		return result, domain.ErrNoAccount
 	}
 	defer release()
 	defer func() {
@@ -251,7 +255,7 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 	// Deltas are counted on their own, so a long stream costs O(n) tokenization.
 	// Per-delta counts never undercount the joined text, which keeps the local
 	// limit conservative; billing uses one exact count of the final output.
-	limit, used := int64(cfg.OutputTokenLimit), int64(0)
+	used := int64(0)
 	take := func(part string) (string, error) {
 		if part == "" || result.Truncated {
 			return "", nil
@@ -323,8 +327,9 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 	}
 	if env.NodeID > 0 {
 		record.EgressNodeID = &env.NodeID
+		record.EgressNodeName = env.NodeName
 	}
-	record.Estimation = &auditdomain.EstimationDetails{Version: 1, PriceVersion: price.Version, Tokenizer: EstimatorVersion, VisionTokensPerImage: cfg.VisionTokens, OutputLimitTokens: cfg.OutputTokenLimit, Truncated: result.Truncated}
+	record.Estimation = &auditdomain.EstimationDetails{Version: 1, PriceVersion: price.Version, Tokenizer: EstimatorVersion, VisionTokensPerImage: cfg.VisionTokens, OutputLimitTokens: int(limit), Truncated: result.Truncated}
 	for _, message := range r.Messages {
 		for _, part := range message.Content {
 			if part.Type == "image_url" {

@@ -459,7 +459,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		if e != nil {
 			return ctx, nil, e
 		}
-		return channeldomain.WithEnvironment(ctx, channeldomain.Environment{ProxyURL: lease.ProxyURL, NodeID: lease.NodeID}), lease.Release, nil
+		return channeldomain.WithEnvironment(ctx, channeldomain.Environment{ProxyURL: lease.ProxyURL, NodeID: lease.NodeID, NodeName: lease.NodeName}), lease.Release, nil
 	})
 	channelService.SetImages(relational.NewChannelRepository(database), mediaService)
 	channelService.SetRequestTimeout(cfg.Server.RequestTimeout.Value())

@@ -20,6 +20,7 @@ var (
 	ErrDisabled       = errors.New("channel is disabled")
 	ErrUnsupported    = errors.New("unsupported channel capability")
 	ErrQuotaExhausted = errors.New("channel capability quota exhausted")
+	ErrNoAccount      = errors.New("no available verified channel account")
 )
 
 type Capabilities struct {
@@ -49,6 +50,9 @@ type Settings struct {
 	VisionTokens           int    `json:"vision_tokens"`
 	AccountConcurrency     int    `json:"account_concurrency"`
 	ImageWorkers           int    `json:"image_workers"`
+	// DefaultImageModel is the public image route used when a Responses
+	// image_generation tool names no model and the top-level model is a chat model.
+	DefaultImageModel string `json:"default_image_model"`
 }
 
 func DefaultSettings() Settings {
@@ -123,6 +127,10 @@ type Message struct {
 type ChatRequest struct {
 	Model    string
 	Messages []Message
+	// ReasoningEffort is normalized by the transport: "", low, medium, high or extended.
+	ReasoningEffort string
+	// MaxOutputTokens lowers the channel output limit for one request (0 = channel limit).
+	MaxOutputTokens int
 }
 type ChatEvent struct {
 	Text      string

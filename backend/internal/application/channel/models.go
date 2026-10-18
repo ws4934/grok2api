@@ -272,3 +272,22 @@ func (s *Service) CheckAccess(ctx context.Context, key clientkey.Key, r model.Ro
 	_, e := s.authorize(ctx, key, r)
 	return e
 }
+
+// EstimateTextTokens applies the channel billing estimator to client-visible usage.
+func (s *Service) EstimateTextTokens(text string) int64 {
+	if s.execution == nil {
+		return 0
+	}
+	n, _ := s.count(text)
+	return n
+}
+
+// Classify maps a channel error to its module's failure kind for client-facing errors.
+func (s *Service) Classify(p account.Provider, err error) domain.Failure {
+	if m, ok := s.registry.Get(p); ok {
+		if classifier, ok := m.(domain.FailureClassifier); ok {
+			return classifier.Classify(err)
+		}
+	}
+	return domain.Failure{Kind: domain.FailureNetwork, Code: "upstream_error", Message: "channel request failed"}
+}

@@ -67,7 +67,7 @@ func (a *Adapter) Chat(ctx context.Context, c channel.Credentials, r channel.Cha
 	if e != nil {
 		return e
 	}
-	request := wireChatRequest{Model: r.Model}
+	request := wireChatRequest{Model: r.Model, ReasoningEffort: r.ReasoningEffort}
 	var images []OpenAIChatImage
 	for mi, m := range r.Messages {
 		parts := []any{}

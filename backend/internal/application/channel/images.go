@@ -32,6 +32,7 @@ type MediaStore interface {
 	OpenImage(context.Context, string) (media.Asset, io.ReadCloser, error)
 	PublicImageURL(string) string
 }
+
 // ResponseIDPrefix makes every image job addressable as an OpenAI Responses object.
 const ResponseIDPrefix = "resp_"
 
@@ -569,6 +570,7 @@ func (s *Service) runImageItem(parent context.Context, job domain.ImageJob, item
 	}
 	if env.NodeID > 0 {
 		record.EgressNodeID = &env.NodeID
+		record.EgressNodeName = env.NodeName
 	}
 	record.Estimation = &audit.EstimationDetails{Version: 1, PriceVersion: job.Price.Version, ImageJobID: job.ID, Stage: "archived", Attempt: item.Generation}
 	_ = complete([]string{asset.ID}, "succeeded", "", &record)
