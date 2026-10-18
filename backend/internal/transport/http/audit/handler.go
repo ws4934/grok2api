@@ -542,7 +542,9 @@ func newAuditResponse(value auditdomain.Record, prices map[uint64]pricingdomain.
 }
 
 func newBillingBreakdown(value auditdomain.Record, prices map[uint64]pricingdomain.Price) *billingBreakdownResponse {
-	if value.CostInUSDTicks > 0 {
+	// Mirrors settlement: an administrator price is billed at its estimate even
+	// when upstream reported a cost.
+	if value.PriceID == 0 && value.CostInUSDTicks > 0 {
 		return &billingBreakdownResponse{
 			Source: "upstream", Method: "upstream_reported", Components: []billingComponentResponse{}, TotalInUSDTicks: value.CostInUSDTicks,
 		}

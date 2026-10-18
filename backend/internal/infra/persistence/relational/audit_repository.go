@@ -534,8 +534,10 @@ func deleteBillingReservations(tx *gorm.DB, eventIDs []string) error {
 	return nil
 }
 
+// auditBillingAmount bills an administrator price (PriceID != 0) at its own
+// estimate; otherwise the upstream-reported cost wins over the official estimate.
 func auditBillingAmount(row requestAuditModel) int64 {
-	if row.CostInUSDTicks > 0 {
+	if row.PriceID == 0 && row.CostInUSDTicks > 0 {
 		return row.CostInUSDTicks
 	}
 	return row.EstimatedCostInUSDTicks
@@ -645,7 +647,7 @@ func (r *AuditRepository) ListCursor(ctx context.Context, input repository.Audit
 	fields := map[string]sortSpec{
 		"request":   {expression: "request_audits.request_id"},
 		"model":     {expression: "LOWER(request_audits.model_public_id)"},
-		"billing":   {expression: "CASE WHEN request_audits.cost_in_usd_ticks > 0 THEN request_audits.cost_in_usd_ticks ELSE request_audits.estimated_cost_in_usd_ticks END", defaultDirection: repository.SortDescending},
+		"billing":   {expression: "CASE WHEN request_audits.price_id = 0 AND request_audits.cost_in_usd_ticks > 0 THEN request_audits.cost_in_usd_ticks ELSE request_audits.estimated_cost_in_usd_ticks END", defaultDirection: repository.SortDescending},
 		"tokens":    {expression: "request_audits.total_tokens", defaultDirection: repository.SortDescending},
 		"status":    {expression: "request_audits.status_code"},
 		"mode":      {expression: "CASE WHEN request_audits.streaming = TRUE THEN 1 ELSE 0 END"},

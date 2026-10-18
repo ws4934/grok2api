@@ -594,8 +594,9 @@ func formatAuditCursorValue(value auditdomain.Record, field string) string {
 	case "model":
 		return strings.ToLower(value.ModelPublicID)
 	case "billing":
+		// Must match the "billing" sort expression in AuditRepository.ListCursor.
 		amount := value.CostInUSDTicks
-		if amount == 0 {
+		if amount == 0 || value.PriceID != 0 {
 			amount = value.EstimatedCostInUSDTicks
 		}
 		return strconv.FormatInt(amount, 10)
