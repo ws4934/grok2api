@@ -26,6 +26,22 @@ export type ImageResult = {
   revisedPrompt?: string;
 };
 
+// size applies to basic (OpenAI-compatible) routes; aspectRatio/resolution to Grok routes.
+// quality is auto|low|medium|high on basic routes and low|medium on grok-imagine-image-2.0.
+export type ImageParams = {
+  count: number;
+  size?: string;
+  quality?: string;
+  aspectRatio?: string;
+  resolution?: string;
+};
+
+export type ApiErrorDetail = {
+  message: string;
+  code?: string;
+  requestId?: string;
+};
+
 export type VideoStatus = {
   status: "pending" | "done" | "failed";
   model?: string;
@@ -37,12 +53,14 @@ export type VideoStatus = {
 class CreativeApiError extends Error {
   readonly status: number;
   readonly code?: string;
+  readonly requestId?: string;
 
-  constructor(status: number, message: string, code?: string) {
+  constructor(status: number, message: string, code?: string, requestId?: string) {
     super(message);
     this.name = "CreativeApiError";
     this.status = status;
     this.code = code;
+    this.requestId = requestId;
   }
 }
 
@@ -84,34 +102,24 @@ export async function createChatResponse(input: {
 }
 
 export async function generateImage(input: {
-  basicProtocol?: boolean;
+  basicProtocol: boolean;
   apiKey: string;
   model: string;
   prompt: string;
-  count: number;
-  aspectRatio: string;
-  resolution: string;
-  quality?: "low" | "medium";
+  params: ImageParams;
   signal?: AbortSignal;
 }): Promise<ImageResult[]> {
-  const payload = await publicApiRequest(
-    input.apiKey,
-    "/images/generations",
-    {
-      method: "POST",
-      body: {
-        model: input.model,
-        prompt: input.prompt,
-        n: input.count,
-        ...(input.basicProtocol ? { size: "auto", quality: "auto", output_format: "png" } : { aspect_ratio: input.aspectRatio, resolution: input.resolution, ...(input.quality ? { quality: input.quality } : {}), stream: false }),
-        response_format: "url",
-      },
-      signal: input.signal,
-    },
-  );
+  const payload = await publicApiRequest(input.apiKey, "/images/generations", { method: "POST", body: imageGenerationBody(input), signal: input.signal });
   const images = readImages(payload);
   if (images.length === 0) throw new CreativeApiError(200, "The image response did not contain any images", "invalid_response");
   return images.map((image) => ({ ...image, url: resolveMediaURL(image.url) }));
+}
+
+export function imageGenerationBody({ basicProtocol, model, prompt, params }: { basicProtocol: boolean; model: string; prompt: string; params: ImageParams }): Record<string, unknown> {
+  const options = basicProtocol
+    ? { size: params.size || "auto", quality: params.quality || "auto", output_format: "png" }
+    : { aspect_ratio: params.aspectRatio, resolution: params.resolution, ...(params.quality ? { quality: params.quality } : {}), stream: false };
+  return { model, prompt, n: params.count, ...options, response_format: "url" };
 }
 
 export async function createVideo(input: {
@@ -294,12 +302,7 @@ export async function synthesizeSpeech(input: {
     signal: input.signal,
   });
   const contentType = response.headers.get("content-type") || "";
-  if (!response.ok) {
-    const responseText = await response.text();
-    const payload = parseJSON(responseText);
-    const error = readError(payload);
-    throw new CreativeApiError(response.status, error.message ?? (responseText.trim() || response.statusText || `HTTP ${response.status}`), error.code);
-  }
+  if (!response.ok) throw apiErrorFromResponse(response, await response.text());
   if (contentType.includes("application/json")) {
     const payload = await response.json();
     if (!isRecord(payload) || typeof payload.audio !== "string") {
@@ -339,10 +342,7 @@ export async function transcribeSpeech(input: {
   });
   const responseText = await response.text();
   const payload = parseJSON(responseText);
-  if (!response.ok) {
-    const error = readError(payload);
-    throw new CreativeApiError(response.status, error.message ?? (responseText.trim() || response.statusText || `HTTP ${response.status}`), error.code);
-  }
+  if (!response.ok) throw apiErrorFromResponse(response, responseText);
   if (!isRecord(payload) || typeof payload.text !== "string") {
     throw new CreativeApiError(200, "The STT response was invalid", "invalid_response");
   }
@@ -379,19 +379,8 @@ async function publicApiRequest(apiKey: string, path: string, options: RequestOp
     signal: options.signal,
   });
   const responseText = await response.text();
-  let payload: unknown = null;
-  if (responseText) {
-    try {
-      payload = JSON.parse(responseText);
-    } catch {
-      payload = null;
-    }
-  }
-  if (!response.ok) {
-    const error = readError(payload);
-    const fallback = responseText.trim() || response.statusText || `HTTP ${response.status}`;
-    throw new CreativeApiError(response.status, error.message ?? fallback, error.code);
-  }
+  if (!response.ok) throw apiErrorFromResponse(response, responseText);
+  const payload = parseJSON(responseText);
   if (payload === null) throw new CreativeApiError(response.status, "The API returned a non-JSON response", "invalid_response");
   return payload;
 }
@@ -403,12 +392,7 @@ async function publicResponsesStream(apiKey: string, body: Record<string, unknow
     body: JSON.stringify(body),
     signal,
   });
-  if (!response.ok) {
-    const responseText = await response.text();
-    const payload = parseJSON(responseText);
-    const error = readError(payload);
-    throw new CreativeApiError(response.status, error.message ?? (responseText.trim() || response.statusText || `HTTP ${response.status}`), error.code);
-  }
+  if (!response.ok) throw apiErrorFromResponse(response, await response.text());
   if (!response.headers.get("content-type")?.includes("text/event-stream")) {
     const responseText = await response.text();
     const payload = parseJSON(responseText);
@@ -520,6 +504,18 @@ async function publicResponsesStream(apiKey: string, body: Record<string, unknow
   if (buffer.trim()) consume(buffer);
   if (!text.trim() && !reasoning.trim() && tools.size === 0) throw new CreativeApiError(response.status, "The Responses API did not return any displayable output", "invalid_response");
   return snapshot();
+}
+
+// Gateway error bodies carry only message/code; the request ID travels in the X-Request-ID header of every response.
+export function apiErrorFromResponse(response: Response, responseText: string): CreativeApiError {
+  const error = readError(parseJSON(responseText));
+  const message = error.message ?? (responseText.trim() || response.statusText || `HTTP ${response.status}`);
+  return new CreativeApiError(response.status, message, error.code, response.headers.get("X-Request-ID")?.trim() || undefined);
+}
+
+export function describeError(error: unknown): ApiErrorDetail {
+  if (error instanceof CreativeApiError) return { message: error.message, code: error.code, requestId: error.requestId };
+  return { message: error instanceof Error ? error.message : String(error) };
 }
 
 function resolveMediaURL(value: string): string {

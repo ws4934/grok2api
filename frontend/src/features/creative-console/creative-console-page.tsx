@@ -1,11 +1,11 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowUp, AudioLines, BrainCircuit, Check, CheckCircle2, Clock3, ExternalLink, Globe, History, ImageIcon, ImagePlus, ImageUpscale, Images, Loader2, MessageSquareText, Mic, Pencil, RefreshCw, Sparkle, Square, SquarePen, Trash2, TriangleAlert, TvMinimal, Upload, Video, Wrench, X } from "lucide-react";
+import { ArrowUp, AudioLines, BrainCircuit, Check, CheckCircle2, Clock3, CornerDownLeft, Download, ExternalLink, Globe, History, ImageIcon, ImagePlus, ImageUpscale, Images, Loader2, MessageSquareText, Mic, Pencil, RefreshCw, Sparkle, Square, SquarePen, Trash2, TriangleAlert, TvMinimal, Upload, Video, Wrench, X } from "lucide-react";
 import { marked } from "marked";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,7 @@ import { isGrokProvider } from "@/entities/provider/provider-presentation";
 import {
   createChatResponse,
   createVideo,
+  describeError,
   editVideo,
   extendVideo,
   generateImage,
@@ -30,16 +31,31 @@ import {
   listVoices,
   synthesizeSpeech,
   transcribeSpeech,
+  type ApiErrorDetail,
   type ChatMessage,
   type ChatStreamSnapshot,
   type ChatToolActivity,
-  type ImageResult,
+  type ImageParams,
   type ReasoningEffort,
   type STTResult,
   type TTSResult,
   type VideoStatus,
   type VoiceInfo,
 } from "@/features/creative-console/creative-console-api";
+import {
+  finiteTimestamp,
+  historyStorageKey,
+  isLocalRecord,
+  loadImageHistory,
+  loadStoredList,
+  loadVideoHistory,
+  persistImageHistory,
+  persistStoredList,
+  persistVideoHistory,
+  type ImageHistoryRecord,
+  type VideoAction,
+  type VideoHistoryRecord,
+} from "@/features/creative-console/creative-console-history";
 import { getClientKeySecret, listClientKeys, type ClientKeyDTO } from "@/features/client-keys/client-keys-api";
 import { importVideoInputFromURL, uploadMediaInput } from "@/features/media/media-api";
 import { PageHeader } from "@/shared/components/page-header";
@@ -90,11 +106,11 @@ type ChatSession = {
 const imageAspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
 const videoAspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
 const imageResolutions = ["1k", "2k"] as const;
+const basicImageSizes = ["auto", "1024x1024", "1536x1024", "1024x1536"] as const;
+const basicImageQualities = ["auto", "low", "medium", "high"] as const;
 const videoResolutions = ["480p", "720p", "1080p"] as const;
 const videoDurations = ["6", "10", "15"] as const;
 const videoExtendDurations = ["2", "4", "6", "8", "10"] as const;
-type VideoAction = "generate" | "edit" | "extend";
-const chatHistoryStoragePrefix = "grok2api:creative-console:chat-history:";
 const chatHistoryMaxSessions = 50;
 const chatHistoryMaxBytes = 4 * 1024 * 1024;
 const composerClassName = "overflow-hidden rounded-2xl bg-secondary/45 ring-1 ring-transparent transition-colors focus-within:bg-secondary/60 focus-within:ring-ring";
@@ -106,7 +122,7 @@ export function CreativeConsolePage() {
   const [secretState, setSecretState] = useState<SecretState | null>(null);
   const [keyError, setKeyError] = useState("");
   const [selectedModels, setSelectedModels] = useState<Record<CreativeMode, string>>({ chat: "", image: "", video: "", voice: "" });
-  const [chatToolbarElement, setChatToolbarElement] = useState<HTMLDivElement | null>(null);
+  const [toolbarElement, setToolbarElement] = useState<HTMLDivElement | null>(null);
   const requestedSecretKeyRef = useRef("");
 
   const keysQuery = useQuery({
@@ -174,6 +190,7 @@ export function CreativeConsolePage() {
   }, [effectiveKeyId, loadSecret]);
 
   const apiKey = secretState?.keyId === effectiveKeyId ? secretState.secret : "";
+  const storageScope = effectiveKeyId || "default";
 
   function panelProps(panelMode: CreativeMode): CreativePanelProps {
     return {
@@ -224,7 +241,7 @@ export function CreativeConsolePage() {
                 {activeKeys.map((key) => <SelectItem key={key.id} value={key.id}>{key.name} · {key.prefix}</SelectItem>)}
               </SelectContent>
             </Select>
-            <div ref={setChatToolbarElement} className={cn("items-center gap-1", mode === "chat" ? "flex" : "hidden")} />
+            <div ref={setToolbarElement} className={cn("items-center gap-1", mode === "voice" ? "hidden" : "flex")} />
           </div>
         </div>
 
@@ -236,9 +253,9 @@ export function CreativeConsolePage() {
         </div>
 
         <div className="min-h-0 flex-1">
-          <div className="h-full" hidden={mode !== "chat"}><ChatPanel key={effectiveKeyId || "default"} storageScope={effectiveKeyId || "default"} toolbarElement={chatToolbarElement} {...panelProps("chat")} /></div>
-          <div className="h-full" hidden={mode !== "image"}><ImagePanel {...panelProps("image")} /></div>
-          <div className="h-full" hidden={mode !== "video"}><VideoPanel {...panelProps("video")} /></div>
+          <div className="h-full" hidden={mode !== "chat"}><ChatPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "chat" ? toolbarElement : null} {...panelProps("chat")} /></div>
+          <div className="h-full" hidden={mode !== "image"}><ImagePanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "image" ? toolbarElement : null} {...panelProps("image")} /></div>
+          <div className="h-full" hidden={mode !== "video"}><VideoPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "video" ? toolbarElement : null} {...panelProps("video")} /></div>
           <div className="h-full" hidden={mode !== "voice"}><VoicePanel {...panelProps("voice")} /></div>
         </div>
       </section>
@@ -253,7 +270,13 @@ type CreativePanelProps = {
   onModelChange: (model: string) => void;
 };
 
-function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & { storageScope: string; toolbarElement: HTMLDivElement | null }) {
+// History is stored per client key; the toolbar slot is only passed to the visible panel.
+type HistoryPanelProps = {
+  storageScope: string;
+  toolbarElement: HTMLDivElement | null;
+};
+
+function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & HistoryPanelProps) {
   const { t, i18n } = useTranslation();
   const [initialHistory] = useState(() => {
     const sessions = loadChatSessions(storageScope);
@@ -869,51 +892,125 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
   );
 }
 
-function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePanelProps) {
-  const { t } = useTranslation();
+function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & HistoryPanelProps) {
+  const { t, i18n } = useTranslation();
   const [prompt, setPrompt] = useState("");
   const [count, setCount] = useState("1");
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [resolution, setResolution] = useState("1k");
   const [quality, setQuality] = useState<"low" | "medium">("medium");
-  const [images, setImages] = useState<ImageResult[]>([]);
+  const [size, setSize] = useState("auto");
+  const [basicQuality, setBasicQuality] = useState("auto");
+  // Newest first, matching the storage order; rendered oldest-to-newest like the chat transcript.
+  const [records, setRecords] = useState(() => loadImageHistory(storageScope));
+  const timeline = useMemo(() => [...records].reverse(), [records]);
   const selectedModelRoute = modelOptions.find((option) => option.publicId === model);
   const basicProtocol = !usesGrokDialect(selectedModelRoute);
-  const supportsQuality = model.toLowerCase().endsWith("grok-imagine-image-2.0");
+  const supportsQuality = !basicProtocol && model.toLowerCase().endsWith("grok-imagine-image-2.0");
 
   const mutation = useMutation({
-    mutationFn: (request: Parameters<typeof generateImage>[0]) => generateImage(request),
-    onSuccess: setImages,
+    mutationFn: ({ record, key }: { record: ImageHistoryRecord; key: string }) => generateImage({ apiKey: key, basicProtocol: record.basicProtocol, model: record.model, prompt: record.prompt, params: record.params }),
+    onSuccess: (images, { record }) => patchRecord(record.id, { status: "completed", images }),
+    onError: (error, { record }) => patchRecord(record.id, { status: "failed", error: describeError(error) }),
   });
+
+  function updateRecords(update: (current: ImageHistoryRecord[]) => ImageHistoryRecord[]): void {
+    setRecords((current) => {
+      const next = update(current);
+      persistImageHistory(storageScope, next);
+      return next;
+    });
+  }
+
+  function patchRecord(id: string, patch: Partial<ImageHistoryRecord>): void {
+    updateRecords((current) => current.map((record) => record.id === id ? { ...record, ...patch } : record));
+  }
+
+  function generate(request: Pick<ImageHistoryRecord, "prompt" | "model" | "basicProtocol" | "params">): void {
+    if (!apiKey || !request.model || !request.prompt || mutation.isPending) return;
+    const record: ImageHistoryRecord = {
+      id: createCreativeMessageId(),
+      createdAt: Date.now(),
+      prompt: request.prompt,
+      model: request.model,
+      basicProtocol: request.basicProtocol,
+      params: request.params,
+      status: "generating",
+      images: [],
+    };
+    updateRecords((current) => [record, ...current]);
+    mutation.reset();
+    mutation.mutate({ record, key: apiKey });
+  }
 
   function submit(event: FormEvent): void {
     event.preventDefault();
-    if (!apiKey || !model || !prompt.trim() || mutation.isPending) return;
-    mutation.reset();
-    mutation.mutate({ basicProtocol, apiKey, model, prompt: prompt.trim(), count: Number(count), aspectRatio, resolution, quality: supportsQuality ? quality : undefined });
+    const params: ImageParams = basicProtocol
+      ? { count: Number(count), size, quality: basicQuality }
+      : { count: Number(count), aspectRatio, resolution, quality: supportsQuality ? quality : undefined };
+    generate({ prompt: prompt.trim(), model, basicProtocol, params });
+  }
+
+  function reuse(record: ImageHistoryRecord): void {
+    const { params } = record;
+    setPrompt(record.prompt);
+    setCount(String(params.count));
+    if (record.basicProtocol) {
+      setSize(params.size ?? "auto");
+      setBasicQuality(params.quality ?? "auto");
+    } else {
+      if (params.aspectRatio) setAspectRatio(params.aspectRatio);
+      if (params.resolution) setResolution(params.resolution);
+      if (params.quality === "low" || params.quality === "medium") setQuality(params.quality);
+    }
+    if (modelOptions.some((option) => option.publicId === record.model)) onModelChange(record.model);
   }
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="min-h-0 flex-1 overflow-y-auto py-6">
-        <div className="flex min-h-full w-full flex-col justify-center px-3 sm:px-6">
-          {images.length === 0 && !mutation.isPending ? <WelcomeState title={t("creativeConsole.welcomeImage")} /> : null}
-          {mutation.isPending ? <LoadingResult text={t("creativeConsole.generatingImage")} /> : null}
-          {images.length > 0 ? (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2" aria-live="polite">
-              {images.map((image, index) => (
-                <figure key={`${image.url}-${index}`} className="group min-w-0 overflow-hidden">
-                  <img src={image.url} alt={t("creativeConsole.generatedImageAlt", { index: index + 1 })} className="aspect-square w-full rounded-xl bg-muted object-contain" loading="lazy" />
-                  <figcaption className="flex min-w-0 items-center justify-between gap-2 py-1.5">
-                    <span className="truncate text-xs text-muted-foreground">{t("creativeConsole.imageNumber", { index: index + 1 })}</span>
-                    <Button variant="ghost" size="icon" asChild><a href={image.url} target="_blank" rel="noreferrer" aria-label={t("creativeConsole.open")}><ExternalLink /></a></Button>
-                  </figcaption>
-                </figure>
+      {toolbarElement ? createPortal(<ClearHistoryButton disabled={records.length === 0 || mutation.isPending} onConfirm={() => updateRecords(() => [])} />, toolbarElement) : null}
+      <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+        <MessageScroller className="min-h-0 flex-1">
+          <MessageScrollerViewport aria-label={t("creativeConsole.history")}>
+            <MessageScrollerContent className={cn("w-full px-3 py-6 sm:px-6", records.length === 0 && "justify-center")}>
+              {records.length === 0 ? <WelcomeState title={t("creativeConsole.welcomeImage")} /> : null}
+              {timeline.map((record) => (
+                <MessageScrollerItem key={record.id} messageId={record.id} scrollAnchor>
+                  <HistoryRecordItem
+                    prompt={record.prompt}
+                    meta={[record.model, imageParamsLabel(record.params), formatChatSessionTime(record.createdAt, i18n.language)].join(" · ")}
+                    status={record.status}
+                    error={record.error}
+                    actions={<>
+                      <HistoryAction label={t("creativeConsole.reusePrompt")} icon={<CornerDownLeft />} onClick={() => reuse(record)} />
+                      <HistoryAction label={t("creativeConsole.regenerate")} icon={<RefreshCw />} onClick={() => generate(record)} disabled={!apiKey || mutation.isPending} />
+                      {record.status !== "generating" ? <HistoryAction label={t("creativeConsole.deleteRecord")} icon={<Trash2 />} destructive onClick={() => updateRecords((current) => current.filter((item) => item.id !== record.id))} /> : null}
+                    </>}
+                  >
+                    {record.status === "generating" || record.images.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {record.status === "generating"
+                          ? Array.from({ length: record.params.count }, (_, index) => <div key={index} className="flex size-40 items-center justify-center rounded-xl bg-secondary/60 sm:size-56"><Spinner /></div>)
+                          : record.images.map((image, index) => (
+                            <figure key={`${image.url}-${index}`} className="group/image relative size-40 overflow-hidden rounded-xl bg-muted sm:size-56">
+                              <a href={image.url} target="_blank" rel="noreferrer" aria-label={t("creativeConsole.open")}>
+                                <img src={image.url} alt={t("creativeConsole.generatedImageAlt", { index: index + 1 })} title={image.revisedPrompt} className="size-full object-contain" loading="lazy" />
+                              </a>
+                              <Button variant="secondary" size="icon" className="absolute right-1.5 top-1.5 size-7 rounded-full shadow-sm focus-visible:opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/image:opacity-100" asChild>
+                                <a href={image.url} download aria-label={t("creativeConsole.download")}><Download className="size-3.5" /></a>
+                              </Button>
+                            </figure>
+                          ))}
+                      </div>
+                    ) : null}
+                  </HistoryRecordItem>
+                </MessageScrollerItem>
               ))}
-            </div>
-          ) : null}
-        </div>
-      </div>
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton aria-label={t("creativeConsole.scrollToLatest")} />
+        </MessageScroller>
+      </MessageScrollerProvider>
 
       <form className="w-full shrink-0 px-3 pb-2 sm:px-6 sm:pb-3" onSubmit={submit}>
         <div className={composerClassName}>
@@ -922,21 +1019,22 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
             <div className="flex min-w-0 flex-wrap items-center gap-1">
               <CompactModelSelect value={model} models={modelOptions} onChange={onModelChange} />
               <CompactSelect value={count} options={["1", "2", "3", "4"]} onChange={setCount} ariaLabel={t("creativeConsole.count")} suffix="×" icon={<Images />} />
-              {!basicProtocol && <><CompactSelect value={aspectRatio} options={imageAspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
-              <CompactSelect value={resolution} options={imageResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} /></>}
+              {/* Keys keep React from reusing a Radix Select across protocols, which leaves its value blank. */}
+              {basicProtocol ? <><CompactSelect key="size" value={size} options={basicImageSizes} onChange={setSize} ariaLabel={t("creativeConsole.size")} icon={<TvMinimal />} />
+              <CompactSelect key="basic-quality" value={basicQuality} options={basicImageQualities} onChange={setBasicQuality} ariaLabel={t("creativeConsole.quality")} icon={<ImageUpscale />} /></> : <><CompactSelect key="aspect-ratio" value={aspectRatio} options={imageAspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
+              <CompactSelect key="resolution" value={resolution} options={imageResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} /></>}
               {supportsQuality ? <CompactSelect value={quality} options={["low", "medium"]} onChange={(value) => setQuality(value as "low" | "medium")} ariaLabel={t("creativeConsole.quality")} /> : null}
             </div>
             <Button type="submit" size="icon" aria-label={t("creativeConsole.generateImage")} disabled={!apiKey || !model || !prompt.trim() || mutation.isPending}>{mutation.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />}</Button>
           </div>
         </div>
-        {mutation.isError ? <div className="mt-1 px-2 text-[11px] text-destructive">{mutation.error.message}</div> : null}
       </form>
     </div>
   );
 }
 
-function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePanelProps) {
-  const { t } = useTranslation();
+function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & HistoryPanelProps) {
+  const { t, i18n } = useTranslation();
   const [action, setAction] = useState<VideoAction>("generate");
   const [prompt, setPrompt] = useState("");
   const [imageURL, setImageURL] = useState("");
@@ -950,7 +1048,9 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   const [extendDuration, setExtendDuration] = useState("6");
   const [aspectRatio, setAspectRatio] = useState("16:9");
   const [resolution, setResolution] = useState("720p");
-  const [job, setJob] = useState<{ requestId: string; apiKey: string } | null>(null);
+  // Newest first, matching the storage order; rendered oldest-to-newest like the chat transcript.
+  const [records, setRecords] = useState(() => loadVideoHistory(storageScope));
+  const timeline = useMemo(() => [...records].reverse(), [records]);
   const imageFileInputRef = useRef<HTMLInputElement | null>(null);
   const referenceFileInputRef = useRef<HTMLInputElement | null>(null);
   const videoFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -988,7 +1088,8 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   const generateResolutions = isReferenceMode ? videoResolutions.filter((item) => item !== "1080p") : videoResolutions;
   const selectedVideoResolution = isReferenceMode && resolution === "1080p" ? "720p" : resolution;
 
-  const createMutation = useMutation({
+  // Variables are the history record ID; the request itself reads the composer state captured at submit.
+  const createMutation = useMutation<string, Error, string>({
     mutationFn: async () => {
       if (!apiKey || !activeModel) throw new Error(t("creativeConsole.errors.noModels"));
       if (action === "generate") {
@@ -1044,8 +1145,41 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
         duration: Number(extendDuration),
       });
     },
-    onSuccess: (requestId) => setJob({ requestId, apiKey }),
+    onSuccess: (requestId, recordId) => patchRecord(recordId, { status: "generating", requestId }),
+    onError: (error, recordId) => patchRecord(recordId, { status: "failed", error: describeError(error) }),
   });
+
+  function updateRecords(update: (current: VideoHistoryRecord[]) => VideoHistoryRecord[]): void {
+    setRecords((current) => {
+      const next = update(current);
+      persistVideoHistory(storageScope, next);
+      return next;
+    });
+  }
+
+  function patchRecord(id: string, patch: Partial<VideoHistoryRecord>): void {
+    updateRecords((current) => current.map((record) => record.id === id ? { ...record, ...patch } : record));
+  }
+
+  function settleRecord(id: string, status: VideoStatus): void {
+    if (status.status === "pending") return;
+    patchRecord(id, status.status === "done"
+      ? { status: "completed", video: status.video && { url: status.video.url, duration: status.video.duration } }
+      : { status: "failed", error: status.error });
+  }
+
+  function reuse(record: VideoHistoryRecord): void {
+    const { params } = record;
+    setAction(record.action);
+    setPrompt(record.prompt);
+    if (record.action === "generate") {
+      if (params.duration) setDuration(String(params.duration));
+      if (params.aspectRatio) setAspectRatio(params.aspectRatio);
+      if (params.resolution) setResolution(params.resolution);
+    }
+    if (record.action === "extend" && params.duration) setExtendDuration(String(params.duration));
+    if (modelOptions.some((option) => option.publicId === record.model)) onModelChange(record.model);
+  }
 
   // 本地媒体进入有 TTL 的隐藏临时区；视频任务只持久化短 file_id，不写入图库或公开 URL。
   const uploadMutation = useMutation({
@@ -1087,14 +1221,6 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
     },
   });
 
-  const statusQuery = useQuery({
-    queryKey: ["creative-console", "video", job?.requestId],
-    queryFn: ({ signal }) => getVideo({ apiKey: job!.apiKey, requestId: job!.requestId, signal }),
-    enabled: Boolean(job),
-    refetchInterval: (query) => query.state.data?.status === "pending" ? 3_000 : false,
-    retry: 2,
-  });
-
   function submit(event: FormEvent): void {
     event.preventDefault();
     if (!apiKey || !activeModel || createMutation.isPending || uploadMutation.isPending || videoUploadMutation.isPending) return;
@@ -1108,9 +1234,20 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
         if (!Number.isFinite(value) || value < 2 || value > 10) return;
       }
     }
-    setJob(null);
+    const record: VideoHistoryRecord = {
+      id: createCreativeMessageId(),
+      createdAt: Date.now(),
+      action,
+      prompt: prompt.trim(),
+      model: activeModel,
+      params: action === "generate"
+        ? { duration: Number(duration), aspectRatio, resolution: selectedVideoResolution }
+        : action === "extend" ? { duration: Number(extendDuration) } : {},
+      status: "submitting",
+    };
+    updateRecords((current) => [record, ...current]);
     createMutation.reset();
-    createMutation.mutate();
+    createMutation.mutate(record.id);
   }
 
   const placeholder = action === "generate"
@@ -1135,21 +1272,31 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="min-h-0 flex-1 overflow-y-auto py-6">
-        <div className="flex min-h-full w-full flex-col justify-center px-3 sm:px-6">
-          {!job && !createMutation.isPending ? <WelcomeState title={welcome} /> : null}
-          {createMutation.isPending ? <LoadingResult text={t("creativeConsole.submittingVideo")} /> : null}
-          {job ? (
-            <VideoResult
-              requestId={job.requestId}
-              status={statusQuery.data}
-              loading={statusQuery.isPending || statusQuery.isFetching}
-              error={statusQuery.isError ? statusQuery.error.message : ""}
-              onRetry={() => void statusQuery.refetch()}
-            />
-          ) : null}
-        </div>
-      </div>
+      {toolbarElement ? createPortal(<ClearHistoryButton disabled={records.length === 0 || createMutation.isPending} onConfirm={() => updateRecords(() => [])} />, toolbarElement) : null}
+      <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+        <MessageScroller className="min-h-0 flex-1">
+          <MessageScrollerViewport aria-label={t("creativeConsole.history")}>
+            <MessageScrollerContent className={cn("w-full px-3 py-6 sm:px-6", records.length === 0 && "justify-center")}>
+              {records.length === 0 ? <WelcomeState title={welcome} /> : null}
+              {timeline.map((record) => (
+                <MessageScrollerItem key={record.id} messageId={record.id} scrollAnchor>
+                  <VideoRecordItem
+                    record={record}
+                    apiKey={apiKey}
+                    meta={[record.model, videoParamsLabel(record, t(`creativeConsole.videoActions.${record.action}`)), formatChatSessionTime(record.createdAt, i18n.language)].join(" · ")}
+                    onSettle={settleRecord}
+                    actions={<>
+                      <HistoryAction label={t("creativeConsole.reusePrompt")} icon={<CornerDownLeft />} onClick={() => reuse(record)} />
+                      {record.status !== "submitting" ? <HistoryAction label={t("creativeConsole.deleteRecord")} icon={<Trash2 />} destructive onClick={() => updateRecords((current) => current.filter((item) => item.id !== record.id))} /> : null}
+                    </>}
+                  />
+                </MessageScrollerItem>
+              ))}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton aria-label={t("creativeConsole.scrollToLatest")} />
+        </MessageScroller>
+      </MessageScrollerProvider>
 
       <form className="w-full shrink-0 px-3 pb-2 sm:px-6 sm:pb-3" onSubmit={submit}>
         <div className={composerClassName}>
@@ -1165,11 +1312,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
                 variant="ghost"
                 size="sm"
                 className={cn("h-7 rounded-full px-3 text-xs font-normal", action === value && "bg-secondary/70 text-foreground")}
-                onClick={() => {
-                  setAction(value);
-                  setJob(null);
-                  createMutation.reset();
-                }}
+                onClick={() => setAction(value)}
               >
                 {label}
               </Button>
@@ -1330,41 +1473,147 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
             </Button>
           </div>
         </div>
-        {createMutation.isError ? <div className="mt-1 px-2 text-[11px] text-destructive">{createMutation.error.message}</div> : null}
       </form>
     </div>
   );
 }
 
-function VideoResult({ requestId, status, loading, error, onRetry }: { requestId: string; status?: VideoStatus; loading: boolean; error: string; onRetry: () => void }) {
+// Unfinished jobs keep polling while their record is rendered, including after a reload.
+function VideoRecordItem({ record, apiKey, meta, onSettle, actions }: { record: VideoHistoryRecord; apiKey: string; meta: string; onSettle: (id: string, status: VideoStatus) => void; actions: ReactNode }) {
   const { t } = useTranslation();
+  const polling = record.status === "generating" && Boolean(record.requestId);
+  const statusQuery = useQuery({
+    queryKey: ["creative-console", "video", record.requestId],
+    queryFn: ({ signal }) => getVideo({ apiKey, requestId: record.requestId ?? "", signal }),
+    enabled: polling && Boolean(apiKey),
+    refetchInterval: (query) => query.state.data?.status === "pending" ? 3_000 : false,
+    retry: 2,
+  });
+  const status = statusQuery.data;
   const progress = status?.progress ?? 0;
+
+  useEffect(() => {
+    if (polling && status && status.status !== "pending") onSettle(record.id, status);
+  }, [onSettle, polling, record.id, status]);
+
   return (
-    <div className="w-full space-y-4" aria-live="polite">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <MetaItem label={t("creativeConsole.requestId")} value={requestId} mono />
-        <MetaItem label={t("creativeConsole.status")} value={status ? t(`creativeConsole.videoStatus.${status.status}`) : t("common.loading")} />
-      </div>
-      <div className="space-y-2">
-        <div className="flex items-center justify-between text-xs"><span className="text-muted-foreground">{t("creativeConsole.progress")}</span><span className="tabular-nums">{progress}%</span></div>
-        <div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${progress}%` }} /></div>
-      </div>
-      {loading && status?.status !== "done" && status?.status !== "failed" ? <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner />{t("creativeConsole.pollingVideo")}</div> : null}
-      {error ? <RetryableError message={error} onRetry={onRetry} /> : null}
-      {status?.status === "failed" ? <InlineError message={status.error?.message || t("creativeConsole.errors.videoFailed")} /> : null}
-      {status?.status === "done" && status.video ? (
-        <div className="space-y-3">
-          <video src={status.video.url} controls preload="metadata" className="max-h-[60vh] w-full rounded-2xl bg-black shadow-sm" />
+    <HistoryRecordItem
+      prompt={record.prompt}
+      meta={meta}
+      status={record.status}
+      error={record.status === "failed" ? record.error ?? { message: t("creativeConsole.errors.videoFailed") } : undefined}
+      actions={actions}
+    >
+      {record.status === "submitting" ? <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground"><Spinner />{t("creativeConsole.submittingVideo")}</div> : null}
+      {record.status === "generating" ? (
+        <div className="w-full max-w-md space-y-2">
+          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span className="flex items-center gap-2"><Spinner />{t("creativeConsole.pollingVideo")}</span><span className="tabular-nums">{progress}%</span></div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${progress}%` }} /></div>
+        </div>
+      ) : null}
+      {polling && statusQuery.isError ? <ErrorDetail error={describeError(statusQuery.error)} onRetry={() => void statusQuery.refetch()} /> : null}
+      {record.status === "completed" && record.video ? (
+        <div className="w-full max-w-2xl space-y-2">
+          <video src={record.video.url} controls preload="metadata" className="max-h-[60vh] w-full rounded-2xl bg-black shadow-sm" />
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs text-muted-foreground">{status.video.duration ? t("creativeConsole.videoDuration", { count: status.video.duration }) : ""}</span>
-            <Button variant="secondary" size="sm" asChild><a href={status.video.url} target="_blank" rel="noreferrer"><ExternalLink />{t("creativeConsole.openVideo")}</a></Button>
+            <span className="text-xs text-muted-foreground">{record.video.duration ? t("creativeConsole.videoDuration", { count: record.video.duration }) : ""}</span>
+            <Button variant="secondary" size="sm" asChild><a href={record.video.url} target="_blank" rel="noreferrer"><ExternalLink />{t("creativeConsole.openVideo")}</a></Button>
           </div>
         </div>
+      ) : null}
+      {record.requestId ? <div className="text-[11px] text-muted-foreground">{t("creativeConsole.requestId")} <span className="select-all font-mono">{record.requestId}</span></div> : null}
+    </HistoryRecordItem>
+  );
+}
+
+function HistoryRecordItem({ prompt, meta, status, error, actions, children }: { prompt: string; meta: string; status: ImageHistoryRecord["status"] | VideoHistoryRecord["status"]; error?: ApiErrorDetail; actions: ReactNode; children?: ReactNode }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-3">
+      <Message align="end">
+        <MessageContent>
+          {prompt ? <div className="whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-secondary px-4 py-2.5 text-sm leading-6">{prompt}</div> : null}
+          <div className="text-[11px] text-muted-foreground">{meta}</div>
+        </MessageContent>
+      </Message>
+      <Message align="start">
+        <MessageContent className="w-full max-w-full">
+          {children}
+          {error ? <ErrorDetail error={error} /> : null}
+          {status === "interrupted" ? <p className="text-xs text-muted-foreground">{t("creativeConsole.interruptedHint")}</p> : null}
+          <MessageFooter className="gap-0.5 font-normal">
+            <span className="mr-1.5 flex items-center gap-1">
+              {status === "submitting" || status === "generating"
+                ? <Loader2 className="size-3 animate-spin" />
+                : status === "completed" ? <CheckCircle2 className="size-3" /> : <TriangleAlert className={cn("size-3", status === "failed" && "text-destructive")} />}
+              {t(`creativeConsole.recordStatus.${status}`)}
+            </span>
+            <span className="flex items-center gap-0.5 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/message:opacity-100 [@media(hover:hover)]:group-focus-within/message:opacity-100">{actions}</span>
+          </MessageFooter>
+        </MessageContent>
+      </Message>
+    </div>
+  );
+}
+
+function HistoryAction({ label, icon, onClick, disabled = false, destructive = false }: { label: string; icon: ReactNode; onClick: () => void; disabled?: boolean; destructive?: boolean }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button type="button" variant="ghost" size="icon" className={cn("size-7 rounded-full [&_svg]:size-3.5", destructive && "text-destructive hover:text-destructive")} aria-label={label} onClick={onClick} disabled={disabled}>
+          {icon}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+function ErrorDetail({ error, onRetry }: { error: ApiErrorDetail; onRetry?: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div role="alert" className="w-full rounded-md bg-destructive/8 px-3 py-2 text-xs leading-5 text-destructive">
+      <div className="flex items-start justify-between gap-2">
+        <span className="whitespace-pre-wrap break-words">{error.message}</span>
+        {onRetry ? <Button type="button" variant="ghost" size="sm" className="-my-1 shrink-0 text-destructive hover:text-destructive" onClick={onRetry}><RefreshCw />{t("common.retry")}</Button> : null}
+      </div>
+      {error.code || error.requestId ? (
+        <dl className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-destructive/80">
+          {error.code ? <div className="flex gap-1"><dt>{t("creativeConsole.errorCode")}</dt><dd className="font-mono">{error.code}</dd></div> : null}
+          {error.requestId ? <div className="flex gap-1"><dt>{t("creativeConsole.requestId")}</dt><dd className="select-all font-mono">{error.requestId}</dd></div> : null}
+        </dl>
       ) : null}
     </div>
   );
 }
 
+function ClearHistoryButton({ disabled, onConfirm }: { disabled: boolean; onConfirm: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <AlertDialog>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <AlertDialogTrigger asChild>
+            <Button type="button" variant="ghost" size="icon" className="rounded-full" aria-label={t("creativeConsole.clearHistory")} disabled={disabled}>
+              <Trash2 />
+            </Button>
+          </AlertDialogTrigger>
+        </TooltipTrigger>
+        <TooltipContent>{t("creativeConsole.clearHistory")}</TooltipContent>
+      </Tooltip>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{t("creativeConsole.clearHistoryTitle")}</AlertDialogTitle>
+          <AlertDialogDescription>{t("creativeConsole.clearHistoryDescription")}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+          <AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" onClick={onConfirm}>{t("creativeConsole.clearHistory")}</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
 
 function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePanelProps) {
   const { t } = useTranslation();
@@ -1749,10 +1998,6 @@ function RetryableError({ message, onRetry }: { message: string; onRetry: () => 
   );
 }
 
-function MetaItem({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return <div className="min-w-0 py-2"><div className="mb-1 text-[11px] text-muted-foreground">{label}</div><div className={cn("truncate text-xs", mono && "font-mono")} title={value}>{value}</div></div>;
-}
-
 function isUsableKey(key: ClientKeyDTO): boolean {
   if (!key.enabled) return false;
   return !key.expiresAt || new Date(key.expiresAt).getTime() > Date.now();
@@ -1825,43 +2070,12 @@ function upsertChatSession(sessions: ChatSession[], session: ChatSession): ChatS
     .slice(0, chatHistoryMaxSessions);
 }
 
-function chatHistoryStorageKey(scope: string): string {
-  return `${chatHistoryStoragePrefix}${encodeURIComponent(scope)}`;
-}
-
 function loadChatSessions(scope: string): ChatSession[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(chatHistoryStorageKey(scope)) ?? "[]");
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap(parseChatSession).sort((left, right) => right.updatedAt - left.updatedAt).slice(0, chatHistoryMaxSessions);
-  } catch {
-    return [];
-  }
+  return loadStoredList(historyStorageKey("chat", scope), parseChatSession).sort((left, right) => right.updatedAt - left.updatedAt).slice(0, chatHistoryMaxSessions);
 }
 
 function persistChatSessions(scope: string, sessions: ChatSession[]): ChatSession[] {
-  if (typeof window === "undefined") return sessions;
-  const retained = sessions.slice(0, chatHistoryMaxSessions);
-  while (retained.length > 0) {
-    try {
-      const serialized = JSON.stringify(retained);
-      if (serialized.length * 2 > chatHistoryMaxBytes) {
-        retained.pop();
-        continue;
-      }
-      window.localStorage.setItem(chatHistoryStorageKey(scope), serialized);
-      return retained;
-    } catch {
-      retained.pop();
-    }
-  }
-  try {
-    window.localStorage.removeItem(chatHistoryStorageKey(scope));
-  } catch {
-    // Storage may be unavailable; the in-memory conversation remains usable.
-  }
-  return retained;
+  return persistStoredList(historyStorageKey("chat", scope), sessions, chatHistoryMaxSessions, chatHistoryMaxBytes);
 }
 
 function parseChatSession(value: unknown): ChatSession[] {
@@ -1906,14 +2120,6 @@ function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return value === "auto" || value === "none" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
 }
 
-function finiteTimestamp(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function isLocalRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isAbortError(error: unknown): boolean {
   return (error instanceof DOMException || error instanceof Error) && error.name === "AbortError";
 }
@@ -1924,6 +2130,16 @@ function hasChatStreamContent(snapshot: ChatStreamSnapshot): boolean {
 
 function formatChatSessionTime(value: number, language: string): string {
   return new Intl.DateTimeFormat(language, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+}
+
+// "auto" is the default for size and quality, so it is left out of the summary.
+function imageParamsLabel(params: ImageParams): string {
+  return [`${params.count}×`, params.aspectRatio, params.resolution, params.size, params.quality].filter((value) => value && value !== "auto").join(" · ");
+}
+
+function videoParamsLabel(record: VideoHistoryRecord, actionLabel: string): string {
+  const { duration, aspectRatio, resolution } = record.params;
+  return [actionLabel, duration ? `${duration}s` : "", aspectRatio, resolution].filter(Boolean).join(" · ");
 }
 
 const safeAssistantHTMLTags = new Set([
