@@ -18,6 +18,7 @@ import (
 	"time"
 
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
+	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
@@ -78,11 +79,13 @@ type imageJobInputs struct {
 	MaskURL   string   `json:"mask_url,omitempty"`
 }
 
-// ImageJobImage is one delivered image of an image job.
+// ImageJobImage is one delivered image of an image job. Missing marks an
+// image whose stored result was removed (capacity cleanup, gallery deletion).
 type ImageJobImage struct {
 	Data          []byte
 	MIMEType      string
 	Width, Height int
+	Missing       bool
 }
 
 type imageItemOutcome struct {
@@ -1014,6 +1017,12 @@ func (s *Service) ImageJobOutput(ctx context.Context, job media.Job) ([]ImageJob
 	sizes := make([]image.Point, 0, len(job.ResultAssetIDs))
 	for _, id := range job.ResultAssetIDs {
 		asset, body, err := s.mediaAssets.OpenImage(ctx, id)
+		if errors.Is(err, mediaapp.ErrAssetNotFound) {
+			// Still delivered and billed: it stays in the usage estimate at the default size.
+			images = append(images, ImageJobImage{Missing: true})
+			sizes = append(sizes, image.Point{})
+			continue
+		}
 		if err != nil {
 			return nil, nil, err
 		}

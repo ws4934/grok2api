@@ -2,13 +2,94 @@ package inference
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
+	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
+	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
+	localmedia "github.com/chenyme/grok2api/backend/internal/infra/media"
+	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 )
+
+// forgetfulAssets saves images but has lost every one of them on read, as
+// after capacity cleanup or a gallery deletion.
+type forgetfulAssets struct{ *mediaapp.Service }
+
+func (forgetfulAssets) OpenImage(context.Context, string) (mediadomain.Asset, io.ReadCloser, error) {
+	return mediadomain.Asset{}, nil, mediaapp.ErrAssetNotFound
+}
+
+func TestResponsesImageToolRendersARemovedResultAsAFailedCall(t *testing.T) {
+	f := newImageToolFixture(t)
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "assets.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	objects, err := localmedia.NewLocalStore(filepath.Join(t.TempDir(), "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.gateway.ConfigureMediaAssets(forgetfulAssets{mediaapp.NewService(relational.NewMediaAssetRepository(database), relational.NewMediaJobRepository(database), objects, nil, mediaapp.Config{PublicBaseURL: "https://example.test", MaxImageBytes: 32 << 20, MaxTotalBytes: 1 << 30, CleanupThresholdPercent: 90, CleanupInterval: time.Hour})})
+	f.startWorkers(t)
+	removed := func(resp map[string]any) bool {
+		output, _ := resp["output"].([]any)
+		if len(output) != 1 {
+			return false
+		}
+		call, _ := output[0].(map[string]any)
+		problem, _ := call["error"].(map[string]any)
+		return resp["status"] == "completed" && call["status"] == "failed" && call["result"] == nil && problem["code"] == "result_unavailable"
+	}
+	request := `{"model":"gpt-image-2","input":"draw a cat","tools":[{"type":"image_generation"}]}`
+	code, created := f.call(t, "POST", "/v1/responses", request)
+	if code != 200 || !removed(created) {
+		t.Fatalf("create: %d %v", code, created)
+	}
+	if code, polled := f.call(t, "GET", "/v1/responses/"+created["id"].(string), ""); code != 200 || !removed(polled) {
+		t.Fatalf("poll: %d %v", code, polled)
+	}
+
+	recorder := httptest.NewRecorder()
+	stream := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(strings.Replace(request, `"input"`, `"stream":true,"input"`, 1)))
+	stream.Header.Set("Content-Type", "application/json")
+	f.router.ServeHTTP(recorder, stream)
+	var names []string
+	var completed map[string]any
+	for _, block := range strings.Split(recorder.Body.String(), "\n\n") {
+		name, data := "", ""
+		for _, line := range strings.Split(block, "\n") {
+			if value, ok := strings.CutPrefix(line, "event: "); ok {
+				name = value
+			} else if value, ok := strings.CutPrefix(line, "data: "); ok {
+				data = value
+			}
+		}
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+		if name == "response.completed" {
+			var event map[string]any
+			_ = json.Unmarshal([]byte(data), &event)
+			completed, _ = event["response"].(map[string]any)
+		}
+	}
+	want := "response.created,response.in_progress,response.output_item.added,response.image_generation_call.in_progress,response.image_generation_call.generating,response.output_item.done,response.completed"
+	if strings.Join(names, ",") != want || !removed(completed) {
+		t.Fatalf("stream events = %v completed = %v", names, completed)
+	}
+}
 
 func TestResponsesImageToolKeyedJobSurvivesDisconnect(t *testing.T) {
 	f := newImageToolFixture(t)

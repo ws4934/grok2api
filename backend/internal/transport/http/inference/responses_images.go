@@ -341,6 +341,8 @@ func imageResponseObject(job mediadomain.Job, images []gateway.ImageJobImage, us
 	for index := range job.ItemCount {
 		call := gin.H{"id": imageCallID(job, index), "type": "image_generation_call", "status": "failed", "result": nil}
 		switch {
+		case index < len(images) && images[index].Missing:
+			call["error"] = gin.H{"code": "result_unavailable", "message": "The generated image was removed from storage and can no longer be returned"}
 		case index < len(images):
 			size := job.Size
 			if images[index].Width > 0 && images[index].Height > 0 {
@@ -447,7 +449,10 @@ func (h *Handler) streamImageResponse(c *gin.Context, key clientkeydomain.Key, j
 		return
 	}
 	markGenerating()
-	send("response.image_generation_call.completed", gin.H{"output_index": 0, "item_id": id})
+	// A result removed from storage leaves the call failed inside a completed response.
+	if item, _ := output[0].(gin.H); item["status"] == "completed" {
+		send("response.image_generation_call.completed", gin.H{"output_index": 0, "item_id": id})
+	}
 	send("response.output_item.done", gin.H{"output_index": 0, "item": output[0]})
 	send("response.completed", gin.H{"response": final})
 }
