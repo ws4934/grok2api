@@ -261,8 +261,8 @@ func toAuditDomain(value requestAuditModel) audit.Record {
 		_ = json.Unmarshal([]byte(value.RequestHeadersJSON), &requestHeaders)
 	}
 	return audit.Record{
-		Estimation: estimation,
-		ID:         value.ID, EventID: value.EventID, RequestID: value.RequestID, ClientKeyID: value.ClientKeyID, ClientKeyName: value.ClientKeyName, ClientIP: value.ClientIP,
+		ID: value.ID, EventID: value.EventID, RequestID: value.RequestID, ClientKeyID: value.ClientKeyID, ClientKeyName: value.ClientKeyName, ClientIP: value.ClientIP,
+		Estimation:   estimation,
 		ModelRouteID: value.ModelRouteID, ModelPublicID: value.ModelPublicID, ModelUpstreamModel: value.ModelUpstreamModel,
 		Provider: value.Provider, Operation: audit.Operation(value.Operation), UsageSource: audit.UsageSource(value.UsageSource),
 		ReasoningEffort: value.ReasoningEffort,
