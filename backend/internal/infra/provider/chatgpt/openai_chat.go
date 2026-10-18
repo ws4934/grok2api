@@ -77,11 +77,18 @@ func (c *OpenAIChat) Stream(ctx context.Context, account wireAccount, request wi
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return readOpenAIHTTPError(response, "/backend-api/conversation")
 	}
-	return scanOpenAIChat(response.Body, onEvent, func(v any) { notifyUpstreamModel(ctx, v) })
+	// ChatGPT echoes the request's messages before the answer; their IDs
+	// keep an earlier assistant turn from being read as the reply.
+	sent := map[string]bool{}
+	for _, raw := range payload["messages"].([]any) {
+		message, _ := raw.(map[string]any)
+		sent[stringValue(message["id"])] = true
+	}
+	return scanOpenAIChat(response.Body, sent, onEvent, func(v any) { notifyUpstreamModel(ctx, v) })
 }
 
-func scanOpenAIChat(reader io.Reader, emit func(OpenAIChatEvent) error, observers ...func(any)) error {
-	state := openAIChatState{}
+func scanOpenAIChat(reader io.Reader, inputs map[string]bool, emit func(OpenAIChatEvent) error, observers ...func(any)) error {
+	state := openAIChatState{inputs: inputs}
 	onEvent := func(event OpenAIChatEvent) error {
 		event.Search = &state.search
 		return emit(event)
@@ -219,6 +226,8 @@ type openAIChatState struct {
 	fragments     map[string]string
 	fragmentOrder []string
 	search        chatSearch
+	// inputs holds the IDs of the request's messages, which ChatGPT echoes.
+	inputs map[string]bool
 }
 
 // displayableAssistantMessage reports whether a message is the user-visible
@@ -332,6 +341,10 @@ func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
 			envelope, _ := raw.(map[string]any)
 			message, ok := envelope["message"].(map[string]any)
 			if !ok {
+				continue
+			}
+			if s.inputs[stringValue(message["id"])] {
+				s.hidden = true
 				continue
 			}
 			author, _ := message["author"].(map[string]any)

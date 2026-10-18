@@ -57,11 +57,11 @@ data: {"p":"/message/content/parts/0","o":"append","v":" world"}
 data: [DONE]
 `
 	var text string
-	e := scanOpenAIChat(strings.NewReader(stream), func(ev OpenAIChatEvent) error { text += ev.Text; return nil })
+	e := scanOpenAIChat(strings.NewReader(stream), nil, func(ev OpenAIChatEvent) error { text += ev.Text; return nil })
 	if e != nil || text != "你好 world" {
 		t.Fatalf("stream: %q %v", text, e)
 	}
-	if e := scanOpenAIChat(strings.NewReader(strings.ReplaceAll(stream, "data: [DONE]", "")), func(OpenAIChatEvent) error { return nil }); e == nil {
+	if e := scanOpenAIChat(strings.NewReader(strings.ReplaceAll(stream, "data: [DONE]", "")), nil, func(OpenAIChatEvent) error { return nil }); e == nil {
 		t.Fatal("truncated stream treated as complete")
 	}
 }
@@ -92,7 +92,7 @@ func TestChatStreamUsesMergedAnswerNotFragments(t *testing.T) {
 		chatSnapshot("merged", "第一段。你可以查看天气网。", "finished_successfully", merged) +
 		"data: [DONE]\n\n"
 	var text strings.Builder
-	if err := scanOpenAIChat(strings.NewReader(stream), func(event OpenAIChatEvent) error {
+	if err := scanOpenAIChat(strings.NewReader(stream), nil, func(event OpenAIChatEvent) error {
 		text.WriteString(event.Text)
 		return nil
 	}); err != nil {
@@ -107,10 +107,25 @@ func TestChatStreamFallsBackToFragmentsWithoutMergedAnswer(t *testing.T) {
 	fragment := `{"is_message_fragment":true}`
 	stream := chatSnapshot("a", "前半", "finished_successfully", fragment) + chatSnapshot("b", "后半", "finished_successfully", fragment) + "data: [DONE]\n\n"
 	var text strings.Builder
-	if err := scanOpenAIChat(strings.NewReader(stream), func(event OpenAIChatEvent) error {
+	if err := scanOpenAIChat(strings.NewReader(stream), nil, func(event OpenAIChatEvent) error {
 		text.WriteString(event.Text)
 		return nil
 	}); err != nil || text.String() != "前半后半" {
+		t.Fatalf("text = %q, err = %v", text.String(), err)
+	}
+}
+
+func TestChatStreamSkipsEchoedInputMessages(t *testing.T) {
+	echo := `data: {"message":{"id":"in-1","author":{"role":"assistant"},"status":"finished_successfully","content":{"content_type":"text","parts":["<tool_calls>…</tool_calls>"]},"metadata":{"message_source":null}}}` + "\n\n"
+	stream := echo + chatSnapshot("a", "Here", "in_progress", "{}") + chatSnapshot("a", "Here it is.", "finished_successfully", "{}") + "data: [DONE]\n\n"
+	var text strings.Builder
+	if err := scanOpenAIChat(strings.NewReader(stream), map[string]bool{"in-1": true}, func(event OpenAIChatEvent) error {
+		if event.Done && text.Len() == 0 {
+			t.Fatal("the echoed input ended the answer")
+		}
+		text.WriteString(event.Text)
+		return nil
+	}); err != nil || text.String() != "Here it is." {
 		t.Fatalf("text = %q, err = %v", text.String(), err)
 	}
 }
