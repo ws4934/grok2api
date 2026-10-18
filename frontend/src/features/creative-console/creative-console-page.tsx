@@ -17,6 +17,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { channelsApi } from "@/features/channels/channels-api";
 import { listModels } from "@/entities/model/model-api";
 import type { ModelRouteDTO } from "@/entities/model/types";
 import {
@@ -124,7 +125,19 @@ export function CreativeConsolePage() {
     enabled: Boolean(selectedKey),
     staleTime: 30_000,
   });
-  const availableModels = useMemo(() => (modelsQuery.data ?? []).filter((model) => model.enabled && model.available), [modelsQuery.data]);
+  const extensionModelsQuery = useQuery({
+    queryKey: ["channels", "creative-models", effectiveKeyId],
+    enabled: Boolean(effectiveKeyId),
+    queryFn: async (): Promise<ModelRouteDTO[]> => {
+      const channels = await channelsApi.list();
+      const groups = await Promise.all(channels.filter(c => c.settings.enabled).map(async c => {
+        const routes = await channelsApi.clientModels(c.descriptor.id, effectiveKeyId);
+        return routes.map(r => ({ id: String(r.ID), publicId: r.PublicID, provider: c.descriptor.id, upstreamModel: r.UpstreamModel, capability: r.Capability as ModelRouteDTO["capability"], origin: "manual" as const, enabled: r.Enabled, accountIds: [], bindingMode: false, supportedAccounts: 0, syncedAccounts: 0, totalAccounts: 0, capabilityKnown: true, available: true }));
+      }));
+      return groups.flat();
+    },
+  });
+  const availableModels = useMemo(() => [...(modelsQuery.data ?? []).filter(model => ["grok_build", "grok_web", "grok_console"].includes(model.provider)), ...(extensionModelsQuery.data ?? [])].filter((model) => model.enabled && model.available), [modelsQuery.data, extensionModelsQuery.data]);
   const permittedModels = useMemo(() => {
     if (!selectedKey || selectedKey.allowedModelIds.length === 0) return availableModels;
     const allowedModelIds = new Set(selectedKey.allowedModelIds);
@@ -278,6 +291,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
   const activeRequestSeqRef = useRef(0);
   const restoredInitialModelRef = useRef(false);
   const selectedModelRoute = useMemo(() => modelOptions.find((option) => option.publicId === model), [model, modelOptions]);
+  const basicProtocol = Boolean(selectedModelRoute && !["grok_build", "grok_web", "grok_console"].includes(selectedModelRoute.provider));
   const fixedReasoningModel = isFixedReasoningConsoleModel(selectedModelRoute);
   const effectiveReasoningEffort: ReasoningEffort = fixedReasoningModel ? "auto" : reasoningEffort;
   const reasoningEffortOptions: ReasoningEffort[] = fixedReasoningModel ? ["auto"] : ["auto", "none", "low", "medium", "high", "xhigh"];
@@ -376,6 +390,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
       requestControllerRef.current = controller;
       activeRequestSeqRef.current = request.requestSeq;
       return createChatResponse({
+        basicProtocol: !["grok_build", "grok_web", "grok_console"].includes(modelOptions.find(m => m.publicId === request.model)?.provider ?? "grok_build"),
         apiKey: request.apiKey,
         model: request.model,
         messages: request.messages,
@@ -781,7 +796,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
           <div className="flex items-center justify-between gap-3 px-3 pb-3">
             <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
               <CompactModelSelect value={model} models={modelOptions} onChange={onModelChange} />
-              <CompactIconSelect
+              {!basicProtocol && <><CompactIconSelect
                 value={webSearch ? "on" : "off"}
                 options={[{ value: "off", label: t("creativeConsole.webSearchOff") }, { value: "on", label: t("creativeConsole.webSearchOn") }]}
                 onChange={(value) => setWebSearch(value === "on")}
@@ -805,7 +820,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
                 icon={<Sparkle />}
                 active={effectiveReasoningEffort !== "auto" && effectiveReasoningEffort !== "none"}
                 disabled={fixedReasoningModel}
-              />
+              /></>}
             </div>
             {mutation.isPending ? (
               <Button type="button" size="icon" variant="secondary" aria-label={t("creativeConsole.stopGenerating")} onClick={stopGenerating}>
@@ -874,6 +889,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   const [resolution, setResolution] = useState("1k");
   const [quality, setQuality] = useState<"low" | "medium">("medium");
   const [images, setImages] = useState<ImageResult[]>([]);
+  const basicProtocol = !["grok_build", "grok_web", "grok_console"].includes(modelOptions.find(m => m.publicId === model)?.provider ?? "grok_build");
   const supportsQuality = model.toLowerCase().endsWith("grok-imagine-image-2.0");
 
   const mutation = useMutation({
@@ -885,7 +901,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
     event.preventDefault();
     if (!apiKey || !model || !prompt.trim() || mutation.isPending) return;
     mutation.reset();
-    mutation.mutate({ apiKey, model, prompt: prompt.trim(), count: Number(count), aspectRatio, resolution, quality: supportsQuality ? quality : undefined });
+    mutation.mutate({ basicProtocol, apiKey, model, prompt: prompt.trim(), count: Number(count), aspectRatio, resolution, quality: supportsQuality ? quality : undefined });
   }
 
   return (
@@ -917,8 +933,9 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
             <div className="flex min-w-0 flex-wrap items-center gap-1">
               <CompactModelSelect value={model} models={modelOptions} onChange={onModelChange} />
               <CompactSelect value={count} options={["1", "2", "3", "4"]} onChange={setCount} ariaLabel={t("creativeConsole.count")} suffix="×" icon={<Images />} />
-              <CompactSelect value={aspectRatio} options={imageAspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
-              <CompactSelect value={resolution} options={imageResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} />
+              {!basicProtocol && <><CompactSelect value={aspectRatio} options={imageAspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
+              <CompactSelect value={resolution} options={imageResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} /></>}
+              {basicProtocol && <a className="px-2 text-xs text-primary underline" href="/channels">参考图 / 蒙版编辑</a>}
               {supportsQuality ? <CompactSelect value={quality} options={["low", "medium"]} onChange={(value) => setQuality(value as "low" | "medium")} ariaLabel={t("creativeConsole.quality")} /> : null}
             </div>
             <Button type="submit" size="icon" aria-label={t("creativeConsole.generateImage")} disabled={!apiKey || !model || !prompt.trim() || mutation.isPending}>{mutation.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />}</Button>

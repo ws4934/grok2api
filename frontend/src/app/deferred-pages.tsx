@@ -2,6 +2,7 @@ import { lazy, Suspense, type ComponentType, type LazyExoticComponent } from "re
 
 import { Spinner } from "@/components/ui/spinner";
 
+const ChannelsPage = lazyNamed(() => import("@/features/channels/channels-page"), "ChannelsPage");
 const AccountsPage = lazyNamed(() => import("@/features/accounts/accounts-page"), "AccountsPage");
 const AppShell = lazyNamed(() => import("@/app/app-shell"), "AppShell");
 const RequestAuditsPage = lazyNamed(() => import("@/features/audits/request-audits-page"), "RequestAuditsPage");
@@ -78,3 +79,5 @@ function PageLoadingFallback({ fullScreen = false }: { fullScreen?: boolean }) {
     </div>
   );
 }
+
+export function DeferredChannelsPage() { return <DeferredPage page={ChannelsPage} />; }

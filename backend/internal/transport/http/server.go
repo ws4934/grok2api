@@ -2,6 +2,8 @@ package httpserver
 
 import (
 	"context"
+	channelapp "github.com/chenyme/grok2api/backend/internal/application/channel"
+	channelhttp "github.com/chenyme/grok2api/backend/internal/transport/http/channel"
 	"log/slog"
 	"net/http"
 	"time"
@@ -37,6 +39,7 @@ import (
 )
 
 type Dependencies struct {
+	Channels           *channelapp.Service
 	Logger             *slog.Logger
 	RequestTimeout     time.Duration
 	MaxBodyBytes       int64
@@ -149,6 +152,9 @@ func New(deps Dependencies) *gin.Engine {
 	adminProtected := adminRoot.Group("")
 	adminProtected.Use(middleware.AdminAuth(deps.AdminAuth))
 	authHandler.RegisterAuthenticated(adminProtected)
+	if deps.Channels != nil {
+		channelhttp.NewHandler(deps.Channels).Register(adminProtected)
+	}
 	accounthttp.NewHandler(deps.Accounts, deps.AccountSync).Register(adminProtected)
 	modelhttp.NewHandler(deps.Models).Register(adminProtected)
 	clientkeyhttp.NewHandler(deps.ClientKeys).Register(adminProtected)
@@ -188,9 +194,16 @@ func New(deps Dependencies) *gin.Engine {
 		})
 	}
 	v1.Use(middleware.ClientAuth(deps.ClientKeys))
+	if deps.Channels != nil {
+		v1.Use(channelhttp.NewHandler(deps.Channels).Dispatch())
+		channelhttp.NewHandler(deps.Channels).RegisterPublic(v1)
+	}
 	inferenceHandler := inference.NewHandler(deps.Gateway, deps.Models, deps.MaxBodyBytes, deps.PublicAPIBaseURL)
 	if deps.Settings != nil {
 		inferenceHandler.SetPublicAPIBaseURLResolver(deps.Settings.PublicAPIBaseURL)
+	}
+	if deps.Channels != nil {
+		inferenceHandler.SetExtensionModels(deps.Channels.ClientModels)
 	}
 	inferenceHandler.Register(v1)
 	registerFrontend(router, deps.FrontendStaticPath)

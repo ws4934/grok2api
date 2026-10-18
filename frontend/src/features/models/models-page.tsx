@@ -159,6 +159,7 @@ export function ModelsPage() {
   }
 
   function beginEdit(model: ModelRouteDTO): void {
+    if (model.provider !== "grok_build" && model.provider !== "grok_web" && model.provider !== "grok_console") { window.location.assign("/channels"); return; }
     setEditing(model);
     setAccountSearch("");
     form.reset({
@@ -437,7 +438,7 @@ export function ModelsPage() {
 
 function ModelProvider({ provider }: { provider: ModelRouteDTO["provider"] }) {
   const { t } = useTranslation();
-  const label = provider === "grok_web" ? t("models.providerGrokWeb") : provider === "grok_console" ? t("console.name") : t("models.providerGrokBuild");
+  const label = provider === "grok_web" ? t("models.providerGrokWeb") : provider === "grok_console" ? t("console.name") : provider === "grok_build" ? t("models.providerGrokBuild") : provider;
   const color = provider === "grok_web" ? "bg-quota-product-2" : provider === "grok_console" ? "bg-quota-product-4" : "bg-quota-product-1";
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">

@@ -1338,7 +1338,7 @@ func parseLinkedDeleteTargets(values []string) ([]accountdomain.Provider, error)
 	seen := map[accountdomain.Provider]struct{}{}
 	for _, value := range values {
 		provider := accountdomain.Provider(strings.TrimSpace(value))
-		if !provider.IsValid() {
+		if !provider.IsLegacy() {
 			return nil, fmt.Errorf("关联删除目标无效")
 		}
 		if _, ok := seen[provider]; ok {

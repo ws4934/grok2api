@@ -22,6 +22,9 @@ const postgresSchemaMigrationLockID int64 = 0x47524f4b32415049
 const standaloneProxyProfileMigrationBatchSize = 100
 
 var schemaModels = []any{
+	&channelExecutionSlotModel{},
+	&channelImageJobModel{}, &channelImageItemModel{}, &channelAssetRefModel{}, &channelQuotaReservationModel{},
+	&channelSettingsModel{}, &channelAccountModel{}, &channelOAuthModel{}, &channelGrantModel{}, &channelPriceModel{},
 	&adminModel{},
 	&adminSessionModel{},
 	&egressSubscriptionSourceModel{},
@@ -503,25 +506,11 @@ type consoleConstraint struct {
 	name  string
 }
 
+// Open-ended business identifiers are validated by the registered channel catalog.
 func (d *Database) ensureConsoleConstraints(ctx context.Context) error {
-	return d.ensureNamedConstraints(ctx, []consoleConstraint{
-		{model: &accountModel{}, table: "provider_accounts", name: "chk_accounts_provider"},
-		{model: &modelRouteModel{}, table: "model_routes", name: "chk_model_routes_provider"},
-		{model: &requestAuditModel{}, table: "request_audits", name: "chk_request_audits_provider"},
-		{model: &responseOwnershipModel{}, table: "response_ownership", name: "chk_response_ownership_provider"},
-		{model: &egressNodeModel{}, table: "egress_nodes", name: "chk_egress_nodes_specific_scope"},
-	}, "grok_console")
+	return d.dropChannelEnumConstraints(ctx)
 }
-
-// ensureEgressAssetScopeConstraints upgrades existing SQLite/PostgreSQL CHECK
-// definitions so Console CDN traffic can use an independently managed scope.
-func (d *Database) ensureEgressAssetScopeConstraints(ctx context.Context) error {
-	return d.ensureNamedConstraints(ctx, []consoleConstraint{
-		{model: &egressNodeModel{}, table: "egress_nodes", name: "chk_egress_nodes_specific_scope"},
-		{model: &egressSubscriptionSourceModel{}, table: "egress_subscription_sources", name: "chk_egress_subscription_sources_scope"},
-		{model: &requestAuditModel{}, table: "request_audits", name: "chk_request_audits_egress_scope"},
-	}, "grok_console_asset")
-}
+func (d *Database) ensureEgressAssetScopeConstraints(ctx context.Context) error { return nil }
 
 // ensureAuditOperationConstraints upgrades existing databases so Codex remote
 // compaction and Console voice operations can be recorded separately.
@@ -542,16 +531,6 @@ func (d *Database) ensureModelRouteCapabilityConstraints(ctx context.Context) er
 // ensureMediaJobConstraints 将历史仅允许 grok_web 的 media job CHECK 升级到支持 Build 与 Console 视频。
 // AutoMigrate 不会可靠替换已有 PostgreSQL CHECK，因此启动时幂等检测并重建。
 func (d *Database) ensureMediaJobConstraints(ctx context.Context) error {
-	if err := d.ensureNamedConstraints(ctx, []consoleConstraint{
-		{model: &mediaJobModel{}, table: "media_jobs", name: "chk_media_jobs_provider"},
-	}, "grok_console"); err != nil {
-		return err
-	}
-	if err := d.ensureNamedConstraints(ctx, []consoleConstraint{
-		{model: &mediaJobModel{}, table: "media_jobs", name: "chk_media_jobs_egress_scope"},
-	}, "grok_console"); err != nil {
-		return err
-	}
 	for _, constraint := range []consoleConstraint{
 		{model: &mediaJobModel{}, table: "media_jobs", name: "chk_media_jobs_operation"},
 		{model: &mediaJobModel{}, table: "media_jobs", name: "chk_media_jobs_seconds"},

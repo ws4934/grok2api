@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	channelapp "github.com/chenyme/grok2api/backend/internal/application/channel"
+	channeldomain "github.com/chenyme/grok2api/backend/internal/domain/channel"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -29,6 +32,7 @@ import (
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
 	"github.com/chenyme/grok2api/backend/internal/buildinfo"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	inframedia "github.com/chenyme/grok2api/backend/internal/infra/media"
@@ -60,6 +64,8 @@ const (
 
 // Application 管理后端进程生命周期和本地后台任务。
 type Application struct {
+	channels        *channelapp.Service
+	chatgpt         *chatgpt.Adapter
 	logger          *slog.Logger
 	database        *relational.Database
 	server          *http.Server
@@ -432,9 +438,31 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 			MaxOutputTokens: cfg.QualityGuard.MaxOutputTokens,
 		}
 	}
-	router := httpserver.New(httpserver.Dependencies{Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
+	gptAdapter := chatgpt.NewAdapter()
+	channelRegistry, err := channeldomain.NewRegistry(gptAdapter)
+	if err != nil {
+		return nil, err
+	}
+	channelService := channelapp.NewService(channelRegistry, relational.NewChannelRepository(database), cipher, refreshLock, modelRepo)
+	channelService.SetClientKeys(clientKeyRepo)
+	channelService.SetEnvironment(func(ctx context.Context, p account.Provider, id uint64) (context.Context, func(), error) {
+		credential, e := accountRepo.Get(ctx, id)
+		if e != nil {
+			return ctx, nil, e
+		}
+		lease, e := egressManager.AcquireCredential(ctx, egressdomain.Scope(p), credential)
+		if e != nil {
+			return ctx, nil, e
+		}
+		return channeldomain.WithEnvironment(ctx, channeldomain.Environment{ProxyURL: lease.ProxyURL, NodeID: lease.NodeID}), lease.Release, nil
+	})
+	channelService.SetImages(relational.NewChannelRepository(database), mediaService)
+	if err := channelService.SetExecution(clientKeyService, auditService); err != nil {
+		return nil, err
+	}
+	router := httpserver.New(httpserver.Dependencies{Channels: channelService, Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
 	server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
-	return &Application{
+	return &Application{channels: channelService, chatgpt: gptAdapter,
 		logger: logger, database: database, server: server,
 		audits: auditService, responses: responseRepo, cleanupLock: refreshLock, runtime: runtimeStore,
 		settingsBus: settingsBus, invalidationBus: invalidationBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService, invalidations: invalidationService,
@@ -558,6 +586,10 @@ func (a *Application) Run(ctx context.Context) error {
 			defer background.Done()
 			a.runSupervisedTask(runCtx, name, task)
 		}()
+	}
+	if a.channels != nil {
+		startBackground("channel_image_workers", func(ctx context.Context) error { a.channels.RunImages(ctx); return nil })
+		startBackground("channel_maintenance", func(ctx context.Context) error { a.channels.RunMaintenance(ctx); return nil })
 	}
 	if a.invalidationBus != nil {
 		startBackground("invalidation_publisher", a.invalidations.RunPublisher)
@@ -803,6 +835,9 @@ func (a *Application) logPerformanceMetrics() {
 }
 
 func (a *Application) Close() error {
+	if a.chatgpt != nil {
+		_ = a.chatgpt.Close()
+	}
 	var runtimeErr error
 	if a.runtime != nil {
 		runtimeErr = a.runtime.Close()

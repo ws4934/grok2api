@@ -408,7 +408,7 @@ function BillingValue({ audit }: { audit: AuditDTO }) {
         <Tooltip>
           <TooltipTrigger asChild><span className="block cursor-help whitespace-nowrap text-xs tabular-nums" tabIndex={0}>{amount}</span></TooltipTrigger>
           <TooltipContent className="w-96 max-w-[calc(100vw-2rem)] p-3" side="top" align="start">
-            <BillingBreakdown billing={billing} locale={i18n.language} />
+            <BillingBreakdown estimation={audit.estimation} billing={billing} locale={i18n.language} />
           </TooltipContent>
         </Tooltip>
       ) : <span className="block whitespace-nowrap text-xs text-muted-foreground">{amount}</span>}
@@ -438,12 +438,13 @@ function fallbackBillingBreakdown(audit: AuditDTO): AuditBillingBreakdownDTO | u
   };
 }
 
-function BillingBreakdown({ billing, locale }: { billing: AuditBillingBreakdownDTO; locale: string }) {
+function BillingBreakdown({ billing, locale, estimation }: { billing: AuditBillingBreakdownDTO; locale: string; estimation?: AuditDTO["estimation"] }) {
   const { t } = useTranslation();
   return (
     <div className="space-y-2.5 text-xs leading-5">
       <div className="space-y-1">
-        <BillingDetailRow label={t("audits.billingSource")} value={billing.source === "upstream" ? t("audits.billingSourceUpstream") : t("audits.billingSourceOfficial")} />
+        {estimation?.tokenizer && <BillingDetailRow label="估算规则" value={`${estimation.tokenizer} · 图片 ${estimation.vision_tokens_per_image ?? 0} Token/张 · 本地输出上限 ${estimation.output_limit_tokens ?? 0}${estimation.truncated ? " · 已截断" : ""}`} />}
+        <BillingDetailRow label={t("audits.billingSource")} value={billing.source === "channel" ? "渠道配置价格 / 本地估算" : billing.source === "upstream" ? t("audits.billingSourceUpstream") : t("audits.billingSourceOfficial")} />
         {billing.model ? <BillingDetailRow label={t("audits.billingModel")} value={billing.model} mono /> : null}
         {billing.version ? <BillingDetailRow label={t("audits.billingVersion")} value={billing.version} /> : null}
         {billing.tier === "long_context" ? <BillingDetailRow label={t("audits.billingRateTier")} value={t("audits.billingLongContextTier")} /> : null}
@@ -743,6 +744,8 @@ function providerLabel(provider: AuditDTO["provider"]): string {
       return "Grok Web";
     case "grok_console":
       return "Grok Console";
+    default:
+      return provider === "chatgpt" ? "ChatGPT" : provider;
   }
 }
 
@@ -770,6 +773,8 @@ function providerShortLabel(provider: AuditDTO["provider"]): string {
       return "Web";
     case "grok_console":
       return "Console";
+    default:
+      return provider === "chatgpt" ? "ChatGPT" : provider;
   }
 }
 

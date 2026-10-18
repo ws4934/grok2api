@@ -33,14 +33,23 @@ func Providers() []Provider {
 	return append([]Provider(nil), providers[:]...)
 }
 
-// IsValid 判断 Provider 是否属于当前系统固定支持的渠道。
+// IsValid validates the stable identifier syntax, not registration or enablement.
+// Admission must additionally consult the provider registry.
 func (p Provider) IsValid() bool {
-	switch p {
-	case ProviderBuild, ProviderWeb, ProviderConsole:
-		return true
-	default:
+	if len(p) < 1 || len(p) > 32 || p[0] < 'a' || p[0] > 'z' {
 		return false
 	}
+	for _, c := range p {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// IsLegacy identifies the providers covered by the original client-key bitmask.
+func (p Provider) IsLegacy() bool {
+	return p == ProviderBuild || p == ProviderWeb || p == ProviderConsole
 }
 
 // ModelNamespace 返回内部模型路由使用的稳定渠道命名空间。
@@ -53,6 +62,9 @@ func (p Provider) ModelNamespace() string {
 	case ProviderConsole:
 		return "Console"
 	default:
+		if p.IsValid() {
+			return string(p)
+		}
 		return ""
 	}
 }

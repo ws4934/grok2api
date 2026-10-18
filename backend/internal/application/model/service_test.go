@@ -20,14 +20,14 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 )
 
-func TestModelProviderFilterAcceptsOnlyKnownProviders(t *testing.T) {
+func TestModelProviderFilterValidatesIdentifierSyntax(t *testing.T) {
 	for _, value := range []string{"", string(account.ProviderBuild), string(account.ProviderWeb), string(account.ProviderConsole)} {
 		if !validProviderFilter(value) {
 			t.Fatalf("known provider rejected: %q", value)
 		}
 	}
-	if validProviderFilter("cli") {
-		t.Fatal("unsupported provider filter was accepted")
+	if validProviderFilter("invalid/provider") {
+		t.Fatal("malformed provider filter was accepted")
 	}
 }
 
@@ -160,7 +160,6 @@ func TestValidateBoundAccountsSupportsAccountsFilteredByIDs(t *testing.T) {
 		t.Fatal("expected error for mismatched provider, got nil")
 	}
 }
-
 
 func TestSyncAggregatesCapabilitiesFromAllAccounts(t *testing.T) {
 	ctx := context.Background()

@@ -3,6 +3,7 @@ package relational
 import (
 	"context"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -58,11 +59,8 @@ func TestInitializeSchemaUpgradesProviderChecksForConsole(t *testing.T) {
 		if err := database.db.WithContext(ctx).Raw("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&sql).Error; err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(sql, "grok_console") {
-			t.Fatalf("table %s was not upgraded: %s", table, sql)
-		}
-		if (table == "request_audits" || table == "egress_nodes" || table == "egress_subscription_sources") && !strings.Contains(sql, "grok_console_asset") {
-			t.Fatalf("table %s was not upgraded for Console assets: %s", table, sql)
+		if regexp.MustCompile(`CHECK \((provider|scope|egress_scope) IN`).MatchString(sql) {
+			t.Fatalf("table %s retained closed channel checks: %s", table, sql)
 		}
 		if table == "request_audits" && !strings.Contains(sql, "compaction") {
 			t.Fatalf("table %s operation constraint was not upgraded: %s", table, sql)

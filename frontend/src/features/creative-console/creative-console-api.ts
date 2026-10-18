@@ -53,6 +53,7 @@ type RequestOptions = {
 };
 
 export async function createChatResponse(input: {
+  basicProtocol?: boolean;
   apiKey: string;
   model: string;
   messages: ChatMessage[];
@@ -69,6 +70,7 @@ export async function createChatResponse(input: {
     stream: true,
     store: false,
   };
+  if (!input.basicProtocol) {
   if (input.promptCacheKey) body.prompt_cache_key = input.promptCacheKey;
   if (input.reasoningEffort === "auto") body.reasoning = { summary: "auto" };
   else if (input.reasoningEffort !== "none") body.reasoning = { effort: input.reasoningEffort, summary: "auto" };
@@ -77,10 +79,12 @@ export async function createChatResponse(input: {
   if (input.webSearch) tools.push({ type: "web_search" });
   if (input.xSearch) tools.push({ type: "x_search" });
   if (tools.length > 0) body.tools = tools;
+  }
   return publicResponsesStream(input.apiKey, body, input.onUpdate, input.signal);
 }
 
 export async function generateImage(input: {
+  basicProtocol?: boolean;
   apiKey: string;
   model: string;
   prompt: string;
@@ -99,11 +103,8 @@ export async function generateImage(input: {
         model: input.model,
         prompt: input.prompt,
         n: input.count,
-        aspect_ratio: input.aspectRatio,
-        resolution: input.resolution,
-        ...(input.quality ? { quality: input.quality } : {}),
+        ...(input.basicProtocol ? { size: "auto", quality: "auto", output_format: "png" } : { aspect_ratio: input.aspectRatio, resolution: input.resolution, ...(input.quality ? { quality: input.quality } : {}), stream: false }),
         response_format: "url",
-        stream: false,
       },
       signal: input.signal,
     },

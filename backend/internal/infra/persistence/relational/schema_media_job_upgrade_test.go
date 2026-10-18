@@ -22,24 +22,16 @@ func TestMediaJobModelTagsAllowAllVideoProvidersAndPrimaryScopes(t *testing.T) {
 		t.Fatal("Provider field missing")
 	}
 	providerTag := providerField.Tag.Get("gorm")
-	if !strings.Contains(providerTag, "chk_media_jobs_provider") ||
-		!strings.Contains(providerTag, "grok_web") ||
-		!strings.Contains(providerTag, "grok_build") ||
-		!strings.Contains(providerTag, "grok_console") {
-		t.Fatalf("provider tag = %q", providerTag)
+	if strings.Contains(providerTag, "check:") {
+		t.Fatalf("closed provider tag: %s", providerTag)
 	}
 	scopeField, ok := modelType.FieldByName("EgressScope")
 	if !ok {
 		t.Fatal("EgressScope field missing")
 	}
 	scopeTag := scopeField.Tag.Get("gorm")
-	if !strings.Contains(scopeTag, "chk_media_jobs_egress_scope") ||
-		!strings.Contains(scopeTag, "''") ||
-		!strings.Contains(scopeTag, "grok_web") ||
-		!strings.Contains(scopeTag, "grok_build") ||
-		!strings.Contains(scopeTag, "grok_console") ||
-		strings.Contains(scopeTag, "grok_console_asset") {
-		t.Fatalf("egress_scope tag = %q", scopeTag)
+	if strings.Contains(scopeTag, "check:") {
+		t.Fatalf("closed scope tag: %s", scopeTag)
 	}
 	inputField, ok := modelType.FieldByName("InputJSON")
 	if !ok {
@@ -415,7 +407,7 @@ func assertMediaJobSQLLacksNewInputLimit(t *testing.T, database *Database) {
 	if !strings.Contains(sql, "1048576") || strings.Contains(sql, strconv.Itoa(mediadomain.MaxInputJSONBytes)) {
 		t.Fatalf("previous media_jobs input constraint was not installed: %s", sql)
 	}
-	if !strings.Contains(sql, "grok_build") || !strings.Contains(strings.ToUpper(sql), "ON DELETE SET NULL") {
+	if strings.Contains(sql, "chk_media_jobs_provider") || !strings.Contains(strings.ToUpper(sql), "ON DELETE SET NULL") {
 		t.Fatalf("fixture changed unrelated v3.0.6 constraints: %s", sql)
 	}
 }
@@ -424,10 +416,10 @@ func assertMediaJobSQLContainsBuild(t *testing.T, database *Database) {
 	t.Helper()
 	assertTableColumns(t, database, "media_jobs", []string{"client_ip"}, nil)
 	sql := mediaJobsTableSQL(t, database)
-	if !strings.Contains(sql, "grok_build") {
-		t.Fatalf("media_jobs was not upgraded with grok_build: %s", sql)
+	if strings.Contains(sql, "chk_media_jobs_provider") || strings.Contains(sql, "chk_media_jobs_egress_scope") {
+		t.Fatalf("media_jobs retained a closed channel constraint: %s", sql)
 	}
-	if !strings.Contains(sql, "grok_console") || strings.Contains(sql, "grok_console_asset") {
+	if strings.Contains(sql, "chk_media_jobs_egress_scope") {
 		t.Fatalf("media_jobs primary scopes are incomplete: %s", sql)
 	}
 	if !strings.Contains(strings.ToUpper(sql), "ON DELETE SET NULL") {

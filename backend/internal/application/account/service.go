@@ -953,7 +953,7 @@ type CleanupResult struct {
 
 // validateCleanupSelection validates cleanup states and linked target providers.
 func validateCleanupSelection(providerValue accountdomain.Provider, statuses []CleanupStatus, targets []accountdomain.Provider) (map[CleanupStatus]struct{}, error) {
-	if !providerValue.IsValid() {
+	if !providerValue.IsLegacy() {
 		return nil, invalidInput("账号来源无效")
 	}
 	selected := make(map[CleanupStatus]struct{}, len(statuses))
@@ -969,7 +969,7 @@ func validateCleanupSelection(providerValue accountdomain.Provider, statuses []C
 		return nil, invalidInput("至少选择一种账号状态")
 	}
 	for _, target := range targets {
-		if !target.IsValid() {
+		if !target.IsLegacy() {
 			return nil, invalidInput("关联删除目标无效")
 		}
 		if target == providerValue {

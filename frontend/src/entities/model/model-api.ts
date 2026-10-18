@@ -9,7 +9,7 @@ export type ListModelsInput = {
   pageSize: number;
   search?: string;
   status?: string;
-  provider?: "grok_build" | "grok_web" | "grok_console" | "";
+  provider?: string;
   providerScope?: Array<"grok_build" | "grok_web" | "grok_console">;
   tierScope?: Array<"free" | "super">;
   activeScope?: boolean;
@@ -20,7 +20,7 @@ export type ListModelsInput = {
 const modelRouteValidator = hasShape({
   id: isString,
   publicId: isString,
-  provider: isOneOf("grok_build", "grok_web", "grok_console"),
+  provider: isString,
   upstreamModel: isString,
   capability: isOneOf("responses", "chat", "image", "image_edit", "video", "tts", "stt", "realtime"),
   origin: isOneOf("catalog", "discovered", "manual"),
@@ -35,7 +35,7 @@ const modelRouteValidator = hasShape({
   lastSyncedAt: isOptional(isString),
 });
 const decodeModelRoute = createObjectDecoder<ModelRouteDTO>("model route", {
-  id: isString, publicId: isString, provider: isOneOf("grok_build", "grok_web", "grok_console"), upstreamModel: isString,
+  id: isString, publicId: isString, provider: isString, upstreamModel: isString,
   capability: isOneOf("responses", "chat", "image", "image_edit", "video", "tts", "stt", "realtime"), origin: isOneOf("catalog", "discovered", "manual"),
   enabled: isBoolean, accountIds: isArrayOf(isString), bindingMode: isBoolean, supportedAccounts: isNumber,
   syncedAccounts: isNumber, totalAccounts: isNumber, capabilityKnown: isBoolean, available: isBoolean, lastSyncedAt: isOptional(isString),

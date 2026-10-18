@@ -3,6 +3,7 @@ package relational
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -123,6 +124,9 @@ func (r *EgressRepository) GetEgressNode(ctx context.Context, id uint64) (egress
 }
 
 func (r *EgressRepository) CreateEgressNode(ctx context.Context, value egress.Node) (egress.Node, error) {
+	if value.Scope == "all" {
+		return egress.Node{}, fmt.Errorf("all egress scope is not supported")
+	}
 	row := fromEgressDomain(value)
 	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := materializeEgressProxyProfile(tx, &row); err != nil {

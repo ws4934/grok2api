@@ -14,6 +14,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/chenyme/grok2api/backend/internal/domain/account"
+
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"gorm.io/gorm"
@@ -104,7 +106,7 @@ func validatePreparedAudit(value preparedAudit) error {
 	if row.ModelRouteID == 0 {
 		return errors.New("model_route_id must be positive")
 	}
-	if !auditStringAllowed(row.Provider, "grok_build", "grok_web", "grok_console") {
+	if !account.Provider(row.Provider).IsValid() {
 		return errors.New("provider is invalid")
 	}
 	if !auditStringAllowed(row.Operation, "responses", "compaction", "chat", "messages", "image", "image_edit", "video", "tts", "stt", "realtime", "voice") {
@@ -119,7 +121,7 @@ func validatePreparedAudit(value preparedAudit) error {
 	if row.EgressNodeID != nil && *row.EgressNodeID == 0 {
 		return errors.New("egress_node_id must be positive when present")
 	}
-	if !auditStringAllowed(row.EgressScope, "", "grok_build", "grok_web", "grok_console", "grok_web_asset", "grok_console_asset") {
+	if row.EgressScope != "" && !account.Provider(row.EgressScope).IsValid() {
 		return errors.New("egress_scope is invalid")
 	}
 	if !auditStringAllowed(row.EgressMode, "", "direct", "proxy") {
@@ -344,6 +346,14 @@ func settleInsertedAudits(tx *gorm.DB, inserted []preparedAudit) error {
 }
 
 func toAuditModels(value audit.Record) (requestAuditModel, []requestAuditAttemptModel, error) {
+	estimationJSON := ""
+	if value.Estimation != nil {
+		raw, err := json.Marshal(value.Estimation)
+		if err != nil {
+			return requestAuditModel{}, nil, err
+		}
+		estimationJSON = string(raw)
+	}
 	provider := value.Provider
 	if provider == "" {
 		provider = "grok_build"
@@ -368,7 +378,8 @@ func toAuditModels(value audit.Record) (requestAuditModel, []requestAuditAttempt
 		}
 	}
 	row := requestAuditModel{
-		EventID: truncate(eventID, 64), RequestID: truncate(value.RequestID, 64), ClientKeyID: value.ClientKeyID, ClientKeyName: truncate(value.ClientKeyName, 160), ClientIP: strings.TrimSpace(value.ClientIP),
+		EstimationJSON: estimationJSON,
+		EventID:        truncate(eventID, 64), RequestID: truncate(value.RequestID, 64), ClientKeyID: value.ClientKeyID, ClientKeyName: truncate(value.ClientKeyName, 160), ClientIP: strings.TrimSpace(value.ClientIP),
 		ModelRouteID: value.ModelRouteID, ModelPublicID: truncate(value.ModelPublicID, 255), ModelUpstreamModel: truncate(value.ModelUpstreamModel, 255),
 		Provider: truncate(provider, 32), Operation: string(operation), UsageSource: string(usageSource),
 		ReasoningEffort: audit.NormalizeReasoningEffort(value.ReasoningEffort),

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -975,15 +976,22 @@ func (r *Registry) Definition(value account.Provider) (Definition, bool) {
 	return definition.Clone(), ok
 }
 
-// Providers returns registered Providers in fixed channel order with capability definitions.
+// Providers returns the legacy display order followed by sorted extension IDs.
 func (r *Registry) Providers() []account.Provider {
-	values := make([]account.Provider, 0, len(r.definitions))
+	values := make([]account.Provider, 0, len(r.adapters))
 	for _, value := range account.Providers() {
-		if _, ok := r.definitions[value]; ok {
+		if _, ok := r.adapters[value]; ok {
 			values = append(values, value)
 		}
 	}
-	return values
+	var extensions []account.Provider
+	for value := range r.adapters {
+		if !value.IsLegacy() {
+			extensions = append(extensions, value)
+		}
+	}
+	sort.Slice(extensions, func(i, j int) bool { return extensions[i] < extensions[j] })
+	return append(values, extensions...)
 }
 
 // Validate checks that production registry definitions match their implemented capability interfaces.
@@ -994,7 +1002,7 @@ func (r *Registry) Validate() error {
 	if len(r.issues) > 0 {
 		return errors.Join(r.issues...)
 	}
-	for _, value := range account.Providers() {
+	for _, value := range r.Providers() {
 		adapter, registered := r.adapters[value]
 		definition, described := r.definitions[value]
 		if !registered || !described {

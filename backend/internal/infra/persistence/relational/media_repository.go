@@ -2,9 +2,11 @@ package relational
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"gorm.io/gorm"
@@ -131,6 +133,7 @@ func (r *MediaAssetRepository) ExpireMediaInputIfUnreferenced(ctx context.Contex
 	result := r.db.db.WithContext(ctx).Model(&mediaAssetModel{}).
 		Where("id = ? AND kind IN ? AND expires_at IS NOT NULL", id, []string{"image", "video"}).
 		Where("NOT EXISTS (?)", activeReference).
+		Where("NOT EXISTS (?)", r.db.db.Model(&channelAssetRefModel{}).Select("1").Where("asset_id = ?", id)).
 		Update("expires_at", expiresAt)
 	return result.RowsAffected > 0, result.Error
 }
@@ -149,6 +152,13 @@ func (r *MediaAssetRepository) DeleteMediaAsset(ctx context.Context, id string) 
 // ListProtectedMediaAssetIDs 返回不可清理的资产：活动任务的结果与未消费票据。
 func (r *MediaAssetRepository) ListProtectedMediaAssetIDs(ctx context.Context) (map[string]struct{}, error) {
 	protected := make(map[string]struct{})
+	var channelAssets []string
+	if err := r.db.db.WithContext(ctx).Model(&channelAssetRefModel{}).Pluck("asset_id", &channelAssets).Error; err != nil {
+		return nil, err
+	}
+	for _, id := range channelAssets {
+		protected[id] = struct{}{}
+	}
 	var jobAssetIDs []string
 	if err := r.db.db.WithContext(ctx).Model(&mediaJobModel{}).
 		Where("result_asset_id <> '' AND status IN ?", []string{string(media.StatusQueued), string(media.StatusInProgress)}).
@@ -295,6 +305,11 @@ func ticketToDomain(row mediaUploadTicketModel) repository.MediaUploadTicket {
 }
 
 func (r *MediaJobRepository) CreateMediaJob(ctx context.Context, value media.Job) error {
+	// This repository owns the original Grok video workflow. Extension images
+	// have their own repository; open provider syntax is not video capability.
+	if (value.Provider != "" && !account.Provider(value.Provider).IsLegacy()) || (value.EgressScope != "" && !account.Provider(value.EgressScope).IsLegacy()) {
+		return errors.New("unsupported video provider or primary egress scope")
+	}
 	return r.db.db.WithContext(ctx).Create(mediaJobFromDomain(value)).Error
 }
 

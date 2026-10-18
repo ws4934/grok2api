@@ -563,6 +563,14 @@ func (r *ModelRepository) GetByPublicIDCandidates(ctx context.Context, publicID 
 	return mapModelRows(rows), nil
 }
 
+// Extensions evaluate their own capabilities (for example an image route uses
+// a distinct Web conversation model). Preserve Grok's availability query above.
+func (r *ModelRepository) GetConfiguredByPublicIDCandidates(ctx context.Context, publicID string) ([]model.Route, error) {
+	rows, err := findModelRoutesByPublicID(r.db.db.WithContext(ctx).Where("enabled = ?", true), publicID)
+	if err != nil { return nil, mapError(err) }
+	return mapModelRows(rows), nil
+}
+
 func (r *ModelRepository) GetByPublicIDIncludingDisabled(ctx context.Context, publicID string) (model.Route, error) {
 	db := r.db.db.WithContext(ctx)
 	rows, err := findModelRoutesByPublicID(db, publicID)
@@ -573,7 +581,17 @@ func (r *ModelRepository) GetByPublicIDIncludingDisabled(ctx context.Context, pu
 }
 
 func findModelRoutesByPublicID(db *gorm.DB, publicID string) ([]modelRouteModel, error) {
-	groups := model.PublicIDCandidateGroups(publicID)
+	var catalog []account.Provider
+	if err := db.Session(&gorm.Session{}).Model(&modelRouteModel{}).Distinct("provider").Pluck("provider", &catalog).Error; err != nil {
+		return nil, err
+	}
+	providers := account.Providers()
+	for _, p := range catalog {
+		if !p.IsLegacy() && p.IsValid() {
+			providers = append(providers, p)
+		}
+	}
+	groups := model.PublicIDCandidateGroupsFor(publicID, providers)
 	requested := strings.TrimSpace(publicID)
 	for index, candidates := range groups {
 		aliasRequested := ""

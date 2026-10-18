@@ -14,7 +14,7 @@ export type AuditBillingComponentDTO = {
 };
 
 export type AuditBillingBreakdownDTO = {
-  source: "upstream" | "official";
+  source: "upstream" | "official" | "channel";
   method: "upstream_reported" | "official_rates" | "stored_estimate";
   model?: string;
   version?: string;
@@ -32,7 +32,7 @@ export type AuditDTO = {
   modelRouteId: string;
   modelPublicId?: string;
   modelUpstreamModel?: string;
-  provider: "grok_build" | "grok_web" | "grok_console";
+  provider: string;
   operation: "responses" | "compaction" | "chat" | "messages" | "image" | "image_edit" | "video" | "tts" | "stt" | "realtime" | "voice";
   usageSource: "upstream" | "estimated" | "none";
   reasoningEffort?: "auto" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "fixed";
@@ -40,7 +40,7 @@ export type AuditDTO = {
   accountName?: string;
   egressNodeId?: string;
   egressNodeName?: string;
-  egressScope?: "grok_build" | "grok_web" | "grok_console" | "grok_web_asset" | "grok_console_asset";
+  egressScope?: string;
   egressMode?: "direct" | "proxy";
   // 0 表示已返回 2xx 响应头但流随后失败（如首字节超时/流式中断），不属于任何 HTTP 状态段。
   statusCode: number;
@@ -58,6 +58,7 @@ export type AuditDTO = {
   pricingModel?: string;
   pricingVersion?: string;
   billing?: AuditBillingBreakdownDTO;
+  estimation?: { version: number; price_version: number; tokenizer?: string; vision_tokens_per_image?: number; output_limit_tokens?: number; truncated?: boolean; image_job_id?: string; stage?: string; attempt?: number };
   numSourcesUsed: number;
   numServerSideToolsUsed: number;
   contextInputTokens: number;
@@ -139,22 +140,22 @@ const auditBillingComponentValidator = hasShape({
   unit: isOneOf("token", "image", "second"), quantity: isNumber, unitPriceInUsdTicks: isNumber, subtotalInUsdTicks: isNumber,
 });
 const auditBillingValidator = hasShape({
-  source: isOneOf("upstream", "official"), method: isOneOf("upstream_reported", "official_rates", "stored_estimate"),
+  source: isOneOf("upstream", "official", "channel"), method: isOneOf("upstream_reported", "official_rates", "stored_estimate"),
   model: isOptional(isString), version: isOptional(isString), tier: isOptional(isOneOf("standard", "long_context", "media")),
   components: isArrayOf(auditBillingComponentValidator), totalInUsdTicks: isNumber,
 });
 const auditValidator = hasShape({
   id: isString, requestId: isString, clientKeyId: isString, clientKeyName: isOptional(isString), clientIp: isOptional(isString), modelRouteId: isString,
-  modelPublicId: isOptional(isString), modelUpstreamModel: isOptional(isString), provider: isOneOf("grok_build", "grok_web", "grok_console"),
+  modelPublicId: isOptional(isString), modelUpstreamModel: isOptional(isString), provider: isString,
   operation: isOneOf("responses", "compaction", "chat", "messages", "image", "image_edit", "video", "tts", "stt", "realtime", "voice"), usageSource: isOneOf("upstream", "estimated", "none"),
   reasoningEffort: isOptional(isOneOf("auto", "none", "minimal", "low", "medium", "high", "xhigh", "max", "fixed")),
   accountId: isOptional(isString), accountName: isOptional(isString),
   egressNodeId: isOptional(isString), egressNodeName: isOptional(isString),
-  egressScope: isOptional(isOneOf("grok_build", "grok_web", "grok_console", "grok_web_asset", "grok_console_asset")), egressMode: isOptional(isOneOf("direct", "proxy")),
+  egressScope: isOptional(isString), egressMode: isOptional(isOneOf("direct", "proxy")),
   statusCode: isNumber, streaming: isBoolean,
   mediaInputImages: isNumber, mediaOutputImages: isNumber, mediaOutputSeconds: isNumber, inputTokens: isNumber,
   cachedInputTokens: isNumber, outputTokens: isNumber, reasoningTokens: isNumber, totalTokens: isNumber,
-  costInUsdTicks: isNumber, estimatedCostInUsdTicks: isNumber, pricingModel: isOptional(isString), pricingVersion: isOptional(isString), billing: isOptional(auditBillingValidator),
+  costInUsdTicks: isNumber, estimatedCostInUsdTicks: isNumber, pricingModel: isOptional(isString), pricingVersion: isOptional(isString), billing: isOptional(auditBillingValidator), estimation: isOptional(hasShape({ version:isNumber, price_version:isNumber, tokenizer:isOptional(isString), vision_tokens_per_image:isOptional(isNumber), output_limit_tokens:isOptional(isNumber), truncated:isOptional(isBoolean), image_job_id:isOptional(isString), stage:isOptional(isString), attempt:isOptional(isNumber) })),
   numSourcesUsed: isNumber, numServerSideToolsUsed: isNumber, contextInputTokens: isNumber, contextOutputTokens: isNumber,
   firstTokenMs: isOptional(isNumber), outputTokensPerSecond: isOptional(isNumber),
   durationMs: isNumber, errorCode: isOptional(isString), requestMethod: isOptional(isString), requestPath: isOptional(isString),

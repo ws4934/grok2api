@@ -104,6 +104,7 @@ type Record struct {
 	EstimatedCostInUSDTicks int64
 	PricingModel            string
 	PricingVersion          string
+	Estimation              *EstimationDetails
 	NumSourcesUsed          int64
 	NumServerSideToolsUsed  int64
 	ContextInputTokens      int64
@@ -117,6 +118,20 @@ type Record struct {
 	AttemptCount            int
 	Attempts                []Attempt
 	CreatedAt               time.Time
+}
+
+// EstimationDetails records the gateway rule used at acceptance, independently
+// of upstream usage. Existing provider audits leave it nil.
+type EstimationDetails struct {
+	Version              int    `json:"version"`
+	PriceVersion         uint64 `json:"price_version"`
+	Tokenizer            string `json:"tokenizer,omitempty"`
+	VisionTokensPerImage int    `json:"vision_tokens_per_image,omitempty"`
+	OutputLimitTokens    int    `json:"output_limit_tokens,omitempty"`
+	Truncated            bool   `json:"truncated,omitempty"`
+	ImageJobID           string `json:"image_job_id,omitempty"`
+	Stage                string `json:"stage,omitempty"`
+	Attempt              uint64 `json:"attempt,omitempty"`
 }
 
 // Summary 表示指定审计范围内的聚合用量。

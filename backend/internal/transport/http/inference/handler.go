@@ -32,6 +32,7 @@ import (
 )
 
 type Handler struct {
+	extensionModels  func(context.Context, clientkeydomain.Key) ([]modeldomain.Route, error)
 	gateway          *gateway.Service
 	models           *modelapp.Service
 	maxBodyBytes     int64
@@ -82,6 +83,10 @@ func NewHandler(gatewayService *gateway.Service, models *modelapp.Service, maxBo
 func (h *Handler) SetPublicAPIBaseURLResolver(resolve func() string) *Handler {
 	h.publicBaseURL = resolve
 	return h
+}
+
+func (h *Handler) SetExtensionModels(fn func(context.Context, clientkeydomain.Key) ([]modeldomain.Route, error)) {
+	h.extensionModels = fn
 }
 
 func (h *Handler) Register(router *gin.RouterGroup) {
@@ -224,6 +229,14 @@ func (h *Handler) listModels(c *gin.Context) {
 	}
 	if hasClientKey {
 		values = filterModelRoutesForClientKey(values, clientKey)
+	}
+	if hasClientKey && h.extensionModels != nil {
+		extra, err := h.extensionModels(c.Request.Context(), clientKey)
+		if err != nil {
+			writeOpenAIError(c, 503, "channel_catalog_unavailable", "读取扩展渠道模型失败")
+			return
+		}
+		values = append(values, extra...)
 	}
 	items := newModelListItems(values)
 	if allowAliases {

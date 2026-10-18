@@ -252,12 +252,17 @@ func toClientKeyDomain(value clientKeyModel, allowedModels []uint64) clientkey.K
 }
 
 func toAuditDomain(value requestAuditModel) audit.Record {
+	var estimation *audit.EstimationDetails
+	if value.EstimationJSON != "" {
+		_ = json.Unmarshal([]byte(value.EstimationJSON), &estimation)
+	}
 	var requestHeaders map[string][]string
 	if strings.TrimSpace(value.RequestHeadersJSON) != "" && value.RequestHeadersJSON != "{}" {
 		_ = json.Unmarshal([]byte(value.RequestHeadersJSON), &requestHeaders)
 	}
 	return audit.Record{
-		ID: value.ID, EventID: value.EventID, RequestID: value.RequestID, ClientKeyID: value.ClientKeyID, ClientKeyName: value.ClientKeyName, ClientIP: value.ClientIP,
+		Estimation: estimation,
+		ID:         value.ID, EventID: value.EventID, RequestID: value.RequestID, ClientKeyID: value.ClientKeyID, ClientKeyName: value.ClientKeyName, ClientIP: value.ClientIP,
 		ModelRouteID: value.ModelRouteID, ModelPublicID: value.ModelPublicID, ModelUpstreamModel: value.ModelUpstreamModel,
 		Provider: value.Provider, Operation: audit.Operation(value.Operation), UsageSource: audit.UsageSource(value.UsageSource),
 		ReasoningEffort: value.ReasoningEffort,

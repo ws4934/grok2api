@@ -50,3 +50,15 @@ __pycache__/
 /.tmp/
 /tmp/
 /Dockerfile.local
+
+# Local agent workspace and private artifacts
+CLAUDE.md
+.claude/
+proxy/
+userdata/
+session/
+*_article
+*.docx
+*.doc
+*.xlsx
+*.csv

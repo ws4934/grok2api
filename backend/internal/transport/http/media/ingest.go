@@ -397,3 +397,8 @@ func (h *Handler) acquireIngest(c *gin.Context) bool {
 }
 
 func (h *Handler) releaseIngest() { <-h.ingestSlots }
+
+// FetchRemoteImage shares the existing DNS-pinned import checks with channel inputs.
+func FetchRemoteImage(ctx context.Context, rawURL string) ([]byte, error) {
+	return fetchRemoteImage(ctx, rawURL)
+}

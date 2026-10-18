@@ -84,7 +84,7 @@ func NormalizePublicID(provider account.Provider, value string) (string, bool) {
 	if localID == "" {
 		return "", false
 	}
-	for _, candidate := range account.Providers() {
+	for _, candidate := range providersWith(provider) {
 		prefix := candidate.ModelNamespace() + "/"
 		if len(localID) < len(prefix) || !strings.EqualFold(localID[:len(prefix)], prefix) {
 			continue
@@ -116,7 +116,7 @@ func NormalizeExternalPublicID(provider account.Provider, value string) (string,
 	if publicName == "" {
 		return "", false
 	}
-	for _, candidate := range account.Providers() {
+	for _, candidate := range providersWith(provider) {
 		prefix := candidate.ModelNamespace() + "/"
 		if len(publicName) < len(prefix) || !strings.EqualFold(publicName[:len(prefix)], prefix) {
 			continue
@@ -153,11 +153,16 @@ func ExternalPublicID(provider account.Provider, value string) string {
 // 无前缀名称同时匹配所有 Provider。带前缀名称先按字面对外名称匹配，若不存在，
 // 再回退为历史上的显式 Provider 路由语法。
 func PublicIDCandidateGroups(value string) [][]string {
+	return PublicIDCandidateGroupsFor(value, account.Providers())
+}
+
+// PublicIDCandidateGroupsFor resolves against an explicitly supplied catalog.
+func PublicIDCandidateGroupsFor(value string, providers []account.Provider) [][]string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil
 	}
-	for _, providerValue := range account.Providers() {
+	for _, providerValue := range providers {
 		prefix := providerValue.ModelNamespace() + "/"
 		if len(value) >= len(prefix) && strings.EqualFold(value[:len(prefix)], prefix) {
 			literal, literalOK := NormalizeExternalPublicID(providerValue, value)
@@ -171,8 +176,8 @@ func PublicIDCandidateGroups(value string) [][]string {
 			return [][]string{{literal}, {qualified}}
 		}
 	}
-	group := make([]string, 0, len(account.Providers()))
-	for _, providerValue := range account.Providers() {
+	group := make([]string, 0, len(providers))
+	for _, providerValue := range providers {
 		if normalized, ok := NormalizePublicID(providerValue, value); ok {
 			group = append(group, normalized)
 		}
@@ -202,7 +207,7 @@ func NormalizeUpstreamModel(provider account.Provider, value string) (string, bo
 	if upstream == "" {
 		return "", false
 	}
-	for _, candidate := range account.Providers() {
+	for _, candidate := range providersWith(provider) {
 		prefix := candidate.ModelNamespace() + "/"
 		if len(upstream) < len(prefix) || !strings.EqualFold(upstream[:len(prefix)], prefix) {
 			continue
@@ -226,4 +231,12 @@ func DisplayUpstreamModel(provider account.Provider, value string) string {
 		return strings.TrimSpace(value)
 	}
 	return provider.ModelNamespace() + "/" + upstream
+}
+
+func providersWith(value account.Provider) []account.Provider {
+	values := account.Providers()
+	if !value.IsLegacy() {
+		values = append(values, value)
+	}
+	return values
 }

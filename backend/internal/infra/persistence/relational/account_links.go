@@ -287,7 +287,7 @@ func resolveLinkedDeleteIDs(db *gorm.DB, providerValue account.Provider, rootIDs
 	}
 	targetSet := make(map[account.Provider]struct{}, len(targets))
 	for _, target := range targets {
-		if !target.IsValid() {
+		if !target.IsLegacy() {
 			return result, fmt.Errorf("关联删除目标无效")
 		}
 		if target == providerValue {
@@ -637,7 +637,7 @@ func (r *AccountRepository) CountCleanupWithLinked(ctx context.Context, provider
 			)
 		}
 		for _, target := range targets {
-			if !target.IsValid() || target == providerValue {
+			if !target.IsLegacy() || target == providerValue {
 				return preview, fmt.Errorf("关联删除目标无效")
 			}
 			var linked int64
