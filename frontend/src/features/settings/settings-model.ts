@@ -120,6 +120,13 @@ export const settingsSchema = z.object({
   }).refine((value) => durationSeconds(value.streamIdleTimeout) <= durationSeconds(value.chatTimeout), {
     path: ["streamIdleTimeout"], message: "invalid",
   }),
+  providerChatGPT: z.object({
+    imageConversationModel: z.string().trim(),
+    outputTokenLimit: z.number().int().min(1).max(131_072),
+    visionTokens: z.number().int().min(0).max(100_000),
+    defaultImageModel: z.string().trim(),
+    cloudflareClearance: z.boolean(),
+  }),
   batch: z.object({
     importConcurrency: positiveInteger.max(50),
     conversionConcurrency: positiveInteger.max(50),
@@ -201,6 +208,7 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
       recoveryBackoffBase: parseDuration(config.providerWeb.recoveryBackoffBase), recoveryBackoffMax: parseDuration(config.providerWeb.recoveryBackoffMax),
     },
     providerConsole: { ...config.providerConsole, chatTimeout: parseDuration(config.providerConsole.chatTimeout), streamIdleTimeout: parseDuration(config.providerConsole.streamIdleTimeout) },
+    providerChatGPT: config.providerChatGPT,
     batch: { ...config.batch, randomDelay: parseDurationMilliseconds(config.batch.randomDelay) },
     media: {
       maxImageSize: parseByteSize(config.media.maxImageBytes), maxTotalSize: parseByteSize(config.media.maxTotalBytes),
@@ -251,6 +259,7 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
       recoveryBackoffBase: formatDuration(config.providerWeb.recoveryBackoffBase), recoveryBackoffMax: formatDuration(config.providerWeb.recoveryBackoffMax),
     },
     providerConsole: { ...config.providerConsole, chatTimeout: formatDuration(config.providerConsole.chatTimeout), streamIdleTimeout: formatDuration(config.providerConsole.streamIdleTimeout) },
+    providerChatGPT: config.providerChatGPT,
     batch: { ...config.batch, randomDelay: `${config.batch.randomDelay}ms` },
     media: {
       maxImageBytes: byteSizeBytes(config.media.maxImageSize), maxTotalBytes: byteSizeBytes(config.media.maxTotalSize),

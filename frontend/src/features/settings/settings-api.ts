@@ -13,6 +13,7 @@ export type SettingsConfigDTO = {
     recoveryBackoffBase: string; recoveryBackoffMax: string;
   };
   providerConsole: { baseURL: string; chatTimeout: string; streamIdleTimeout: string };
+  providerChatGPT: { imageConversationModel: string; outputTokenLimit: number; visionTokens: number; defaultImageModel: string; cloudflareClearance: boolean };
   batch: { importConcurrency: number; conversionConcurrency: number; syncConcurrency: number; refreshConcurrency: number; randomDelay: string };
   media: {
     maxImageBytes: number; maxTotalBytes: number; cleanupThresholdPercent: number;
@@ -126,6 +127,8 @@ const settingsConfigValidator = hasShape({
     clearanceTimeout: isString, clearanceRefresh: isString, mediaConcurrency: isNumber, allowNSFW: isBoolean, freeVideoDurationCap: isOptional(isNumber), recoveryBackoffBase: isString, recoveryBackoffMax: isString,
   }),
   providerConsole: hasShape({ baseURL: isString, chatTimeout: isString, streamIdleTimeout: isOptional(isString) }),
+  // Older backends omit the ChatGPT section; withSettingsDefaults fills it in.
+  providerChatGPT: isOptional(hasShape({ imageConversationModel: isString, outputTokenLimit: isNumber, visionTokens: isNumber, defaultImageModel: isString, cloudflareClearance: isBoolean })),
   batch: hasShape({ importConcurrency: isNumber, conversionConcurrency: isNumber, syncConcurrency: isNumber, refreshConcurrency: isNumber, randomDelay: isString }),
   media: hasShape({ maxImageBytes: isNumber, maxTotalBytes: isNumber, cleanupThresholdPercent: isNumber, cleanupInterval: isString }),
   frontend: hasShape({ publicApiBaseURL: isString }),
@@ -176,6 +179,7 @@ function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDT
         ...snapshot.config.providerConsole,
         streamIdleTimeout: snapshot.config.providerConsole.streamIdleTimeout || "2m",
       },
+      providerChatGPT: snapshot.config.providerChatGPT ?? { imageConversationModel: "", outputTokenLimit: 16384, visionTokens: 256, defaultImageModel: "", cloudflareClearance: false },
       audit: {
         ...snapshot.config.audit,
         commitDelayMS: snapshot.config.audit.commitDelayMS ?? 5,

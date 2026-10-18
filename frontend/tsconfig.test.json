@@ -6,6 +6,6 @@
     "types": ["node"],
     "allowImportingTsExtensions": true
   },
-  "include": ["src/**/*.test.ts", "src/**/*.test.tsx"],
+  "include": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/types"],
   "exclude": []
 }

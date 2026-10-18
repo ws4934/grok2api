@@ -83,6 +83,7 @@ export function SettingsPage() {
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="build">{t("models.providerGrokBuild")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="web">{t("settings.web.title")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="console">{t("console.name")}</TabsTrigger>
+            <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="chatgpt">{t("settingsChatGPT.title")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="delivery">{t("settings.groups.delivery")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="policies">{t("settings.groups.policies")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="audit">{t("settings.audit.tabTitle")}</TabsTrigger>
@@ -161,6 +162,18 @@ export function SettingsPage() {
               <SettingsField controlId="console-base-url" className="sm:col-span-2" label={t("console.baseURL")} description={t("settings.console.baseURLHelp")} error={form.formState.errors.providerConsole?.baseURL?.message}><Input id="console-base-url" type="url" {...form.register("providerConsole.baseURL")} /></SettingsField>
               <SettingsField controlId="console-chat-timeout" label={t("console.chatTimeout")} description={t("settings.console.chatTimeoutHelp")} error={form.formState.errors.providerConsole?.chatTimeout?.message}><Controller control={form.control} name="providerConsole.chatTimeout" render={({ field }) => <DurationInput id="console-chat-timeout" value={field.value} onChange={field.onChange} />} /></SettingsField>
               <SettingsField controlId="console-stream-idle-timeout" label={t("settings.console.streamIdleTimeout")} description={t("settings.console.streamIdleTimeoutHelp")} error={form.formState.errors.providerConsole?.streamIdleTimeout?.message}><Controller control={form.control} name="providerConsole.streamIdleTimeout" render={({ field }) => <DurationInput id="console-stream-idle-timeout" value={field.value} onChange={field.onChange} />} /></SettingsField>
+            </div>
+          </SettingsSection>
+          </SettingsPane>
+
+          <SettingsPane value="chatgpt">
+          <SettingsSection title={t("settingsChatGPT.title")}>
+            <div className="space-y-0">
+              <SettingsField controlId="chatgpt-image-conversation-model" label={t("settingsChatGPT.imageConversationModel")} description={t("settingsChatGPT.imageConversationModelHelp")} error={form.formState.errors.providerChatGPT?.imageConversationModel?.message}><Input id="chatgpt-image-conversation-model" {...form.register("providerChatGPT.imageConversationModel")} /></SettingsField>
+              <SettingsField controlId="chatgpt-default-image-model" label={t("settingsChatGPT.defaultImageModel")} description={t("settingsChatGPT.defaultImageModelHelp")} error={form.formState.errors.providerChatGPT?.defaultImageModel?.message}><Input id="chatgpt-default-image-model" {...form.register("providerChatGPT.defaultImageModel")} /></SettingsField>
+              <SettingsField controlId="chatgpt-output-token-limit" label={t("settingsChatGPT.outputTokenLimit")} description={t("settingsChatGPT.outputTokenLimitHelp")} error={form.formState.errors.providerChatGPT?.outputTokenLimit?.message}><Input id="chatgpt-output-token-limit" type="number" min={1} max={131_072} {...form.register("providerChatGPT.outputTokenLimit", { valueAsNumber: true })} /></SettingsField>
+              <SettingsField controlId="chatgpt-vision-tokens" label={t("settingsChatGPT.visionTokens")} description={t("settingsChatGPT.visionTokensHelp")} error={form.formState.errors.providerChatGPT?.visionTokens?.message}><Input id="chatgpt-vision-tokens" type="number" min={0} max={100_000} {...form.register("providerChatGPT.visionTokens", { valueAsNumber: true })} /></SettingsField>
+              <SettingsField controlId="chatgpt-cloudflare-clearance" label={t("settingsChatGPT.cloudflareClearance")} description={t("settingsChatGPT.cloudflareClearanceHelp")}><Controller control={form.control} name="providerChatGPT.cloudflareClearance" render={({ field }) => <div className="flex h-8 items-center"><Switch id="chatgpt-cloudflare-clearance" checked={field.value} onCheckedChange={field.onChange} /></div>} /></SettingsField>
             </div>
           </SettingsSection>
           </SettingsPane>
