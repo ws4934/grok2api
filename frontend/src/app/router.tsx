@@ -1,7 +1,7 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import { AnonymousBoundary, AuthBoundary } from "@/app/auth-boundary";
-import { DeferredAccountsPage, DeferredApiDocsPage, DeferredAppShell, DeferredClientKeysPage, DeferredCreativeConsolePage, DeferredDashboardPage, DeferredGalleryPage, DeferredModelsPage, DeferredQualityGuardPage, DeferredRequestAuditsPage, DeferredSettingsPage, DeferredVideoGalleryPage } from "@/app/deferred-pages";
+import { DeferredAccountsPage, DeferredApiDocsPage, DeferredAppShell, DeferredClientKeysPage, DeferredCreativeConsolePage, DeferredDashboardPage, DeferredGalleryPage, DeferredMediaJobsPage, DeferredModelsPage, DeferredQualityGuardPage, DeferredRequestAuditsPage, DeferredSettingsPage } from "@/app/deferred-pages";
 import { LoginPage } from "@/features/auth/login-page";
 
 export const router = createBrowserRouter([
@@ -22,7 +22,8 @@ export const router = createBrowserRouter([
           { path: "/creative-console", element: <DeferredCreativeConsolePage /> },
           { path: "/client-keys", element: <DeferredClientKeysPage /> },
           { path: "/gallery", element: <DeferredGalleryPage /> },
-          { path: "/video-gallery", element: <DeferredVideoGalleryPage /> },
+          { path: "/media-jobs", element: <DeferredMediaJobsPage /> },
+          { path: "/video-gallery", element: <Navigate to="/media-jobs" replace /> },
           { path: "/request-audits", element: <DeferredRequestAuditsPage /> },
           { path: "/quality-guard", element: <DeferredQualityGuardPage /> },
           { path: "/docs", element: <Navigate to="/docs/chat/completions" replace /> },

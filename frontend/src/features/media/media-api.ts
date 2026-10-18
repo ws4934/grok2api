@@ -1,102 +1,61 @@
-import type { MediaAssetDTO, ImageStatsDTO, MediaJobDTO, VideoStatsDTO } from "@/features/media/types";
+import { galleryQuery, mediaAssetSchema, mediaJobSchema, mediaJobsQuery, mediaJobStatsSchema, pageSchema, type GalleryFilter, type MediaAssetDTO, type MediaJobDTO, type MediaJobsFilter, type MediaJobStatsDTO } from "@/features/media/media-model";
 import { apiRequest, type PaginatedDTO } from "@/shared/api/client";
 import {
   createObjectDecoder,
-  createPaginatedDecoder,
   createValidatedDecoder,
   decodeCountResult,
   hasShape,
   isNumber,
   isString,
-  isOneOf,
 } from "@/shared/api/decoder";
-import type { SortOrder } from "@/shared/lib/table-sort";
 
-export type ListImagesInput = {
-  page: number;
-  pageSize: number;
-  search?: string;
-};
-
-export type ListVideosInput = {
-  page: number;
-  pageSize: number;
-  status?: MediaJobDTO["status"] | "";
-  search?: string;
-  sortBy?: string;
-  sortOrder?: SortOrder;
-};
-
-const mediaAssetShape = {
-  id: isString,
-  kind: isString,
-  mimeType: isString,
-  sizeBytes: isNumber,
-  sha256: isString,
-  createdAt: isString,
-  url: isString,
-};
-
-const mediaJobShape = {
-  id: isString,
-  model: isString,
-  prompt: isString,
-  status: isOneOf("queued", "in_progress", "completed", "failed"),
-  progress: isNumber,
-  seconds: isNumber,
-  size: isString,
-  quality: isString,
-  accountName: isString,
-  clientKeyName: isString,
-  createdAt: isString,
-  completedAt: (value: unknown) => value === null || isString(value),
-  errorMessage: isString,
-  assetId: isString,
-};
+export type ImageStatsDTO = { totalImages: number; totalBytes: number };
 
 const decodeImageStats = createObjectDecoder<ImageStatsDTO>("image stats", {
   totalImages: isNumber,
   totalBytes: isNumber,
 });
-const decodeVideoStats = createObjectDecoder<VideoStatsDTO>("video stats", {
-  totalJobs: isNumber,
-  completed: isNumber,
-  failed: isNumber,
-  inProgress: isNumber,
-  queued: isNumber,
-});
+const assetPage = pageSchema(mediaAssetSchema);
+const jobPage = pageSchema(mediaJobSchema);
 
-export function listImages(input: ListImagesInput): Promise<PaginatedDTO<MediaAssetDTO>> {
-  const query = new URLSearchParams({ page: String(input.page), pageSize: String(input.pageSize) });
-  if (input.search) query.set("search", input.search);
-  return apiRequest(`/api/admin/v1/media/images?${query}`, {}, createPaginatedDecoder(hasShape(mediaAssetShape)));
+export function listMediaAssets(filter: GalleryFilter): Promise<PaginatedDTO<MediaAssetDTO>> {
+  return apiRequest(`/api/admin/v1/media/images?${galleryQuery(filter)}`, {}, (value) => assetPage.parse(value));
+}
+
+export function getMediaAsset(id: string): Promise<MediaAssetDTO> {
+  return apiRequest(`/api/admin/v1/media/images/${encodeURIComponent(id)}`, {}, (value) => mediaAssetSchema.parse(value));
 }
 
 export function getImageStats(): Promise<ImageStatsDTO> {
   return apiRequest("/api/admin/v1/media/images/stats", {}, decodeImageStats);
 }
 
-export function deleteImages(ids: string[]): Promise<{ deleted: number }> {
+// Deletes images or videos; 409 mediaAssetInUse when one belongs to an active job.
+export function deleteMediaAssets(ids: string[]): Promise<{ deleted: number }> {
   return apiRequest("/api/admin/v1/media/images", { method: "DELETE", body: { ids } }, decodeCountResult<{ deleted: number }>("deleted"));
 }
 
-export function listVideos(input: ListVideosInput): Promise<PaginatedDTO<MediaJobDTO>> {
-  const query = new URLSearchParams({ page: String(input.page), pageSize: String(input.pageSize) });
-  if (input.status) query.set("status", input.status);
-  if (input.search) query.set("search", input.search);
-  if (input.sortBy && input.sortOrder) {
-    query.set("sortBy", input.sortBy);
-    query.set("sortOrder", input.sortOrder);
-  }
-  return apiRequest(`/api/admin/v1/media/videos?${query}`, {}, createPaginatedDecoder(hasShape(mediaJobShape)));
+export function listMediaJobs(filter: MediaJobsFilter): Promise<PaginatedDTO<MediaJobDTO>> {
+  return apiRequest(`/api/admin/v1/media/jobs?${mediaJobsQuery(filter)}`, {}, (value) => jobPage.parse(value));
 }
 
-export function getVideoStats(): Promise<VideoStatsDTO> {
-  return apiRequest("/api/admin/v1/media/videos/stats", {}, decodeVideoStats);
+export function getMediaJobStats(kind: string): Promise<MediaJobStatsDTO> {
+  const query = kind ? `?${new URLSearchParams({ kind })}` : "";
+  return apiRequest(`/api/admin/v1/media/jobs/stats${query}`, {}, (value) => mediaJobStatsSchema.parse(value));
 }
 
-export function deleteVideos(ids: string[]): Promise<{ deleted: number }> {
-  return apiRequest("/api/admin/v1/media/videos", { method: "DELETE", body: { ids } }, decodeCountResult<{ deleted: number }>("deleted"));
+// Only ended jobs; image results stay in the gallery.
+export function deleteMediaJobs(ids: string[]): Promise<{ deleted: number }> {
+  return apiRequest("/api/admin/v1/media/jobs", { method: "DELETE", body: { ids } }, decodeCountResult<{ deleted: number }>("deleted"));
+}
+
+export function cancelMediaJob(id: string): Promise<MediaJobDTO> {
+  return apiRequest(`/api/admin/v1/media/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }, (value) => mediaJobSchema.parse(value));
+}
+
+// The server's default idempotency key (retry:<id>) makes repeated clicks resolve to one new job.
+export function retryMediaJob(id: string): Promise<MediaJobDTO> {
+  return apiRequest(`/api/admin/v1/media/jobs/${encodeURIComponent(id)}/retry`, { method: "POST" }, (value) => mediaJobSchema.parse(value));
 }
 
 // 临时输入不会进入图库，也不会生成公开 URL；任务只持久化短 file_id。

@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { AudioLines, Box, ChevronDown, Eye, Image, KeyRound, Languages, LayoutDashboard, LogOut, Menu, MessageSquareText, Monitor, Moon, MoreHorizontal, Settings, ShieldCheck, Sparkles, Sun, Users, Video } from "lucide-react";
+import { AudioLines, Box, ChevronDown, Eye, Image, KeyRound, Languages, LayoutDashboard, ListChecks, LogOut, Menu, MessageSquareText, Monitor, Moon, MoreHorizontal, Settings, ShieldCheck, Sparkles, Sun, Users, Video } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useState, type ReactNode } from "react";
 import { useForm } from "react-hook-form";
@@ -26,7 +26,7 @@ const navigation = [
   { href: "/client-keys", label: "nav.clientKeys", icon: KeyRound },
   { href: "/models", label: "nav.models", icon: Box },
   { href: "/gallery", label: "nav.gallery", icon: Image },
-  { href: "/video-gallery", label: "nav.videoGallery", icon: Video },
+  { href: "/media-jobs", label: "nav.mediaJobs", icon: ListChecks },
   { href: "/request-audits", label: "nav.audits", icon: Eye },
   { href: "/quality-guard", label: "nav.qualityGuard", icon: ShieldCheck },
   { href: "/creative-console", label: "nav.creativeConsole", icon: Sparkles },
@@ -83,7 +83,7 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [documentationOpen, setDocumentationOpen] = useState<Record<string, boolean>>({});
-  const isMediaWorkspace = ["/creative-console", "/gallery", "/video-gallery"].includes(location.pathname);
+  const isMediaWorkspace = ["/creative-console", "/gallery", "/media-jobs"].includes(location.pathname);
 
   const passwordSchema = z.object({
     currentPassword: z.string().min(1, t("errors.required")),
