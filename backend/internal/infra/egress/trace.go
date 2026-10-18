@@ -100,6 +100,27 @@ func qualityProbeFromContext(ctx context.Context) bool {
 	return value
 }
 
+type existingAccountContextKey struct{}
+
+// WithExistingAccount binds a login that has no account row yet (a pending
+// credential with ID 0) to the stored account it re-imports, so the exchange
+// leaves through that account's egress instead of a fresh one.
+func WithExistingAccount(ctx context.Context, credential accountdomain.Credential) context.Context {
+	if ctx == nil || credential.ID == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, existingAccountContextKey{}, credential)
+}
+
+// ExistingAccount returns the account bound by WithExistingAccount.
+func ExistingAccount(ctx context.Context) (accountdomain.Credential, bool) {
+	if ctx == nil {
+		return accountdomain.Credential{}, false
+	}
+	value, ok := ctx.Value(existingAccountContextKey{}).(accountdomain.Credential)
+	return value, ok
+}
+
 // WithAccountIdentity attaches the stable, non-sensitive identity used by
 // account-bound proxy templates such as Resin. Providers that represent the
 // same upstream login (for example Web and Console sharing one SSO token) can

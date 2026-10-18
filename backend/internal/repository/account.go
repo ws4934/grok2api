@@ -117,6 +117,8 @@ type AccountRepository interface {
 	ListRoutingCandidates(ctx context.Context, provider account.Provider, modelRouteID uint64, upstreamModel, quotaMode string) ([]account.RoutingCandidate, error)
 	GetCredentialMaterial(ctx context.Context, accountID uint64, provider account.Provider) (account.CredentialMaterial, error)
 	Get(ctx context.Context, id uint64) (account.Credential, error)
+	// FindBySourceKey returns the provider account imported from sourceKey, or ErrNotFound.
+	FindBySourceKey(ctx context.Context, provider account.Provider, sourceKey string) (account.Credential, error)
 	LinkWebToBuild(ctx context.Context, webAccountID, buildAccountID uint64) error
 	GetBillings(ctx context.Context, accountIDs []uint64) (map[uint64]account.Billing, error)
 	GetQuotaRecoveries(ctx context.Context, accountIDs []uint64) (map[uint64]account.QuotaRecovery, error)

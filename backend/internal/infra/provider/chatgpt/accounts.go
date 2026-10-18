@@ -265,7 +265,7 @@ func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.C
 	if !seed.ExpiresAt.IsZero() {
 		c.ExpiresAt = seed.ExpiresAt
 	}
-	pending := account.Credential{Provider: account.ProviderChatGPT}
+	pending := pendingCredential(ctx, seed.SourceKey)
 	refreshed := false
 	if c.AccessToken == "" {
 		if c.ClientProfile != oauthProfile {
@@ -631,7 +631,7 @@ func (a *Adapter) CompleteAuthorization(ctx context.Context, challenge provider.
 	if len(q["code"]) != 1 || q.Get("code") == "" {
 		return provider.CredentialSeed{}, invalidRequest("OAuth callback has no authorization code")
 	}
-	pending := account.Credential{Provider: account.ProviderChatGPT}
+	pending := pendingCredential(ctx, start.State)
 	c, err := a.exchange(ctx, pending, map[string]string{"client_id": oauthClientID, "grant_type": "authorization_code", "code": q.Get("code"), "redirect_uri": start.RedirectURI, "code_verifier": start.Verifier}, credentials{ClientProfile: oauthProfile})
 	if err != nil {
 		return provider.CredentialSeed{}, err

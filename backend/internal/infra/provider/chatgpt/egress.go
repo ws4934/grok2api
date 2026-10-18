@@ -9,6 +9,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
+	"github.com/chenyme/grok2api/backend/internal/infra/security"
 )
 
 var scope = egressdomain.Scope(account.ProviderChatGPT)
@@ -55,6 +56,17 @@ func observeConversation(ctx context.Context, id string) error {
 		return fn(id)
 	}
 	return nil
+}
+
+// pendingCredential is the egress binding of a login without an account row.
+// key (the import source key or the OAuth state) gives each login its own
+// sticky-proxy identity and node affinity instead of one shared chatgpt_0; a
+// re-import of a stored account leaves through that account's egress.
+func pendingCredential(ctx context.Context, key string) account.Credential {
+	if existing, ok := infraegress.ExistingAccount(ctx); ok && existing.Provider == account.ProviderChatGPT {
+		return existing
+	}
+	return account.Credential{Provider: account.ProviderChatGPT, EgressIdentity: "chatgpt_pending_" + security.HashToken(key)[:24]}
 }
 
 // lease binds ctx to an egress of credential.

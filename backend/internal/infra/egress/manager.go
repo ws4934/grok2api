@@ -476,9 +476,15 @@ func (m *Manager) AcquireCredential(ctx context.Context, scope domain.Scope, cre
 		}
 		identity = "sso_" + security.HashToken(token)[:32]
 	}
+	affinity := strconv.FormatUint(credential.ID, 10)
+	if credential.ID == 0 && strings.TrimSpace(credential.EgressIdentity) != "" {
+		// A login without an account row yet: its own identity keeps unrelated
+		// pending logins from all hashing onto the node of ID 0.
+		affinity = identity
+	}
 	ctx = WithAccountIdentity(ctx, identity)
 	ctx = WithEgressNode(ctx, credential.EgressNodeID)
-	lease, _, err := m.acquire(ctx, scope, strconv.FormatUint(credential.ID, 10), true, credential.EncryptedCloudflareCookie, credential.EgressNodeID)
+	lease, _, err := m.acquire(ctx, scope, affinity, true, credential.EncryptedCloudflareCookie, credential.EgressNodeID)
 	return lease, err
 }
 

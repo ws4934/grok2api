@@ -18,6 +18,7 @@ import (
 
 	egressapp "github.com/chenyme/grok2api/backend/internal/application/egress"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
+	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
@@ -1355,7 +1356,16 @@ func (s *Service) persistPreparedImportedSeeds(ctx context.Context, seeds []prov
 		seen      = make(map[string]struct{}, len(seeds))
 	)
 	// Every seed goes through the preparer: it may exchange tokens or resolve identity.
-	_, batchErr := batch.ForEachObserved(prepareCtx, seeds, batch.Options{Workers: credentialImportPrepareWorkers}, preparer.PrepareImportedCredential, func(index int, item batch.Result[provider.CredentialSeed]) {
+	prepare := func(ctx context.Context, seed provider.CredentialSeed) (provider.CredentialSeed, error) {
+		// A re-import exchanges through the stored account's egress binding.
+		if seed.SourceKey != "" {
+			if existing, err := s.accounts.FindBySourceKey(ctx, seed.Provider, seed.SourceKey); err == nil {
+				ctx = infraegress.WithExistingAccount(ctx, existing)
+			}
+		}
+		return preparer.PrepareImportedCredential(ctx, seed)
+	}
+	_, batchErr := batch.ForEachObserved(prepareCtx, seeds, batch.Options{Workers: credentialImportPrepareWorkers}, prepare, func(index int, item batch.Result[provider.CredentialSeed]) {
 		mu.Lock()
 		defer mu.Unlock()
 		completed++

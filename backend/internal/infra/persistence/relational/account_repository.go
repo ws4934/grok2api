@@ -1009,6 +1009,15 @@ func (r *AccountRepository) Get(ctx context.Context, id uint64) (account.Credent
 	return values[0], nil
 }
 
+// FindBySourceKey returns the provider account imported from sourceKey.
+func (r *AccountRepository) FindBySourceKey(ctx context.Context, provider account.Provider, sourceKey string) (account.Credential, error) {
+	var row accountModel
+	if err := r.db.db.WithContext(ctx).Preload("Credential").Preload("WebProfile").Where("provider = ? AND source_key = ?", provider, sourceKey).First(&row).Error; err != nil {
+		return account.Credential{}, mapError(err)
+	}
+	return toAccountDomain(row), nil
+}
+
 // GetCredentialMaterial hydrates the encrypted provider data for one account
 // after routing has selected it. Routing candidate queries intentionally never
 // load these encrypted columns.
