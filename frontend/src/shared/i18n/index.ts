@@ -2597,9 +2597,9 @@ Object.assign(resources["zh-CN"].translation.accounts as unknown as Record<strin
   quotaModes: { reason: "推理", image_gen: "生图", file_upload: "文件上传" },
   chatgpt: {
     quickImport: "快速导入 Token",
-    quickImportDescription: "支持粘贴 Access Token 或 Refresh Token（每行一个），也可粘贴导出的 JSON / JSONL 凭据；重复账号会更新凭据。",
+    quickImportDescription: "每行粘贴一个 Access Token，或粘贴导出的 JSON / JSONL 凭据；重复账号会更新凭据。",
     tokens: "Token 或 JSON 凭据",
-    tokenPlaceholder: "access_token_1\nrefresh_token_2\n{\"access_token\":\"…\",\"refresh_token\":\"…\"}",
+    tokenPlaceholder: "access_token_1\naccess_token_2\n{\"access_token\":\"…\",\"refresh_token\":\"…\"}",
     authHelp: "回调页面可能显示无法访问，直接复制地址栏中的完整地址即可，形如：",
   },
 });
@@ -2620,9 +2620,9 @@ Object.assign(resources.en.translation.accounts as unknown as Record<string, unk
   quotaModes: { reason: "Reasoning", image_gen: "Images", file_upload: "File uploads" },
   chatgpt: {
     quickImport: "Quick import tokens",
-    quickImportDescription: "Paste access or refresh tokens (one per line), or exported JSON / JSONL credentials. Duplicate accounts get their credentials updated.",
+    quickImportDescription: "Paste one access token per line, or exported JSON / JSONL credentials. Duplicate accounts get their credentials updated.",
     tokens: "Tokens or JSON credentials",
-    tokenPlaceholder: "access_token_1\nrefresh_token_2\n{\"access_token\":\"…\",\"refresh_token\":\"…\"}",
+    tokenPlaceholder: "access_token_1\naccess_token_2\n{\"access_token\":\"…\",\"refresh_token\":\"…\"}",
     authHelp: "The callback page may fail to load; copy the full address from the address bar. It looks like:",
   },
 });

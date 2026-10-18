@@ -1229,7 +1229,7 @@ export function AccountsPage() {
               <input
                 ref={quickImportFileInputRef}
                 type="file"
-                accept="text/plain,.txt"
+                accept=".txt,.json,.jsonl"
                 className="hidden"
                 onChange={(event) => {
                   void loadQuickImportFile(event.target.files?.[0]);
