@@ -714,13 +714,7 @@ func (s *Service) endImageJob(ctx context.Context, job *media.Job, status media.
 		status = media.StatusFailed
 	}
 	now := time.Now().UTC()
-	job.Status, job.ErrorCode, job.ErrorMessage = status, code, ""
-	if err != nil {
-		job.ErrorMessage = err.Error()
-		if len(job.ErrorMessage) > 512 {
-			job.ErrorMessage = job.ErrorMessage[:512]
-		}
-	}
+	job.Status, job.ErrorCode, job.ErrorMessage = status, code, jobErrorMessage(err)
 	if status == media.StatusCompleted {
 		job.Progress = 100
 	}
@@ -733,6 +727,15 @@ func (s *Service) endImageJob(ctx context.Context, job *media.Job, status media.
 	if auditErr := s.recordImageJobAudits(context.Background(), *job, upstreamStatus, attempts...); auditErr != nil {
 		s.logger.Error("image_usage_record_failed", "job_id", job.ID, "error", auditErr)
 	}
+}
+
+// jobErrorMessage is err's text as valid UTF-8 cut to the 512-byte column on
+// a rune boundary; PostgreSQL rejects a write that splits a rune.
+func jobErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	return truncateDiagnosticText(strings.ToValidUTF8(err.Error(), "�"), 512)
 }
 
 // recordImageJobAudits writes the audit of every delivered image and of the

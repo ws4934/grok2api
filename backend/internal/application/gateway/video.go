@@ -1275,14 +1275,7 @@ func (s *Service) failVideoJob(ctx context.Context, job media.Job, code string, 
 // their inputs so an administrator can retry them.
 func (s *Service) endVideoJob(ctx context.Context, job media.Job, status media.Status, code string, err error, upstreamStatus int, attempts []audit.Attempt) {
 	now := time.Now().UTC()
-	message := ""
-	if err != nil {
-		message = err.Error()
-	}
-	job.Status, job.ErrorCode, job.ErrorMessage = status, code, message
-	if len(job.ErrorMessage) > 512 {
-		job.ErrorMessage = job.ErrorMessage[:512]
-	}
+	job.Status, job.ErrorCode, job.ErrorMessage = status, code, jobErrorMessage(err)
 	job.LeaseUntil, job.UpdatedAt, job.CompletedAt = nil, now, &now
 	if updateErr := s.persistVideoJobWithRetry(ctx, job); updateErr != nil {
 		s.logger.Error("video_job_terminal_write_failed", "job_id", job.ID, "error", updateErr)

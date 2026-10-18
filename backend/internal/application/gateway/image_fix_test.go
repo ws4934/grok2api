@@ -14,6 +14,7 @@ import (
 	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
+	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	pricingdomain "github.com/chenyme/grok2api/backend/internal/domain/pricing"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
@@ -110,5 +111,25 @@ func TestSyncImageBillsDeliveredImagesOnly(t *testing.T) {
 				t.Fatalf("images = %d billed = %d reserved = %d, want %d images", records[0].MediaOutputImages, settled.BilledUsageUSDTicks, settled.ReservedUsageUSDTicks, tc.wantImages)
 			}
 		})
+	}
+}
+
+type requestScopedTestError struct{ message string }
+
+func (e requestScopedTestError) Error() string              { return e.message }
+func (e requestScopedTestError) RequestScopedFailure() bool { return true }
+
+func TestImageJobErrorMessageIsCutOnARuneBoundary(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	// 1 + 3*200 bytes: a byte cut at 512 lands inside a rune.
+	message := "x" + strings.Repeat("抱", 200)
+	f.adapter.submit = func(provider.ImageJobRequest, func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error) {
+		return provider.ImageCheckpoint{}, requestScopedTestError{message}
+	}
+	job := f.create(t, ImageJobInput{})
+	f.service.processMediaJob(context.Background(), job.ID)
+	stored := f.job(t, job.ID)
+	if stored.Status != media.StatusFailed || len(stored.ErrorMessage) != 511 || !strings.HasPrefix(message, stored.ErrorMessage) {
+		t.Fatalf("stored = %s %d bytes %q", stored.Status, len(stored.ErrorMessage), stored.ErrorMessage)
 	}
 }

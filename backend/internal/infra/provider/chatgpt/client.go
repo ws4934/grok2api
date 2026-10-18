@@ -58,9 +58,10 @@ func (e *upstreamError) Error() string {
 	if e.Endpoint != "" {
 		text += " at " + e.Endpoint
 	}
-	if excerpt := strings.Join(strings.Fields(e.Message), " "); excerpt != "" {
+	if excerpt := strings.Join(strings.Fields(strings.ToValidUTF8(e.Message, "�")), " "); excerpt != "" {
 		if len(excerpt) > 300 {
-			excerpt = excerpt[:300] + "…"
+			// Drop the rune the byte cut split: the text is persisted (PostgreSQL rejects invalid UTF-8).
+			excerpt = strings.ToValidUTF8(excerpt[:300], "") + "…"
 		}
 		text += ": " + excerpt
 	}

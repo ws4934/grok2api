@@ -694,8 +694,11 @@ func mediaJobFromDomain(value media.Job) *mediaJobModel {
 		ResultAssetID: value.ResultAssetID, ResultAssetIDs: string(resultAssetIDs), ItemCount: itemCount, CheckpointJSON: checkpoint, Submitted: value.Submitted,
 		ParamsJSON: string(params), IdempotencyKey: value.IdempotencyKey, PayloadHash: value.PayloadHash, Generation: value.Generation,
 		ResumeItem: value.ResumeItem, ResumeGeneration: value.ResumeGeneration,
-		ContentType: value.ContentType, ErrorCode: value.ErrorCode, ErrorMessage: value.ErrorMessage,
-		LeaseUntil: value.LeaseUntil, ClaimToken: value.ClaimToken, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
+		ContentType: value.ContentType, ErrorCode: value.ErrorCode,
+		// Upstream error text may carry invalid UTF-8 or NUL, which PostgreSQL
+		// rejects: the terminal write would fail and leave the job running.
+		ErrorMessage: strings.ToValidUTF8(strings.ReplaceAll(value.ErrorMessage, "\x00", ""), "�"),
+		LeaseUntil:   value.LeaseUntil, ClaimToken: value.ClaimToken, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
 		CompletedAt: value.CompletedAt, UsageRecordedAt: value.UsageRecordedAt,
 	}
 	if value.Price != nil {
