@@ -217,6 +217,7 @@ type Service struct {
 	mediaAssets                 mediaAssetStore
 	defaultImageModel           atomic.Pointer[string]
 	mediaQueue                  chan string
+	imageQueue                  chan string
 	mediaMu                     sync.Mutex
 	mediaQueued                 map[string]struct{}
 	mediaWorker                 int
@@ -257,6 +258,9 @@ func (s *Service) ConfigureMedia(repository repository.MediaJobRepository, concu
 	s.mediaJobs = repository
 	s.mediaWorker = concurrency
 	s.mediaQueue = make(chan string, min(2048, max(64, concurrency*32)))
+	// Image jobs get their own pool of the same size: a long video and a draw
+	// never wait for each other's workers.
+	s.imageQueue = make(chan string, cap(s.mediaQueue))
 	s.mediaInputSlots = make(chan struct{}, min(concurrency, videoInputMaterializeConcurrency))
 	s.mediaQueued = make(map[string]struct{})
 }

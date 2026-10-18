@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,6 +192,31 @@ func TestImageJobDoesNotRefetchAnImageFailingTheOutputOptions(t *testing.T) {
 	}
 	if stored := f.job(t, job.ID); stored.Status != media.StatusFailed || stored.ErrorCode != "media_download_failed" || fetches != 1 {
 		t.Fatalf("job = %s %s, fetches = %d", stored.Status, stored.ErrorCode, fetches)
+	}
+}
+
+func TestImageJobsQueueApartFromVideoJobs(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	// The image job is queued on creation.
+	job := f.create(t, ImageJobInput{})
+	if !f.service.enqueueMediaJob("video_queued_job") {
+		t.Fatal("video job not queued")
+	}
+	if len(f.service.imageQueue) != 1 || len(f.service.mediaQueue) != 1 {
+		t.Fatalf("image queue = %d video queue = %d", len(f.service.imageQueue), len(f.service.mediaQueue))
+	}
+	// With every video worker busy (here: none running), the image pool runs the job.
+	ctx, stop := context.WithCancel(context.Background())
+	var workers sync.WaitGroup
+	f.service.runMediaQueue(ctx, f.service.imageQueue, &workers)
+	defer func() { stop(); workers.Wait() }()
+	for deadline := time.Now().Add(10 * time.Second); f.job(t, job.ID).Status != media.StatusCompleted; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("image job = %s", f.job(t, job.ID).Status)
+		}
+	}
+	if len(f.service.mediaQueue) != 1 {
+		t.Fatal("the image pool took a video job")
 	}
 }
 

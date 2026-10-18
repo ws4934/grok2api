@@ -379,9 +379,8 @@ func (s *Service) RecoverMediaJobs(ctx context.Context) error {
 		return errors.Join(usageErr, err)
 	}
 	for _, job := range values {
-		if !s.enqueueMediaJob(job.ID) {
-			break
-		}
+		// Image and video jobs queue apart: one full queue must not hold back the other.
+		_ = s.enqueueMediaJob(job.ID)
 	}
 	return usageErr
 }
@@ -392,6 +391,16 @@ func (s *Service) RunMediaWorkers(ctx context.Context) {
 		return
 	}
 	var workers sync.WaitGroup
+	for _, queue := range []chan string{s.mediaQueue, s.imageQueue} {
+		if queue != nil {
+			s.runMediaQueue(ctx, queue, &workers)
+		}
+	}
+	workers.Wait()
+}
+
+// runMediaQueue starts the mediaWorker workers of one queue.
+func (s *Service) runMediaQueue(ctx context.Context, queue chan string, workers *sync.WaitGroup) {
 	workers.Add(s.mediaWorker)
 	for range s.mediaWorker {
 		go func() {
@@ -400,7 +409,7 @@ func (s *Service) RunMediaWorkers(ctx context.Context) {
 				select {
 				case <-ctx.Done():
 					return
-				case id := <-s.mediaQueue:
+				case id := <-queue:
 					err := batch.Do(ctx, func(workCtx context.Context) error {
 						s.processMediaJob(workCtx, id)
 						return nil
@@ -419,12 +428,15 @@ func (s *Service) RunMediaWorkers(ctx context.Context) {
 			}
 		}()
 	}
-	workers.Wait()
 }
 
 func (s *Service) enqueueMediaJob(id string) bool {
 	if id == "" || s.mediaQueue == nil {
 		return false
+	}
+	queue := s.mediaQueue
+	if s.imageQueue != nil && strings.HasPrefix(id, ImageJobIDPrefix) {
+		queue = s.imageQueue
 	}
 	s.mediaMu.Lock()
 	if _, exists := s.mediaQueued[id]; exists {
@@ -434,7 +446,7 @@ func (s *Service) enqueueMediaJob(id string) bool {
 	s.mediaQueued[id] = struct{}{}
 	s.mediaMu.Unlock()
 	select {
-	case s.mediaQueue <- id:
+	case queue <- id:
 		return true
 	default:
 		s.mediaMu.Lock()
@@ -442,7 +454,7 @@ func (s *Service) enqueueMediaJob(id string) bool {
 		s.mediaMu.Unlock()
 		full := s.mediaQueueFull.Add(1)
 		if s.logger != nil && (full == 1 || full%100 == 0) {
-			s.logger.Warn("media_queue_full", "count", full, "queued", len(s.mediaQueue), "capacity", cap(s.mediaQueue))
+			s.logger.Warn("media_queue_full", "count", full, "queued", len(queue), "capacity", cap(queue))
 		}
 		return false
 	}
