@@ -134,6 +134,7 @@ func (a *Adapter) images(ctx context.Context, credential account.Credential, job
 	if err != nil {
 		return nil, err
 	}
+	ctx = a.WithImageJobScope(ctx)
 	if job.streaming {
 		return a.streamImages(ctx, credential, c, job, model)
 	}
@@ -218,8 +219,7 @@ func (a *Adapter) generateImage(ctx context.Context, credential account.Credenti
 	var mask *OpenAIImageInput
 	prepared := false
 	uploads := map[int]openAIImageReference{}
-	var raw []byte
-	var mime string
+	var download downloadedImage
 	var onSubmit func() error
 	if submitted != nil {
 		onSubmit = func() error { submitted(); return nil }
@@ -248,14 +248,14 @@ func (a *Adapter) generateImage(ctx context.Context, credential account.Credenti
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.image.RequestTimeout)
 		defer cancel()
 		started = time.Now()
-		raw, mime, err = a.finishDrawing(finishCtx, w, id, files)
-		a.logImageStage(ctx, credential, "result", started, err, "conversation_id", id, "bytes", len(raw), "mime", mime)
+		download, err = a.finishDrawing(finishCtx, w, id, files)
+		a.logImageStage(ctx, credential, "result", started, err, "conversation_id", id, "bytes", len(download.raw), "mime", download.mime)
 		return err
 	})
 	if err != nil {
 		return imageOutput{}, sent, err
 	}
-	raw, _, err = (ImageOutputOptions{OutputFormat: job.outputFormat, Background: job.background}).apply(raw, mime)
+	raw, _, err := (ImageOutputOptions{OutputFormat: job.outputFormat, Background: job.background}).applyDecoded(download)
 	if err != nil {
 		return imageOutput{}, true, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, err)
 	}
@@ -270,8 +270,34 @@ func (a *Adapter) generateImage(ctx context.Context, credential account.Credenti
 	return output, true, nil
 }
 
+type preparedImageKey struct{}
+
+// preparedImage holds the inputs and mask loaded for the images of one request
+// or job, so later images neither fetch nor decode them again.
+type preparedImage struct {
+	mu     sync.Mutex
+	done   bool
+	inputs []OpenAIImageInput
+	mask   *OpenAIImageInput
+}
+
+// WithImageJobScope makes the images drawn under ctx (one job) load their
+// inputs and mask once.
+func (a *Adapter) WithImageJobScope(ctx context.Context) context.Context {
+	return context.WithValue(ctx, preparedImageKey{}, &preparedImage{})
+}
+
 // prepareImage loads the inputs and converts the mask before anything is sent.
 func (a *Adapter) prepareImage(ctx context.Context, job imageJob) ([]OpenAIImageInput, *OpenAIImageInput, error) {
+	scope, _ := ctx.Value(preparedImageKey{}).(*preparedImage)
+	if scope == nil {
+		scope = &preparedImage{}
+	}
+	scope.mu.Lock()
+	defer scope.mu.Unlock()
+	if scope.done {
+		return scope.inputs, scope.mask, nil
+	}
 	var inputs []OpenAIImageInput
 	for _, value := range job.inputs {
 		input, err := a.loadInput(ctx, value)
@@ -280,18 +306,20 @@ func (a *Adapter) prepareImage(ctx context.Context, job imageJob) ([]OpenAIImage
 		}
 		inputs = append(inputs, input)
 	}
-	if job.mask == "" {
-		return inputs, nil, nil
+	var mask *OpenAIImageInput
+	if job.mask != "" {
+		b, err := a.loadInput(ctx, job.mask)
+		if err != nil {
+			return nil, nil, err
+		}
+		selection, err := ParseImageMask(b.Data, inputs)
+		if err != nil {
+			return nil, nil, invalidRequest(err.Error())
+		}
+		mask = &OpenAIImageInput{Name: "mask.png", MIME: "image/png", Data: selection.png}
 	}
-	b, err := a.loadInput(ctx, job.mask)
-	if err != nil {
-		return nil, nil, err
-	}
-	selection, err := ParseImageMask(b.Data, inputs)
-	if err != nil {
-		return nil, nil, invalidRequest(err.Error())
-	}
-	return inputs, &OpenAIImageInput{Name: "mask.png", MIME: "image/png", Data: selection.png}, nil
+	scope.inputs, scope.mask, scope.done = inputs, mask, true
+	return inputs, mask, nil
 }
 
 // submitDrawing uploads the inputs and submits the image conversation; it
@@ -354,11 +382,11 @@ func (a *Adapter) submitDrawing(ctx context.Context, w wireAccount, job imageJob
 }
 
 // finishDrawing waits for the generated image and downloads the first one.
-func (a *Adapter) finishDrawing(ctx context.Context, w wireAccount, id string, files []string) ([]byte, string, error) {
+func (a *Adapter) finishDrawing(ctx context.Context, w wireAccount, id string, files []string) (downloadedImage, error) {
 	if len(files) == 0 {
 		var err error
 		if files, err = a.image.pollConversation(ctx, w, id); err != nil {
-			return nil, "", err
+			return downloadedImage{}, err
 		}
 	}
 	return a.image.downloadImageRef(ctx, w, id, files[0])
@@ -463,20 +491,19 @@ func (a *Adapter) FetchImage(ctx context.Context, request provider.ImageJobReque
 	if err != nil {
 		return nil, err
 	}
-	var raw []byte
-	var mime string
+	var download downloadedImage
 	_, err = a.attempt(ctx, request.Credential, nil, func(ctx context.Context) error {
 		w, err := wire(ctx, c)
 		if err != nil {
 			return err
 		}
-		raw, mime, err = a.image.downloadImageRef(ctx, w, cp.UpstreamID, cp.Outputs[0])
+		download, err = a.image.downloadImageRef(ctx, w, cp.UpstreamID, cp.Outputs[0])
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	raw, _, err = (ImageOutputOptions{OutputFormat: request.OutputFormat, Background: request.Background}).apply(raw, mime)
+	raw, _, err := (ImageOutputOptions{OutputFormat: request.OutputFormat, Background: request.Background}).applyDecoded(download)
 	return raw, err
 }
 

@@ -10,7 +10,10 @@ import (
 )
 
 const MaxImageMaskBytes = 4 << 20
-const maxImageMaskPixels = 32_000_000
+
+// maxImageMaskPixels is the largest image the tool draws (4096x4096). The mask
+// is fully decoded: at most 64 MiB for 8-bit RGBA, 128 MiB for 16-bit.
+const maxImageMaskPixels = 4096 * 4096
 
 // ImageMask is an immutable, validated Web selection. Each generation uploads
 // it separately; provider/account-specific file IDs must never be shared.
@@ -37,7 +40,7 @@ func ParseImageMask(raw []byte, inputs []OpenAIImageInput) (*ImageMask, error) {
 		return invalid("mask must be a valid PNG")
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxImageMaskPixels {
-		return invalid("mask exceeds the 32 megapixel limit")
+		return invalid("mask exceeds 4096x4096 pixels")
 	}
 	source, _, err := image.DecodeConfig(bytes.NewReader(inputs[0].Data))
 	if err != nil {

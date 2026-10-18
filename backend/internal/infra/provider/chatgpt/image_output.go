@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"net/http"
+	"strings"
 
 	"github.com/HugoSmits86/nativewebp"
 )
@@ -90,14 +91,23 @@ func invalidImageOutput(message string) error {
 // JPEG with automatic background composites alpha over white to avoid black
 // edges; PNG/WebP preserve alpha. No subject segmentation is performed.
 func (o ImageOutputOptions) apply(raw []byte, mime string) ([]byte, string, error) {
+	return o.applyDecoded(downloadedImage{raw: raw, mime: mime})
+}
+
+// applyDecoded is apply on a download whose pixels decodeImageDownload already
+// decoded (bounded there); without them raw is decoded here.
+func (o ImageOutputOptions) applyDecoded(download downloadedImage) ([]byte, string, error) {
+	raw, mime, decoded := download.raw, download.mime, download.decoded
 	target := o.EffectiveFormat()
 	if o.Background != "transparent" && o.Background != "opaque" && mime == "image/"+target {
 		return raw, mime, nil
 	}
-	// Downloads have already been decoded and bounded by validatedImageMIME.
-	decoded, format, err := image.Decode(bytes.NewReader(raw))
-	if err != nil {
-		return nil, "", invalidImageOutput("OpenAI image output could not be decoded")
+	format := strings.TrimPrefix(mime, "image/")
+	var err error
+	if decoded == nil {
+		if decoded, format, err = image.Decode(bytes.NewReader(raw)); err != nil {
+			return nil, "", invalidImageOutput("OpenAI image output could not be decoded")
+		}
 	}
 	if o.Background == "transparent" || o.Background == "opaque" {
 		var transparent, visible, nonOpaque bool

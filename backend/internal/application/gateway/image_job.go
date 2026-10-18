@@ -376,6 +376,12 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 	ctx, cancel := context.WithTimeout(ctx, imageJobTimeout)
 	defer cancel()
 	ctx, egressTrace := infraegress.WithTrace(ctx)
+	// The job's images share inputs loaded and checked once.
+	if scoped, ok := adapter.(interface {
+		WithImageJobScope(context.Context) context.Context
+	}); ok {
+		ctx = scoped.WithImageJobScope(ctx)
+	}
 	// The claim carries the long video lease; image jobs hold a short one
 	// and renew it, so a dead worker's job is recovered within minutes.
 	if err := s.renewImageJobLease(ctx, job); errors.Is(err, repository.ErrNotFound) {

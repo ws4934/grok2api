@@ -2,13 +2,16 @@
 package chatgpt
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"image"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -152,12 +155,21 @@ func (a *Adapter) loadInput(ctx context.Context, s string) (OpenAIImageInput, er
 	if len(raw) > 20<<20 {
 		return OpenAIImageInput{}, invalidRequest("input image too large")
 	}
-	mime, e := validatedImageMIME(raw)
-	if e != nil {
+	// Only the header is read: a small file may declare a huge image, and its
+	// pixels are ChatGPT's to decode, not ours.
+	config, format, e := image.DecodeConfig(bytes.NewReader(raw))
+	if e != nil || config.Width <= 0 || config.Height <= 0 || !slices.Contains([]string{"png", "jpeg", "gif", "webp"}, format) {
 		return OpenAIImageInput{}, invalidRequest("input is not a supported image")
 	}
-	return OpenAIImageInput{Name: "image", MIME: mime, Data: raw}, nil
+	if int64(config.Width)*int64(config.Height) > maxInputImagePixels {
+		return OpenAIImageInput{}, invalidRequest("input image exceeds 25 megapixels")
+	}
+	return OpenAIImageInput{Name: "image", MIME: "image/" + format, Data: raw}, nil
 }
+
+// maxInputImagePixels bounds the size a client image may declare. 25 MP
+// admits 24 MP camera photos; ChatGPT downsamples large uploads anyway.
+const maxInputImagePixels = 25_000_000
 
 // requestError is a client mistake that no account or egress can fix; its
 // status is 400 unless set.

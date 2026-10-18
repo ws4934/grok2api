@@ -614,19 +614,27 @@ func (o *OpenAIImage) uploadInputWithPurpose(ctx context.Context, account wireAc
 	return openAIImageReference{FileID: fileID, FileName: name, FileSize: len(input.Data), MIME: mimeType, Width: width, Height: height}, nil
 }
 
-func (o *OpenAIImage) downloadFile(ctx context.Context, account wireAccount, fileID string) ([]byte, string, error) {
+// downloadedImage is a validated image download with its decoded pixels, so
+// the output options do not decode it a second time.
+type downloadedImage struct {
+	raw     []byte
+	mime    string
+	decoded image.Image
+}
+
+func (o *OpenAIImage) downloadFile(ctx context.Context, account wireAccount, fileID string) (downloadedImage, error) {
 	response, err := o.do(ctx, http.MethodGet, "/backend-api/files/"+url.PathEscape(fileID)+"/download", account, nil, nil, false)
 	if err != nil {
-		return nil, "", err
+		return downloadedImage{}, err
 	}
 	return o.readImageDownloadResponse(ctx, account, response)
 }
 
-func (o *OpenAIImage) downloadImageRef(ctx context.Context, account wireAccount, conversationID, imageRef string) ([]byte, string, error) {
+func (o *OpenAIImage) downloadImageRef(ctx context.Context, account wireAccount, conversationID, imageRef string) (downloadedImage, error) {
 	if strings.HasPrefix(imageRef, "sediment://") {
 		attachmentID := strings.TrimPrefix(imageRef, "sediment://")
 		if conversationID == "" || attachmentID == "" {
-			return nil, "", fmt.Errorf("OpenAI sediment image reference is incomplete")
+			return downloadedImage{}, fmt.Errorf("OpenAI sediment image reference is incomplete")
 		}
 		path := "/backend-api/conversation/" + url.PathEscape(conversationID) + "/attachment/" + url.PathEscape(attachmentID) + "/download"
 		response, err := o.do(ctx, http.MethodGet, path, account, nil, map[string]string{
@@ -635,7 +643,7 @@ func (o *OpenAIImage) downloadImageRef(ctx context.Context, account wireAccount,
 			"X-OpenAI-Target-Route": "/backend-api/conversation/{conversation_id}/attachment/{attachment_id}/download",
 		}, false)
 		if err != nil {
-			return nil, "", err
+			return downloadedImage{}, err
 		}
 		return o.readImageDownloadResponse(ctx, account, response)
 	}
@@ -655,43 +663,49 @@ func (o *OpenAIImage) fetchImageURL(ctx context.Context, account wireAccount, ra
 	return o.doAbsolute(ctx, http.MethodGet, rawURL, account, nil, nil, false)
 }
 
-func (o *OpenAIImage) readImageDownloadResponse(ctx context.Context, account wireAccount, response *http.Response) ([]byte, string, error) {
+func (o *OpenAIImage) readImageDownloadResponse(ctx context.Context, account wireAccount, response *http.Response) (downloadedImage, error) {
 	var value map[string]any
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (64<<20)+1))
 	_ = response.Body.Close()
 	if err != nil {
-		return nil, "", err
+		return downloadedImage{}, err
 	}
 	if strings.Contains(strings.ToLower(response.Header.Get("Content-Type")), "application/json") || json.Valid(raw) {
 		if json.Unmarshal(raw, &value) != nil {
-			return nil, "", fmt.Errorf("decode OpenAI image download metadata")
+			return downloadedImage{}, fmt.Errorf("decode OpenAI image download metadata")
 		}
 		downloadURL := firstStringValue(value, "download_url", "url")
 		if downloadURL == "" {
-			return nil, "", fmt.Errorf("OpenAI image download returned no URL")
+			return downloadedImage{}, fmt.Errorf("OpenAI image download returned no URL")
 		}
 		response, err = o.fetchImageURL(ctx, account, downloadURL)
 		if err != nil {
-			return nil, "", err
+			return downloadedImage{}, err
 		}
 		raw, err = io.ReadAll(io.LimitReader(response.Body, (64<<20)+1))
 		_ = response.Body.Close()
 		if err != nil {
-			return nil, "", err
+			return downloadedImage{}, err
 		}
 	}
-	mimeType, err := validatedImageMIME(raw)
+	mimeType, decoded, err := decodeImageDownload(raw)
 	if err != nil {
-		return nil, "", err
+		return downloadedImage{}, err
 	}
-	return raw, mimeType, nil
+	return downloadedImage{raw: raw, mime: mimeType, decoded: decoded}, nil
+}
+
+// validatedImageMIME is decodeImageDownload without the pixels.
+func validatedImageMIME(raw []byte) (string, error) {
+	mimeType, _, err := decodeImageDownload(raw)
+	return mimeType, err
 }
 
 // Headers and extensions are advisory. A 200 storage error document is not an
 // image; decoding prevents XML/HTML, truncated data and spoofed MIME successes.
-func validatedImageMIME(raw []byte) (string, error) {
-	invalid := func(message string) (string, error) {
-		return "", &upstreamError{Status: http.StatusBadGateway, Message: message}
+func decodeImageDownload(raw []byte) (string, image.Image, error) {
+	invalid := func(message string) (string, image.Image, error) {
+		return "", nil, &upstreamError{Status: http.StatusBadGateway, Message: message}
 	}
 	if len(raw) == 0 || len(raw) > 64<<20 {
 		return invalid("OpenAI image download is empty or exceeds 64 MiB")
@@ -713,18 +727,13 @@ func validatedImageMIME(raw []byte) (string, error) {
 		return invalid("OpenAI image download is not a supported image or exceeds the pixel limit")
 	}
 	// DecodeConfig alone accepts files truncated after their dimensions header.
-	if _, _, err := image.Decode(bytes.NewReader(raw)); err != nil {
+	decoded, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
 		return invalid("OpenAI image download contains corrupt or truncated image bytes")
 	}
 	switch format {
-	case "png":
-		return "image/png", nil
-	case "jpeg":
-		return "image/jpeg", nil
-	case "gif":
-		return "image/gif", nil
-	case "webp":
-		return "image/webp", nil
+	case "png", "jpeg", "gif", "webp":
+		return "image/" + format, decoded, nil
 	default:
 		return invalid("OpenAI image download has an unsupported image format")
 	}
