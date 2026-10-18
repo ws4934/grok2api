@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { apiErrorFromResponse, describeError, getImageJob, imageGenerationBody, imageJobState } from "./creative-console-api.ts";
+import { apiErrorFromResponse, describeError, getImageJob, imageGenerationBody, imageJobState, imageJobsRefetchInterval, refreshImageJobs } from "./creative-console-api.ts";
 
 describe("image generation body", () => {
   it("sends size and quality on basic routes, defaulting both to auto", () => {
@@ -58,5 +58,30 @@ describe("image job state", () => {
   it("reports the submit request ID, not the job ID, for a vanished job", async (t) => {
     t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ error: { code: "not_found", message: "gone" } }), { status: 404 }));
     assert.deepEqual(await getImageJob({ apiKey: "k", id: "resp_img_1", requestId: "rec_1-2" }), { done: true, succeeded: false, error: { message: "gone", code: "not_found", requestId: "rec_1-2" } });
+  });
+
+  it("rejects on other errors so polling stops instead of ending the job", async (t) => {
+    t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ error: { code: "result_unavailable", message: "Image result unavailable" } }), { status: 503 }));
+    await assert.rejects(getImageJob({ apiKey: "k", id: "resp_img_1", requestId: "rec_1" }), { status: 503, code: "result_unavailable" });
+  });
+});
+
+describe("image job polling", () => {
+  const done = { done: true, succeeded: true };
+  const running = { done: false, succeeded: false };
+
+  it("fetches only jobs that have not finished", async () => {
+    const fetched: string[] = [];
+    const states = await refreshImageJobs(["a", "b", "c"], [done, running], async (id) => { fetched.push(id); return done; });
+    assert.deepEqual(fetched, ["b", "c"]);
+    assert.deepEqual(states, [done, done, done]);
+  });
+
+  it("polls until every job finished and pauses after a failed poll", () => {
+    assert.equal(imageJobsRefetchInterval({ status: "pending" }), 4000);
+    assert.equal(imageJobsRefetchInterval({ status: "success", data: [done, running] }), 4000);
+    assert.equal(imageJobsRefetchInterval({ status: "success", data: [done, done] }), false);
+    assert.equal(imageJobsRefetchInterval({ status: "error" }), false);
+    assert.equal(imageJobsRefetchInterval({ status: "error", data: [running] }), false);
   });
 });

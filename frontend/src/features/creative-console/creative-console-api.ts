@@ -152,6 +152,17 @@ export function imageJobState(payload: unknown, requestId: string): ImageJobStat
   return { done: false, succeeded: false };
 }
 
+// Only unfinished jobs are fetched again: a finished job's response embeds its whole image,
+// and every poll counts against the client key's limits.
+export function refreshImageJobs(jobIds: readonly string[], previous: readonly ImageJobState[] | undefined, fetchJob: (id: string, index: number) => Promise<ImageJobState>): Promise<ImageJobState[]> {
+  return Promise.all(jobIds.map((id, index) => previous?.[index]?.done ? previous[index] : fetchJob(id, index)));
+}
+
+// Polling ends when every job finished; a failed poll pauses it until it is retried.
+export function imageJobsRefetchInterval(state: { status: string; data?: readonly ImageJobState[] }): number | false {
+  return state.status === "error" || state.data?.every((job) => job.done) ? false : 4000;
+}
+
 export function imageGenerationBody({ basicProtocol, model, prompt, params }: { basicProtocol: boolean; model: string; prompt: string; params: ImageParams }): Record<string, unknown> {
   const options = basicProtocol
     ? { size: params.size || "auto", quality: params.quality || "auto", output_format: "png" }

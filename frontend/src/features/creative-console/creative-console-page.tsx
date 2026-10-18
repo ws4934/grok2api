@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AudioLines, BrainCircuit, Check, CheckCircle2, Clock3, CornerDownLeft, Download, ExternalLink, Globe, History, ImageIcon, ImagePlus, ImageUpscale, Images, Loader2, MessageSquareText, Mic, Pencil, RefreshCw, Sparkle, Square, SquarePen, Trash2, TriangleAlert, TvMinimal, Upload, Video, Wrench, X } from "lucide-react";
 import { marked } from "marked";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
@@ -29,6 +29,8 @@ import {
   generateImage,
   getImageJob,
   getVideo,
+  imageJobsRefetchInterval,
+  refreshImageJobs,
   submitImageJob,
   listVoices,
   synthesizeSpeech,
@@ -37,6 +39,7 @@ import {
   type ChatMessage,
   type ChatStreamSnapshot,
   type ChatToolActivity,
+  type ImageJobState,
   type ImageParams,
   type ImageResult,
   type ReasoningEffort,
@@ -1016,7 +1019,6 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
               {records.length === 0 ? <WelcomeState title={t("creativeConsole.welcomeImage")} /> : null}
               {timeline.map((record) => (
                 <MessageScrollerItem key={record.id} messageId={record.id} scrollAnchor>
-                  {record.status === "generating" && record.jobIds?.length ? <ImageJobPoller record={record} apiKey={apiKey} onSettle={(patch) => patchRecord(record.id, patch)} /> : null}
                   <HistoryRecordItem
                     prompt={record.prompt}
                     meta={[record.model, imageParamsLabel(record.params), formatChatSessionTime(record.createdAt, i18n.language)].join(" · ")}
@@ -1025,7 +1027,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                     actions={<>
                       <HistoryAction label={t("creativeConsole.reusePrompt")} icon={<CornerDownLeft />} onClick={() => reuse(record)} />
                       <HistoryAction label={t("creativeConsole.regenerate")} icon={<RefreshCw />} onClick={() => generate(record)} disabled={!apiKey || busy} />
-                      {record.status !== "generating" ? <HistoryAction label={t("creativeConsole.deleteRecord")} icon={<Trash2 />} destructive onClick={() => updateRecords((current) => current.filter((item) => item.id !== record.id))} /> : null}
+                      <HistoryAction label={t("creativeConsole.deleteRecord")} icon={<Trash2 />} destructive onClick={() => updateRecords((current) => current.filter((item) => item.id !== record.id))} />
                     </>}
                   >
                     {record.status === "generating" || record.images.length > 0 ? (
@@ -1044,6 +1046,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                           ))}
                       </div>
                     ) : null}
+                    {record.status === "generating" && record.jobIds?.length ? <ImageJobPoller record={record} apiKey={apiKey} onSettle={(patch) => patchRecord(record.id, patch)} /> : null}
                   </HistoryRecordItem>
                 </MessageScrollerItem>
               ))}
@@ -1079,16 +1082,19 @@ function newImageRecord(request: Pick<ImageHistoryRecord, "prompt" | "model" | "
 }
 
 // ImageJobPoller follows a record's durable image jobs until all of them end,
-// then loads the finished images from the gallery by job ID.
+// then loads the finished images from the gallery by job ID. A failed poll is
+// shown with a retry instead of polling on.
 function ImageJobPoller({ record, apiKey, onSettle }: { record: ImageHistoryRecord; apiKey: string; onSettle: (patch: Partial<ImageHistoryRecord>) => void }) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const jobIds = useMemo(() => record.jobIds ?? [], [record.jobIds]);
   const settled = useRef(false);
   const query = useQuery({
     queryKey: ["creative-console", "image-jobs", ...jobIds],
-    queryFn: ({ signal }) => Promise.all(jobIds.map((id, index) => getImageJob({ apiKey, id, requestId: imageJobRequestId(record.id, index), signal }))),
+    queryFn: ({ signal, queryKey }) => refreshImageJobs(jobIds, queryClient.getQueryData<ImageJobState[]>(queryKey), (id, index) => getImageJob({ apiKey, id, requestId: imageJobRequestId(record.id, index), signal })),
     enabled: Boolean(apiKey) && jobIds.length > 0,
-    refetchInterval: (current) => current.state.data?.every((state) => state.done) ? false : 4000,
+    refetchInterval: (current) => imageJobsRefetchInterval(current.state),
+    retry: 2,
   });
   const states = query.data;
   const noResult = t("creativeConsole.imageJobNoResult");
@@ -1112,7 +1118,7 @@ function ImageJobPoller({ record, apiKey, onSettle }: { record: ImageHistoryReco
         : { status: "failed", error: failure ?? { message: noResult } });
     })();
   }, [jobIds, noResult, onSettle, states]);
-  return null;
+  return query.isError ? <ErrorDetail error={describeError(query.error)} onRetry={() => void query.refetch()} /> : null;
 }
 
 function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement, grokVoiceRoute }: CreativePanelProps & HistoryPanelProps & { grokVoiceRoute: boolean }) {
