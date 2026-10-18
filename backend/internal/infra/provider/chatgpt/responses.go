@@ -25,6 +25,14 @@ import (
 // answers in plain text.
 const toolsUnavailable = "Tools are unavailable in this session: you cannot call functions, run commands or read files. Answer directly in plain text and never claim to have used a tool."
 
+// ChatGPT otherwise sends the declared functions through its own tool
+// channel (functions, container), where they fail, or prefers its built-in
+// tools (web search, weather and other widgets) to them.
+const (
+	clientTools    = "These tools run on the client, not through your tool interface. To call one, write the <tool_calls> block as the visible text of your final reply; never call it through functions, code execution or any other built-in tool."
+	noBuiltinTools = "Do not search the web, browse, run code, or use any built-in tool or widget (weather, maps, images, canvas). When a listed tool can provide the information, call it instead of answering from your own knowledge."
+)
+
 const defaultOutputTokenLimit = 16384
 
 var errOutputLimit = errors.New("local output limit")
@@ -393,6 +401,10 @@ func toolNotice(tools toolemu.Config, parallel bool) string {
 	}
 	if len(tools.Unsupported) > 0 {
 		prompt += "\nOnly the tools listed above can be called; any other tool is unavailable in this session."
+	}
+	prompt += "\n" + clientTools
+	if !tools.HostedWebSearch {
+		prompt += "\n" + noBuiltinTools
 	}
 	return prompt
 }
