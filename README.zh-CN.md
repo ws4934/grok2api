@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>面向 Grok Build、Grok Web 与 Grok Console 的多账号 API 网关</strong>
+  <strong>面向 Grok Build、Grok Web、Grok Console 与 ChatGPT 的多账号 API 网关</strong>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 > 推荐个人新项目 [DEEIX-AI / DEEIX-Chat](https://github.com/DEEIX-AI/DEEIX-Chat)：面向多模型路由、对话、文件、工具、计费与运维的一体化轻量 AI 平台。
 
 > [!NOTE]
-> 本项目仅供技术研究与学习交流。使用时请务必遵循 Grok 官方的使用条款及当地法律法规，否则一切后果自负！
+> 本项目仅供技术研究与学习交流。使用时请务必遵循 Grok、OpenAI 官方的使用条款及当地法律法规，否则一切后果自负！
 
 ## 赞助商
 
@@ -57,7 +57,7 @@
 
 ## 项目简介
 
-Grok2API 是一个内置 React 管理端的 Go 网关。它分别管理 Grok Build、Grok Web 和 Grok Console 账号池，并对外提供统一的 OpenAI 与 Anthropic 兼容接口。
+Grok2API 是一个内置 React 管理端的 Go 网关。它分别管理 Grok Build、Grok Web、Grok Console 和 ChatGPT 账号池，并对外提供统一的 OpenAI 与 Anthropic 兼容接口。
 
 ### 项目架构
 
@@ -92,9 +92,11 @@ flowchart LR
         Build["Grok Build<br/>OAuth · 动态模型 · Billing"]
         Web["Grok Web<br/>SSO · 远端额度 · 媒体"]
         Console["Grok Console<br/>SSO · 本地窗口 · 无状态"]
+        ChatGPT["ChatGPT<br/>OAuth · 远端额度 · 图片 · 语音"]
         Registry --> Build
         Registry --> Web
         Registry --> Console
+        Registry --> ChatGPT
     end
 
     subgraph Infra["共享基础设施域"]
@@ -104,7 +106,7 @@ flowchart LR
         Runtime[("Memory / Redis")]
     end
 
-    Upstream["🌐 Grok 上游"]
+    Upstream["🌐 Grok / ChatGPT 上游"]
 
     %% 跨域调用
     Clients --> Gateway
@@ -114,6 +116,7 @@ flowchart LR
     Build -->|grok_build| Egress
     Web -->|grok_web / asset| Egress
     Console -->|grok_console| Egress
+    ChatGPT -->|chatgpt| Egress
     Egress --> Upstream
     Management --> Database
     Audit --> Database
@@ -122,12 +125,12 @@ flowchart LR
     %% 应用样式
     class Clients,Admin access
     class Management,Sync,Gateway,Audit core
-    class Registry,Build,Web,Console providers
+    class Registry,Build,Web,Console,ChatGPT providers
     class Egress,Database,Runtime infra
     class Upstream upstream
 ```
 
-网关通过 Provider 注册表分发请求，账号同步负责刷新凭据、额度和模型。三个渠道独立维护账号状态并使用隔离的出口作用域；请求结束后统一结算用量、审计和客户端计费。
+网关通过 Provider 注册表分发请求，账号同步负责刷新凭据、额度和模型。四个渠道独立维护账号状态并使用隔离的出口作用域；请求结束后统一结算用量、审计和客户端计费。
 
 ### 核心能力
 
@@ -149,8 +152,9 @@ flowchart LR
 | Grok Build | OAuth / 设备授权 | 按账号动态发现 | Responses、Chat、Messages、compact、stored response、付费账号视频 |
 | Grok Web | SSO | 内置并按等级过滤 | Responses、Chat、Messages、stored response、图片、图片编辑、视频 |
 | Grok Console | SSO | 内置 | 无状态 Responses、Chat、Messages、图片、图片编辑、视频、TTS、STT、Realtime |
+| ChatGPT | 浏览器 OAuth、导入 AT/RT | 对话模型按账号同步，图片和语音内置 | Responses、Chat、Messages（函数调用模拟、联网搜索）、图片、图片编辑、异步图片任务、TTS、STT |
 
-三个 Provider 独立维护凭据、额度、健康、冷却、并发与模型能力。单条路由的账号重试始终留在当前 Provider；当同一对外模型名主动聚合了多条路由时，网关可选择另一条可调度路由，但不会跨 Provider 混用账号状态。
+四个 Provider 独立维护凭据、额度、健康、冷却、并发与模型能力。单条路由的账号重试始终留在当前 Provider；当同一对外模型名主动聚合了多条路由时，网关可选择另一条可调度路由，但不会跨 Provider 混用账号状态。
 
 ## 快速部署
 
@@ -207,7 +211,7 @@ pnpm dev
 ## 初始化网关
 
 1. 使用初始管理员登录。
-2. 接入 Build、Web 或 Console 账号。
+2. 接入 Build、Web、Console 或 ChatGPT 账号。
 3. 等待额度和模型能力同步完成。
 4. 在“模型路由”中确认公开模型。
 5. 在“客户端密钥”中创建密钥。
@@ -222,6 +226,7 @@ pnpm dev
 | Build | 设备授权、JSON/JSONL | 可重新导入的账号文件 |
 | Web | 粘贴/TXT SSO、JSON/JSONL | 可重新导入的账号文件 |
 | Console | 粘贴/TXT SSO、JSON/JSONL | 可重新导入的账号文件 |
+| ChatGPT | 浏览器 OAuth、JSON/JSONL、每行一个 access token | 可重新导入的账号文件 |
 
 导入兼容 UTF-8 BOM。批量额度同步、Build 凭据续期、Web→Build/Console 转换、账号工具和账号清理均显示实时进度。
 
@@ -236,7 +241,7 @@ Web 账号工具支持接受协议、设置对应 20–40 岁的随机生日和�
 
 ## 模型与路由
 
-Build 模型根据每个账号的实际能力动态发现；Web、Console 使用内置目录。管理端“模型路由”展示 Provider 前缀、接口能力和支持账号数；客户端应以 `GET /v1/models` 返回的当前可服务模型为准。
+Build 模型根据每个账号的实际能力动态发现；Web、Console 使用内置目录；ChatGPT 的对话模型按账号同步，图片和语音模型使用内置目录。管理端“模型路由”展示 Provider 前缀、接口能力和支持账号数；客户端应以 `GET /v1/models` 返回的当前可服务模型为准。
 
 ### Grok Build
 
@@ -287,7 +292,19 @@ Console 使用当前版本内置目录。对话为无状态转发；图片、视
 
 同一个 Console 图片模型的生成与编辑能力会聚合展示为一条逻辑模型，不需要创建 `-edit` 模型副本。
 
-公开模型名通常不带 Provider。内部路由使用 `Build/`、`Web/` 或 `Console/` 前缀；带前缀名称可显式限定来源。
+### ChatGPT
+
+ChatGPT 通过网页端协议接入，用量为本地估算。接入步骤、设置项和各项限制见 [PROVIDERS.md](./PROVIDERS.md)。
+
+| 模型 | 类型 | 可用条件 | 网关接口能力 |
+| :-- | :-- | :-- | :-- |
+| 账号 `/backend-api/models` 返回的对话模型（例如 `auto`、`gpt-6`、`gpt-5-3-mini`） | 对话 | 当前账号实际返回 | Chat Completions、Responses、Messages；函数工具用提示词模拟，联网搜索由 ChatGPT 服务端完成 |
+| `gpt-image-2` | 图像、图像编辑 | 账号有开启生图工具的 `gpt-5-3` | Images Generations、Images Edits、Responses `image_generation`（可异步） |
+| `gpt-image-2.5`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst` | 图像、图像编辑 | 账号有开启生图工具的 `gpt-6` 或 `auto` | 同上；网页端无法指定引擎，三个名称出图相同 |
+| `chatgpt-tts` | 语音 | 所有账号 | TTS：`mp3`、`aac`、`opus`，账号音色，支持中文 |
+| `chatgpt-transcribe` | 语音 | 所有账号 | STT：只返回文字，不占对话额度 |
+
+公开模型名通常不带 Provider。内部路由使用 `Build/`、`Web/`、`Console/` 或 `chatgpt/` 前缀；带前缀名称可显式限定来源。
 
 Web 可与对应的 Build、Console 建立一对一弱关联。关联只共享匿名出口身份和来源展示，不合并凭据、额度、健康、冷却、并发、模型能力或计费。
 
@@ -311,7 +328,8 @@ Authorization: Bearer g2a_xxx_xxx
 | `GET` | `/v1/models` | 当前可服务模型 |
 | `POST` | `/v1/responses` | Responses JSON/SSE |
 | `POST` | `/v1/responses/compact` | 压缩支持的 Response 会话 |
-| `GET`、`DELETE` | `/v1/responses/{id}` | 查询或删除 stored response |
+| `GET`、`DELETE` | `/v1/responses/{id}` | 查询或删除 stored response；也用于查询异步图片任务 |
+| `POST` | `/v1/responses/{id}/cancel` | 取消尚未提交到上游的异步图片任务 |
 | `POST` | `/v1/chat/completions` | Chat Completions JSON/SSE |
 | `POST` | `/v1/messages` | Anthropic Messages JSON/SSE |
 | `POST` | `/v1/images/generations`、`/v1/images/edits` | 生成或编辑图片 |
@@ -340,7 +358,7 @@ curl http://127.0.0.1:8000/v1/responses \
 
 ## 出口与 Cloudflare
 
-出口节点按 Build、Web、Console 或 Web 资源隔离。管理端支持：
+出口节点按 Build、Web、Console、ChatGPT 或 Web 资源隔离。管理端支持：
 
 - HTTP、HTTPS、SOCKS4/4A、SOCKS5/5H、Resin、Trojan、VLESS、Shadowsocks 与 VMess
 - 隧道协议支持 TCP、WebSocket 和 TLS，未实现的传输形态会在导入时拒绝

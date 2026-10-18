@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>A multi-account API gateway for Grok Build, Grok Web, and Grok Console</strong>
+  <strong>A multi-account API gateway for Grok Build, Grok Web, Grok Console, and ChatGPT</strong>
 </p>
 
 <p align="center">
@@ -24,7 +24,7 @@
 > Check out [DEEIX-AI / DEEIX-Chat](https://github.com/DEEIX-AI/DEEIX-Chat), a lightweight, integrated AI platform for model routing, chat, files, tools, billing, identity, and operations.
 
 > [!NOTE]
-> This project is for technical research and learning purposes only. Please comply with Grok's official terms of use and local laws when using it; otherwise, you will be solely responsible for all consequences!
+> This project is for technical research and learning purposes only. Please comply with the official terms of use of Grok and OpenAI and local laws when using it; otherwise, you will be solely responsible for all consequences!
 
 
 
@@ -61,7 +61,7 @@
 
 ## Overview
 
-Grok2API is a Go gateway with a built-in React admin console. It manages independent Grok Build, Grok Web, and Grok Console account pools and exposes unified OpenAI- and Anthropic-compatible APIs.
+Grok2API is a Go gateway with a built-in React admin console. It manages independent Grok Build, Grok Web, Grok Console, and ChatGPT account pools and exposes unified OpenAI- and Anthropic-compatible APIs.
 
 ### Architecture
 
@@ -96,9 +96,11 @@ flowchart LR
         Build["Grok Build<br/>OAuth · Dynamic Models · Billing"]
         Web["Grok Web<br/>SSO · Remote Quota · Media"]
         Console["Grok Console<br/>SSO · Local Window · Stateless"]
+        ChatGPT["ChatGPT<br/>OAuth · Remote Quota · Images · Voice"]
         Registry --> Build
         Registry --> Web
         Registry --> Console
+        Registry --> ChatGPT
     end
 
     subgraph Infra["Shared Infrastructure Domain"]
@@ -108,7 +110,7 @@ flowchart LR
         Runtime[("Memory / Redis")]
     end
 
-    Upstream["🌐 Grok Upstream"]
+    Upstream["🌐 Grok / ChatGPT Upstream"]
 
     %% Cross-domain calls
     Clients --> Gateway
@@ -118,6 +120,7 @@ flowchart LR
     Build -->|grok_build| Egress
     Web -->|grok_web / asset| Egress
     Console -->|grok_console| Egress
+    ChatGPT -->|chatgpt| Egress
     Egress --> Upstream
     Management --> Database
     Audit --> Database
@@ -126,7 +129,7 @@ flowchart LR
     %% Application styles
     class Clients,Admin access
     class Management,Sync,Gateway,Audit core
-    class Registry,Build,Web,Console providers
+    class Registry,Build,Web,Console,ChatGPT providers
     class Egress,Database,Runtime infra
     class Upstream upstream
 ```
@@ -160,6 +163,7 @@ The Gateway routes requests through the Provider Registry. Account Sync refreshe
 | Grok Build   | OAuth / Device OAuth | Discovered per account     | Responses, Chat, Messages, compact, stored responses, paid-account video              |
 | Grok Web     | SSO                  | Built-in, filtered by tier | Responses, Chat, Messages, stored responses, images, image editing, video             |
 | Grok Console | SSO                  | Built-in                   | Stateless Responses, Chat, Messages, images, image editing, video, TTS, STT, Realtime |
+| ChatGPT      | Browser OAuth, AT/RT import | Chat synced per account; images and voice built-in | Responses, Chat, Messages (emulated function tools, web search), images, image editing, async image jobs, TTS, STT |
 
 
 Each Provider keeps its own credentials, quota, health, cooldown, concurrency, and model capabilities. Account retries stay within one route; when one public model ID intentionally aggregates multiple routes, the gateway may select another schedulable route without mixing Provider state.
@@ -221,7 +225,7 @@ pnpm dev
 ## Set up the gateway
 
 1. Sign in with the bootstrap administrator.
-2. Connect a Build, Web, or Console account.
+2. Connect a Build, Web, Console, or ChatGPT account.
 3. Wait for its quota and model capabilities to sync.
 4. Review the public routes under **Model Routes**.
 5. Create a client key under **Client Keys**.
@@ -237,6 +241,7 @@ After first sign-in, change the administrator password and remove `bootstrapAdmi
 | Build    | Device OAuth, JSON/JSONL   | Re-importable account file |
 | Web      | Pasted/TXT SSO, JSON/JSONL | Re-importable account file |
 | Console  | Pasted/TXT SSO, JSON/JSONL | Re-importable account file |
+| ChatGPT  | Browser OAuth, JSON/JSONL, one access token per line | Re-importable account file |
 
 
 Imports accept UTF-8 BOM. Bulk quota sync, Build credential renewal, Web→Build/Console conversion, account tools, and cleanup report live progress.
@@ -254,7 +259,7 @@ Automatic deletion of old `reauthRequired` accounts is available but disabled by
 
 ## Models and routing
 
-Build models are discovered from each account's actual capabilities. Web and Console use built-in catalogs. The **Model Routes** page shows Provider-qualified routes, endpoint capabilities, and supporting-account counts; clients should treat the currently serviceable results from `GET /v1/models` as authoritative.
+Build models are discovered from each account's actual capabilities. Web and Console use built-in catalogs. ChatGPT chat models are synced per account; its image and voice models come from a built-in catalog. The **Model Routes** page shows Provider-qualified routes, endpoint capabilities, and supporting-account counts; clients should treat the currently serviceable results from `GET /v1/models` as authoritative.
 
 ### Grok Build
 
@@ -314,7 +319,19 @@ Console uses the catalog built into the current release. Conversation forwarding
 
 Generation and editing capabilities for the same Console image model are grouped into one logical model row; no separate `-edit` model copy is required.
 
-Public names normally omit the Provider. Internally, routes use `Build/`, `Web/`, or `Console/`; qualified names can pin a request to one source.
+### ChatGPT
+
+ChatGPT is reached through the ChatGPT Web protocol, and its usage is estimated locally. Setup, settings, and limits are described in [PROVIDERS.md](./PROVIDERS.md) (Chinese).
+
+| Model | Type | Availability | Gateway endpoint capabilities |
+| :-- | :-- | :-- | :-- |
+| Chat models returned by the account's `/backend-api/models` (e.g. `auto`, `gpt-6`, `gpt-5-3-mini`) | Chat | Returned for the account | Chat Completions, Responses, Messages; function tools are emulated through the prompt, web search runs on ChatGPT's side |
+| `gpt-image-2` | Image, image edit | The account has `gpt-5-3` with the image tool enabled | Images Generations, Images Edits, Responses `image_generation` (optionally async) |
+| `gpt-image-2.5`, `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst` | Image, image edit | The account has `gpt-6` or `auto` with the image tool enabled | Same as above; ChatGPT Web cannot pick an engine, so the three names draw the same |
+| `chatgpt-tts` | Voice | Every account | TTS: `mp3`, `aac`, `opus`, the account's voices, Chinese supported |
+| `chatgpt-transcribe` | Voice | Every account | STT: text only, no conversation quota |
+
+Public names normally omit the Provider. Internally, routes use `Build/`, `Web/`, `Console/`, or `chatgpt/`; qualified names can pin a request to one source.
 
 Web can be weakly linked one-to-one with matching Build and Console accounts. Links share only an anonymous egress identity and provenance display. They never merge credentials, quota, health, cooldown, concurrency, capabilities, or billing.
 
@@ -339,7 +356,8 @@ Authorization: Bearer g2a_xxx_xxx
 | `GET`           | `/v1/models`                                                 | Serviceable models                   |
 | `POST`          | `/v1/responses`                                              | Responses JSON/SSE                   |
 | `POST`          | `/v1/responses/compact`                                      | Compact a supported Response session |
-| `GET`, `DELETE` | `/v1/responses/{id}`                                         | Read or delete a stored response     |
+| `GET`, `DELETE` | `/v1/responses/{id}`                                         | Read or delete a stored response; also reads async image jobs |
+| `POST`          | `/v1/responses/{id}/cancel`                                  | Cancel an async image job not yet sent upstream |
 | `POST`          | `/v1/chat/completions`                                       | Chat Completions JSON/SSE            |
 | `POST`          | `/v1/messages`                                               | Anthropic Messages JSON/SSE          |
 | `POST`          | `/v1/images/generations`, `/v1/images/edits`                 | Generate or edit images              |
@@ -371,7 +389,7 @@ curl http://127.0.0.1:8000/v1/responses \
 
 ## Egress and Cloudflare
 
-Egress nodes are scoped to Build, Web, Console, or Web assets. The admin console supports:
+Egress nodes are scoped to Build, Web, Console, ChatGPT, or Web assets. The admin console supports:
 
 - HTTP, HTTPS, SOCKS4/4A, SOCKS5/5H, Resin, Trojan, VLESS, Shadowsocks, and VMess
 - TCP, WebSocket, and TLS tunnel transports; unsupported variants are rejected during import
