@@ -802,3 +802,42 @@ func TestSubmittedImageFinishesAfterClientDisconnect(t *testing.T) {
 		t.Fatalf("response = %+v, err = %v, submits = %d, saved = %d", response, err, submits.Load(), assets.saved)
 	}
 }
+
+func TestSedimentImageDownloadUsesAccountSession(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveWebBasics(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/backend-api/f/conversation/prepare":
+			_, _ = w.Write([]byte(`{"conduit_token":"conduit"}`))
+		case "/backend-api/f/conversation":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"conversation_id\":\"conv1\"}\n\ndata: [DONE]\n\n"))
+		case "/backend-api/conversation/conv1":
+			_, _ = w.Write([]byte(`{"conversation_id":"conv1","mapping":{"m1":{"message":{"author":{"role":"tool"},"create_time":1,"content":{"content_type":"multimodal_text","parts":[{"content_type":"image_asset_pointer","asset_pointer":"sediment://file_00000000ae14"}]}}}}}`))
+		case "/backend-api/conversation/conv1/attachment/file_00000000ae14/download":
+			_, _ = w.Write([]byte(`{"download_url":"` + server.URL + `/backend-api/estuary/content?id=file_00000000ae14&sig=s"}`))
+		case "/backend-api/estuary/content":
+			if r.Header.Get("Authorization") != "Bearer AT" || r.URL.Query().Get("sig") != "s" {
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = w.Write([]byte(`{"detail":"File stream access denied."}`))
+				return
+			}
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(testPNG())
+		default:
+			t.Errorf("unexpected endpoint %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	a, assets := newTestAdapter(t, server)
+	credential := testCredential(t, a, credentials{AccessToken: "AT"})
+
+	response, err := a.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "a fox"})
+	if err != nil || response.StatusCode != http.StatusOK || assets.saved != 1 {
+		t.Fatalf("response = %+v, err = %v, saved = %d", response, err, assets.saved)
+	}
+}

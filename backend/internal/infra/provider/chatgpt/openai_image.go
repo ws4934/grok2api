@@ -642,6 +642,19 @@ func (o *OpenAIImage) downloadImageRef(ctx context.Context, account wireAccount,
 	return o.downloadFile(ctx, account, strings.TrimPrefix(imageRef, "file-service://"))
 }
 
+// fetchImageURL downloads a resolved image URL. Same-origin URLs such as
+// chatgpt.com/backend-api/estuary/content need the account session (without
+// it the upstream answers 403 "File stream access denied"); other hosts are
+// signed CDN URLs fetched without credentials.
+func (o *OpenAIImage) fetchImageURL(ctx context.Context, account wireAccount, rawURL string) (*http.Response, error) {
+	u, err := url.Parse(rawURL)
+	base, baseErr := url.Parse(o.BaseURL)
+	if err == nil && baseErr == nil && u.User == nil && (u.Host == "" || strings.EqualFold(u.Host, base.Host)) {
+		return o.doRequest(ctx, http.MethodGet, o.BaseURL+u.RequestURI(), u.Path, account, nil, map[string]string{"Accept": "image/*, */*"}, false, true)
+	}
+	return o.doAbsolute(ctx, http.MethodGet, rawURL, account, nil, nil, false)
+}
+
 func (o *OpenAIImage) readImageDownloadResponse(ctx context.Context, account wireAccount, response *http.Response) ([]byte, string, error) {
 	var value map[string]any
 	raw, err := io.ReadAll(io.LimitReader(response.Body, (64<<20)+1))
@@ -657,7 +670,7 @@ func (o *OpenAIImage) readImageDownloadResponse(ctx context.Context, account wir
 		if downloadURL == "" {
 			return nil, "", fmt.Errorf("OpenAI image download returned no URL")
 		}
-		response, err = o.doAbsolute(ctx, http.MethodGet, downloadURL, account, nil, nil, false)
+		response, err = o.fetchImageURL(ctx, account, downloadURL)
 		if err != nil {
 			return nil, "", err
 		}
