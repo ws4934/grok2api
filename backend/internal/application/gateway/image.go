@@ -29,6 +29,8 @@ type ImageGenerationInput struct {
 	Resolution     string
 	Quality        string
 	ResponseFormat string
+	OutputFormat   string
+	Background     string
 	Streaming      bool
 	PartialImages  int
 	Method         string
@@ -36,25 +38,36 @@ type ImageGenerationInput struct {
 	Headers        map[string][]string
 }
 
-// ImageEditInput 表示图片编辑用例已经完成协议校验后的输入。
+// ImageEditInput 表示图片编辑用例已经完成协议校验后的输入；ImageURLs 与 MaskURL 为 data URI 或 https URL。
 type ImageEditInput struct {
 	RequestID      string
 	ClientKey      clientkey.Key
 	PublicModel    string
 	Prompt         string
 	ImageURLs      []string
+	MaskURL        string
 	Count          int
 	Size           string
 	AspectRatio    string
 	Resolution     string
 	Quality        string
 	ResponseFormat string
+	OutputFormat   string
+	Background     string
 	Streaming      bool
 	PartialImages  int
 	Method         string
 	Path           string
 	Headers        map[string][]string
 }
+
+// ImageRequestRejectedError carries a provider's client-safe rejection of the
+// image parameters after every same-name route rejected the request.
+type ImageRequestRejectedError struct{ Err error }
+
+func (e *ImageRequestRejectedError) Error() string { return e.Err.Error() }
+
+func (e *ImageRequestRejectedError) Unwrap() error { return e.Err }
 
 type imageProviderSupport func(accountdomain.Provider) bool
 
@@ -62,6 +75,11 @@ type imageExecution func(context.Context, accountdomain.Provider, accountdomain.
 
 // GenerateImage 选择支持图片生成的路由和账号，并返回可统一审计的上游响应。
 func (s *Service) GenerateImage(ctx context.Context, input ImageGenerationInput) (*Result, error) {
+	options := provider.ImageRequestOptions{
+		Count: input.Count, Size: input.Size, AspectRatio: input.AspectRatio, Resolution: input.Resolution, Quality: input.Quality,
+		ResponseFormat: input.ResponseFormat, OutputFormat: input.OutputFormat, Background: input.Background,
+		Streaming: input.Streaming, PartialImages: input.PartialImages,
+	}
 	return s.executeImage(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationImage, modeldomain.CapabilityImage, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.ImageGeneration(providerValue)
 		return ok
@@ -74,12 +92,19 @@ func (s *Service) GenerateImage(ctx context.Context, input ImageGenerationInput)
 			Credential: credential, Model: upstream, Prompt: input.Prompt, Count: input.Count,
 			Size: input.Size, AspectRatio: input.AspectRatio, Resolution: input.Resolution, Quality: input.Quality,
 			ResponseFormat: input.ResponseFormat, Streaming: input.Streaming, PartialImages: input.PartialImages,
+			OutputFormat: input.OutputFormat, Background: input.Background,
 		})
-	}, input.Streaming, input.Resolution, input.Quality, input.Count, 0, input.Method, input.Path, input.Headers)
+	}, options, input.Method, input.Path, input.Headers)
 }
 
 // EditImage 选择支持图片编辑的路由和账号，并返回可统一审计的上游响应。
 func (s *Service) EditImage(ctx context.Context, input ImageEditInput) (*Result, error) {
+	options := provider.ImageRequestOptions{
+		Edit: true, Count: input.Count, InputImages: len(input.ImageURLs), HasMask: input.MaskURL != "",
+		Size: input.Size, AspectRatio: input.AspectRatio, Resolution: input.Resolution, Quality: input.Quality,
+		ResponseFormat: input.ResponseFormat, OutputFormat: input.OutputFormat, Background: input.Background,
+		Streaming: input.Streaming, PartialImages: input.PartialImages,
+	}
 	return s.executeImage(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationImageEdit, modeldomain.CapabilityImageEdit, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.ImageEdit(providerValue)
 		return ok
@@ -93,8 +118,9 @@ func (s *Service) EditImage(ctx context.Context, input ImageEditInput) (*Result,
 			ImageURLs: input.ImageURLs, Count: input.Count, Size: input.Size, AspectRatio: input.AspectRatio,
 			Resolution: input.Resolution, Quality: input.Quality, ResponseFormat: input.ResponseFormat,
 			Streaming: input.Streaming, PartialImages: input.PartialImages,
+			OutputFormat: input.OutputFormat, Background: input.Background, MaskURL: input.MaskURL,
 		})
-	}, input.Streaming, input.Resolution, input.Quality, input.Count, len(input.ImageURLs), input.Method, input.Path, input.Headers)
+	}, options, input.Method, input.Path, input.Headers)
 }
 
 func (s *Service) executeImage(
@@ -106,11 +132,7 @@ func (s *Service) executeImage(
 	capability modeldomain.Capability,
 	supports imageProviderSupport,
 	execute imageExecution,
-	streaming bool,
-	resolution string,
-	quality string,
-	requestedCount int,
-	inputImageCount int,
+	options provider.ImageRequestOptions,
 	method string,
 	path string,
 	headers map[string][]string,
@@ -118,17 +140,39 @@ func (s *Service) executeImage(
 	ctx, egressTrace := infraegress.WithTrace(ctx)
 	startedAt := time.Now()
 	eventID := newAuditEventID()
+	streaming, resolution, quality := options.Streaming, options.Resolution, options.Quality
+	requestedCount, inputImageCount := options.Count, options.InputImages
 	routes, err := s.models.GetByPublicIDCandidates(ctx, publicModel)
 	if err != nil {
 		return nil, ErrModelNotFound
 	}
-	route, preselectedSession, err := s.selectSchedulableMediaRoute(ctx, routes, key, capability, true, supports)
+	// Routes whose provider rejects the parameters are dropped; the first
+	// rejection surfaces only when no other target remains.
+	var rejection error
+	supportsRequest := func(providerValue accountdomain.Provider) bool {
+		if !supports(providerValue) {
+			return false
+		}
+		validator, ok := s.providers.ImageRequestValidator(providerValue)
+		if !ok {
+			return true
+		}
+		err := validator.ValidateImageRequest(options)
+		if err != nil && rejection == nil {
+			rejection = &ImageRequestRejectedError{Err: err}
+		}
+		return err == nil
+	}
+	route, preselectedSession, err := s.selectSchedulableMediaRoute(ctx, routes, key, capability, true, supportsRequest)
 	if err != nil {
 		// Preserve the established failure-audit path when every eligible target
 		// is currently unschedulable. The request loop will reproduce the
 		// selection error for the representative route after auditBase exists.
-		route, err = s.selectMediaRoute(routes, key, capability, supports)
+		route, err = s.selectMediaRoute(routes, key, capability, supportsRequest)
 		if err != nil {
+			if rejection != nil && errors.Is(err, ErrNoAvailableAccount) {
+				return nil, rejection
+			}
 			return nil, err
 		}
 		preselectedSession = nil

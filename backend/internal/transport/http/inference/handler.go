@@ -147,29 +147,32 @@ type imageGenerationRequest struct {
 	Resolution     string          `json:"resolution"`
 	Quality        string          `json:"quality"`
 	ResponseFormat string          `json:"response_format"`
+	OutputFormat   string          `json:"output_format"`
+	Background     string          `json:"background"`
 	StorageOptions json.RawMessage `json:"storage_options"`
 	Stream         bool            `json:"stream"`
 }
 
-type imageEditJSONImage struct {
-	URL    string `json:"url"`
-	FileID string `json:"file_id"`
-}
-
+// imageEditJSONRequest is also filled from multipart fields; image, images,
+// image_url and mask accept every form imageReferences understands.
 type imageEditJSONRequest struct {
-	Model          string               `json:"model"`
-	Prompt         string               `json:"prompt"`
-	Image          *imageEditJSONImage  `json:"image"`
-	Images         []imageEditJSONImage `json:"images"`
-	Count          *int                 `json:"n"`
-	Size           string               `json:"size"`
-	AspectRatio    string               `json:"aspect_ratio"`
-	Resolution     string               `json:"resolution"`
-	Quality        string               `json:"quality"`
-	ResponseFormat string               `json:"response_format"`
-	StorageOptions json.RawMessage      `json:"storage_options"`
-	Stream         bool                 `json:"stream"`
-	PartialImages  *int                 `json:"partial_images"`
+	Model          string          `json:"model"`
+	Prompt         string          `json:"prompt"`
+	Image          json.RawMessage `json:"image"`
+	Images         json.RawMessage `json:"images"`
+	ImageURL       json.RawMessage `json:"image_url"`
+	Mask           json.RawMessage `json:"mask"`
+	Count          *int            `json:"n"`
+	Size           string          `json:"size"`
+	AspectRatio    string          `json:"aspect_ratio"`
+	Resolution     string          `json:"resolution"`
+	Quality        string          `json:"quality"`
+	ResponseFormat string          `json:"response_format"`
+	OutputFormat   string          `json:"output_format"`
+	Background     string          `json:"background"`
+	StorageOptions json.RawMessage `json:"storage_options"`
+	Stream         bool            `json:"stream"`
+	PartialImages  *int            `json:"partial_images"`
 }
 
 type videoGenerationImage struct {
@@ -440,11 +443,6 @@ func (h *Handler) generateImage(c *gin.Context) {
 			return
 		}
 	}
-	quality := strings.ToLower(strings.TrimSpace(request.Quality))
-	if quality != "" && quality != "low" && quality != "medium" {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "quality 必须是 low 或 medium")
-		return
-	}
 	clientKey, requestID, ok := requestIdentity(c)
 	if !ok {
 		return
@@ -452,7 +450,8 @@ func (h *Handler) generateImage(c *gin.Context) {
 	result, err := h.gateway.GenerateImage(c.Request.Context(), gateway.ImageGenerationInput{
 		RequestID: requestID, ClientKey: clientKey, PublicModel: request.Model, Prompt: request.Prompt,
 		Count: count, Size: request.Size, AspectRatio: request.AspectRatio,
-		Resolution: request.Resolution, Quality: quality, ResponseFormat: request.ResponseFormat,
+		Resolution: request.Resolution, Quality: normalizeImageOption(request.Quality), ResponseFormat: request.ResponseFormat,
+		OutputFormat: normalizeImageOption(request.OutputFormat), Background: normalizeImageOption(request.Background),
 		Streaming: request.Stream, PartialImages: partialImages,
 		Method: c.Request.Method, Path: c.Request.URL.Path, Headers: c.Request.Header.Clone(),
 	})
@@ -595,18 +594,8 @@ func writeMediaBody(c *gin.Context, source io.Reader, contentType string, status
 
 func (h *Handler) editImage(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxBodyBytes)
-	if !isJSONRequest(c) {
-		writeOpenAIError(c, http.StatusUnsupportedMediaType, "invalid_request", "图片编辑仅支持 application/json")
-		return
-	}
-	body, err := io.ReadAll(c.Request.Body)
-	if err != nil {
-		writeOpenAIError(c, http.StatusRequestEntityTooLarge, "request_too_large", "请求体超过限制")
-		return
-	}
-	var request imageEditJSONRequest
-	if err := decodeSingleJSON(bytes.NewReader(body), &request, false); err != nil {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "图片编辑 JSON 请求无效")
+	request, imageURLs, maskURLs, ok := readImageEditRequest(c)
+	if !ok {
 		return
 	}
 	if value := bytes.TrimSpace(request.StorageOptions); len(value) > 0 && !bytes.Equal(value, []byte("null")) {
@@ -619,26 +608,12 @@ func (h *Handler) editImage(c *gin.Context) {
 	if request.Count != nil {
 		count = *request.Count
 	}
-	inputs := append([]imageEditJSONImage(nil), request.Images...)
-	if request.Image != nil {
-		inputs = append([]imageEditJSONImage{*request.Image}, inputs...)
-	}
-	if len(inputs) == 0 || len(inputs) > 8 {
+	if len(imageURLs) == 0 || len(imageURLs) > 8 {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "image 或 images 数量必须在 1 到 8 之间")
 		return
 	}
-	imageURLs := make([]string, 0, len(inputs))
-	for _, input := range inputs {
-		if strings.TrimSpace(input.FileID) != "" {
-			writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前暂不支持 image.file_id，请使用 image.url")
-			return
-		}
-		if value := strings.TrimSpace(input.URL); value != "" {
-			imageURLs = append(imageURLs, value)
-		}
-	}
-	if len(imageURLs) != len(inputs) {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "每个 image 都必须提供有效 url")
+	if len(maskURLs) > 1 {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "mask 最多只能提供一张")
 		return
 	}
 	if model == "" || prompt == "" {
@@ -661,28 +636,9 @@ func (h *Handler) editImage(c *gin.Context) {
 			return
 		}
 	}
-	aspectRatio := strings.ToLower(strings.TrimSpace(request.AspectRatio))
-	size := strings.ToLower(strings.TrimSpace(request.Size))
-	if aspectRatio != "" && !validImageAspectRatio(aspectRatio) {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "aspect_ratio 不受支持")
-		return
-	}
-	if size != "" && !validImageEditSize(size) {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "size 必须是 auto、1024x1024、1024x1536 或 1536x1024")
-		return
-	}
-	resolution := strings.ToLower(strings.TrimSpace(request.Resolution))
-	if resolution == "" {
-		resolution = "1k"
-	}
-	if resolution != "1k" && resolution != "2k" {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "resolution 必须是 1k 或 2k")
-		return
-	}
-	quality := strings.ToLower(strings.TrimSpace(request.Quality))
-	if quality != "" && quality != "low" && quality != "medium" {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "quality 必须是 low 或 medium")
-		return
+	maskURL := ""
+	if len(maskURLs) == 1 {
+		maskURL = maskURLs[0]
 	}
 	clientKey, requestID, ok := requestIdentity(c)
 	if !ok {
@@ -690,8 +646,10 @@ func (h *Handler) editImage(c *gin.Context) {
 	}
 	result, err := h.gateway.EditImage(c.Request.Context(), gateway.ImageEditInput{
 		RequestID: requestID, ClientKey: clientKey, PublicModel: model, Prompt: prompt,
-		ImageURLs: imageURLs, Count: count, Size: size, AspectRatio: aspectRatio,
-		Resolution: resolution, Quality: quality, ResponseFormat: request.ResponseFormat,
+		ImageURLs: imageURLs, MaskURL: maskURL, Count: count,
+		Size: normalizeImageOption(request.Size), AspectRatio: normalizeImageOption(request.AspectRatio),
+		Resolution: normalizeImageOption(request.Resolution), Quality: normalizeImageOption(request.Quality), ResponseFormat: request.ResponseFormat,
+		OutputFormat: normalizeImageOption(request.OutputFormat), Background: normalizeImageOption(request.Background),
 		Streaming: request.Stream, PartialImages: partialImages,
 		Method: c.Request.Method, Path: c.Request.URL.Path, Headers: c.Request.Header.Clone(),
 	})
@@ -1077,23 +1035,9 @@ func validVideoAspectRatio(value string) bool {
 	}
 }
 
-func validImageAspectRatio(value string) bool {
-	switch value {
-	case "auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "2:1", "1:2", "19.5:9", "9:19.5", "20:9", "9:20":
-		return true
-	default:
-		return false
-	}
-}
-
-func validImageEditSize(value string) bool {
-	switch value {
-	case "auto", "1024x1024", "1024x1536", "1536x1024":
-		return true
-	default:
-		return false
-	}
-}
+// normalizeImageOption trims and lowercases an enum-like image parameter;
+// providers validate the values.
+func normalizeImageOption(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
 
 func videoGenerationResponse(job mediadomain.Job, contentURLs ...string) gin.H {
 	switch job.Status {
@@ -2309,6 +2253,7 @@ func writeGatewayError(c *gin.Context, err error) {
 	message := "上游服务暂不可用"
 	var upstreamFailure *gateway.UpstreamFailure
 	var selectionFailure *gateway.SelectionUnavailableError
+	var imageRejection *gateway.ImageRequestRejectedError
 	switch {
 	case errors.Is(err, gateway.ErrLedgerUnavailable):
 		status, code = http.StatusServiceUnavailable, "ledger_unavailable"
@@ -2333,6 +2278,9 @@ func writeGatewayError(c *gin.Context, err error) {
 		message = err.Error()
 	case errors.Is(err, gateway.ErrVideoOperationUnsupported):
 		status, code = http.StatusBadRequest, "unsupported_model"
+		message = err.Error()
+	case errors.As(err, &imageRejection):
+		status, code = http.StatusBadRequest, "invalid_parameter"
 		message = err.Error()
 	case errors.As(err, &upstreamFailure):
 		if isSanitizedUpstreamAvailabilityFailure(upstreamFailure) {

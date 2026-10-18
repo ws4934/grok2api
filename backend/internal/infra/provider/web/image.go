@@ -25,6 +25,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/grokimage"
 )
 
 const (
@@ -275,6 +276,12 @@ func numberAsInt(value any) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+var _ provider.ImageRequestValidator = (*Adapter)(nil)
+
+func (a *Adapter) ValidateImageRequest(options provider.ImageRequestOptions) error {
+	return grokimage.Validate(options)
 }
 
 func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGenerationRequest) (*provider.Response, error) {

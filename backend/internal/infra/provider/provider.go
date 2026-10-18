@@ -860,7 +860,6 @@ type ImageEditAdapter interface {
 	EditImage(ctx context.Context, request ImageEditRequest) (*Response, error)
 }
 
-// ImageAssetStore archives generated images as local resources that the backend can read reliably.
 // ImageRequestOptions are the client image parameters checked against a
 // provider before routing; empty strings mean "not specified".
 type ImageRequestOptions struct {
@@ -887,6 +886,7 @@ type ImageRequestValidator interface {
 	ValidateImageRequest(options ImageRequestOptions) error
 }
 
+// ImageAssetStore archives generated images as local resources that the backend can read reliably.
 type ImageAssetStore interface {
 	SaveImage(ctx context.Context, data []byte) (media.Asset, error)
 	PublicImageURL(id string) string

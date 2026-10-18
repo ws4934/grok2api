@@ -1706,6 +1706,86 @@ func TestGenerateImageUnlimitedAttemptsRetainsEgressRetry(t *testing.T) {
 	}
 }
 
+func TestImageRequestValidationDropsRejectingRoutes(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "image-validation.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accountRepo := relational.NewAccountRepository(database)
+	modelRepo := relational.NewModelRepository(database)
+	auditRepo := relational.NewAuditRepository(database)
+	now := time.Now().UTC()
+	const publicModel = "validated-image"
+	routes := []modeldomain.Route{
+		{PublicID: publicModel, Provider: account.ProviderBuild, UpstreamModel: "build-image", Capability: modeldomain.CapabilityImage, Enabled: true},
+		{PublicID: publicModel, Provider: account.ProviderConsole, UpstreamModel: "console-image", Capability: modeldomain.CapabilityImage, Enabled: true},
+	}
+	if err := modelRepo.UpsertRoutes(ctx, routes); err != nil {
+		t.Fatal(err)
+	}
+	for _, route := range routes {
+		credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
+			Provider: route.Provider, AuthType: account.AuthTypeSSO, Name: route.UpstreamModel, SourceKey: route.UpstreamModel,
+			EncryptedAccessToken: "token", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := modelRepo.ReplaceAccountCapabilities(ctx, credential.ID, []string{route.UpstreamModel}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	build := &validatingImageAdapter{provider: account.ProviderBuild}
+	console := &validatingImageAdapter{provider: account.ProviderConsole}
+	registry := provider.NewRegistry(build, console)
+	sticky := memory.NewStickyStore()
+	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
+	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
+	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(nil, nil, nil, 60, 4, nil), registry, selector, relational.NewResponseRepository(database), 1)
+	input := ImageGenerationInput{
+		RequestID: "req-image-validation", ClientKey: clientkey.Key{ID: 1, Name: "image-key"},
+		PublicModel: publicModel, Prompt: "test", Count: 1, Quality: "high", OutputFormat: "webp", Background: "transparent",
+	}
+
+	generate := func() {
+		t.Helper()
+		result, err := service.GenerateImage(ctx, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.ReadAll(result.Body)
+		result.Finalize(Usage{}, "", "")
+		_ = result.Body.Close()
+	}
+	generate()
+	if build.generated.Load() != 1 || console.generated.Load() != 0 {
+		t.Fatalf("accepting Build route was not preferred: build=%d console=%d", build.generated.Load(), console.generated.Load())
+	}
+
+	// The preferred Build route rejects the parameters, so the Console route serves the request.
+	build.reject = errors.New("quality 必须是 low 或 medium")
+	generate()
+	if build.generated.Load() != 1 || console.generated.Load() != 1 {
+		t.Fatalf("build generated=%d, console generated=%d", build.generated.Load(), console.generated.Load())
+	}
+	if got := console.options; got.Quality != "high" || got.OutputFormat != "webp" || got.Background != "transparent" || got.Count != 1 || got.Edit {
+		t.Fatalf("validator options = %#v", got)
+	}
+
+	// When every route rejects, the first rejection becomes the client error.
+	console.reject = errors.New("console rejects")
+	_, err = service.GenerateImage(ctx, input)
+	var rejection *ImageRequestRejectedError
+	if !errors.As(err, &rejection) || err.Error() != "quality 必须是 low 或 medium" || console.generated.Load() != 1 {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
 func TestGatewayDoesNotPersistStatelessConsoleResponses(t *testing.T) {
 	ctx := context.Background()
 	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "console-stateless.db"))
@@ -2616,7 +2696,7 @@ func TestImageStreamPropagatesWithoutTouchingChatQuota(t *testing.T) {
 		RequestID: "req-image-edit", ClientKey: key, PublicModel: "grok-imagine-image-edit",
 		Prompt: "edit", ImageURLs: []string{"data:image/png;base64,a", "data:image/png;base64,b"},
 		Count: 3, Size: "1024x1024", AspectRatio: "1:1", Resolution: "2k", ResponseFormat: "url",
-		Streaming: true, PartialImages: 2,
+		Streaming: true, PartialImages: 2, MaskURL: "data:image/png;base64,m", OutputFormat: "webp", Background: "opaque",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2629,7 +2709,8 @@ func TestImageStreamPropagatesWithoutTouchingChatQuota(t *testing.T) {
 		t.Fatalf("image edit pricing audit = %#v, total=%d, err=%v", logs, total, err)
 	}
 	editRequest := adapter.EditRequest()
-	if editRequest.Resolution != "2k" || editRequest.Size != "1024x1024" || editRequest.AspectRatio != "1:1" || !editRequest.Streaming || editRequest.PartialImages != 2 {
+	if editRequest.Resolution != "2k" || editRequest.Size != "1024x1024" || editRequest.AspectRatio != "1:1" || !editRequest.Streaming || editRequest.PartialImages != 2 ||
+		editRequest.MaskURL != "data:image/png;base64,m" || editRequest.OutputFormat != "webp" || editRequest.Background != "opaque" {
 		t.Fatalf("image edit request = %#v", editRequest)
 	}
 
@@ -4622,6 +4703,29 @@ func (a *credentialFailureImageAdapter) RefreshCredential(context.Context, accou
 func (a *credentialFailureImageAdapter) GenerateImage(context.Context, provider.ImageGenerationRequest) (*provider.Response, error) {
 	a.generationCalls.Add(1)
 	return nil, errors.New("unexpected image generation")
+}
+
+type validatingImageAdapter struct {
+	provider  account.Provider
+	reject    error
+	options   provider.ImageRequestOptions
+	generated atomic.Int64
+}
+
+func (a *validatingImageAdapter) Provider() account.Provider { return a.provider }
+func (a *validatingImageAdapter) Definition() provider.Definition {
+	return testConversationDefinition(a.provider)
+}
+func (a *validatingImageAdapter) ValidateImageRequest(options provider.ImageRequestOptions) error {
+	a.options = options
+	return a.reject
+}
+func (a *validatingImageAdapter) GenerateImage(context.Context, provider.ImageGenerationRequest) (*provider.Response, error) {
+	a.generated.Add(1)
+	return &provider.Response{
+		StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{"created":1,"data":[{"url":"https://example.com/a.png"}]}`)),
+	}, nil
 }
 
 func (webRateLimitAdapter) Provider() account.Provider { return account.ProviderWeb }

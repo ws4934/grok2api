@@ -123,7 +123,8 @@ const docTemplate = `{
                     }
                 ],
                 "consumes": [
-                    "application/json"
+                    "application/json",
+                    "multipart/form-data"
                 ],
                 "produces": [
                     "application/json"
@@ -710,7 +711,20 @@ const docTemplate = `{
                     "type": "string",
                     "example": "1:1"
                 },
+                "background": {
+                    "type": "string",
+                    "example": "auto"
+                },
                 "image": {
+                    "$ref": "#/definitions/httpserver.SwaggerImageReference"
+                },
+                "images": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpserver.SwaggerImageReference"
+                    }
+                },
+                "mask": {
                     "$ref": "#/definitions/httpserver.SwaggerImageReference"
                 },
                 "model": {
@@ -721,6 +735,10 @@ const docTemplate = `{
                     "type": "integer",
                     "example": 1
                 },
+                "output_format": {
+                    "type": "string",
+                    "example": "png"
+                },
                 "partial_images": {
                     "type": "integer",
                     "example": 0
@@ -728,6 +746,10 @@ const docTemplate = `{
                 "prompt": {
                     "type": "string",
                     "example": "Change the background to black"
+                },
+                "quality": {
+                    "type": "string",
+                    "example": "medium"
                 },
                 "resolution": {
                     "type": "string",
@@ -754,6 +776,10 @@ const docTemplate = `{
                     "type": "string",
                     "example": "16:9"
                 },
+                "background": {
+                    "type": "string",
+                    "example": "auto"
+                },
                 "model": {
                     "type": "string",
                     "example": "grok-imagine-image-quality"
@@ -761,6 +787,10 @@ const docTemplate = `{
                 "n": {
                     "type": "integer",
                     "example": 1
+                },
+                "output_format": {
+                    "type": "string",
+                    "example": "png"
                 },
                 "partial_images": {
                     "type": "integer",
@@ -770,6 +800,10 @@ const docTemplate = `{
                     "type": "string",
                     "example": "A cinematic city at night"
                 },
+                "quality": {
+                    "type": "string",
+                    "example": "medium"
+                },
                 "resolution": {
                     "type": "string",
                     "example": "2k"
@@ -777,6 +811,10 @@ const docTemplate = `{
                 "response_format": {
                     "type": "string",
                     "example": "url"
+                },
+                "size": {
+                    "type": "string",
+                    "example": "1024x1024"
                 },
                 "stream": {
                     "type": "boolean",
@@ -787,6 +825,12 @@ const docTemplate = `{
         "httpserver.SwaggerImageReference": {
             "type": "object",
             "properties": {
+                "b64_json": {
+                    "type": "string"
+                },
+                "image_url": {
+                    "type": "string"
+                },
                 "url": {
                     "type": "string",
                     "example": "https://example.com/source.png"

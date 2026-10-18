@@ -1742,7 +1742,7 @@ func TestConsoleImageEditForwardsMultipleImages(t *testing.T) {
 			t.Error(err)
 		}
 		images, _ := payload["images"].([]any)
-		if len(images) != 2 || payload["image"] != nil || payload["model"] != "grok-imagine-image" || payload["n"] != float64(2) {
+		if len(images) != 2 || payload["image"] != nil || payload["model"] != "grok-imagine-image" || payload["n"] != float64(2) || payload["resolution"] != "1k" {
 			t.Errorf("edit payload = %#v", payload)
 		}
 		if payload["response_format"] != "b64_json" {
@@ -1755,7 +1755,7 @@ func TestConsoleImageEditForwardsMultipleImages(t *testing.T) {
 	adapter, credential := newConsoleTestAdapter(t, server.URL)
 	response, err := adapter.EditImage(context.Background(), provider.ImageEditRequest{
 		Credential: credential, Model: "grok-imagine-image", Prompt: "merge", Count: 2,
-		ImageURLs: []string{"https://example.com/a.png", "data:image/png;base64,AAAA"}, Resolution: "1k", ResponseFormat: "b64_json",
+		ImageURLs: []string{"https://example.com/a.png", "data:image/png;base64,AAAA"}, ResponseFormat: "b64_json",
 	})
 	if err != nil {
 		t.Fatal(err)

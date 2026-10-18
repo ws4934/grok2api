@@ -18,7 +18,16 @@ definitions:
       aspect_ratio:
         example: "1:1"
         type: string
+      background:
+        example: auto
+        type: string
       image:
+        $ref: '#/definitions/httpserver.SwaggerImageReference'
+      images:
+        items:
+          $ref: '#/definitions/httpserver.SwaggerImageReference'
+        type: array
+      mask:
         $ref: '#/definitions/httpserver.SwaggerImageReference'
       model:
         example: grok-imagine-image-edit
@@ -26,11 +35,17 @@ definitions:
       "n":
         example: 1
         type: integer
+      output_format:
+        example: png
+        type: string
       partial_images:
         example: 0
         type: integer
       prompt:
         example: Change the background to black
+        type: string
+      quality:
+        example: medium
         type: string
       resolution:
         example: 1k
@@ -50,17 +65,26 @@ definitions:
       aspect_ratio:
         example: "16:9"
         type: string
+      background:
+        example: auto
+        type: string
       model:
         example: grok-imagine-image-quality
         type: string
       "n":
         example: 1
         type: integer
+      output_format:
+        example: png
+        type: string
       partial_images:
         example: 0
         type: integer
       prompt:
         example: A cinematic city at night
+        type: string
+      quality:
+        example: medium
         type: string
       resolution:
         example: 2k
@@ -68,12 +92,19 @@ definitions:
       response_format:
         example: url
         type: string
+      size:
+        example: 1024x1024
+        type: string
       stream:
         example: false
         type: boolean
     type: object
   httpserver.SwaggerImageReference:
     properties:
+      b64_json:
+        type: string
+      image_url:
+        type: string
       url:
         example: https://example.com/source.png
         type: string
@@ -237,6 +268,7 @@ paths:
     post:
       consumes:
       - application/json
+      - multipart/form-data
       parameters:
       - description: 请求
         in: body

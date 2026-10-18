@@ -31,35 +31,46 @@ type SwaggerMessagesRequest struct {
 	Stream    bool             `json:"stream" example:"false"`
 }
 
-// SwaggerImageGenerationRequest 表示图片生成请求。
+// SwaggerImageGenerationRequest 表示图片生成请求；quality/size/output_format/background 的取值由目标 Provider 校验。
 type SwaggerImageGenerationRequest struct {
 	Model          string `json:"model" example:"grok-imagine-image-quality"`
 	Prompt         string `json:"prompt" example:"A cinematic city at night"`
 	N              int    `json:"n" example:"1"`
+	Size           string `json:"size,omitempty" example:"1024x1024"`
 	AspectRatio    string `json:"aspect_ratio,omitempty" example:"16:9"`
 	Resolution     string `json:"resolution,omitempty" example:"2k"`
+	Quality        string `json:"quality,omitempty" example:"medium"`
 	ResponseFormat string `json:"response_format,omitempty" example:"url"`
+	OutputFormat   string `json:"output_format,omitempty" example:"png"`
+	Background     string `json:"background,omitempty" example:"auto"`
 	Stream         bool   `json:"stream,omitempty" example:"false"`
 	PartialImages  int    `json:"partial_images,omitempty" example:"0"`
 }
 
-// SwaggerImageReference 表示图片 URL 输入。
+// SwaggerImageReference 表示图片输入对象；也可直接传 Base64 图片 data URI、https URL 或 Base64 字符串，不支持 file_id。
 type SwaggerImageReference struct {
-	URL string `json:"url" example:"https://example.com/source.png"`
+	URL      string `json:"url,omitempty" example:"https://example.com/source.png"`
+	ImageURL string `json:"image_url,omitempty"`
+	B64JSON  string `json:"b64_json,omitempty"`
 }
 
-// SwaggerImageEditRequest 表示图片编辑请求。
+// SwaggerImageEditRequest 表示图片编辑请求；multipart 形式用 image/image[]/images[] 与 mask 文件字段，其余字段同名。
 type SwaggerImageEditRequest struct {
-	Model          string                `json:"model" example:"grok-imagine-image-edit"`
-	Prompt         string                `json:"prompt" example:"Change the background to black"`
-	Image          SwaggerImageReference `json:"image"`
-	N              int                   `json:"n" example:"1"`
-	Size           string                `json:"size,omitempty" example:"1024x1024"`
-	AspectRatio    string                `json:"aspect_ratio,omitempty" example:"1:1"`
-	Resolution     string                `json:"resolution,omitempty" example:"1k"`
-	ResponseFormat string                `json:"response_format,omitempty" example:"url"`
-	Stream         bool                  `json:"stream,omitempty" example:"false"`
-	PartialImages  int                   `json:"partial_images,omitempty" example:"0"`
+	Model          string                  `json:"model" example:"grok-imagine-image-edit"`
+	Prompt         string                  `json:"prompt" example:"Change the background to black"`
+	Image          SwaggerImageReference   `json:"image"`
+	Images         []SwaggerImageReference `json:"images,omitempty"`
+	Mask           *SwaggerImageReference  `json:"mask,omitempty"`
+	N              int                     `json:"n" example:"1"`
+	Size           string                  `json:"size,omitempty" example:"1024x1024"`
+	AspectRatio    string                  `json:"aspect_ratio,omitempty" example:"1:1"`
+	Resolution     string                  `json:"resolution,omitempty" example:"1k"`
+	Quality        string                  `json:"quality,omitempty" example:"medium"`
+	ResponseFormat string                  `json:"response_format,omitempty" example:"url"`
+	OutputFormat   string                  `json:"output_format,omitempty" example:"png"`
+	Background     string                  `json:"background,omitempty" example:"auto"`
+	Stream         bool                    `json:"stream,omitempty" example:"false"`
+	PartialImages  int                     `json:"partial_images,omitempty" example:"0"`
 }
 
 // SwaggerVideoGenerationRequest 表示视频生成请求。
@@ -203,7 +214,7 @@ func swaggerGenerateImage() {}
 // @Summary 编辑图片
 // @Tags Images
 // @Security BearerAuth
-// @Accept json
+// @Accept json,mpfd
 // @Produce json
 // @Param request body SwaggerImageEditRequest true "请求"
 // @Success 200 {object} map[string]any

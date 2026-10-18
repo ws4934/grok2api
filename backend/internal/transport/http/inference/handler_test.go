@@ -647,7 +647,6 @@ func TestImageGenerationEndpointValidatesXAIContractBeforeRouting(t *testing.T) 
 	}{
 		{name: "zero n", body: `{"model":"grok-imagine-image","prompt":"test","n":0}`, want: "n 必须在 1 到 10 之间"},
 		{name: "large n", body: `{"model":"grok-imagine-image","prompt":"test","n":11}`, want: "n 必须在 1 到 10 之间"},
-		{name: "invalid quality", body: `{"model":"grok-imagine-image-2.0","prompt":"test","quality":"high"}`, want: "quality 必须是 low 或 medium"},
 		{name: "storage options", body: `{"model":"grok-imagine-image","prompt":"test","storage_options":{"filename":"test.jpg"}}`, want: "不支持 storage_options"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -695,28 +694,6 @@ func TestImageEditAcceptsOfficialJSONShape(t *testing.T) {
 		t.Fatalf("valid JSON shape status=%d body=%s", validRecorder.Code, validRecorder.Body.String())
 	}
 
-	invalidResolution := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(`{
-		"model":"grok-imagine-image-edit","prompt":"test","resolution":"4k",
-		"image":{"url":"https://example.com/input.png"}
-	}`))
-	invalidResolution.Header.Set("Content-Type", "application/json")
-	invalidResolutionRecorder := httptest.NewRecorder()
-	router.ServeHTTP(invalidResolutionRecorder, invalidResolution)
-	if invalidResolutionRecorder.Code != http.StatusBadRequest || !strings.Contains(invalidResolutionRecorder.Body.String(), "resolution 必须是 1k 或 2k") {
-		t.Fatalf("invalid resolution status=%d body=%s", invalidResolutionRecorder.Code, invalidResolutionRecorder.Body.String())
-	}
-
-	invalidQuality := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(`{
-		"model":"grok-imagine-image-2.0","prompt":"test","quality":"high",
-		"image":{"url":"https://example.com/input.png"}
-	}`))
-	invalidQuality.Header.Set("Content-Type", "application/json")
-	invalidQualityRecorder := httptest.NewRecorder()
-	router.ServeHTTP(invalidQualityRecorder, invalidQuality)
-	if invalidQualityRecorder.Code != http.StatusBadRequest || !strings.Contains(invalidQualityRecorder.Body.String(), "quality 必须是 low 或 medium") {
-		t.Fatalf("invalid quality status=%d body=%s", invalidQualityRecorder.Code, invalidQualityRecorder.Body.String())
-	}
-
 	validBatchCount := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(`{
 		"model":"grok-imagine-image-quality","prompt":"test","n":2,
 		"image":{"url":"https://example.com/input.png"}
@@ -746,8 +723,6 @@ func TestImageEditAcceptsOfficialJSONShape(t *testing.T) {
 		{name: "negative partial images", body: `{"model":"grok-imagine-image-edit","prompt":"test","stream":true,"partial_images":-1,"image":{"url":"https://example.com/input.png"}}`},
 		{name: "too many partial images", body: `{"model":"grok-imagine-image-edit","prompt":"test","stream":true,"partial_images":4,"image":{"url":"https://example.com/input.png"}}`},
 		{name: "partial images require stream", body: `{"model":"grok-imagine-image-edit","prompt":"test","partial_images":1,"image":{"url":"https://example.com/input.png"}}`},
-		{name: "invalid aspect ratio", body: `{"model":"grok-imagine-image-edit","prompt":"test","aspect_ratio":"7:5","image":{"url":"https://example.com/input.png"}}`},
-		{name: "invalid size", body: `{"model":"grok-imagine-image-edit","prompt":"test","size":"512x512","image":{"url":"https://example.com/input.png"}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(test.body))
@@ -760,12 +735,20 @@ func TestImageEditAcceptsOfficialJSONShape(t *testing.T) {
 		})
 	}
 
-	multipartRequest := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader("ignored"))
-	multipartRequest.Header.Set("Content-Type", "multipart/form-data; boundary=test")
-	multipartRecorder := httptest.NewRecorder()
-	router.ServeHTTP(multipartRecorder, multipartRequest)
-	if multipartRecorder.Code != http.StatusUnsupportedMediaType || !strings.Contains(multipartRecorder.Body.String(), "application/json") {
-		t.Fatalf("multipart status=%d body=%s", multipartRecorder.Code, multipartRecorder.Body.String())
+	malformedMultipart := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader("ignored"))
+	malformedMultipart.Header.Set("Content-Type", "multipart/form-data; boundary=test")
+	malformedRecorder := httptest.NewRecorder()
+	router.ServeHTTP(malformedRecorder, malformedMultipart)
+	if malformedRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("malformed multipart status=%d body=%s", malformedRecorder.Code, malformedRecorder.Body.String())
+	}
+
+	plainText := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader("ignored"))
+	plainText.Header.Set("Content-Type", "text/plain")
+	plainTextRecorder := httptest.NewRecorder()
+	router.ServeHTTP(plainTextRecorder, plainText)
+	if plainTextRecorder.Code != http.StatusUnsupportedMediaType || !strings.Contains(plainTextRecorder.Body.String(), "multipart/form-data") {
+		t.Fatalf("plain text status=%d body=%s", plainTextRecorder.Code, plainTextRecorder.Body.String())
 	}
 }
 
