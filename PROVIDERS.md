@@ -75,22 +75,22 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 
 ChatGPT 网页端不能执行客户端函数，网关用和 Grok Web 相同的约定（`toolemu` 包）模拟：
 
-- 声明 `function` 工具且 `tool_choice` 不是 `none` 时，工具定义和 XML 调用格式作为系统消息发给 ChatGPT；`required`、指定函数、`parallel_tool_calls: false` 会写进提示词，`parallel_tool_calls: false` 时只保留第一个调用。
+- 声明 `function` 工具且 `tool_choice` 不是 `none` 时，工具定义和 XML 调用格式作为系统消息发给 ChatGPT；`required`、指定函数、`parallel_tool_calls: false` 会写进提示词，`parallel_tool_calls: false` 时只保留第一个调用。提示词还说明工具在客户端执行、调用块必须写在可见回复里（否则模型会把调用发到自己的 `functions.exec` / `container.exec` 通道而失败）；没有声明搜索时，要求不使用内置搜索、天气等工具。
 - 回复里的调用块被解析为 Responses `function_call`（`status: completed`，唯一 `call_id`，参数为 JSON 字符串），排在文字之后；Chat 得到 `tool_calls` / `finish_reason: tool_calls`，Messages 得到 `tool_use` / `stop_reason: tool_use`。调用块前后的文字照常作为消息输出。
 - 流式时调用块在完整解析前不会下发，客户端看不到 XML。调用块先于网页 UI 标记改写被取出，参数里的 `<title>` 等文本保持原样。
-- 历史里的 `function_call` 按同一格式回放（同一轮的多个调用合并成一个块），`function_call_output` 作为工具结果消息发送，多轮 agent 循环可以继续。
+- 历史里的 `function_call` 按同一格式回放（同一轮的多个调用合并成一个块），`function_call_output` 作为工具结果消息发送，多轮 agent 循环可以继续。ChatGPT 会在流里回显请求消息，网关按请求消息 ID 跳过这些回显，历史调用不会被当成新回复。
 - 只接受请求中声明过的函数名；未声明的名称或无法解析的块按普通文本返回。`tool_choice: none` 时不发约定，模型被提示直接回答。
 - ChatGPT 无法执行的工具（`code_interpreter`、`file_search`、`computer_use_preview`、`custom`、`mcp` 等）不报错，模型被提示这些工具不可用。
-- 限制：调用依赖模型遵守格式，可能直接回答或写出无效块；`custom` 自由格式工具（如 Codex 的 `apply_patch`）没有模拟；工具定义计入输入，单个 `description` 不超过 16 KB，最多 128 个工具。
+- 限制：调用依赖模型遵守格式，可能直接回答或写出无效块；询问天气、新闻等实时信息时，ChatGPT 服务端的自动搜索（`server_ste_metadata.tool_name: SonicBrowserTool`）会在模型运行前触发，请求里没有关闭它的字段，模型可能直接用搜索结果回答而不调用函数；`custom` 自由格式工具（如 Codex 的 `apply_patch`）没有模拟；工具定义计入输入，单个 `description` 不超过 16 KB，最多 128 个工具。
 
 #### 联网搜索
 
 - 接受 Responses 的 `web_search` / `web_search_preview`、Chat 的 `web_search_options`、Messages 的 `web_search_*`，不再提示"工具不可用"。搜索由 ChatGPT 在服务端完成。
 - `tool_choice` 强制搜索（`{"type":"web_search_preview"}`、只声明了搜索时的 `required`、Messages 指定 `web_search`）时，会话请求带 `system_hints: ["search"]`，与网页端搜索按钮、生图按钮的 `picture_v2` 同一机制。
-- 回复用到搜索（`server_ste_metadata.search_tool_call_count`、消息元数据里的 `search_queries` / `search_result_groups` / `content_references`）时，输出一个 `web_search_call`（`status: completed`，`action.query` 为第一条查询，`action.sources` 为结果链接），能在回答开始前确定时排在消息之前。
-- 正文里的引用标记（`U+E200 … U+E201`）换成 `content_references[].alt` 里 ChatGPT 自带的 Markdown 链接，并按替换后的文字生成 `url_citation`（字符偏移）；没有对应引用的标记原样保留，不猜测位置。`url_moderation` 标为不安全的链接不会出现在来源和正文里。
+- 回复用到搜索（`server_ste_metadata.search_tool_call_count`、消息元数据里的 `search_model_queries` / `search_queries` / `search_result_groups` / `content_references`）时，输出一个 `web_search_call`（`status: completed`，`action.query` 为第一条查询，`action.sources` 为结果链接），能在回答开始前确定时排在消息之前。
+- 正文里的引用组件 `<Cite refs={["turn0search8"]}/>` 按搜索结果的 `ref_id`（`turn{turn_index}{ref_type}{ref_index}`）换成 `([站点](链接))`；旧格式引用标记（`U+E200 … U+E201`）换成 `content_references[].alt` 里 ChatGPT 自带的 Markdown 链接。两者都按替换后的文字生成 `url_citation`（字符偏移）；找不到对应结果的 `<Cite/>` 随网页 UI 标记删除，旧标记原样保留，不猜测位置。`url_moderation` 标为不安全的链接不会出现在来源和正文里。
 - Chat 客户端在 `annotations` 里看到引用；Messages 客户端看到 `server_tool_use` / `web_search_tool_result`。
-- 限制：上述字段名来自网页端协议，未用真实账号验收；引用只在其 `content_references` 与标记同时到达时替换；`citations` / `safe_urls` 不参与映射。
+- 已用免费账号实测（`gpt-6-mini`）：查询词、来源、`<Cite/>` 引用和 `url_citation` 正确。限制：旧格式引用只在其 `content_references` 与标记同时到达时替换；`citations` / `safe_urls` 不参与映射。
 
 ### 图片
 
