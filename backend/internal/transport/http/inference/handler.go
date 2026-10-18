@@ -234,7 +234,7 @@ func (h *Handler) listModels(c *gin.Context) {
 		items = appendReasoningModelAliases(items)
 	}
 	if clientVersion := strings.TrimSpace(c.Query("client_version")); clientVersion != "" {
-		writeCodexModelCatalog(c, newCodexModelCatalog(items))
+		writeCodexModelCatalog(c, newCodexModelCatalog(items, h.gateway.ProviderDefinition))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"object": "list", "data": items})

@@ -92,7 +92,7 @@ func TestNewCodexModelCatalogIncludesRequiredProtocolFields(t *testing.T) {
 	items := newModelListItems([]modeldomain.Route{
 		{PublicID: "Build/grok-4.5", Provider: account.ProviderBuild, Capability: modeldomain.CapabilityResponses, CreatedAt: now},
 	})
-	catalog := newCodexModelCatalog(items)
+	catalog := newCodexModelCatalog(items, grokDefinitions)
 	if len(catalog.Models) != 1 || catalog.Models[0].Slug != "grok-4.5" {
 		t.Fatalf("models = %#v", catalog.Models)
 	}
@@ -133,7 +133,7 @@ func TestCodexCatalogUsesGrok46MetadataForBaseAndXHighAlias(t *testing.T) {
 		{ID: "grok-4.6", Provider: account.ProviderBuild, Capability: modeldomain.CapabilityResponses},
 		{ID: "grok-4.6-xhigh", Provider: account.ProviderBuild, Capability: modeldomain.CapabilityResponses},
 	}
-	models := newCodexModelCatalog(items).Models
+	models := newCodexModelCatalog(items, grokDefinitions).Models
 	if len(models) != 2 {
 		t.Fatalf("model count = %d, want 2", len(models))
 	}
@@ -167,7 +167,7 @@ func TestCodexCatalogUsesGrok46MetadataForBaseAndXHighAlias(t *testing.T) {
 func TestCodexCatalogMarksConsoleGrok420AsFixedReasoning(t *testing.T) {
 	entry := newCodexModelCatalog([]modelListItem{{
 		ID: "grok-4.20-0309-reasoning", Provider: account.ProviderConsole, Capability: modeldomain.CapabilityResponses,
-	}}).Models[0]
+	}}, grokDefinitions).Models[0]
 	if entry.DefaultReasoningLevel != "none" || len(entry.SupportedReasoningLevels) != 0 {
 		t.Fatalf("fixed reasoning efforts = default %q, levels %#v", entry.DefaultReasoningLevel, entry.SupportedReasoningLevels)
 	}
@@ -181,7 +181,7 @@ func TestNewCodexModelCacheRespectsNonReasoningModel(t *testing.T) {
 	items := newModelListItems([]modeldomain.Route{
 		{PublicID: "Build/grok-build-0.1", Provider: account.ProviderBuild, Capability: modeldomain.CapabilityResponses, CreatedAt: now},
 	})
-	entry := newCodexModelCatalog(items).Models[0]
+	entry := newCodexModelCatalog(items, grokDefinitions).Models[0]
 	if entry.DefaultReasoningLevel != "none" {
 		t.Fatalf("default reasoning = %q", entry.DefaultReasoningLevel)
 	}
@@ -200,7 +200,7 @@ func TestCodexCatalogHidesMediaModels(t *testing.T) {
 		{PublicID: "Web/grok-imagine-image-lite", Provider: account.ProviderWeb, Capability: modeldomain.CapabilityImage, CreatedAt: now},
 		{PublicID: "Web/grok-imagine-video", Provider: account.ProviderWeb, Capability: modeldomain.CapabilityVideo, CreatedAt: now},
 	}
-	catalog := newCodexModelCatalog(newModelListItems(routes))
+	catalog := newCodexModelCatalog(newModelListItems(routes), grokDefinitions)
 	if len(catalog.Models) != 3 {
 		t.Fatalf("model count = %d, want 3; slugs = %#v", len(catalog.Models), codexSlugs(catalog.Models))
 	}
@@ -221,7 +221,7 @@ func TestCodexCatalogHidesMediaModels(t *testing.T) {
 func TestCodexCatalogUsesConservativeUnknownModelDefaults(t *testing.T) {
 	entry := newCodexModelCatalog([]modelListItem{{
 		ID: "custom-model", Provider: account.ProviderWeb, Capability: modeldomain.CapabilityChat,
-	}}).Models[0]
+	}}, grokDefinitions).Models[0]
 	if entry.ContextWindow != 128000 || entry.DefaultReasoningLevel != "none" {
 		t.Fatalf("unknown model metadata = %#v", entry)
 	}
@@ -234,7 +234,7 @@ func TestWriteCodexModelCatalogSetsETagAndHandlesNotModified(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	catalog := newCodexModelCatalog([]modelListItem{{
 		ID: "grok-4.5", Provider: account.ProviderBuild, Capability: modeldomain.CapabilityResponses,
-	}})
+	}}, grokDefinitions)
 	router := gin.New()
 	router.GET("/v1/models", func(c *gin.Context) { writeCodexModelCatalog(c, catalog) })
 

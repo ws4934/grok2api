@@ -10,6 +10,7 @@ import (
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/gin-gonic/gin"
 )
 
@@ -105,7 +106,7 @@ var grokDefaultCapability = grokModelCapability{
 	description:   "Grok model served via grok2api.",
 }
 
-func lookupGrokCapability(providerValue account.Provider, slug string) (grokModelCapability, []string) {
+func lookupGrokCapability(providerValue account.Provider, definition provider.Definition, slug string) (grokModelCapability, []string) {
 	// Effort-suffixed aliases inherit the base model's metadata.
 	if base, _, ok := modeldomain.ParseReasoningModelAlias(slug); ok {
 		slug = base
@@ -115,9 +116,9 @@ func lookupGrokCapability(providerValue account.Provider, slug string) (grokMode
 	if !ok {
 		capability = grokDefaultCapability
 	}
-	// The live Build catalog (context_window) is authoritative over the static
+	// A live remote catalog (context_window) is authoritative over the static
 	// table once an account has synchronized it, exactly like grok-build.
-	if providerValue == account.ProviderBuild {
+	if definition.ModelCatalog == provider.ModelCatalogRemote {
 		if profile, exists := modeldomain.UpstreamProfile(slug); exists && profile.ContextWindow > 0 {
 			capability.contextWindow = profile.ContextWindow
 		}
@@ -142,14 +143,17 @@ func codexReasoningLevelsFor(levels []string) []codexReasoningLevel {
 	return result
 }
 
-func codexAgentToolsSupported(item modelListItem) bool {
-	return item.Provider == account.ProviderBuild && item.Capability == modeldomain.CapabilityResponses
+func codexAgentToolsSupported(item modelListItem, definition provider.Definition) bool {
+	return definition.Conversation.CustomTools && item.Capability == modeldomain.CapabilityResponses
 }
 
-func newCodexModelCatalog(items []modelListItem) codexModelCatalog {
+// newCodexModelCatalog describes items for Codex clients; definitions returns
+// the registered declaration of each item's provider.
+func newCodexModelCatalog(items []modelListItem, definitions func(account.Provider) (provider.Definition, bool)) codexModelCatalog {
 	models := make([]codexModelEntry, 0, len(items))
 	for index, item := range items {
-		capability, reasoningLevels := lookupGrokCapability(item.Provider, item.ID)
+		definition, _ := definitions(item.Provider)
+		capability, reasoningLevels := lookupGrokCapability(item.Provider, definition, item.ID)
 		defaultLevel := modeldomain.DefaultReasoningEffortForProvider(item.Provider, item.ID)
 		// Alias entries pin a single effort; advertise only that level for client UX.
 		if _, effort, ok := modeldomain.ParseReasoningModelAlias(item.ID); ok {
@@ -161,7 +165,7 @@ func newCodexModelCatalog(items []modelListItem) codexModelCatalog {
 			modalities = append(modalities, "image")
 		}
 		var applyPatchToolType *string
-		toolsSupported := codexAgentToolsSupported(item)
+		toolsSupported := codexAgentToolsSupported(item, definition)
 		if toolsSupported {
 			value := "freeform"
 			applyPatchToolType = &value

@@ -482,6 +482,11 @@ func (s *Service) SetLogger(logger *slog.Logger) {
 
 func (s *Service) UpdateMaxAttempts(maxAttempts int) { s.maxAttempts.Store(int64(maxAttempts)) }
 
+// ProviderDefinition returns the registered declaration of a provider.
+func (s *Service) ProviderDefinition(value accountdomain.Provider) (provider.Definition, bool) {
+	return s.providers.Definition(value)
+}
+
 // UpdateVideoMaxAttempts configures create-phase account failover for video jobs.
 // 0 is treated as the general default pool size for legacy configs.
 func (s *Service) UpdateVideoMaxAttempts(maxAttempts int) {

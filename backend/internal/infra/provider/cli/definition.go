@@ -21,7 +21,7 @@ func (a *Adapter) Definition() provider.Definition {
 			AuthType: account.AuthTypeOAuth, Import: true, Refresh: true, DeviceOAuth: true,
 		},
 		Conversation: provider.ConversationSurface{
-			Responses: true, ChatCompletions: true, Messages: true, Compact: true, StoredResponses: true,
+			Responses: true, ChatCompletions: true, Messages: true, Compact: true, StoredResponses: true, CustomTools: true,
 		},
 		Media: provider.MediaSurface{VideoGeneration: true},
 		Inference: provider.InferencePolicy{

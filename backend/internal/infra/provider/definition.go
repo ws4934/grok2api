@@ -37,6 +37,9 @@ type ConversationSurface struct {
 	// previous_response_id: the gateway drops the ID and forwards the history
 	// the client replays.
 	StatelessPreviousResponse bool
+	// CustomTools: the upstream runs Responses custom (freeform) tools and
+	// parallel tool calls, so Codex clients may use their agent tools.
+	CustomTools bool
 }
 
 // Supports 判断统一对话协议入口是否由当前 Provider 明确声明。

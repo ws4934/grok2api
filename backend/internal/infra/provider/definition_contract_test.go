@@ -51,7 +51,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			provider: account.ProviderBuild, catalog: provider.ModelCatalogRemote, quota: provider.QuotaBilling,
 			capabilities: []modeldomain.Capability{modeldomain.CapabilityResponses, modeldomain.CapabilityVideo},
 			credential:   provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true, DeviceOAuth: true},
-			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true, Compact: true, StoredResponses: true},
+			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true, Compact: true, StoredResponses: true, CustomTools: true},
 			media:        provider.MediaSurface{VideoGeneration: true},
 			inference:    provider.InferencePolicy{Usage: provider.UsageUpstream, SessionIdentity: true, QualityHold: true, QualityAutoDisable: true},
 			failure: provider.FailurePolicy{
