@@ -101,6 +101,41 @@ type SwaggerVideoAudioInput struct {
 	VoiceID string `json:"voice_id" example:"eve"`
 }
 
+// SwaggerTTSOutputFormat 表示 TTS 输出格式；设置 codec 时优先于 response_format。
+type SwaggerTTSOutputFormat struct {
+	Codec      string `json:"codec,omitempty" example:"mp3"`
+	SampleRate int    `json:"sample_rate,omitempty" example:"24000"`
+	BitRate    int    `json:"bit_rate,omitempty" example:"128000"`
+}
+
+// SwaggerSpeechRequest 表示 OpenAI 兼容语音合成请求；language、voice_id、output_format、optimize_streaming_latency、text_normalization、with_timestamps 为 Grok 扩展字段。
+type SwaggerSpeechRequest struct {
+	Model                    string                  `json:"model,omitempty" example:"grok-voice-latest"`
+	Input                    string                  `json:"input" example:"Hello from the gateway"`
+	Voice                    string                  `json:"voice,omitempty" example:"alloy"`
+	ResponseFormat           string                  `json:"response_format,omitempty" example:"mp3"`
+	Speed                    float64                 `json:"speed,omitempty" example:"1"`
+	Language                 string                  `json:"language,omitempty" example:"en"`
+	VoiceID                  string                  `json:"voice_id,omitempty" example:"eve"`
+	OutputFormat             *SwaggerTTSOutputFormat `json:"output_format,omitempty"`
+	OptimizeStreamingLatency int                     `json:"optimize_streaming_latency,omitempty" example:"0"`
+	TextNormalization        bool                    `json:"text_normalization,omitempty" example:"false"`
+	WithTimestamps           bool                    `json:"with_timestamps,omitempty" example:"false"`
+}
+
+// SwaggerTTSRequest 表示原生 TTS 请求；text 与 language 必填。
+type SwaggerTTSRequest struct {
+	Model                    string                  `json:"model,omitempty" example:"grok-voice-latest"`
+	Text                     string                  `json:"text" example:"Hello from the gateway"`
+	VoiceID                  string                  `json:"voice_id,omitempty" example:"eve"`
+	Language                 string                  `json:"language" example:"en"`
+	OutputFormat             *SwaggerTTSOutputFormat `json:"output_format,omitempty"`
+	Speed                    float64                 `json:"speed,omitempty" example:"1"`
+	OptimizeStreamingLatency int                     `json:"optimize_streaming_latency,omitempty" example:"0"`
+	TextNormalization        bool                    `json:"text_normalization,omitempty" example:"false"`
+	WithTimestamps           bool                    `json:"with_timestamps,omitempty" example:"false"`
+}
+
 // swaggerHealth godoc
 // @Summary 存活检查
 // @Tags System
@@ -120,6 +155,7 @@ func swaggerReady() {}
 
 // swaggerModels godoc
 // @Summary 获取可用模型
+// @Description ChatGPT 账号的模型：文本模型来自账号模型同步（如 auto、gpt-6、gpt-6-mini、gpt-5-3-mini）；图片模型 gpt-image-2、gpt-image-2.5、gpt-image-2.5-flare、gpt-image-2.5-sunburst；语音模型 chatgpt-tts、chatgpt-transcribe。
 // @Tags Models
 // @Security BearerAuth
 // @Produce json
@@ -132,6 +168,9 @@ func swaggerModels() {}
 // @Summary 创建 Response
 // @Description 支持 JSON 与 SSE；stream=true 时返回 text/event-stream。
 // @Description 携带 image_generation 工具且图片路由支持可恢复图片任务（如 ChatGPT）时按图片任务执行：默认等待并返回含 image_generation_call 的 Response；background=true 立即返回 queued 对象，用 GET /v1/responses/{response_id} 查询、POST /v1/responses/{response_id}/cancel 取消。工具未指定 model 且顶层模型为该 Provider 的文本模型时使用运行时设置 providerChatGPT.defaultImageModel。
+// @Description ChatGPT 文本模型（账号模型同步，如 auto、gpt-6、gpt-6-mini、gpt-5-3-mini）：usage 为本地 o200k_base 估算（上游不返回用量）；不支持的采样参数被忽略；reasoning.effort 映射为上游推理强度；回复为纯 Markdown（网关要求 ChatGPT 不输出网页 UI 组件）。
+// @Description ChatGPT 函数工具：通过提示词与 XML 调用约定模拟，返回 function_call 项；只解析已声明的函数名；支持 tool_choice 的 none、required 与指定函数，parallel_tool_calls=false 时只保留第一个调用；最多 128 个工具，每个 description 不超过 16 KB；不模拟 custom 自由格式工具；能否产生调用取决于模型是否遵循约定格式。
+// @Description ChatGPT 联网搜索：web_search / web_search_preview 工具由 ChatGPT 在服务端搜索，结果为 web_search_call 项加 url_citation 注释；支持用 tool_choice 强制搜索；实时类问题即使未声明工具也可能触发 ChatGPT 自动搜索。
 // @Tags Responses
 // @Security BearerAuth
 // @Accept json
@@ -194,6 +233,9 @@ func swaggerCancelResponse() {}
 // swaggerChat godoc
 // @Summary 创建 Chat Completion
 // @Description 支持 JSON 与 SSE、图片输入和函数工具。
+// @Description ChatGPT 文本模型（账号模型同步，如 auto、gpt-6、gpt-6-mini、gpt-5-3-mini）：usage 为本地 o200k_base 估算（上游不返回用量）；不支持的采样参数被忽略；reasoning_effort 映射为上游推理强度；回复为纯 Markdown（网关要求 ChatGPT 不输出网页 UI 组件）。
+// @Description ChatGPT 函数工具：通过提示词与 XML 调用约定模拟，返回 tool_calls 且 finish_reason 为 tool_calls；只解析已声明的函数名；支持 tool_choice 的 none、required 与指定函数，parallel_tool_calls=false 时只保留第一个调用；最多 128 个工具，每个 description 不超过 16 KB；不模拟 custom 自由格式工具；能否产生调用取决于模型是否遵循约定格式。
+// @Description ChatGPT 联网搜索：web_search_options 由 ChatGPT 在服务端搜索，引用以 url_citation 写入 annotations；实时类问题即使未开启搜索也可能触发 ChatGPT 自动搜索。
 // @Tags Chat
 // @Security BearerAuth
 // @Accept json
@@ -206,6 +248,9 @@ func swaggerChat() {}
 
 // swaggerMessages godoc
 // @Summary 创建 Anthropic Message
+// @Description ChatGPT 文本模型（账号模型同步，如 auto、gpt-6、gpt-6-mini、gpt-5-3-mini）：usage 为本地 o200k_base 估算（上游不返回用量）；不支持的采样参数被忽略；回复为纯 Markdown（网关要求 ChatGPT 不输出网页 UI 组件）。
+// @Description ChatGPT 函数工具：通过提示词与 XML 调用约定模拟，返回 tool_use 块；只解析已声明的函数名；支持 tool_choice 的 none、required 与指定函数，parallel_tool_calls=false 时只保留第一个调用；最多 128 个工具，每个 description 不超过 16 KB；不模拟 custom 自由格式工具；能否产生调用取决于模型是否遵循约定格式。
+// @Description ChatGPT 联网搜索：web_search_* 工具由 ChatGPT 在服务端搜索，结果为 server_tool_use 与 web_search_tool_result 块；支持用 tool_choice 强制搜索；实时类问题即使未声明工具也可能触发 ChatGPT 自动搜索。
 // @Tags Messages
 // @Security BearerAuth
 // @Accept json
@@ -219,6 +264,7 @@ func swaggerMessages() {}
 
 // swaggerGenerateImage godoc
 // @Summary 生成图片
+// @Description ChatGPT 图片模型：gpt-image-2、gpt-image-2.5、gpt-image-2.5-flare、gpt-image-2.5-sunburst。
 // @Tags Images
 // @Security BearerAuth
 // @Accept json
@@ -231,6 +277,7 @@ func swaggerGenerateImage() {}
 
 // swaggerEditImage godoc
 // @Summary 编辑图片
+// @Description ChatGPT 图片模型：gpt-image-2、gpt-image-2.5、gpt-image-2.5-flare、gpt-image-2.5-sunburst。
 // @Tags Images
 // @Security BearerAuth
 // @Accept json,mpfd
@@ -297,3 +344,149 @@ func swaggerExtendVideo() {}
 // @Failure 404 {object} map[string]any
 // @Router /v1/videos/{request_id} [get]
 func swaggerGetVideo() {}
+
+// swaggerAudioSpeech godoc
+// @Summary 合成语音（OpenAI 兼容）
+// @Description 默认直接返回音频；with_timestamps=true 或上游返回 JSON 封装时返回 JSON：audio（Base64）、content_type、duration，可选 audio_timestamps（graph_chars、graph_times）。
+// @Description model 缺省为 grok-voice-latest，language 缺省为 en；response_format 支持 mp3、opus（ogg）、aac、flac、wav、pcm，缺省为 mp3，output_format.codec 优先；speed 取值 0.25 到 4.0；optimize_streaming_latency 取值 0 到 4；voice_id 优先于 voice，OpenAI 音色名映射为 Grok 音色（alloy/verse→ara、echo/ballad→eve、fable/coral→sal、onyx/ash→rex、nova/sage→leo、shimmer/marin→sia），其余值原样透传。
+// @Description ChatGPT 模型 chatgpt-tts：response_format 仅支持 mp3、aac、opus（wav、flac、pcm 返回 400）；input 不超过 4096 字符；忽略 speed 与 language；voice 按账号音色 ID 或显示名匹配（breeze、cove、glimmer（显示名 Sol）、orbit（显示名 Spruce）、maple、juniper、ember、vale、fathom（显示名 Arbor）），未知名称（如 OpenAI 的 alloy）使用账号当前选中的音色；单次合成约 9 秒。
+// @Tags Audio
+// @Security BearerAuth
+// @Accept json
+// @Produce audio/mpeg,json
+// @Param request body SwaggerSpeechRequest true "请求"
+// @Success 200 {file} binary
+// @Failure 400 {object} map[string]any
+// @Failure 401 {object} map[string]any
+// @Failure 415 {object} map[string]any
+// @Router /v1/audio/speech [post]
+func swaggerAudioSpeech() {}
+
+// swaggerAudioTask godoc
+// @Summary 合成语音（/v1/audio/speech 兼容别名）
+// @Description 行为与参数同 POST /v1/audio/speech（含 ChatGPT chatgpt-tts 的限制）：默认直接返回音频，with_timestamps=true 时返回 JSON。
+// @Tags Audio
+// @Security BearerAuth
+// @Accept json
+// @Produce audio/mpeg,json
+// @Param request body SwaggerSpeechRequest true "请求"
+// @Success 200 {file} binary
+// @Failure 400 {object} map[string]any
+// @Failure 401 {object} map[string]any
+// @Failure 415 {object} map[string]any
+// @Router /v1/audio/tasks [post]
+func swaggerAudioTask() {}
+
+// swaggerAudioTranscription godoc
+// @Summary 转写音频（OpenAI 兼容）
+// @Description 接受 multipart/form-data，或字段同名的 application/json（用 url 代替 file）；file 与 url 提供其一。model 缺省为 grok-stt。
+// @Description response_format：json（缺省）返回 text；text 返回纯文本；verbose_json 返回 task、text、language、duration 与 words（word、start、end、可选 speaker）。传 prompt、非 0 的 temperature 或 timestamp_granularities 返回 400。其余 Console 扩展字段同 POST /v1/stt。
+// @Description ChatGPT 模型 chatgpt-transcribe：只接受上传的 file（不超过 25 MB，不支持 url），只返回文本（无 words、language、duration）。
+// @Tags Audio
+// @Security BearerAuth
+// @Accept mpfd,json
+// @Produce json,plain
+// @Param file formData file false "音频文件"
+// @Param url formData string false "音频 URL"
+// @Param model formData string false "模型" default(grok-stt)
+// @Param language formData string false "语言"
+// @Param response_format formData string false "响应格式" Enums(json,text,verbose_json) default(json)
+// @Success 200 {object} map[string]any
+// @Failure 400 {object} map[string]any
+// @Failure 401 {object} map[string]any
+// @Failure 415 {object} map[string]any
+// @Router /v1/audio/transcriptions [post]
+func swaggerAudioTranscription() {}
+
+// swaggerTTS godoc
+// @Summary 合成语音
+// @Description 原生 Console 兼容接口：text 与 language 必填，model 缺省为 grok-voice-latest；speed 取值 0.25 到 4.0；optimize_streaming_latency 取值 0 到 4。默认直接返回音频；with_timestamps=true 或上游返回 JSON 封装时返回 JSON：audio（Base64）、content_type、duration，可选 audio_timestamps。
+// @Description ChatGPT 模型 chatgpt-tts：output_format.codec 缺省为 mp3，仅支持 mp3、aac、opus；text 不超过 4096 字符；language 仍需传但会被忽略，speed 也被忽略；voice_id 的匹配规则同 POST /v1/audio/speech。
+// @Tags Audio
+// @Security BearerAuth
+// @Accept json
+// @Produce audio/mpeg,json
+// @Param request body SwaggerTTSRequest true "请求"
+// @Success 200 {file} binary
+// @Failure 400 {object} map[string]any
+// @Failure 401 {object} map[string]any
+// @Failure 415 {object} map[string]any
+// @Router /v1/tts [post]
+func swaggerTTS() {}
+
+// swaggerListTTSVoices godoc
+// @Summary 列出 TTS 音色
+// @Description 返回 voices 数组，每项含 voice_id、name、language（可能为 null）。model=chatgpt-tts 时列出 ChatGPT 账号的音色。
+// @Tags Audio
+// @Security BearerAuth
+// @Produce json
+// @Param model query string false "模型" default(grok-voice-latest)
+// @Success 200 {object} map[string]any
+// @Failure 401 {object} map[string]any
+// @Router /v1/tts/voices [get]
+func swaggerListTTSVoices() {}
+
+// swaggerGetTTSVoice godoc
+// @Summary 查询 TTS 音色
+// @Description 返回 voice_id、name、language（可能为 null）。
+// @Tags Audio
+// @Security BearerAuth
+// @Produce json
+// @Param voiceId path string true "Voice ID"
+// @Param model query string false "模型" default(grok-voice-latest)
+// @Success 200 {object} map[string]any
+// @Failure 401 {object} map[string]any
+// @Failure 404 {object} map[string]any
+// @Router /v1/tts/voices/{voiceId} [get]
+func swaggerGetTTSVoice() {}
+
+// swaggerSTT godoc
+// @Summary 转写音频
+// @Description 原生 Console 兼容接口：接受 multipart/form-data，或字段同名的 application/json（用 url 代替 file）；file 与 url 提供其一。model 缺省为 grok-stt。
+// @Description 返回上游原始 JSON，或 text、language、duration 与可选 words（text、start、end、speaker）、channels（index、text、words）。
+// @Description ChatGPT 模型 chatgpt-transcribe：只接受上传的 file（不超过 25 MB，不支持 url），只返回文本（无 words、language、duration）。
+// @Tags Audio
+// @Security BearerAuth
+// @Accept mpfd,json
+// @Produce json
+// @Param file formData file false "音频文件"
+// @Param url formData string false "音频 URL"
+// @Param model formData string false "模型" default(grok-stt)
+// @Param language formData string false "语言"
+// @Param audio_format formData string false "音频格式"
+// @Param sample_rate formData string false "采样率；也接受 sample_rate_hertz"
+// @Param format formData boolean false "透传 Console STT 的 format"
+// @Param multichannel formData boolean false "多声道"
+// @Param channels formData integer false "声道数"
+// @Param diarize formData boolean false "说话人分离"
+// @Param filler_words formData boolean false "保留语气词"
+// @Param keyterm formData []string false "关键词，可重复" collectionFormat(multi)
+// @Param vad_threshold formData number false "VAD 阈值"
+// @Success 200 {object} map[string]any
+// @Failure 400 {object} map[string]any
+// @Failure 401 {object} map[string]any
+// @Failure 415 {object} map[string]any
+// @Router /v1/stt [post]
+func swaggerSTT() {}
+
+// swaggerSTTWebSocket godoc
+// @Summary 流式转写（WebSocket）
+// @Description 需要 WebSocket Upgrade，普通请求返回 405；升级后在客户端与上游语音 WebSocket 之间双向转发消息。model 缺省为 grok-stt。
+// @Tags Audio
+// @Security BearerAuth
+// @Param model query string false "模型" default(grok-stt)
+// @Success 101 "切换到 WebSocket"
+// @Failure 405 {object} map[string]any
+// @Router /v1/stt [get]
+func swaggerSTTWebSocket() {}
+
+// swaggerRealtimeWebSocket godoc
+// @Summary 实时语音（WebSocket）
+// @Description 需要 WebSocket Upgrade，普通请求返回 400；升级后在客户端与上游语音 WebSocket 之间双向转发消息。model 缺省为 grok-voice-latest。
+// @Tags Audio
+// @Security BearerAuth
+// @Param model query string false "模型" default(grok-voice-latest)
+// @Success 101 "切换到 WebSocket"
+// @Failure 400 {object} map[string]any
+// @Router /v1/realtime [get]
+func swaggerRealtimeWebSocket() {}

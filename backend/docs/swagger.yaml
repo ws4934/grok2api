@@ -156,6 +156,82 @@ definitions:
         items: {}
         type: array
     type: object
+  httpserver.SwaggerSpeechRequest:
+    properties:
+      input:
+        example: Hello from the gateway
+        type: string
+      language:
+        example: en
+        type: string
+      model:
+        example: grok-voice-latest
+        type: string
+      optimize_streaming_latency:
+        example: 0
+        type: integer
+      output_format:
+        $ref: '#/definitions/httpserver.SwaggerTTSOutputFormat'
+      response_format:
+        example: mp3
+        type: string
+      speed:
+        example: 1
+        type: number
+      text_normalization:
+        example: false
+        type: boolean
+      voice:
+        example: alloy
+        type: string
+      voice_id:
+        example: eve
+        type: string
+      with_timestamps:
+        example: false
+        type: boolean
+    type: object
+  httpserver.SwaggerTTSOutputFormat:
+    properties:
+      bit_rate:
+        example: 128000
+        type: integer
+      codec:
+        example: mp3
+        type: string
+      sample_rate:
+        example: 24000
+        type: integer
+    type: object
+  httpserver.SwaggerTTSRequest:
+    properties:
+      language:
+        example: en
+        type: string
+      model:
+        example: grok-voice-latest
+        type: string
+      optimize_streaming_latency:
+        example: 0
+        type: integer
+      output_format:
+        $ref: '#/definitions/httpserver.SwaggerTTSOutputFormat'
+      speed:
+        example: 1
+        type: number
+      text:
+        example: Hello from the gateway
+        type: string
+      text_normalization:
+        example: false
+        type: boolean
+      voice_id:
+        example: eve
+        type: string
+      with_timestamps:
+        example: false
+        type: boolean
+    type: object
   httpserver.SwaggerVideoAudioInput:
     properties:
       voice_id:
@@ -241,11 +317,164 @@ paths:
       summary: 就绪检查
       tags:
       - System
+  /v1/audio/speech:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        默认直接返回音频；with_timestamps=true 或上游返回 JSON 封装时返回 JSON：audio（Base64）、content_type、duration，可选 audio_timestamps（graph_chars、graph_times）。
+        model 缺省为 grok-voice-latest，language 缺省为 en；response_format 支持 mp3、opus（ogg）、aac、flac、wav、pcm，缺省为 mp3，output_format.codec 优先；speed 取值 0.25 到 4.0；optimize_streaming_latency 取值 0 到 4；voice_id 优先于 voice，OpenAI 音色名映射为 Grok 音色（alloy/verse→ara、echo/ballad→eve、fable/coral→sal、onyx/ash→rex、nova/sage→leo、shimmer/marin→sia），其余值原样透传。
+        ChatGPT 模型 chatgpt-tts：response_format 仅支持 mp3、aac、opus（wav、flac、pcm 返回 400）；input 不超过 4096 字符；忽略 speed 与 language；voice 按账号音色 ID 或显示名匹配（breeze、cove、glimmer（显示名 Sol）、orbit（显示名 Spruce）、maple、juniper、ember、vale、fathom（显示名 Arbor）），未知名称（如 OpenAI 的 alloy）使用账号当前选中的音色；单次合成约 9 秒。
+      parameters:
+      - description: 请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.SwaggerSpeechRequest'
+      produces:
+      - audio/mpeg
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "415":
+          description: Unsupported Media Type
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 合成语音（OpenAI 兼容）
+      tags:
+      - Audio
+  /v1/audio/tasks:
+    post:
+      consumes:
+      - application/json
+      description: 行为与参数同 POST /v1/audio/speech（含 ChatGPT chatgpt-tts 的限制）：默认直接返回音频，with_timestamps=true
+        时返回 JSON。
+      parameters:
+      - description: 请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.SwaggerSpeechRequest'
+      produces:
+      - audio/mpeg
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "415":
+          description: Unsupported Media Type
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 合成语音（/v1/audio/speech 兼容别名）
+      tags:
+      - Audio
+  /v1/audio/transcriptions:
+    post:
+      consumes:
+      - multipart/form-data
+      - application/json
+      description: |-
+        接受 multipart/form-data，或字段同名的 application/json（用 url 代替 file）；file 与 url 提供其一。model 缺省为 grok-stt。
+        response_format：json（缺省）返回 text；text 返回纯文本；verbose_json 返回 task、text、language、duration 与 words（word、start、end、可选 speaker）。传 prompt、非 0 的 temperature 或 timestamp_granularities 返回 400。其余 Console 扩展字段同 POST /v1/stt。
+        ChatGPT 模型 chatgpt-transcribe：只接受上传的 file（不超过 25 MB，不支持 url），只返回文本（无 words、language、duration）。
+      parameters:
+      - description: 音频文件
+        in: formData
+        name: file
+        type: file
+      - description: 音频 URL
+        in: formData
+        name: url
+        type: string
+      - default: grok-stt
+        description: 模型
+        in: formData
+        name: model
+        type: string
+      - description: 语言
+        in: formData
+        name: language
+        type: string
+      - default: json
+        description: 响应格式
+        enum:
+        - json
+        - text
+        - verbose_json
+        in: formData
+        name: response_format
+        type: string
+      produces:
+      - application/json
+      - text/plain
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "415":
+          description: Unsupported Media Type
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 转写音频（OpenAI 兼容）
+      tags:
+      - Audio
   /v1/chat/completions:
     post:
       consumes:
       - application/json
-      description: 支持 JSON 与 SSE、图片输入和函数工具。
+      description: |-
+        支持 JSON 与 SSE、图片输入和函数工具。
+        ChatGPT 文本模型（账号模型同步，如 auto、gpt-6、gpt-6-mini、gpt-5-3-mini）：usage 为本地 o200k_base 估算（上游不返回用量）；不支持的采样参数被忽略；reasoning_effort 映射为上游推理强度；回复为纯 Markdown（网关要求 ChatGPT 不输出网页 UI 组件）。
+        ChatGPT 函数工具：通过提示词与 XML 调用约定模拟，返回 tool_calls 且 finish_reason 为 tool_calls；只解析已声明的函数名；支持 tool_choice 的 none、required 与指定函数，parallel_tool_calls=false 时只保留第一个调用；最多 128 个工具，每个 description 不超过 16 KB；不模拟 custom 自由格式工具；能否产生调用取决于模型是否遵循约定格式。
+        ChatGPT 联网搜索：web_search_options 由 ChatGPT 在服务端搜索，引用以 url_citation 写入 annotations；实时类问题即使未开启搜索也可能触发 ChatGPT 自动搜索。
       parameters:
       - description: 请求
         in: body
@@ -276,6 +505,7 @@ paths:
       consumes:
       - application/json
       - multipart/form-data
+      description: ChatGPT 图片模型：gpt-image-2、gpt-image-2.5、gpt-image-2.5-flare、gpt-image-2.5-sunburst。
       parameters:
       - description: 请求
         in: body
@@ -305,6 +535,7 @@ paths:
     post:
       consumes:
       - application/json
+      description: ChatGPT 图片模型：gpt-image-2、gpt-image-2.5、gpt-image-2.5-flare、gpt-image-2.5-sunburst。
       parameters:
       - description: 请求
         in: body
@@ -354,6 +585,10 @@ paths:
     post:
       consumes:
       - application/json
+      description: |-
+        ChatGPT 文本模型（账号模型同步，如 auto、gpt-6、gpt-6-mini、gpt-5-3-mini）：usage 为本地 o200k_base 估算（上游不返回用量）；不支持的采样参数被忽略；回复为纯 Markdown（网关要求 ChatGPT 不输出网页 UI 组件）。
+        ChatGPT 函数工具：通过提示词与 XML 调用约定模拟，返回 tool_use 块；只解析已声明的函数名；支持 tool_choice 的 none、required 与指定函数，parallel_tool_calls=false 时只保留第一个调用；最多 128 个工具，每个 description 不超过 16 KB；不模拟 custom 自由格式工具；能否产生调用取决于模型是否遵循约定格式。
+        ChatGPT 联网搜索：web_search_* 工具由 ChatGPT 在服务端搜索，结果为 server_tool_use 与 web_search_tool_result 块；支持用 tool_choice 强制搜索；实时类问题即使未声明工具也可能触发 ChatGPT 自动搜索。
       parameters:
       - default: "2023-06-01"
         description: Anthropic API version
@@ -387,6 +622,9 @@ paths:
       - Messages
   /v1/models:
     get:
+      description: ChatGPT 账号的模型：文本模型来自账号模型同步（如 auto、gpt-6、gpt-6-mini、gpt-5-3-mini）；图片模型
+        gpt-image-2、gpt-image-2.5、gpt-image-2.5-flare、gpt-image-2.5-sunburst；语音模型
+        chatgpt-tts、chatgpt-transcribe。
       produces:
       - application/json
       responses:
@@ -405,6 +643,29 @@ paths:
       summary: 获取可用模型
       tags:
       - Models
+  /v1/realtime:
+    get:
+      description: 需要 WebSocket Upgrade，普通请求返回 400；升级后在客户端与上游语音 WebSocket 之间双向转发消息。model
+        缺省为 grok-voice-latest。
+      parameters:
+      - default: grok-voice-latest
+        description: 模型
+        in: query
+        name: model
+        type: string
+      responses:
+        "101":
+          description: 切换到 WebSocket
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 实时语音（WebSocket）
+      tags:
+      - Audio
   /v1/responses:
     post:
       consumes:
@@ -412,6 +673,9 @@ paths:
       description: |-
         支持 JSON 与 SSE；stream=true 时返回 text/event-stream。
         携带 image_generation 工具且图片路由支持可恢复图片任务（如 ChatGPT）时按图片任务执行：默认等待并返回含 image_generation_call 的 Response；background=true 立即返回 queued 对象，用 GET /v1/responses/{response_id} 查询、POST /v1/responses/{response_id}/cancel 取消。工具未指定 model 且顶层模型为该 Provider 的文本模型时使用运行时设置 providerChatGPT.defaultImageModel。
+        ChatGPT 文本模型（账号模型同步，如 auto、gpt-6、gpt-6-mini、gpt-5-3-mini）：usage 为本地 o200k_base 估算（上游不返回用量）；不支持的采样参数被忽略；reasoning.effort 映射为上游推理强度；回复为纯 Markdown（网关要求 ChatGPT 不输出网页 UI 组件）。
+        ChatGPT 函数工具：通过提示词与 XML 调用约定模拟，返回 function_call 项；只解析已声明的函数名；支持 tool_choice 的 none、required 与指定函数，parallel_tool_calls=false 时只保留第一个调用；最多 128 个工具，每个 description 不超过 16 KB；不模拟 custom 自由格式工具；能否产生调用取决于模型是否遵循约定格式。
+        ChatGPT 联网搜索：web_search / web_search_preview 工具由 ChatGPT 在服务端搜索，结果为 web_search_call 项加 url_citation 注释；支持用 tool_choice 强制搜索；实时类问题即使未声明工具也可能触发 ChatGPT 自动搜索。
       parameters:
       - description: 图片任务幂等键：相同请求返回同一任务，请求体不同返回 409
         in: header
@@ -554,6 +818,229 @@ paths:
       summary: 压缩 Response 上下文
       tags:
       - Responses
+  /v1/stt:
+    get:
+      description: 需要 WebSocket Upgrade，普通请求返回 405；升级后在客户端与上游语音 WebSocket 之间双向转发消息。model
+        缺省为 grok-stt。
+      parameters:
+      - default: grok-stt
+        description: 模型
+        in: query
+        name: model
+        type: string
+      responses:
+        "101":
+          description: 切换到 WebSocket
+        "405":
+          description: Method Not Allowed
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 流式转写（WebSocket）
+      tags:
+      - Audio
+    post:
+      consumes:
+      - multipart/form-data
+      - application/json
+      description: |-
+        原生 Console 兼容接口：接受 multipart/form-data，或字段同名的 application/json（用 url 代替 file）；file 与 url 提供其一。model 缺省为 grok-stt。
+        返回上游原始 JSON，或 text、language、duration 与可选 words（text、start、end、speaker）、channels（index、text、words）。
+        ChatGPT 模型 chatgpt-transcribe：只接受上传的 file（不超过 25 MB，不支持 url），只返回文本（无 words、language、duration）。
+      parameters:
+      - description: 音频文件
+        in: formData
+        name: file
+        type: file
+      - description: 音频 URL
+        in: formData
+        name: url
+        type: string
+      - default: grok-stt
+        description: 模型
+        in: formData
+        name: model
+        type: string
+      - description: 语言
+        in: formData
+        name: language
+        type: string
+      - description: 音频格式
+        in: formData
+        name: audio_format
+        type: string
+      - description: 采样率；也接受 sample_rate_hertz
+        in: formData
+        name: sample_rate
+        type: string
+      - description: 透传 Console STT 的 format
+        in: formData
+        name: format
+        type: boolean
+      - description: 多声道
+        in: formData
+        name: multichannel
+        type: boolean
+      - description: 声道数
+        in: formData
+        name: channels
+        type: integer
+      - description: 说话人分离
+        in: formData
+        name: diarize
+        type: boolean
+      - description: 保留语气词
+        in: formData
+        name: filler_words
+        type: boolean
+      - collectionFormat: multi
+        description: 关键词，可重复
+        in: formData
+        items:
+          type: string
+        name: keyterm
+        type: array
+      - description: VAD 阈值
+        in: formData
+        name: vad_threshold
+        type: number
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "415":
+          description: Unsupported Media Type
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 转写音频
+      tags:
+      - Audio
+  /v1/tts:
+    post:
+      consumes:
+      - application/json
+      description: |-
+        原生 Console 兼容接口：text 与 language 必填，model 缺省为 grok-voice-latest；speed 取值 0.25 到 4.0；optimize_streaming_latency 取值 0 到 4。默认直接返回音频；with_timestamps=true 或上游返回 JSON 封装时返回 JSON：audio（Base64）、content_type、duration，可选 audio_timestamps。
+        ChatGPT 模型 chatgpt-tts：output_format.codec 缺省为 mp3，仅支持 mp3、aac、opus；text 不超过 4096 字符；language 仍需传但会被忽略，speed 也被忽略；voice_id 的匹配规则同 POST /v1/audio/speech。
+      parameters:
+      - description: 请求
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/httpserver.SwaggerTTSRequest'
+      produces:
+      - audio/mpeg
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "415":
+          description: Unsupported Media Type
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 合成语音
+      tags:
+      - Audio
+  /v1/tts/voices:
+    get:
+      description: 返回 voices 数组，每项含 voice_id、name、language（可能为 null）。model=chatgpt-tts
+        时列出 ChatGPT 账号的音色。
+      parameters:
+      - default: grok-voice-latest
+        description: 模型
+        in: query
+        name: model
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 列出 TTS 音色
+      tags:
+      - Audio
+  /v1/tts/voices/{voiceId}:
+    get:
+      description: 返回 voice_id、name、language（可能为 null）。
+      parameters:
+      - description: Voice ID
+        in: path
+        name: voiceId
+        required: true
+        type: string
+      - default: grok-voice-latest
+        description: 模型
+        in: query
+        name: model
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 查询 TTS 音色
+      tags:
+      - Audio
   /v1/videos/{request_id}:
     get:
       parameters:
