@@ -28,7 +28,7 @@ type billingPoCVoiceAdapter struct{ conn *billingPoCVoiceConn }
 
 func (*billingPoCVoiceAdapter) Provider() account.Provider { return account.ProviderConsole }
 func (*billingPoCVoiceAdapter) Definition() provider.Definition {
-	return provider.Definition{Provider: account.ProviderConsole, Media: provider.MediaSurface{STT: true, Realtime: true}}
+	return withGrokPolicy(provider.Definition{Provider: account.ProviderConsole, Media: provider.MediaSurface{STT: true, Realtime: true}})
 }
 func (a *billingPoCVoiceAdapter) DialVoiceWebSocket(context.Context, provider.VoiceWebSocketRequest) (provider.VoiceWebSocketConn, func(), error) {
 	return a.conn, func() {}, nil

@@ -45,6 +45,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 		conversation provider.ConversationSurface
 		media        provider.MediaSurface
 		inference    provider.InferencePolicy
+		failure      provider.FailurePolicy
 	}{
 		{
 			provider: account.ProviderBuild, catalog: provider.ModelCatalogRemote, quota: provider.QuotaBilling,
@@ -52,23 +53,28 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			credential:   provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true, DeviceOAuth: true},
 			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true, Compact: true, StoredResponses: true},
 			media:        provider.MediaSurface{VideoGeneration: true},
-			inference:    provider.InferencePolicy{Usage: provider.UsageUpstream},
+			inference:    provider.InferencePolicy{Usage: provider.UsageUpstream, SessionIdentity: true, QualityHold: true, QualityAutoDisable: true},
+			failure: provider.FailurePolicy{
+				AuthenticatedForbidden: true, ForceAccountFailover: true, TerminalRequestScopedForbidden: true,
+				FatalHeaderTimeout: true, FatalOriginTLS: true,
+			},
 		},
 		{
 			provider: account.ProviderWeb, catalog: provider.ModelCatalogStatic, quota: provider.QuotaRemoteWindow,
 			capabilities: []modeldomain.Capability{modeldomain.CapabilityChat, modeldomain.CapabilityImage, modeldomain.CapabilityImageEdit, modeldomain.CapabilityVideo},
 			credential:   provider.CredentialSurface{AuthType: account.AuthTypeSSO, Import: true},
 			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true, StoredResponses: true},
-			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true},
+			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true},
 			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true},
 		},
 		{
 			provider: account.ProviderConsole, catalog: provider.ModelCatalogStatic, quota: provider.QuotaRemoteWindow,
 			capabilities: []modeldomain.Capability{modeldomain.CapabilityResponses, modeldomain.CapabilityImage, modeldomain.CapabilityImageEdit, modeldomain.CapabilityVideo, modeldomain.CapabilityTTS, modeldomain.CapabilitySTT, modeldomain.CapabilityRealtime},
 			credential:   provider.CredentialSurface{AuthType: account.AuthTypeSSO, Import: true},
-			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true},
+			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true, StatelessPreviousResponse: true},
 			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, TTS: true, STT: true, Realtime: true},
-			inference:    provider.InferencePolicy{Usage: provider.UsageUpstream, RetryForbiddenAsEgress: true},
+			inference:    provider.InferencePolicy{Usage: provider.UsageUpstream, RetryForbiddenAsEgress: true, QualityHold: true},
+			failure:      provider.FailurePolicy{TerminalAuthSchemeForbidden: true, SoftRateLimit: true},
 		},
 		{
 			provider: account.ProviderChatGPT, catalog: provider.ModelCatalogRemote, quota: provider.QuotaRemoteWindow,
@@ -88,7 +94,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			if definition.ModelNamespace != test.provider.ModelNamespace() || definition.ModelCatalog != test.catalog || definition.Quota != test.quota {
 				t.Fatalf("definition identity = %#v", definition)
 			}
-			if !reflect.DeepEqual(definition.ModelCapabilities, test.capabilities) || definition.Credential != test.credential || definition.Conversation != test.conversation || definition.Media != test.media || definition.Inference != test.inference {
+			if !reflect.DeepEqual(definition.ModelCapabilities, test.capabilities) || definition.Credential != test.credential || definition.Conversation != test.conversation || definition.Media != test.media || definition.Inference != test.inference || definition.Failure != test.failure {
 				t.Fatalf("definition capabilities = %#v", definition)
 			}
 			for _, operation := range []string{"responses", "chat", "messages"} {

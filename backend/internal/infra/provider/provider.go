@@ -1232,6 +1232,27 @@ func (r *Registry) RetryForbiddenAsEgress(value account.Provider) bool {
 	return ok && definition.Inference.RetryForbiddenAsEgress
 }
 
+func (r *Registry) SupportsStatelessPreviousResponse(value account.Provider) bool {
+	definition, ok := r.Definition(value)
+	return ok && definition.Conversation.StatelessPreviousResponse
+}
+
+// Inference returns the provider's gateway runtime policy; unknown providers get the zero policy.
+func (r *Registry) Inference(value account.Provider) InferencePolicy {
+	if r == nil {
+		return InferencePolicy{}
+	}
+	return r.definitions[value].Inference
+}
+
+// Failure returns the provider's failure policy; unknown providers get the generic zero policy.
+func (r *Registry) Failure(value account.Provider) FailurePolicy {
+	if r == nil {
+		return FailurePolicy{}
+	}
+	return r.definitions[value].Failure
+}
+
 func (r *Registry) Responses(value account.Provider) (ResponseAdapter, bool) {
 	adapter, ok := r.Get(value)
 	if !ok {

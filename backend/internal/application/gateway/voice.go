@@ -406,7 +406,7 @@ func (s *Service) executeVoice(
 			} else {
 				failure := newTransportUpstreamFailure(err, credential.ID, credential.Name)
 				lastCredentialError = failure
-				if ctx.Err() == nil && isRetryableTransportFailure(credential.Provider, err) && attemptPolicy.hasNext(attempt) {
+				if ctx.Err() == nil && isRetryableTransportFailure(s.providers.Failure(credential.Provider), err) && attemptPolicy.hasNext(attempt) {
 					// Transport failures are normally tied to the selected egress. Retry the
 					// same account after the adapter has invalidated/rebuilt that transport,
 					// without cooling an otherwise healthy credential.

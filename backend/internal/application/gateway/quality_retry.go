@@ -437,6 +437,8 @@ func CommitQualityHold(verdict QualityVerdict, qualityAttempt, maxAttempts int, 
 	}
 }
 
+// shouldHoldQualityStream applies the request gates; callers first check the
+// provider's InferencePolicy.QualityHold.
 func shouldHoldQualityStream(input Input, ownership *inferencedomain.ResponseOwnership, route modeldomain.Route, operation audit.Operation, cfg QualityRetryRuntime) bool {
 	if !cfg.Enabled || !input.Streaming || input.ForcedEgressNodeID != 0 || input.skipQualityHold {
 		return false
@@ -451,9 +453,6 @@ func shouldHoldQualityStream(input Input, ownership *inferencedomain.ResponseOwn
 	// expected summary without streamed reasoning. Keep both compaction forms
 	// excluded even if a caller reaches this gate without skipQualityHold.
 	if isResponsesCompactionRequest(input.Body) {
-		return false
-	}
-	if route.Provider != accountdomain.ProviderBuild && route.Provider != accountdomain.ProviderConsole {
 		return false
 	}
 	// TUI commonly declares tools and follow-ups carry previous_response_id.
@@ -595,13 +594,15 @@ func (s *Service) applyMissingThinkingPenalty(ctx context.Context, requestID str
 	}
 }
 
+// applyOutputSpeedPenalty is called only for providers declaring
+// InferencePolicy.QualityAutoDisable.
 func (s *Service) applyOutputSpeedPenalty(ctx context.Context, record audit.Record, credential accountdomain.Credential, cfg QualityRetryRuntime, forcedEgress bool) error {
 	// Both explicit and TUI compaction are classified in the audit record.
 	// System summaries stay exempt from account quality penalties.
 	if record.Operation == audit.OperationCompaction {
 		return nil
 	}
-	if !cfg.Enabled || !cfg.AutoDisable || forcedEgress || credential.Provider != accountdomain.ProviderBuild || !record.Streaming || record.FirstTokenMS == nil || record.OutputTokens < cfg.MinOutputTokens || !auditRequestSucceeded(record.StatusCode, record.ErrorCode) {
+	if !cfg.Enabled || !cfg.AutoDisable || forcedEgress || !record.Streaming || record.FirstTokenMS == nil || record.OutputTokens < cfg.MinOutputTokens || !auditRequestSucceeded(record.StatusCode, record.ErrorCode) {
 		return nil
 	}
 	class, tps, _ := audit.ClassifyOutputSpeed(record.OutputTokens, record.ReasoningTokens, *record.FirstTokenMS, record.DurationMS, cfg.SoftTPS, cfg.HardTPS, cfg.MinGenerationMS, cfg.FailClosed)

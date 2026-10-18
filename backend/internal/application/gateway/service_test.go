@@ -225,7 +225,7 @@ func TestGatewayFailsOverBeforeReturningBody(t *testing.T) {
 	if got := adapter.transientRetries; len(got) != 2 || got[0] != 0 || got[1] != 0 {
 		t.Fatalf("payment failover transient retries = %#v, want [0 0]", got)
 	}
-	identity := resolveBuildSessionIdentity(clientKey.ID, account.ProviderBuild, "grok-test", "", "claude-session", nil)
+	identity := resolveSessionIdentity(clientKey.ID, account.ProviderBuild, "grok-test", "", "claude-session", nil)
 	expectedCacheKey := identity.upstreamID
 	if adapter.lastPromptCacheKey != expectedCacheKey {
 		t.Fatalf("prompt cache key = %q, want %q", adapter.lastPromptCacheKey, expectedCacheKey)
@@ -2033,12 +2033,12 @@ type finalizationOrderAdapter struct{}
 
 func (finalizationOrderAdapter) Provider() account.Provider { return account.ProviderWeb }
 func (finalizationOrderAdapter) Definition() provider.Definition {
-	return provider.Definition{
+	return withGrokPolicy(provider.Definition{
 		Provider:     account.ProviderWeb,
 		Quota:        provider.QuotaRemoteWindow,
 		Conversation: provider.ConversationSurface{Responses: true, StoredResponses: true},
 		Inference:    provider.InferencePolicy{Usage: provider.UsageEstimated},
-	}
+	})
 }
 func (finalizationOrderAdapter) QuotaMode(string) string { return "fast" }
 func (finalizationOrderAdapter) TierOrder(string) []account.WebTier {
@@ -3032,12 +3032,12 @@ type teamModelRateLimitConsoleAdapter struct {
 
 func (statelessConsoleAdapter) Provider() account.Provider { return account.ProviderConsole }
 func (statelessConsoleAdapter) Definition() provider.Definition {
-	return provider.Definition{
+	return withGrokPolicy(provider.Definition{
 		Provider: account.ProviderConsole,
 		Conversation: provider.ConversationSurface{
 			Responses: true,
 		},
-	}
+	})
 }
 func (statelessConsoleAdapter) ForwardResponse(context.Context, provider.ResponseResourceRequest) (*provider.Response, error) {
 	return &provider.Response{
@@ -4649,13 +4649,13 @@ type webStoredResponseAdapter struct{}
 
 func (webStoredResponseAdapter) Provider() account.Provider { return account.ProviderWeb }
 func (webStoredResponseAdapter) Definition() provider.Definition {
-	return provider.Definition{
+	return withGrokPolicy(provider.Definition{
 		Provider: account.ProviderWeb,
 		Conversation: provider.ConversationSurface{
 			Responses: true, StoredResponses: true,
 		},
 		Inference: provider.InferencePolicy{Usage: provider.UsageEstimated},
-	}
+	})
 }
 func (webStoredResponseAdapter) ForwardResponse(context.Context, provider.ResponseResourceRequest) (*provider.Response, error) {
 	return &provider.Response{
@@ -4689,11 +4689,11 @@ type credentialFailureImageAdapter struct {
 func (a *credentialFailureImageAdapter) Provider() account.Provider { return account.ProviderBuild }
 
 func (a *credentialFailureImageAdapter) Definition() provider.Definition {
-	return provider.Definition{
+	return withGrokPolicy(provider.Definition{
 		Provider: account.ProviderBuild, ModelNamespace: account.ProviderBuild.ModelNamespace(),
 		Credential: provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Refresh: true},
 		Media:      provider.MediaSurface{ImageGeneration: true},
-	}
+	})
 }
 
 func (a *credentialFailureImageAdapter) RefreshCredential(context.Context, account.Credential) (provider.RefreshedCredential, error) {
@@ -4867,12 +4867,12 @@ func (a *webChatQuotaAdapter) SyncQuotaMode(_ context.Context, credential accoun
 
 func (a *failoverAdapter) Provider() account.Provider { return account.ProviderBuild }
 func (a *failoverAdapter) Definition() provider.Definition {
-	return provider.Definition{
+	return withGrokPolicy(provider.Definition{
 		Provider: account.ProviderBuild,
 		Conversation: provider.ConversationSurface{
 			Responses: true, Compact: true, StoredResponses: true,
 		},
-	}
+	})
 }
 func (a *failoverAdapter) ForwardResponse(_ context.Context, request provider.ResponseResourceRequest) (*provider.Response, error) {
 	if request.NormalizedMetadata != nil {
@@ -4959,7 +4959,7 @@ func testConversationDefinition(providerValue account.Provider) provider.Definit
 	if providerValue == account.ProviderWeb || providerValue == account.ProviderConsole {
 		definition.Inference.RetryForbiddenAsEgress = true
 	}
-	return definition
+	return withGrokPolicy(definition)
 }
 func (a *failoverAdapter) GetBilling(context.Context, account.Credential) (account.Billing, error) {
 	return account.Billing{}, nil
@@ -5046,10 +5046,10 @@ func TestIsBuildTransientRetryStatusMatchesOfficialClient(t *testing.T) {
 func TestBuildOriginTLSFailureIsNotRetryable(t *testing.T) {
 	for _, status := range []int{525, 526} {
 		response := &provider.Response{StatusCode: status, Header: http.Header{"X-Should-Retry": {"true"}}}
-		if isRetryableResponse(response, account.ProviderBuild) {
+		if isRetryableResponse(response, failurePolicyOf(account.ProviderBuild)) {
 			t.Fatalf("Build status %d must be terminal even with X-Should-Retry:true", status)
 		}
-		if !isRetryableResponse(response, account.ProviderWeb) {
+		if !isRetryableResponse(response, failurePolicyOf(account.ProviderWeb)) {
 			t.Fatalf("non-Build status %d behavior changed unexpectedly", status)
 		}
 	}

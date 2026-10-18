@@ -1977,7 +1977,7 @@ func TestConsoleRateLimitReconciliationUsesNonAccumulatingCooldown(t *testing.T)
 				t.Fatal(err)
 			}
 			selector := NewSelector(accounts, memory.NewConcurrencyLimiter(), memory.NewStickyStore(), nil, time.Hour, 30*time.Second, 30*time.Minute, 500*time.Millisecond)
-			service := &Service{selector: selector}
+			service := &Service{selector: selector, providers: grokRegistry(account.ProviderConsole)}
 			before := time.Now().UTC()
 
 			service.applyRateLimitReconciliation(ctx, credential, test.status, 12*time.Second, test.state, test.err)

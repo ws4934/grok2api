@@ -29,11 +29,11 @@ type staleTokenImageAdapter struct {
 func (a *staleTokenImageAdapter) Provider() account.Provider { return account.ProviderBuild }
 
 func (a *staleTokenImageAdapter) Definition() provider.Definition {
-	return provider.Definition{
+	return withGrokPolicy(provider.Definition{
 		Provider: account.ProviderBuild, ModelNamespace: account.ProviderBuild.ModelNamespace(),
 		Credential: provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Refresh: true},
 		Media:      provider.MediaSurface{ImageGeneration: true},
-	}
+	})
 }
 
 func (a *staleTokenImageAdapter) RefreshCredential(context.Context, account.Credential) (provider.RefreshedCredential, error) {

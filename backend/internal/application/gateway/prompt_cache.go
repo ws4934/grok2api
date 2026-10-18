@@ -12,9 +12,9 @@ import (
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 )
 
-const buildSessionIdentityVersion = "v3"
+const sessionIdentityVersion = "v3"
 
-type buildSessionIdentity struct {
+type sessionIdentity struct {
 	// upstreamID is sent as prompt_cache_key and x-grok-conv-id and must remain stable across turns.
 	upstreamID string
 	// affinityKey controls account stickiness and is isolated by model to avoid cross-model collisions.
@@ -28,11 +28,12 @@ type buildSessionIdentity struct {
 	isolated bool
 }
 
-// resolveBuildSessionIdentity derives a stable Grok Build session identity:
+// resolveSessionIdentity derives a stable upstream session identity for
+// providers that declare InferencePolicy.SessionIdentity:
 // 1. Prefer explicit client session signals, isolated by client key, provider, and model.
 // 2. Fall back to system/instructions and the first user message when no explicit signal exists.
 // 3. Return an empty identity when no signal exists; never generate a random session ID per request.
-func resolveBuildSessionIdentity(clientKeyID uint64, provider accountdomain.Provider, upstreamModel, explicitKey, sessionSeed string, body []byte) buildSessionIdentity {
+func resolveSessionIdentity(clientKeyID uint64, provider accountdomain.Provider, upstreamModel, explicitKey, sessionSeed string, body []byte) sessionIdentity {
 	// Prefer Claude Code and Codex session signals extracted by the transport layer.
 	// body.prompt_cache_key is only a fallback when no stronger header or session signal exists.
 	seed := strings.TrimSpace(sessionSeed)
@@ -41,13 +42,13 @@ func resolveBuildSessionIdentity(clientKeyID uint64, provider accountdomain.Prov
 	}
 	model := strings.ToLower(strings.TrimSpace(upstreamModel))
 	if clientKeyID == 0 || provider == "" || model == "" {
-		return buildSessionIdentity{}
+		return sessionIdentity{}
 	}
 	if seed != "" {
-		upstreamSource := fmt.Sprintf("grok2api:build-session:%s:%d:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, seed)
-		affinitySource := fmt.Sprintf("grok2api:build-affinity:%s:%d:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, seed)
-		replaySource := fmt.Sprintf("grok2api:build-replay:%s:%d:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, seed)
-		return buildSessionIdentity{
+		upstreamSource := fmt.Sprintf("grok2api:build-session:%s:%d:%s:%s:%s", sessionIdentityVersion, clientKeyID, provider, model, seed)
+		affinitySource := fmt.Sprintf("grok2api:build-affinity:%s:%d:%s:%s:%s", sessionIdentityVersion, clientKeyID, provider, model, seed)
+		replaySource := fmt.Sprintf("grok2api:build-replay:%s:%d:%s:%s:%s", sessionIdentityVersion, clientKeyID, provider, model, seed)
+		return sessionIdentity{
 			upstreamID:  digestUUID(upstreamSource),
 			affinityKey: hexDigest(affinitySource),
 			replayKey:   hexDigest(replaySource),
@@ -58,27 +59,27 @@ func resolveBuildSessionIdentity(clientKeyID uint64, provider accountdomain.Prov
 	firstUser = truncateAnchor(firstUser, 200)
 	system = truncateAnchor(system, 100)
 	if firstUser == "" {
-		return buildSessionIdentity{}
+		return sessionIdentity{}
 	}
-	upstreamSource := fmt.Sprintf("grok2api:build-soft-session:%s:%d:%s:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, system, firstUser)
-	affinitySource := fmt.Sprintf("grok2api:build-soft-affinity:%s:%d:%s:%s:%s:%s", buildSessionIdentityVersion, clientKeyID, provider, model, system, firstUser)
-	return buildSessionIdentity{
+	upstreamSource := fmt.Sprintf("grok2api:build-soft-session:%s:%d:%s:%s:%s:%s", sessionIdentityVersion, clientKeyID, provider, model, system, firstUser)
+	affinitySource := fmt.Sprintf("grok2api:build-soft-affinity:%s:%d:%s:%s:%s:%s", sessionIdentityVersion, clientKeyID, provider, model, system, firstUser)
+	return sessionIdentity{
 		upstreamID:  digestUUID(upstreamSource),
 		affinityKey: hexDigest(affinitySource),
 		soft:        true,
 	}
 }
 
-// ensureBuildComposerSessionIdentity mirrors Composer's isolated-conversation
+// ensureComposerSessionIdentity mirrors Composer's isolated-conversation
 // requirement without copying CPA's per-attempt random UUID behavior. The
 // request scope is stable across retries and route failover, while replay stays
 // disabled because this is not an explicit client conversation.
-func ensureBuildComposerSessionIdentity(identity buildSessionIdentity, clientKeyID uint64, provider accountdomain.Provider, upstreamModel, requestScope string) buildSessionIdentity {
+func ensureComposerSessionIdentity(identity sessionIdentity, clientKeyID uint64, provider accountdomain.Provider, upstreamModel, requestScope string) sessionIdentity {
 	// Explicit client sessions and previous-response ownership are authoritative.
 	// A soft message-prefix identity is intentionally replaced: two independent
 	// Composer requests may begin with the same text and must not share a
 	// conversation merely because their first message matches.
-	if (identity.upstreamID != "" && !identity.soft) || clientKeyID == 0 || provider != accountdomain.ProviderBuild || !modeldomain.IsGrokComposerModel(upstreamModel) {
+	if (identity.upstreamID != "" && !identity.soft) || clientKeyID == 0 || !modeldomain.IsGrokComposerModel(upstreamModel) {
 		return identity
 	}
 	requestScope = strings.TrimSpace(requestScope)

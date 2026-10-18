@@ -26,7 +26,7 @@ func TestTransportUpstreamFailureClassifiesProviderStreamIdleTimeout(t *testing.
 	if failure.HTTPStatus != http.StatusGatewayTimeout || failure.Code != "upstream_stream_idle_timeout" || failure.AccountScoped {
 		t.Fatalf("failure = %#v", failure)
 	}
-	if !isRetryableTransportFailure(accountdomain.ProviderWeb, neterror.ErrUpstreamStreamIdleTimeout) {
+	if !isRetryableTransportFailure(failurePolicyOf(accountdomain.ProviderWeb), neterror.ErrUpstreamStreamIdleTimeout) {
 		t.Fatal("pre-response Web idle timeout should retain bounded cross-account failover")
 	}
 }
@@ -46,13 +46,13 @@ func TestTransportUpstreamFailureClassifiesResponseHeaderTimeout(t *testing.T) {
 	if stage := transportStage(responseHeaderTimeoutTestError{}); stage != "response_header_timeout" {
 		t.Fatalf("stage = %q", stage)
 	}
-	if isRetryableTransportFailure(accountdomain.ProviderBuild, responseHeaderTimeoutTestError{}) {
+	if isRetryableTransportFailure(failurePolicyOf(accountdomain.ProviderBuild), responseHeaderTimeoutTestError{}) {
 		t.Fatal("a Build response-header timeout must not switch accounts")
 	}
-	if !isRetryableTransportFailure(accountdomain.ProviderWeb, responseHeaderTimeoutTestError{}) {
+	if !isRetryableTransportFailure(failurePolicyOf(accountdomain.ProviderWeb), responseHeaderTimeoutTestError{}) {
 		t.Fatal("the Build-specific retry veto must not change Web failover")
 	}
-	if !isRetryableTransportFailure(accountdomain.ProviderBuild, errors.New("connection reset by peer")) {
+	if !isRetryableTransportFailure(failurePolicyOf(accountdomain.ProviderBuild), errors.New("connection reset by peer")) {
 		t.Fatal("ordinary pre-response transport failures must retain failover behavior")
 	}
 }
@@ -275,10 +275,10 @@ func TestRetryableResponseRotatesOnlyOnInternalBuildReasoningRecoveryFailure(t *
 		Body:                    io.NopCloser(strings.NewReader(`{"error":"Could not decode the compaction blob"}`)),
 		ReasoningRecoveryFailed: true,
 	}
-	if !isRetryableResponse(failed, accountdomain.ProviderBuild) {
+	if !isRetryableResponse(failed, failurePolicyOf(accountdomain.ProviderBuild)) {
 		t.Fatal("reasoning_recovery_failed 400 must rotate accounts")
 	}
-	if isRetryableResponse(failed, accountdomain.ProviderWeb) {
+	if isRetryableResponse(failed, failurePolicyOf(accountdomain.ProviderWeb)) {
 		t.Fatal("reasoning recovery failover must remain Build-specific")
 	}
 
@@ -287,7 +287,7 @@ func TestRetryableResponseRotatesOnlyOnInternalBuildReasoningRecoveryFailure(t *
 		Header:     failedHeader,
 		Body:       io.NopCloser(strings.NewReader(`{"error":"unrelated bad request"}`)),
 	}
-	if isRetryableResponse(spoofed, accountdomain.ProviderBuild) {
+	if isRetryableResponse(spoofed, failurePolicyOf(accountdomain.ProviderBuild)) {
 		t.Fatal("an upstream-controlled compatibility warning must not trigger account rotation")
 	}
 
@@ -297,7 +297,7 @@ func TestRetryableResponseRotatesOnlyOnInternalBuildReasoningRecoveryFailure(t *
 		Body:       io.NopCloser(strings.NewReader(`{"error":"Could not decode the compaction blob"}`)),
 		Diagnostic: &provider.DiagnosticResponse{Body: []byte(`{"error":"Could not decode the compaction blob. Ensure it is unmodified from the compact response."}`)},
 	}
-	if isRetryableResponse(plain, accountdomain.ProviderBuild) {
+	if isRetryableResponse(plain, failurePolicyOf(accountdomain.ProviderBuild)) {
 		t.Fatal("plain compaction 400 must not rotate accounts without reasoning_recovery_failed")
 	}
 
@@ -307,7 +307,7 @@ func TestRetryableResponseRotatesOnlyOnInternalBuildReasoningRecoveryFailure(t *
 		Body:       io.NopCloser(strings.NewReader(`{"error":"invalid request history"}`)),
 		Diagnostic: &provider.DiagnosticResponse{Body: []byte(`{"error":"could not decode request json"}`)},
 	}
-	if isRetryableResponse(unrelated, accountdomain.ProviderBuild) {
+	if isRetryableResponse(unrelated, failurePolicyOf(accountdomain.ProviderBuild)) {
 		t.Fatal("unrelated 400 must not match encrypted_content/decode substrings")
 	}
 }
@@ -318,15 +318,15 @@ func TestRetryableResponseHonorsUpstreamRetryVeto(t *testing.T) {
 		Header:     http.Header{"X-Should-Retry": {"false"}},
 		Body:       io.NopCloser(strings.NewReader(`{"error":"invalid request history"}`)),
 	}
-	if isRetryableResponse(response, accountdomain.ProviderBuild) {
+	if isRetryableResponse(response, failurePolicyOf(accountdomain.ProviderBuild)) {
 		t.Fatal("x-should-retry:false 必须禁止换账号重试")
 	}
 	response.Header.Set("X-Should-Retry", "true")
-	if !isRetryableResponse(response, accountdomain.ProviderBuild) {
+	if !isRetryableResponse(response, failurePolicyOf(accountdomain.ProviderBuild)) {
 		t.Fatal("x-should-retry:true 不应覆盖现有状态码重试策略")
 	}
 	response.Header.Set("X-Should-Retry", "unknown")
-	if !isRetryableResponse(response, accountdomain.ProviderBuild) {
+	if !isRetryableResponse(response, failurePolicyOf(accountdomain.ProviderBuild)) {
 		t.Fatal("未知 x-should-retry 值应按未提供处理")
 	}
 }
@@ -337,10 +337,10 @@ func TestPaymentRequiredAlwaysRetriesDespiteUpstreamVeto(t *testing.T) {
 		Header:     http.Header{"X-Should-Retry": {"false"}},
 		Body:       io.NopCloser(strings.NewReader(`{"code":"personal-team-blocked:spending-limit","error":"You have run out of credits"}`)),
 	}
-	if !isRetryableResponse(response, accountdomain.ProviderBuild) {
+	if !isRetryableResponse(response, failurePolicyOf(accountdomain.ProviderBuild)) {
 		t.Fatal("402 spending-limit must force account rotation even when X-Should-Retry is false")
 	}
-	if isRetryableResponse(response, accountdomain.ProviderWeb) {
+	if isRetryableResponse(response, failurePolicyOf(accountdomain.ProviderWeb)) {
 		t.Fatal("non-Build 402 must continue honoring X-Should-Retry:false")
 	}
 }
@@ -351,10 +351,10 @@ func TestBuildForbiddenAlwaysEntersAccountFailureHandling(t *testing.T) {
 		Header:     http.Header{"X-Should-Retry": {"false"}},
 		Body:       io.NopCloser(strings.NewReader(`{"code":"permission-denied"}`)),
 	}
-	if !isRetryableResponse(response, accountdomain.ProviderBuild) {
+	if !isRetryableResponse(response, failurePolicyOf(accountdomain.ProviderBuild)) {
 		t.Fatal("Build 403 must enter account failure handling even when X-Should-Retry is false")
 	}
-	if isRetryableResponse(response, accountdomain.ProviderWeb) {
+	if isRetryableResponse(response, failurePolicyOf(accountdomain.ProviderWeb)) {
 		t.Fatal("non-Build 403 must continue honoring X-Should-Retry:false")
 	}
 }
@@ -409,10 +409,10 @@ func TestBuildRateLimitForcesAccountFailoverDespiteRetryVeto(t *testing.T) {
 		Header:     http.Header{"X-Should-Retry": {"false"}},
 		Body:       io.NopCloser(strings.NewReader(`{"code":"subscription:free-usage-exhausted"}`)),
 	}
-	if !isRetryableResponse(response, accountdomain.ProviderBuild) {
+	if !isRetryableResponse(response, failurePolicyOf(accountdomain.ProviderBuild)) {
 		t.Fatal("Build free-usage 429 must force account rotation even when X-Should-Retry is false")
 	}
-	if isRetryableResponse(response, accountdomain.ProviderWeb) {
+	if isRetryableResponse(response, failurePolicyOf(accountdomain.ProviderWeb)) {
 		t.Fatal("non-Build 429 must continue honoring X-Should-Retry:false")
 	}
 }
@@ -428,31 +428,31 @@ func TestBuildForbiddenReauthPolicyIgnoresSafetyRejection(t *testing.T) {
 
 func TestTerminalRequestForbiddenRequiresExplicitRequestSignal(t *testing.T) {
 	bare := &UpstreamFailure{HTTPStatus: http.StatusForbidden, UpstreamCode: "permission-denied"}
-	if isTerminalRequestForbidden(accountdomain.ProviderBuild, bare) {
+	if isTerminalRequestForbidden(failurePolicyOf(accountdomain.ProviderBuild), bare) {
 		t.Fatal("bare permission-denied must remain on credential traversal")
 	}
 
 	requestScoped := &UpstreamFailure{HTTPStatus: http.StatusForbidden, UpstreamCode: "invalid-argument", RequestScopedForbidden: true}
-	if !isTerminalRequestForbidden(accountdomain.ProviderBuild, requestScoped) {
+	if !isTerminalRequestForbidden(failurePolicyOf(accountdomain.ProviderBuild), requestScoped) {
 		t.Fatal("explicit Build request rejection must be terminal")
 	}
 	for _, providerValue := range []accountdomain.Provider{accountdomain.ProviderWeb, accountdomain.ProviderConsole} {
-		if isTerminalRequestForbidden(providerValue, requestScoped) {
+		if isTerminalRequestForbidden(failurePolicyOf(providerValue), requestScoped) {
 			t.Fatalf("%s request classification must retain existing egress recovery", providerValue)
 		}
 	}
 
 	dpopRequired := &UpstreamFailure{HTTPStatus: http.StatusForbidden, UpstreamCode: "unauthorized:dpop-required", RequestScopedForbidden: true}
-	if !isTerminalRequestForbidden(accountdomain.ProviderConsole, dpopRequired) {
+	if !isTerminalRequestForbidden(failurePolicyOf(accountdomain.ProviderConsole), dpopRequired) {
 		t.Fatal("Console DPoP auth-scheme requirement must be terminal")
 	}
-	if isTerminalRequestForbidden(accountdomain.ProviderWeb, dpopRequired) {
+	if isTerminalRequestForbidden(failurePolicyOf(accountdomain.ProviderWeb), dpopRequired) {
 		t.Fatal("Console-specific DPoP classification must not change Web recovery")
 	}
 
 	safety := &UpstreamFailure{HTTPStatus: http.StatusForbidden, UpstreamCode: "permission-denied", SafetyRejection: true}
 	for _, providerValue := range []accountdomain.Provider{accountdomain.ProviderBuild, accountdomain.ProviderWeb, accountdomain.ProviderConsole} {
-		if !isTerminalRequestForbidden(providerValue, safety) {
+		if !isTerminalRequestForbidden(failurePolicyOf(providerValue), safety) {
 			t.Fatalf("%s safety rejection must remain terminal", providerValue)
 		}
 	}

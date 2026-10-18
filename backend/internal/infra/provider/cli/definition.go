@@ -22,7 +22,16 @@ func (a *Adapter) Definition() provider.Definition {
 		Conversation: provider.ConversationSurface{
 			Responses: true, ChatCompletions: true, Messages: true, Compact: true, StoredResponses: true,
 		},
-		Media:     provider.MediaSurface{VideoGeneration: true},
-		Inference: provider.InferencePolicy{Usage: provider.UsageUpstream},
+		Media: provider.MediaSurface{VideoGeneration: true},
+		Inference: provider.InferencePolicy{
+			Usage: provider.UsageUpstream, SessionIdentity: true, QualityHold: true, QualityAutoDisable: true,
+		},
+		// The Build API authenticates every request: a 403 is an account or
+		// request decision, never an expired token, and the official client
+		// gives up on header timeouts and origin-TLS failures.
+		Failure: provider.FailurePolicy{
+			AuthenticatedForbidden: true, ForceAccountFailover: true, TerminalRequestScopedForbidden: true,
+			FatalHeaderTimeout: true, FatalOriginTLS: true,
+		},
 	}
 }

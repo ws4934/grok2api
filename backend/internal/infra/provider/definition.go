@@ -33,6 +33,10 @@ type ConversationSurface struct {
 	Messages        bool
 	Compact         bool
 	StoredResponses bool
+	// StatelessPreviousResponse lets a provider without stored Responses accept
+	// previous_response_id: the gateway drops the ID and forwards the history
+	// the client replays.
+	StatelessPreviousResponse bool
 }
 
 // Supports 判断统一对话协议入口是否由当前 Provider 明确声明。
@@ -59,6 +63,9 @@ type MediaSurface struct {
 	TTS             bool
 	STT             bool
 	Realtime        bool
+	// ImageGenerationModelPriced: image generation picks the product by model
+	// and forwards no resolution or quality, so neither selects a price tier.
+	ImageGenerationModelPriced bool
 }
 
 // CredentialSurface 描述号池凭据的接入和维护方式。
@@ -84,6 +91,41 @@ const (
 type InferencePolicy struct {
 	Usage                  UsageKind
 	RetryForbiddenAsEgress bool
+	// SessionIdentity derives a stable upstream session ID (prompt_cache_key),
+	// account affinity and reasoning replay key from client session signals.
+	SessionIdentity bool
+	// QualityHold lets the quality retry hold reasoning streams for inspection;
+	// QualityAutoDisable also lets it disable accounts below the output-speed floor.
+	QualityHold        bool
+	QualityAutoDisable bool
+}
+
+// FailurePolicy declares provider-specific reactions to upstream failures. The
+// zero value is the generic path: a 403 may be a credential or egress problem,
+// the upstream's X-Should-Retry veto is honoured, and only content-safety 403s
+// are returned to the client unchanged.
+type FailurePolicy struct {
+	// AuthenticatedForbidden: a 403 comes from an authenticated session. It never
+	// triggers a credential refresh, an unclassified 403 still cools the account,
+	// the admin forbidden-reauth codes apply, and an explicit chat-endpoint
+	// denial blocks only the model on that account.
+	AuthenticatedForbidden bool
+	// ForceAccountFailover: 402, 403, 429 and a failed encrypted-reasoning
+	// recovery are bound to the account and rotate it even when the upstream
+	// sends X-Should-Retry: false.
+	ForceAccountFailover bool
+	// TerminalRequestScopedForbidden returns every request-scoped 403 to the
+	// client unchanged; TerminalAuthSchemeForbidden only those demanding a new
+	// auth scheme (DPoP), which no other account or egress can satisfy.
+	TerminalRequestScopedForbidden bool
+	TerminalAuthSchemeForbidden    bool
+	// FatalHeaderTimeout and FatalOriginTLS (Cloudflare 525/526) end failover,
+	// as the official client does.
+	FatalHeaderTimeout bool
+	FatalOriginTLS     bool
+	// SoftRateLimit: a 429 that quota reconciliation does not explain isolates
+	// the account for Retry-After without growing its failure count.
+	SoftRateLimit bool
 }
 
 // ProfileSurface presents the provider and declares traits the shared
@@ -118,6 +160,7 @@ type Definition struct {
 	Conversation      ConversationSurface
 	Media             MediaSurface
 	Inference         InferencePolicy
+	Failure           FailurePolicy
 }
 
 // DefinitionAdapter 由生产 Provider 实现，用于注册明确且可校验的能力边界。

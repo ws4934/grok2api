@@ -207,7 +207,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 			}
 			failure := newTransportUpstreamFailure(dialErr, credential.ID, credential.Name)
 			lastErr = failure
-			if ctx.Err() == nil && isRetryableTransportFailure(credential.Provider, dialErr) && attempt == 0 && attemptPolicy.hasNext(attempt) {
+			if ctx.Err() == nil && isRetryableTransportFailure(s.providers.Failure(credential.Provider), dialErr) && attempt == 0 && attemptPolicy.hasNext(attempt) {
 				delete(excluded, credential.ID)
 				if selection != nil {
 					selection.RetryAccount(credential.ID)

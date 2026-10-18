@@ -867,8 +867,8 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				return nil, ErrResponseNotFound
 			}
 			ownership = &value
-		} else if initialRoute.Provider == accountdomain.ProviderConsole {
-			// Console does not retain Response state, so replay the history statelessly here;
+		} else if s.providers.SupportsStatelessPreviousResponse(initialRoute.Provider) {
+			// The provider retains no Response state, so replay the history statelessly here;
 			// Provider normalization removes stale Response IDs.
 			input.PreviousResponseID = ""
 		} else {
@@ -890,8 +890,8 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	if routeErr == nil && ownership == nil && input.ForcedEgressNodeID == 0 {
 		for _, candidate := range orderedRoutes {
 			affinityKey := ""
-			if candidate.Provider == accountdomain.ProviderBuild {
-				identity := resolveBuildSessionIdentity(
+			if s.providers.Inference(candidate.Provider).SessionIdentity {
+				identity := resolveSessionIdentity(
 					input.ClientKey.ID,
 					candidate.Provider,
 					candidate.UpstreamModel,
@@ -899,7 +899,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 					input.PromptCacheSeed,
 					input.Body,
 				)
-				identity = ensureBuildComposerSessionIdentity(identity, input.ClientKey.ID, candidate.Provider, candidate.UpstreamModel, requestSessionScope)
+				identity = ensureComposerSessionIdentity(identity, input.ClientKey.ID, candidate.Provider, candidate.UpstreamModel, requestSessionScope)
 				affinityKey = identity.affinityKey
 			}
 			candidateSession, selectionErr := s.selector.beginSelectionSessionForKey(
@@ -968,18 +968,18 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	affinityKey := ""
 	ownershipPromptCacheKey := ""
 	reasoningReplayKey := ""
-	if route.Provider == accountdomain.ProviderBuild {
+	if s.providers.Inference(route.Provider).SessionIdentity {
 		// Derive a stable identity from explicit session signals, message anchors,
 		// and model. Composer replaces message-only fallback identities with an
 		// isolated request identity that remains stable across retries.
-		identity := buildSessionIdentity{}
+		identity := sessionIdentity{}
 		if ownership != nil && ownership.PromptCacheKey != "" {
 			// previous_response_id belongs to an existing Response chain and must inherit the root session identity;
 			// do not recompute the soft key from this turn's incremental input.
 			identity.upstreamID = ownership.PromptCacheKey
 			identity.replayKey = ownership.ReasoningReplayKey
 		} else {
-			identity = resolveBuildSessionIdentity(
+			identity = resolveSessionIdentity(
 				input.ClientKey.ID,
 				route.Provider,
 				route.UpstreamModel,
@@ -988,7 +988,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				input.Body,
 			)
 		}
-		identity = ensureBuildComposerSessionIdentity(identity, input.ClientKey.ID, route.Provider, route.UpstreamModel, requestSessionScope)
+		identity = ensureComposerSessionIdentity(identity, input.ClientKey.ID, route.Provider, route.UpstreamModel, requestSessionScope)
 		input.PromptCacheKey = identity.upstreamID
 		affinityKey = identity.affinityKey
 		ownershipPromptCacheKey = identity.upstreamID
@@ -1014,7 +1014,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	// identity. Retrying the same pinned account would provide neither failover
 	// nor new evidence and can multiply a slow/failing probe.
 	holdCfg := s.qualityRetryConfig()
-	qualityHoldEnabled := shouldHoldQualityStream(input, ownership, route, operation, holdCfg)
+	qualityHoldEnabled := s.providers.Inference(route.Provider).QualityHold && shouldHoldQualityStream(input, ownership, route, operation, holdCfg)
 	qualityCrossAccountReplay := canReplayQualityHoldAcrossAccounts(input, ownership)
 	attemptPolicy := newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), ownership != nil || input.ForcedAccountID != 0)
 	idempotencyID, _ := security.NewOpaqueToken(18)
@@ -1034,6 +1034,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	// do not consume the quality retry budget; refreshes stay on the same account.
 	qualityAccountAttempts := 0
 	quotaMode := s.providers.QuotaMode(route.Provider, route.UpstreamModel)
+	failurePolicy := s.providers.Failure(route.Provider)
 	quotaProbeAttempted := false
 	selection := preselectedSession
 	var lastErr error
@@ -1046,7 +1047,13 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 		started := time.Now()
 		responseStartedAt = started
 		lease.markSelectorUpstreamStarted()
-		response, err := adapter.ForwardResponse(physicalCallCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, TransientRetry: transientRetry, IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
+		// Assets the provider saves while answering (e.g. images drawn in chat) carry this request's provenance.
+		originCtx := mediadomain.WithOrigin(physicalCallCtx, mediadomain.Origin{
+			Provider: string(route.Provider), Model: publicModel, UpstreamModel: auditBase.ModelUpstreamModel,
+			ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name, AccountID: credential.ID, AccountName: credential.Name,
+			Operation: string(auditOperation), RequestID: input.RequestID,
+		})
+		response, err := adapter.ForwardResponse(originCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, TransientRetry: transientRetry, IdempotencyID: idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(operation), NormalizedMetadata: normalizedMetadata})
 		auditBase.ReasoningEffort = normalizedMetadata.ReasoningEffort
 		err = failureAttempts.captureResponse(credential, started, response, err)
 		timing.markUpstream(time.Since(started))
@@ -1120,10 +1127,12 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				}
 				record.CreatedAt = now
 				applyAuditEgress(&record, egressTrace, route.Provider)
-				if err := budget.run("quality_disable", finalizationHealthBudget, func(stageCtx context.Context) error {
-					return s.applyOutputSpeedPenalty(stageCtx, record, credential, holdCfg, input.ForcedEgressNodeID != 0)
-				}); err != nil {
-					s.logger.Error("quality_degraded_penalty_failed", "request_id", input.RequestID, "account_id", credential.ID, "error", err)
+				if s.providers.Inference(credential.Provider).QualityAutoDisable {
+					if err := budget.run("quality_disable", finalizationHealthBudget, func(stageCtx context.Context) error {
+						return s.applyOutputSpeedPenalty(stageCtx, record, credential, holdCfg, input.ForcedEgressNodeID != 0)
+					}); err != nil {
+						s.logger.Error("quality_degraded_penalty_failed", "request_id", input.RequestID, "account_id", credential.ID, "error", err)
+					}
 				}
 				if supportsStoredResponses && operation == audit.OperationResponses && responseID != "" && successful {
 					err := budget.run("response_ownership", finalizationOwnershipBudget, func(stageCtx context.Context) error {
@@ -1310,7 +1319,7 @@ attemptLoop:
 				continue
 			}
 			lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.Name)
-			if !isRetryableTransportFailure(credential.Provider, err) {
+			if !isRetryableTransportFailure(failurePolicy, err) {
 				break
 			}
 			responseFailure := false
@@ -1378,7 +1387,7 @@ attemptLoop:
 					break
 				} else {
 					lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.Name)
-					if !isRetryableTransportFailure(credential.Provider, err) {
+					if !isRetryableTransportFailure(failurePolicy, err) {
 						break attemptLoop
 					}
 					if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
@@ -1409,7 +1418,7 @@ attemptLoop:
 			retryAfter := parseRetryAfter(response.Header.Get("Retry-After"), time.Now().UTC())
 			body, _ := readRetryableBody(response.Body)
 			lastFailure = newHTTPUpstreamFailure(response.StatusCode, body, credential.ID, credential.Name)
-			if isTerminalRequestForbidden(credential.Provider, lastFailure) {
+			if isTerminalRequestForbidden(failurePolicy, lastFailure) {
 				// Deterministic request-scoped 403: restore the original body and return it
 				// without OAuth refresh, account rotation, cooldown, or invalidation.
 				response.Body = io.NopCloser(bytes.NewReader(body))
@@ -1444,9 +1453,9 @@ attemptLoop:
 				response.Body = io.NopCloser(bytes.NewReader(body))
 			}
 		}
-		if isTerminalRequestForbidden(credential.Provider, lastFailure) {
+		if isTerminalRequestForbidden(failurePolicy, lastFailure) {
 			// already prepared as a terminal 403 response for the client
-		} else if isRetryableResponse(response, route.Provider) && !finalEgressForbidden {
+		} else if isRetryableResponse(response, failurePolicy) && !finalEgressForbidden {
 			retryAfter := parseRetryAfter(response.Header.Get("Retry-After"), time.Now().UTC())
 			body, _ := readRetryableBody(response.Body)
 			lastFailure = newHTTPUpstreamFailure(response.StatusCode, body, credential.ID, credential.Name)
@@ -1458,7 +1467,7 @@ attemptLoop:
 					}
 				}
 			}
-			buildForbiddenReauth := credential.Provider == accountdomain.ProviderBuild && s.shouldInvalidateBuildForbidden(lastFailure)
+			forbiddenReauth := failurePolicy.AuthenticatedForbidden && s.shouldInvalidateBuildForbidden(lastFailure)
 			if response.StatusCode == http.StatusTooManyRequests && response.RateLimit != nil && response.RateLimit.Model == route.UpstreamModel {
 				rateLimitMeta := *response.RateLimit
 				if strings.TrimSpace(rateLimitMeta.TeamID) == "" {
@@ -1478,10 +1487,10 @@ attemptLoop:
 				continue
 			}
 		afterTeamRateLimit:
-			// Grok Build treats only HTTP 401 as an OAuth authentication failure.
-			// A 403 is already authenticated and must not trigger token rotation or
+			// An authenticated-forbidden provider treats only HTTP 401 as an OAuth
+			// authentication failure. Its 403 must not trigger token rotation or
 			// replay the same request with freshly issued credentials.
-			if credential.Provider != accountdomain.ProviderBuild && s.providers.SupportsCredentialRefresh(credential.Provider) && !authRecoveryAttempted[credential.ID] && credential.EncryptedRefreshToken != "" && !lastFailure.AccountBlocked && !buildForbiddenReauth && (lastFailure.PermanentAccountDenial || lastFailure.CredentialRejected) {
+			if !failurePolicy.AuthenticatedForbidden && s.providers.SupportsCredentialRefresh(credential.Provider) && !authRecoveryAttempted[credential.ID] && credential.EncryptedRefreshToken != "" && !lastFailure.AccountBlocked && (lastFailure.PermanentAccountDenial || lastFailure.CredentialRejected) {
 				authRecoveryAttempted[credential.ID] = true
 				refreshed, refreshErr := ensureCredential(credential, true)
 				if refreshErr != nil {
@@ -1500,7 +1509,7 @@ attemptLoop:
 						break attemptLoop
 					}
 					lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.Name)
-					if !isRetryableTransportFailure(credential.Provider, err) {
+					if !isRetryableTransportFailure(failurePolicy, err) {
 						break attemptLoop
 					}
 					if shouldStopForNonAccountFingerprint(failureFingerprints, lastFailure) {
@@ -1538,10 +1547,10 @@ attemptLoop:
 			}
 			if lastFailure.AccountBlocked {
 				failureHandled = s.markReauthRequired(ctx, input.RequestID, credential, fmt.Sprintf("%s account is blocked", credential.Provider))
-			} else if buildForbiddenReauth {
+			} else if forbiddenReauth {
 				failureHandled = s.markReauthRequired(ctx, input.RequestID, credential, fmt.Sprintf("%s upstream error code %s matched the invalidation policy", credential.Provider, lastFailure.UpstreamCode))
 			} else if s.providers.SupportsCredentialRefresh(credential.Provider) && lastFailure.PermanentAccountDenial {
-				if credential.Provider == accountdomain.ProviderBuild {
+				if failurePolicy.AuthenticatedForbidden {
 					// 默认 model-scoped，视频拒绝时配额/OAuth 仍可能可用。
 					// 开启 markBuildChatDeniedAsReauth 时再额外标 reauth，便于号池摘除。
 					// 同时写入模型 block，避免在候选缓存窗口内本请求再次选中。
@@ -1560,7 +1569,7 @@ attemptLoop:
 			} else if s.providers.SupportsCredentialRefresh(credential.Provider) && lastFailure.CredentialRejected {
 				failureHandled = s.markReauthRequired(ctx, input.RequestID, credential, fmt.Sprintf("%s credential rejected", credential.Provider))
 			}
-			if !failureHandled && (lastFailure.AccountScoped || credential.Provider == accountdomain.ProviderBuild && response.StatusCode == http.StatusForbidden) {
+			if !failureHandled && (lastFailure.AccountScoped || failurePolicy.AuthenticatedForbidden && response.StatusCode == http.StatusForbidden) {
 				s.selector.MarkFailure(ctx, credential, response.StatusCode, retryAfter)
 			} else if !lastFailure.AccountScoped && response.StatusCode >= http.StatusInternalServerError {
 				// Provider-wide 5xx responses should rotate this request and briefly
@@ -1678,7 +1687,7 @@ attemptLoop:
 			}
 			if diagnostic := response.RecoveredPrimaryFailure; diagnostic != nil {
 				recoveredFailure := newHTTPUpstreamFailure(diagnostic.StatusCode, diagnostic.Body, credential.ID, credential.Name)
-				if recoveredFailure.AccountBlocked || (credential.Provider == accountdomain.ProviderBuild && s.shouldInvalidateBuildForbidden(recoveredFailure)) {
+				if recoveredFailure.AccountBlocked || (failurePolicy.AuthenticatedForbidden && s.shouldInvalidateBuildForbidden(recoveredFailure)) {
 					reason := fmt.Sprintf("%s primary endpoint denied account access", credential.Provider)
 					if !s.markReauthRequired(ctx, input.RequestID, credential, reason) {
 						s.selector.MarkModelAccessDenied(ctx, credential, route.UpstreamModel, 0)
@@ -1808,8 +1817,8 @@ func auditRequestSucceeded(statusCode int, errorCode string) bool {
 	return statusCode >= 200 && statusCode < 300 && errorCode == ""
 }
 
-func isRetryableTransportFailure(providerValue accountdomain.Provider, err error) bool {
-	return providerValue != accountdomain.ProviderBuild || !neterrorpkg.IsResponseHeaderTimeout(err)
+func isRetryableTransportFailure(policy provider.FailurePolicy, err error) bool {
+	return !policy.FatalHeaderTimeout || !neterrorpkg.IsResponseHeaderTimeout(err)
 }
 
 func isSSOCredentialRejected(err error, credential accountdomain.Credential) bool {
@@ -2121,20 +2130,16 @@ func isBuildTransientRetryError(err error) bool {
 		!neterrorpkg.IsUpstreamOutputLoop(err)
 }
 
-func isReasoningRecoveryFailedResponse(response *provider.Response, upstreamProvider accountdomain.Provider) bool {
-	return upstreamProvider == accountdomain.ProviderBuild && response != nil && response.ReasoningRecoveryFailed
-}
-
-func isRetryableResponse(response *provider.Response, upstreamProvider accountdomain.Provider) bool {
+func isRetryableResponse(response *provider.Response, policy provider.FailurePolicy) bool {
 	if response == nil {
 		return false
 	}
-	// The official Build client treats Cloudflare origin-TLS failures as fatal,
+	// The official client treats Cloudflare origin-TLS failures as fatal,
 	// even when the edge asks clients to retry. Account rotation cannot repair them.
-	if upstreamProvider == accountdomain.ProviderBuild && (response.StatusCode == 525 || response.StatusCode == 526) {
+	if policy.FatalOriginTLS && (response.StatusCode == 525 || response.StatusCode == 526) {
 		return false
 	}
-	if response.StatusCode == http.StatusBadRequest && isReasoningRecoveryFailedResponse(response, upstreamProvider) {
+	if response.StatusCode == http.StatusBadRequest && policy.ForceAccountFailover && response.ReasoningRecoveryFailed {
 		return true
 	}
 	if !isRetryable(response.StatusCode) {
@@ -2142,7 +2147,7 @@ func isRetryableResponse(response *provider.Response, upstreamProvider accountdo
 	}
 	// Account-scoped payment failures must always rotate accounts.
 	// Upstream X-Should-Retry:false is only honored for non-account errors (e.g. 5xx history).
-	if forcesAccountFailover(response.StatusCode, upstreamProvider) {
+	if forcesAccountFailover(response.StatusCode, policy) {
 		return true
 	}
 	return !strings.EqualFold(strings.TrimSpace(response.Header.Get("X-Should-Retry")), "false")
@@ -2151,24 +2156,24 @@ func isRetryableResponse(response *provider.Response, upstreamProvider accountdo
 // isTerminalRequestForbidden identifies request-level 403 responses that must
 // be returned without account or egress side effects. Unknown 403 responses,
 // including bare permission-denied, remain on the credential traversal path.
-// General request policy classification is Build-specific so Web and Console
-// keep their browser/clearance recovery behavior. The exact Console DPoP rollout
-// error is also terminal because changing account or egress cannot satisfy it.
-func isTerminalRequestForbidden(upstreamProvider accountdomain.Provider, failure *UpstreamFailure) bool {
+// Request policy classification applies only where the provider declares it so
+// browser providers keep their clearance recovery. An auth-scheme rollout error
+// (DPoP) is terminal where declared because no account or egress can satisfy it.
+func isTerminalRequestForbidden(policy provider.FailurePolicy, failure *UpstreamFailure) bool {
 	if failure == nil {
 		return false
 	}
 	return failure.SafetyRejection ||
-		(upstreamProvider == accountdomain.ProviderBuild && failure.RequestScopedForbidden) ||
-		(upstreamProvider == accountdomain.ProviderConsole && failure.RequestScopedForbidden && isDPoPProofRequired(failure.UpstreamCode))
+		(policy.TerminalRequestScopedForbidden && failure.RequestScopedForbidden) ||
+		(policy.TerminalAuthSchemeForbidden && failure.RequestScopedForbidden && isDPoPProofRequired(failure.UpstreamCode))
 }
 
-// forcesAccountFailover keeps Build account-scoped billing, permission, and rate-limit
+// forcesAccountFailover keeps account-scoped billing, permission, and rate-limit
 // failures on the account-rotation path so their state can be recorded before another
 // account is selected. free-usage 429 and Team RPS 429 both need rotation even when
 // upstream sets X-Should-Retry:false.
-func forcesAccountFailover(status int, upstreamProvider accountdomain.Provider) bool {
-	return upstreamProvider == accountdomain.ProviderBuild &&
+func forcesAccountFailover(status int, policy provider.FailurePolicy) bool {
+	return policy.ForceAccountFailover &&
 		(status == http.StatusPaymentRequired || status == http.StatusForbidden || status == http.StatusTooManyRequests)
 }
 
@@ -2177,12 +2182,12 @@ func (s *Service) applyRateLimitReconciliation(ctx context.Context, credential a
 	if reconcileErr == nil && state == accountapp.RateLimitReconcileExhausted {
 		return
 	}
-	if credential.Provider == accountdomain.ProviderConsole && status == http.StatusTooManyRequests {
-		// A Console 429 with available quota, an in-progress cross-instance probe,
-		// or an inconclusive /usage request is transient. Isolate the account for
-		// this Retry-After window without growing its durable failure count.
+	if status == http.StatusTooManyRequests && s.providers.Failure(credential.Provider).SoftRateLimit {
+		// A 429 with available quota, an in-progress cross-instance probe, or an
+		// inconclusive usage request is transient. Isolate the account for this
+		// Retry-After window without growing its durable failure count.
 		if err := s.selector.markSoftFailure(ctx, credential, status, retryAfter); err != nil {
-			s.logger.Warn("console_rate_limit_soft_cooldown_failed", "account_id", credential.ID, "state", state, "error", err)
+			s.logger.Warn("rate_limit_soft_cooldown_failed", "provider", credential.Provider, "account_id", credential.ID, "state", state, "error", err)
 		}
 		return
 	}

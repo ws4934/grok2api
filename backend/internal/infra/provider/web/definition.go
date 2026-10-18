@@ -28,7 +28,7 @@ func (a *Adapter) Definition() provider.Definition {
 			Responses: true, ChatCompletions: true, Messages: true, StoredResponses: true,
 		},
 		Media: provider.MediaSurface{
-			ImageGeneration: true, ImageEdit: true, VideoGeneration: true,
+			ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true,
 		},
 		Inference: provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true},
 	}

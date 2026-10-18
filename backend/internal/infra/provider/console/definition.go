@@ -29,7 +29,7 @@ func (a *Adapter) Definition() provider.Definition {
 			AuthType: account.AuthTypeSSO, Import: true,
 		},
 		Conversation: provider.ConversationSurface{
-			Responses: true, ChatCompletions: true, Messages: true,
+			Responses: true, ChatCompletions: true, Messages: true, StatelessPreviousResponse: true,
 		},
 		Media: provider.MediaSurface{
 			ImageGeneration: true, ImageEdit: true, VideoGeneration: true,
@@ -39,6 +39,9 @@ func (a *Adapter) Definition() provider.Definition {
 		// therefore normally an egress challenge, not proof that the SSO
 		// credential is invalid; the gateway must retry after rebuilding the
 		// browser session instead of cooling the account.
-		Inference: provider.InferencePolicy{Usage: provider.UsageUpstream, RetryForbiddenAsEgress: true},
+		Inference: provider.InferencePolicy{Usage: provider.UsageUpstream, RetryForbiddenAsEgress: true, QualityHold: true},
+		// A 429 with quota left is transient on Console; the DPoP rollout 403
+		// cannot be fixed by another account or egress.
+		Failure: provider.FailurePolicy{TerminalAuthSchemeForbidden: true, SoftRateLimit: true},
 	}
 }

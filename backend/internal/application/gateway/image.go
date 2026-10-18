@@ -214,10 +214,10 @@ func (s *Service) executeImage(
 	}
 	pricingModel := s.providers.PricingModel(route.Provider, route.UpstreamModel)
 	pricingResolution, pricingQuality := resolution, quality
-	if route.Provider == accountdomain.ProviderWeb && operation == audit.OperationImage {
-		// Grok Web Imagine selects the product through the catalog model and
-		// only forwards aspect_ratio/n. Do not reserve or record a price tier
-		// derived from Console-only resolution/quality compatibility fields.
+	if definition, _ := s.providers.Definition(route.Provider); definition.Media.ImageGenerationModelPriced && operation == audit.OperationImage {
+		// The product is selected through the catalog model and only
+		// aspect_ratio/n are forwarded. Do not reserve or record a price tier
+		// derived from resolution/quality compatibility fields.
 		pricingResolution, pricingQuality = "", ""
 	}
 	var reservation audit.PricingResult

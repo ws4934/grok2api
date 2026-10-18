@@ -744,7 +744,8 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 					}
 					retriableCreate = true
 				}
-			case status == http.StatusForbidden && lease.Credential.Provider == account.ProviderBuild:
+			case status == http.StatusForbidden && s.providers.Failure(lease.Credential.Provider).AuthenticatedForbidden:
+				// A paid Build account is entitled to video, so its 403 is request-level.
 				if !account.IsBuildSuper(lease.Credential, lease.Billing) {
 					s.selector.MarkFailure(failureCtx, lease.Credential, status, 0)
 				}
