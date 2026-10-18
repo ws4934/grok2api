@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
@@ -198,7 +199,14 @@ func (s *Service) ReceiveVideoUpload(ctx context.Context, rawToken string, conte
 		}
 	}()
 
-	asset, err := s.commitStagedVideo(ctx, staged, now, nil)
+	commitCtx := ctx
+	if s.jobs != nil {
+		// The upstream PUT carries no gateway context; attribute it to the ticket's job.
+		if jobs, jobErr := s.jobs.GetMediaJobsByIDs(ctx, []string{ticket.JobID}); jobErr == nil && len(jobs) == 1 {
+			commitCtx = mediadomain.WithOrigin(ctx, mediadomain.JobOrigin(jobs[0], string(audit.OperationVideo)))
+		}
+	}
+	asset, err := s.commitStagedVideo(commitCtx, staged, now, nil)
 	if err != nil {
 		return mediadomain.Asset{}, err
 	}
@@ -343,6 +351,7 @@ func (s *Service) commitStagedVideo(ctx context.Context, staged stagedVideo, cre
 		ID: staged.ID, Kind: "video", StorageKey: staged.StorageKey, MIMEType: staged.MIMEType,
 		SizeBytes: staged.SizeBytes, SHA256: staged.SHA256, ExpiresAt: expiresAt, CreatedAt: createdAt,
 	}
+	asset.Origin, _ = mediadomain.OriginFrom(ctx)
 	if err := s.assets.CreateMediaAsset(ctx, asset); err != nil {
 		_ = s.objects.Delete(context.WithoutCancel(ctx), staged.StorageKey)
 		return mediadomain.Asset{}, err

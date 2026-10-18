@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
+	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/pkg/mediafile"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
@@ -38,6 +40,7 @@ func (h *Handler) RegisterAdmin(router *gin.RouterGroup) {
 	router.GET("/media/images", h.listImages)
 	router.DELETE("/media/images", h.deleteImages)
 	router.GET("/media/images/stats", h.imageStats)
+	router.GET("/media/images/:assetId", h.getAsset)
 	router.POST("/media/inputs/import", h.importInputImageFromURL)
 	router.POST("/media/inputs/upload", h.uploadInputAsset)
 	router.GET("/media/videos", h.listVideos)
@@ -131,22 +134,70 @@ func (h *Handler) putVideoUpload(c *gin.Context) {
 	}
 }
 
+// assetListQuery 是图库来源筛选；from/to 为 RFC3339 时间，from 含边界、to 不含。
+type assetListQuery struct {
+	Kind        string    `form:"kind"`
+	Provider    string    `form:"provider"`
+	Model       string    `form:"model"`
+	Operation   string    `form:"operation"`
+	ClientKeyID uint64    `form:"clientKeyId"`
+	AccountID   uint64    `form:"accountId"`
+	From        time.Time `form:"from" time_format:"2006-01-02T15:04:05Z07:00"`
+	To          time.Time `form:"to" time_format:"2006-01-02T15:04:05Z07:00"`
+}
+
 func (h *Handler) listImages(c *gin.Context) {
 	page, pageSize := parsePagination(c)
-	assets, total, err := h.service.AdminListImages(c.Request.Context(), page, pageSize, c.Query("search"))
+	var query assetListQuery
+	if c.ShouldBindQuery(&query) != nil {
+		response.Error(c, http.StatusBadRequest, "invalidFilter", mediaapp.ErrInvalidFilter.Error())
+		return
+	}
+	assets, total, err := h.service.AdminListImages(c.Request.Context(), page, pageSize, c.Query("search"), repository.MediaAssetListFilter{
+		Kind: query.Kind, Provider: query.Provider, Model: query.Model, Operation: query.Operation,
+		ClientKeyID: query.ClientKeyID, AccountID: query.AccountID, CreatedFrom: query.From, CreatedTo: query.To,
+	})
+	if errors.Is(err, mediaapp.ErrInvalidFilter) {
+		response.Error(c, http.StatusBadRequest, "invalidFilter", err.Error())
+		return
+	}
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "mediaListImagesFailed", "读取图片列表失败")
 		return
 	}
 	items := make([]mediaAssetDTO, 0, len(assets))
 	for _, a := range assets {
-		items = append(items, mediaAssetDTO{
-			ID: a.ID, Kind: a.Kind, MimeType: a.MIMEType, SizeBytes: a.SizeBytes,
-			SHA256: a.SHA256, CreatedAt: a.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			URL: h.service.PublicImageURL(a.ID),
-		})
+		items = append(items, h.assetDTO(a))
 	}
 	response.Success(c, http.StatusOK, gin.H{"items": items, "page": page, "pageSize": pageSize, "total": total})
+}
+
+func (h *Handler) getAsset(c *gin.Context) {
+	asset, err := h.service.AdminGetAsset(c.Request.Context(), c.Param("assetId"))
+	if errors.Is(err, mediaapp.ErrAssetNotFound) {
+		response.Error(c, http.StatusNotFound, "mediaAssetNotFound", err.Error())
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusInternalServerError, "mediaGetAssetFailed", "读取媒体资源失败")
+		return
+	}
+	response.Success(c, http.StatusOK, h.assetDTO(asset))
+}
+
+func (h *Handler) assetDTO(a mediadomain.Asset) mediaAssetDTO {
+	url := h.service.PublicImageURL(a.ID)
+	if a.Kind == "video" {
+		url = h.service.PublicVideoURL(a.ID)
+	}
+	o := a.Origin
+	return mediaAssetDTO{
+		ID: a.ID, Kind: a.Kind, MimeType: a.MIMEType, SizeBytes: a.SizeBytes,
+		SHA256: a.SHA256, CreatedAt: a.CreatedAt.Format("2006-01-02T15:04:05Z"), URL: url,
+		Provider: o.Provider, Model: o.Model, UpstreamModel: o.UpstreamModel,
+		ClientKeyID: o.ClientKeyID, ClientKeyName: o.ClientKeyName, AccountID: o.AccountID, AccountName: o.AccountName,
+		Operation: o.Operation, JobID: o.JobID, RequestID: o.RequestID, Prompt: o.Prompt,
+	}
 }
 
 func (h *Handler) imageStats(c *gin.Context) {
@@ -167,6 +218,10 @@ func (h *Handler) deleteImages(c *gin.Context) {
 	deleted, err := h.service.AdminDeleteImages(c.Request.Context(), request.IDs)
 	if errors.Is(err, mediaapp.ErrInvalidImageSelection) {
 		response.Error(c, http.StatusBadRequest, "invalidImageSelection", err.Error())
+		return
+	}
+	if errors.Is(err, mediaapp.ErrAssetInUse) {
+		response.Error(c, http.StatusConflict, "mediaAssetInUse", err.Error())
 		return
 	}
 	if err != nil {

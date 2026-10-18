@@ -620,7 +620,8 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		}
 
 		lastProgress := job.Progress
-		result, err = adapter.GenerateVideo(ctx, provider.VideoRequest{
+		originCtx := media.WithOrigin(ctx, media.JobOrigin(job, string(audit.OperationVideo)))
+		result, err = adapter.GenerateVideo(originCtx, provider.VideoRequest{
 			Credential: lease.Credential, Billing: lease.Billing, JobID: job.ID, Model: route.UpstreamModel,
 			Operation: operation,
 			Prompt:    job.Prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
@@ -640,7 +641,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			},
 		})
 		if err == nil && result.AssetID == "" && result.URL != "" {
-			result, err = s.persistRemoteVideo(ctx, job.ID, adapter, lease.Credential, result)
+			result, err = s.persistRemoteVideo(originCtx, job.ID, adapter, lease.Credential, result)
 		}
 		if err == nil {
 			break

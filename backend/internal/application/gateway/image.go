@@ -12,6 +12,7 @@ import (
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
+	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
@@ -81,7 +82,7 @@ func (s *Service) GenerateImage(ctx context.Context, input ImageGenerationInput)
 		ResponseFormat: input.ResponseFormat, OutputFormat: input.OutputFormat, Background: input.Background,
 		Streaming: input.Streaming, PartialImages: input.PartialImages,
 	}
-	return s.executeImage(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationImage, modeldomain.CapabilityImage, func(providerValue accountdomain.Provider) bool {
+	return s.executeImage(ctx, input.RequestID, input.ClientKey, input.PublicModel, input.Prompt, audit.OperationImage, modeldomain.CapabilityImage, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.ImageGeneration(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, upstream string) (*provider.Response, error) {
@@ -106,7 +107,7 @@ func (s *Service) EditImage(ctx context.Context, input ImageEditInput) (*Result,
 		ResponseFormat: input.ResponseFormat, OutputFormat: input.OutputFormat, Background: input.Background,
 		Streaming: input.Streaming, PartialImages: input.PartialImages,
 	}
-	return s.executeImage(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationImageEdit, modeldomain.CapabilityImageEdit, func(providerValue accountdomain.Provider) bool {
+	return s.executeImage(ctx, input.RequestID, input.ClientKey, input.PublicModel, input.Prompt, audit.OperationImageEdit, modeldomain.CapabilityImageEdit, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.ImageEdit(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, upstream string) (*provider.Response, error) {
@@ -129,6 +130,7 @@ func (s *Service) executeImage(
 	requestID string,
 	key clientkey.Key,
 	publicModel string,
+	prompt string,
 	operation audit.Operation,
 	capability modeldomain.Capability,
 	supports imageProviderSupport,
@@ -277,7 +279,13 @@ func (s *Service) executeImage(
 			continue
 		}
 		lease.markSelectorUpstreamStarted()
-		response, err = execute(ctx, route.Provider, credential, route.UpstreamModel)
+		// Assets the provider saves for this attempt carry its provenance.
+		originCtx := mediadomain.WithOrigin(ctx, mediadomain.Origin{
+			Provider: string(route.Provider), Model: externalModel, UpstreamModel: auditBase.ModelUpstreamModel,
+			ClientKeyID: key.ID, ClientKeyName: key.Name, AccountID: credential.ID, AccountName: credential.Name,
+			Operation: string(operation), RequestID: requestID, Prompt: prompt,
+		})
+		response, err = execute(originCtx, route.Provider, credential, route.UpstreamModel)
 		if err != nil {
 			s.logger.Error("image_upstream_failed", "event_id", eventID, "request_id", requestID, "model", externalModel, "provider", route.Provider, "account_id", credential.ID, "error", err)
 			if isSSOCredentialRejected(err, credential) {

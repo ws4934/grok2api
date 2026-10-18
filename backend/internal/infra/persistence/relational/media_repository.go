@@ -22,10 +22,21 @@ func NewMediaAssetRepository(db *Database) *MediaAssetRepository {
 	return &MediaAssetRepository{db: db}
 }
 
+// mediaAssetPromptRunes bounds the stored prompt excerpt.
+const mediaAssetPromptRunes = 1000
+
 func (r *MediaAssetRepository) CreateMediaAsset(ctx context.Context, value media.Asset) error {
+	origin := value.Origin
+	// Origin is display metadata: clip it to the column sizes instead of
+	// failing the save on PostgreSQL.
 	row := mediaAssetModel{
 		ID: value.ID, Kind: value.Kind, StorageKey: value.StorageKey, MIMEType: value.MIMEType,
 		SizeBytes: value.SizeBytes, SHA256: value.SHA256, ExpiresAt: value.ExpiresAt, CreatedAt: value.CreatedAt,
+		Provider: truncate(origin.Provider, 32), Model: truncate(origin.Model, 255), UpstreamModel: truncate(origin.UpstreamModel, 255),
+		ClientKeyID: origin.ClientKeyID, ClientKeyName: truncate(origin.ClientKeyName, 160),
+		AccountID: origin.AccountID, AccountName: truncate(origin.AccountName, 160),
+		Operation: truncate(origin.Operation, 32), JobID: truncate(origin.JobID, 64), RequestID: truncate(origin.RequestID, 64),
+		Prompt: truncate(origin.Prompt, mediaAssetPromptRunes),
 	}
 	return r.db.db.WithContext(ctx).Create(&row).Error
 }
@@ -35,36 +46,68 @@ func (r *MediaAssetRepository) GetMediaAsset(ctx context.Context, id string) (me
 	if err := r.db.db.WithContext(ctx).Where("id = ?", id).First(&row).Error; err != nil {
 		return media.Asset{}, mapError(err)
 	}
-	return media.Asset{
-		ID: row.ID, Kind: row.Kind, StorageKey: row.StorageKey, MIMEType: row.MIMEType,
-		SizeBytes: row.SizeBytes, SHA256: row.SHA256, ExpiresAt: row.ExpiresAt, CreatedAt: row.CreatedAt,
-	}, nil
+	return mediaAssetToDomain(row), nil
 }
 
 // ListMediaAssets 通过字段投影返回符合筛选条件的稳定分页结果。
-// 默认仅列出图片，避免管理端图库混入视频资产。
+// 仅列出持久资产；未指定类型时只列图片，保持图库默认行为。
 func (r *MediaAssetRepository) ListMediaAssets(ctx context.Context, input repository.MediaAssetListQuery) ([]media.Asset, int64, error) {
-	query := r.db.db.WithContext(ctx).Model(&mediaAssetModel{}).Where("kind = ? AND expires_at IS NULL", "image")
+	filter := input.Filter
+	kind := filter.Kind
+	if kind == "" {
+		kind = "image"
+	}
+	query := r.db.db.WithContext(ctx).Model(&mediaAssetModel{}).Where("kind = ? AND expires_at IS NULL", kind)
+	if filter.Provider != "" {
+		query = query.Where("provider = ?", filter.Provider)
+	}
+	if filter.Model != "" {
+		query = query.Where("model = ?", filter.Model)
+	}
+	if filter.Operation != "" {
+		query = query.Where("operation = ?", filter.Operation)
+	}
+	if filter.ClientKeyID != 0 {
+		query = query.Where("client_key_id = ?", filter.ClientKeyID)
+	}
+	if filter.AccountID != 0 {
+		query = query.Where("account_id = ?", filter.AccountID)
+	}
+	if !filter.CreatedFrom.IsZero() {
+		query = query.Where("created_at >= ?", filter.CreatedFrom.UTC())
+	}
+	if !filter.CreatedTo.IsZero() {
+		query = query.Where("created_at < ?", filter.CreatedTo.UTC())
+	}
 	if search := strings.TrimSpace(input.Page.Search); search != "" {
 		pattern := "%" + strings.ToLower(search) + "%"
-		query = query.Where("LOWER(id) LIKE ? OR LOWER(kind) LIKE ? OR LOWER(mime_type) LIKE ? OR LOWER(sha256) LIKE ?", pattern, pattern, pattern, pattern)
+		query = query.Where("LOWER(id) LIKE ? OR LOWER(kind) LIKE ? OR LOWER(mime_type) LIKE ? OR LOWER(sha256) LIKE ? OR LOWER(prompt) LIKE ?", pattern, pattern, pattern, pattern, pattern)
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []mediaAssetModel
-	if err := query.Select("id", "kind", "mime_type", "size_bytes", "sha256", "created_at").Order("created_at DESC, id DESC").Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
+	if err := query.Omit("storage_key", "expires_at").Order("created_at DESC, id DESC").Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	values := make([]media.Asset, 0, len(rows))
 	for _, row := range rows {
-		values = append(values, media.Asset{
-			ID: row.ID, Kind: row.Kind, StorageKey: row.StorageKey, MIMEType: row.MIMEType,
-			SizeBytes: row.SizeBytes, SHA256: row.SHA256, CreatedAt: row.CreatedAt,
-		})
+		values = append(values, mediaAssetToDomain(row))
 	}
 	return values, total, nil
+}
+
+func mediaAssetToDomain(row mediaAssetModel) media.Asset {
+	return media.Asset{
+		ID: row.ID, Kind: row.Kind, StorageKey: row.StorageKey, MIMEType: row.MIMEType,
+		SizeBytes: row.SizeBytes, SHA256: row.SHA256, ExpiresAt: row.ExpiresAt, CreatedAt: row.CreatedAt,
+		Origin: media.Origin{
+			Provider: row.Provider, Model: row.Model, UpstreamModel: row.UpstreamModel,
+			ClientKeyID: row.ClientKeyID, ClientKeyName: row.ClientKeyName, AccountID: row.AccountID, AccountName: row.AccountName,
+			Operation: row.Operation, JobID: row.JobID, RequestID: row.RequestID, Prompt: row.Prompt,
+		},
+	}
 }
 
 // SummarizeMediaAssets 通过单次聚合查询返回图片数量和全部媒体（含视频）存储占用。

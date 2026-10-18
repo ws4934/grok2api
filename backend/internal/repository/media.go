@@ -8,9 +8,24 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
 )
 
+// MediaAssetListFilter 表示图库按来源筛选的条件；零值字段不参与筛选。
+type MediaAssetListFilter struct {
+	// Kind 为空时按 image 处理，保持图库默认只列图片。
+	Kind        string
+	Provider    string
+	Model       string
+	Operation   string
+	ClientKeyID uint64
+	AccountID   uint64
+	// CreatedFrom 含边界，CreatedTo 不含边界。
+	CreatedFrom time.Time
+	CreatedTo   time.Time
+}
+
 // MediaAssetListQuery 表示管理端媒体资源列表的查询条件。
 type MediaAssetListQuery struct {
-	Page PageQuery
+	Page   PageQuery
+	Filter MediaAssetListFilter
 }
 
 // MediaJobListFilter 表示视频任务列表允许使用的业务筛选条件。

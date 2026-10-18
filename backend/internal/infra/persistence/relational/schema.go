@@ -219,6 +219,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	if err := d.ensureMediaAssetConstraints(ctx); err != nil {
 		return fmt.Errorf("迁移 media asset 数据库约束: %w", err)
 	}
+	if err := d.ensureMediaAssetOriginIndexes(ctx); err != nil {
+		return fmt.Errorf("初始化 media asset 来源索引: %w", err)
+	}
 	if err := d.ensureClientKeyLimitConstraints(ctx); err != nil {
 		return fmt.Errorf("迁移客户端 Key 限额约束: %w", err)
 	}

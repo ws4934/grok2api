@@ -30,6 +30,7 @@ var (
 	ErrMediaJobsUnavailable  = errors.New("视频任务仓储未配置")
 	ErrInputAssetNotFound    = errors.New("临时输入资产不存在或已过期")
 	ErrMediaCapacity         = errors.New("媒体存储容量不足")
+	ErrAssetInUse            = errors.New("媒体资源正被进行中的任务引用")
 )
 
 // InputAssetTTL 是临时输入的硬保留上限；无论任务状态如何，超过后都可回收。
@@ -160,6 +161,7 @@ func (s *Service) saveImage(ctx context.Context, data []byte, expiresAt *time.Ti
 		ID: id, Kind: "image", StorageKey: storageKey, MIMEType: mimeType,
 		SizeBytes: int64(len(data)), SHA256: hex.EncodeToString(digest[:]), ExpiresAt: expiresAt, CreatedAt: createdAt,
 	}
+	asset.Origin, _ = mediadomain.OriginFrom(ctx)
 	if err := s.assets.CreateMediaAsset(ctx, asset); err != nil {
 		_ = s.objects.Delete(context.WithoutCancel(ctx), storageKey)
 		return mediadomain.Asset{}, err
@@ -249,6 +251,11 @@ func (s *Service) PublicImageURL(id string) string {
 	return s.runtimeConfig().PublicBaseURL + "/v1/media/images/" + id
 }
 
+// PublicVideoURL 返回可直接用于视频播放的公开资源地址。
+func (s *Service) PublicVideoURL(id string) string {
+	return s.runtimeConfig().PublicBaseURL + "/v1/media/videos/" + id
+}
+
 // OpenImage 读取图片元数据和正文，不向调用方暴露实际文件路径。
 func (s *Service) OpenImage(ctx context.Context, id string) (mediadomain.Asset, io.ReadCloser, error) {
 	asset, err := s.assets.GetMediaAsset(ctx, strings.TrimSpace(id))
@@ -271,9 +278,21 @@ func (s *Service) OpenImage(ctx context.Context, id string) (mediadomain.Asset, 
 	return asset, body, nil
 }
 
-// AdminListImages 分页返回图片资源列表。
-func (s *Service) AdminListImages(ctx context.Context, page, pageSize int, search string) ([]mediadomain.Asset, int64, error) {
-	return s.assets.ListMediaAssets(ctx, repository.MediaAssetListQuery{Page: mediaPageQuery(page, pageSize, search, repository.SortQuery{})})
+// AdminListImages 分页返回图库资源列表；filter.Kind 为空时只列图片。
+func (s *Service) AdminListImages(ctx context.Context, page, pageSize int, search string, filter repository.MediaAssetListFilter) ([]mediadomain.Asset, int64, error) {
+	if filter.Kind != "" && filter.Kind != "image" && filter.Kind != "video" {
+		return nil, 0, ErrInvalidFilter
+	}
+	return s.assets.ListMediaAssets(ctx, repository.MediaAssetListQuery{Page: mediaPageQuery(page, pageSize, search, repository.SortQuery{}), Filter: filter})
+}
+
+// AdminGetAsset 返回一份图库资产（含来源）；临时输入不属于图库。
+func (s *Service) AdminGetAsset(ctx context.Context, id string) (mediadomain.Asset, error) {
+	asset, err := s.assets.GetMediaAsset(ctx, strings.TrimSpace(id))
+	if errors.Is(err, repository.ErrNotFound) || (err == nil && asset.ExpiresAt != nil) {
+		return mediadomain.Asset{}, ErrAssetNotFound
+	}
+	return asset, err
 }
 
 // AdminListVideoJobs 分页返回视频任务列表。
@@ -300,8 +319,10 @@ func (s *Service) AdminImageStats(ctx context.Context) (ImageStats, error) {
 	return ImageStats{TotalImages: stats.TotalImages, TotalBytes: stats.TotalBytes}, nil
 }
 
-// AdminDeleteImages 删除管理员明确选择的图片对象及其元数据。
-// 不存在或已被并发清理的图片按幂等成功处理；非图片资产不会被删除。
+// AdminDeleteImages 删除管理员明确选择的图库资产（图片或视频）对象及其元数据。
+// 不存在、已被并发清理或不属于图库的临时输入按幂等成功处理。被活动任务结果或
+// 未消费上传票据引用的资产与容量清理同样受保护：整批拒绝并返回 ErrAssetInUse，
+// 单个与批量删除行为一致。终态任务对已删资产的引用由读取端容忍（同容量清理）。
 func (s *Service) AdminDeleteImages(ctx context.Context, ids []string) (int, error) {
 	if len(ids) == 0 || len(ids) > 100 {
 		return 0, ErrInvalidImageSelection
@@ -324,8 +345,19 @@ func (s *Service) AdminDeleteImages(ctx context.Context, ids []string) (int, err
 		if err != nil {
 			return 0, err
 		}
-		if asset.Kind == "image" {
+		if asset.ExpiresAt == nil {
 			assets = append(assets, asset)
+		}
+	}
+	if len(assets) > 0 {
+		protected, err := s.assets.ListProtectedMediaAssetIDs(ctx)
+		if err != nil {
+			return 0, err
+		}
+		for _, asset := range assets {
+			if _, inUse := protected[asset.ID]; inUse {
+				return 0, ErrAssetInUse
+			}
 		}
 	}
 

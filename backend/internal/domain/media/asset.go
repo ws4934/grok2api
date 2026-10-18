@@ -47,4 +47,6 @@ type Asset struct {
 	// ExpiresAt 仅用于临时输入；nil 表示持久图库/视频资产。
 	ExpiresAt *time.Time
 	CreatedAt time.Time
+	// Origin is empty for uploads and assets saved before provenance existed.
+	Origin Origin
 }

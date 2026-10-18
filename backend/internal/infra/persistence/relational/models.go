@@ -478,6 +478,19 @@ type mediaAssetModel struct {
 	SHA256     string `gorm:"size:64;not null;check:chk_media_assets_sha,length(sha256) = 64"`
 	ExpiresAt  *time.Time
 	CreatedAt  time.Time `gorm:"not null"`
+	// Origin columns (see schema_media_asset_origin.go). Key and account are
+	// plain ids without foreign keys so deleting either never blocks.
+	Provider      string `gorm:"size:32;not null;default:''"`
+	Model         string `gorm:"size:255;not null;default:''"`
+	UpstreamModel string `gorm:"size:255;not null;default:''"`
+	ClientKeyID   uint64 `gorm:"not null;default:0"`
+	ClientKeyName string `gorm:"size:160;not null;default:''"`
+	AccountID     uint64 `gorm:"not null;default:0"`
+	AccountName   string `gorm:"size:160;not null;default:''"`
+	Operation     string `gorm:"size:32;not null;default:''"`
+	JobID         string `gorm:"size:64;not null;default:''"`
+	RequestID     string `gorm:"size:64;not null;default:''"`
+	Prompt        string `gorm:"type:text;not null;default:''"`
 }
 
 func (mediaAssetModel) TableName() string { return "media_assets" }

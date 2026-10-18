@@ -8,6 +8,18 @@ type mediaAssetDTO struct {
 	SHA256    string `json:"sha256"`
 	CreatedAt string `json:"createdAt"`
 	URL       string `json:"url"`
+	// Origin fields are empty for uploads and assets saved before provenance.
+	Provider      string `json:"provider"`
+	Model         string `json:"model"`
+	UpstreamModel string `json:"upstreamModel"`
+	ClientKeyID   uint64 `json:"clientKeyId"`
+	ClientKeyName string `json:"clientKeyName"`
+	AccountID     uint64 `json:"accountId"`
+	AccountName   string `json:"accountName"`
+	Operation     string `json:"operation"`
+	JobID         string `json:"jobId"`
+	RequestID     string `json:"requestId"`
+	Prompt        string `json:"prompt"`
 }
 
 type imageStatsDTO struct {

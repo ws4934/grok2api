@@ -92,7 +92,7 @@ func TestTransientInputIsHiddenReadableAndExpires(t *testing.T) {
 	if err != nil || input.ExpiresAt == nil || !strings.HasPrefix(input.ID, "input_") {
 		t.Fatalf("input=%#v err=%v", input, err)
 	}
-	if values, total, listErr := service.AdminListImages(ctx, 1, 20, ""); listErr != nil || total != 0 || len(values) != 0 {
+	if values, total, listErr := service.AdminListImages(ctx, 1, 20, "", repository.MediaAssetListFilter{}); listErr != nil || total != 0 || len(values) != 0 {
 		t.Fatalf("gallery values=%#v total=%d err=%v", values, total, listErr)
 	}
 	if _, _, openErr := service.OpenImage(ctx, input.ID); !errors.Is(openErr, ErrAssetNotFound) {

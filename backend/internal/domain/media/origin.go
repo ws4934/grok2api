@@ -9,7 +9,10 @@ type Origin struct {
 	Model         string
 	UpstreamModel string
 	ClientKeyID   uint64
+	// ClientKeyName and AccountName are snapshots that survive key/account deletion.
+	ClientKeyName string
 	AccountID     uint64
+	AccountName   string
 	// Operation is the audit operation, e.g. image, image_edit, video.
 	Operation string
 	JobID     string
@@ -29,4 +32,13 @@ func WithOrigin(ctx context.Context, origin Origin) context.Context {
 func OriginFrom(ctx context.Context) (Origin, bool) {
 	origin, ok := ctx.Value(originKey{}).(Origin)
 	return origin, ok
+}
+
+// JobOrigin attributes assets produced by a media job to that job.
+func JobOrigin(job Job, operation string) Origin {
+	return Origin{
+		Provider: job.Provider, Model: job.Model, UpstreamModel: job.UpstreamModel,
+		ClientKeyID: job.ClientKeyID, ClientKeyName: job.ClientKeyName, AccountID: job.AccountID, AccountName: job.AccountName,
+		Operation: operation, JobID: job.ID, RequestID: job.RequestID, Prompt: job.Prompt,
+	}
 }

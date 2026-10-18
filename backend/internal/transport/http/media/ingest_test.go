@@ -20,6 +20,7 @@ import (
 	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	localmedia "github.com/chenyme/grok2api/backend/internal/infra/media"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
+	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/gin-gonic/gin"
 )
 
@@ -176,7 +177,7 @@ func TestAdminUploadCreatesHiddenTransientInput(t *testing.T) {
 	if public.Code != http.StatusNotFound {
 		t.Fatalf("transient input became public: status=%d", public.Code)
 	}
-	if values, total, err := service.AdminListImages(ctx, 1, 20, ""); err != nil || total != 0 || len(values) != 0 {
+	if values, total, err := service.AdminListImages(ctx, 1, 20, "", repository.MediaAssetListFilter{}); err != nil || total != 0 || len(values) != 0 {
 		t.Fatalf("gallery values=%#v total=%d err=%v", values, total, err)
 	}
 }
