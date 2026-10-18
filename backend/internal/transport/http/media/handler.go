@@ -291,7 +291,7 @@ func (h *Handler) jobDTO(job mediadomain.Job) mediaJobDTO {
 		CreatedAt: job.CreatedAt.Format("2006-01-02T15:04:05Z"), CompletedAt: completedAt,
 		ErrorCode: job.ErrorCode, ErrorMessage: job.ErrorMessage, AssetID: assetID, AssetIDs: assetIDs, AssetURLs: assetURLs,
 		Cancellable: job.Status == mediadomain.StatusQueued || (job.Kind == mediadomain.KindImage && job.Status == mediadomain.StatusInProgress && !job.Submitted),
-		Retryable:   job.Status == mediadomain.StatusUncertain,
+		Retryable:   job.Status == mediadomain.StatusUncertain || gateway.ImageJobResumable(job),
 	}
 }
 
@@ -345,7 +345,8 @@ func (h *Handler) cancelJob(c *gin.Context) {
 }
 
 // retryJob resubmits an uncertain job as a new job; the optional
-// Idempotency-Key defaults to one retry per job.
+// Idempotency-Key defaults to one retry per job. A failed image job whose
+// image the upstream already drew is resumed in place (resumed: true).
 func (h *Handler) retryJob(c *gin.Context) {
 	if h.jobs == nil {
 		response.Error(c, http.StatusServiceUnavailable, "mediaJobsUnavailable", mediaapp.ErrMediaJobsUnavailable.Error())
@@ -356,12 +357,13 @@ func (h *Handler) retryJob(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "Idempotency-Key 不能超过 160 个字符")
 		return
 	}
-	job, err := h.jobs.RetryMediaJob(c.Request.Context(), strings.TrimSpace(c.Param("jobId")), key)
+	id := strings.TrimSpace(c.Param("jobId"))
+	job, err := h.jobs.RetryMediaJob(c.Request.Context(), id, key)
 	if err != nil {
 		writeJobActionError(c, err)
 		return
 	}
-	response.Success(c, http.StatusOK, h.jobDTO(job))
+	response.Success(c, http.StatusOK, retryJobDTO{mediaJobDTO: h.jobDTO(job), Resumed: job.ID == id})
 }
 
 func writeJobActionError(c *gin.Context, err error) {

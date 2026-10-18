@@ -476,6 +476,10 @@ type mediaJobModel struct {
 	UsageRecordedAt *time.Time
 	Account         *accountModel   `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL"`
 	ClientKey       *clientKeyModel `gorm:"foreignKey:ClientKeyID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT"`
+
+	// ResumeItem/ResumeGeneration are written only by an administrator resume.
+	ResumeItem       int `gorm:"not null;default:0"`
+	ResumeGeneration int `gorm:"not null;default:0"`
 }
 
 func (mediaJobModel) TableName() string { return "media_jobs" }

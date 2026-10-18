@@ -46,7 +46,7 @@ const (
 var (
 	ErrIdempotencyConflict    = errors.New("Idempotency-Key 已用于不同的请求")
 	ErrMediaJobNotCancellable = errors.New("任务已提交上游，无法取消")
-	ErrMediaJobNotRetryable   = errors.New("只有结果不确定的任务可以重试")
+	ErrMediaJobNotRetryable   = errors.New("只有结果不确定的任务或上游已生成结果的失败图片任务可以重试")
 	ErrImageInputTooLarge     = errors.New("图片输入编码后超过 32 MiB")
 	// errJobLost means the claim was canceled or recovered elsewhere.
 	errJobLost = errors.New("media job claim lost")
@@ -96,6 +96,32 @@ type imageItemOutcome struct {
 
 func imageUsageEventID(jobID string, index int) string {
 	return fmt.Sprintf("image_usage_%s_%d", jobID, index)
+}
+
+// imageItemEventID is the usage event (audit and reservation) of image index.
+// The image a resume re-fetches gets a fresh event per resume, since the
+// attempt that failed it already wrote the earlier one.
+func imageItemEventID(job media.Job, index int) string {
+	if job.ResumeGeneration > 0 && index == job.ResumeItem {
+		return fmt.Sprintf("%s_r%d", imageUsageEventID(job.ID, index), job.ResumeGeneration)
+	}
+	return imageUsageEventID(job.ID, index)
+}
+
+// resumeDone reports that a resumed job delivered the image it re-fetches. A
+// resume never draws new images, so the job ends there.
+func resumeDone(job media.Job) bool {
+	return job.ResumeGeneration > 0 && len(job.ResultAssetIDs) > job.ResumeItem
+}
+
+// ImageJobResumable reports whether a failed image job can re-fetch, on its
+// account, the image the upstream already accepted instead of drawing it again.
+func ImageJobResumable(job media.Job) bool {
+	if job.Kind != media.KindImage || job.Status != media.StatusFailed || !job.Submitted || job.AccountID == 0 {
+		return false
+	}
+	var cp provider.ImageCheckpoint
+	return json.Unmarshal([]byte(job.Checkpoint), &cp) == nil && cp.Submitted && cp.UpstreamID != ""
 }
 
 // itemShare splits the reserved total so the per-image charges sum to it exactly.
@@ -328,7 +354,7 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 		s.endImageJob(parent, &job, media.StatusFailed, "provider_unavailable", ErrNoAvailableAccount, 0)
 		return
 	}
-	if job.Generation > imageJobMaxClaims {
+	if job.Generation-job.ResumeGeneration > imageJobMaxClaims {
 		status := media.StatusFailed
 		if job.Submitted {
 			status = media.StatusUncertain
@@ -361,7 +387,7 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 		Model: route.UpstreamModel, Prompt: job.Prompt, ImageURLs: inputs.ImageURLs, MaskURL: inputs.MaskURL,
 		Size: job.Size, Quality: job.Quality, OutputFormat: job.Params.OutputFormat, Background: job.Params.Background,
 	}
-	for len(job.ResultAssetIDs) < job.ItemCount {
+	for len(job.ResultAssetIDs) < job.ItemCount && !resumeDone(job) {
 		outcome := s.runImageItem(ctx, &job, route, adapter, request, egressTrace)
 		if errors.Is(outcome.err, errJobLost) || errors.Is(context.Cause(ctx), errJobLost) {
 			return
@@ -381,6 +407,10 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 			s.endImageJob(parent, &job, outcome.status, outcome.code, outcome.err, outcome.upstreamStatus, outcome.attempts...)
 			return
 		}
+	}
+	if missing := job.ItemCount - len(job.ResultAssetIDs); missing > 0 {
+		s.endImageJob(parent, &job, media.StatusFailed, "partial_result", fmt.Errorf("已重新获取上游生成的图片，其余 %d 张未生成", missing), 0)
+		return
 	}
 	s.endImageJob(parent, &job, media.StatusCompleted, "", nil, 0)
 }
@@ -505,7 +535,7 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 	succeeded = true
 	s.consumeImageQuota(route, job.AccountID, quotaMode)
 	if err := s.recordImageItemAudit(context.WithoutCancel(ctx), *job, index, http.StatusOK, "", time.Since(startedAt).Milliseconds()); err != nil {
-		s.logger.Error("image_usage_record_failed", "job_id", job.ID, "event_id", imageUsageEventID(job.ID, index), "error", err)
+		s.logger.Error("image_usage_record_failed", "job_id", job.ID, "event_id", imageItemEventID(*job, index), "error", err)
 	}
 	return imageItemOutcome{}
 }
@@ -678,6 +708,11 @@ func (s *Service) consumeImageQuota(route modeldomain.Route, accountID uint64, q
 // endImageJob writes the terminal state, releases the reservations of
 // undelivered images and records the remaining audits.
 func (s *Service) endImageJob(ctx context.Context, job *media.Job, status media.Status, code string, err error, upstreamStatus int, attempts ...audit.Attempt) {
+	if status == media.StatusUncertain && job.ResumeGeneration > 0 {
+		// A resumed job still names its upstream result: it stays resumable,
+		// never resubmitted (its inputs were compacted when it first failed).
+		status = media.StatusFailed
+	}
 	now := time.Now().UTC()
 	job.Status, job.ErrorCode, job.ErrorMessage = status, code, ""
 	if err != nil {
@@ -712,7 +747,9 @@ func (s *Service) recordImageJobAudits(ctx context.Context, job media.Job, upstr
 			return err
 		}
 	}
-	if job.Status != media.StatusCompleted && len(job.ResultAssetIDs) < job.ItemCount {
+	// A resumed job that delivered its image ends on images it never drew:
+	// the failure that stopped them is already recorded.
+	if job.Status != media.StatusCompleted && len(job.ResultAssetIDs) < job.ItemCount && !resumeDone(job) {
 		statusCode := resolveVideoAuditStatusCode(job, upstreamStatus, nil)
 		if err := s.recordImageItemAudit(ctx, job, len(job.ResultAssetIDs), statusCode, job.ErrorCode, durationMS, attempts...); err != nil {
 			return err
@@ -731,7 +768,7 @@ func (s *Service) recordImageItemAudit(ctx context.Context, job media.Job, index
 		createdAt = job.CompletedAt.UTC()
 	}
 	record := audit.Record{
-		EventID: imageUsageEventID(job.ID, index), RequestID: job.RequestID, ClientKeyID: job.ClientKeyID, ClientKeyName: job.ClientKeyName,
+		EventID: imageItemEventID(job, index), RequestID: job.RequestID, ClientKeyID: job.ClientKeyID, ClientKeyName: job.ClientKeyName,
 		ClientIP: job.ClientIP, ModelRouteID: job.ModelRouteID, ModelPublicID: job.Model, ModelUpstreamModel: job.UpstreamModel,
 		Provider: job.Provider, Operation: imageJobOperation(job), UsageSource: audit.UsageSourceNone,
 		AccountID: auditAccountID(job.AccountID), AccountName: job.AccountName, StatusCode: statusCode, ErrorCode: errorCode,
@@ -765,7 +802,7 @@ func (s *Service) releaseJobReservations(job media.Job) {
 		return
 	}
 	for index := len(job.ResultAssetIDs); index < job.ItemCount; index++ {
-		s.cancelBillingReservation(imageUsageEventID(job.ID, index))
+		s.cancelBillingReservation(imageItemEventID(job, index))
 	}
 }
 
@@ -851,7 +888,8 @@ func (s *Service) cancelMediaJob(ctx context.Context, id string, clientKeyID uin
 
 // RetryMediaJob resubmits the undelivered part of an uncertain job as a new
 // job of the same client key, deduplicated by idempotencyKey (default: one
-// retry per job).
+// retry per job). A resumable failed image job is instead resumed in place
+// and returned with its own ID.
 func (s *Service) RetryMediaJob(ctx context.Context, id, idempotencyKey string) (media.Job, error) {
 	if s.mediaJobs == nil {
 		return media.Job{}, ErrResponseNotFound
@@ -864,12 +902,16 @@ func (s *Service) RetryMediaJob(ctx context.Context, id, idempotencyKey string) 
 		return media.Job{}, ErrResponseNotFound
 	}
 	job := jobs[0]
-	if job.Status != media.StatusUncertain {
+	resumable := ImageJobResumable(job)
+	if job.Status != media.StatusUncertain && !resumable {
 		return media.Job{}, ErrMediaJobNotRetryable
 	}
 	key, err := s.clientKeys.Get(ctx, job.ClientKeyID)
 	if err != nil || !key.IsAvailable(time.Now()) {
 		return media.Job{}, fmt.Errorf("%w: 客户端 Key 不可用", ErrMediaJobNotRetryable)
+	}
+	if resumable {
+		return s.resumeImageJob(ctx, job, key)
 	}
 	inputJSON, err := s.mediaJobs.GetMediaJobInput(ctx, job.ID)
 	if err != nil {
@@ -894,6 +936,49 @@ func (s *Service) RetryMediaJob(ctx context.Context, id, idempotencyKey string) 
 		Duration: job.Seconds, AspectRatio: job.Size, Resolution: job.Quality, ImageURL: imageURL, ReferenceURLs: referenceURLs,
 		ReferenceAudios: referenceAudios, VideoURL: videoURL, IdempotencyKey: idempotencyKey,
 	})
+}
+
+// resumeImageJob sends a failed image job back to the workers to poll, fetch
+// and save the image in flight from its checkpoint on the job's account; it
+// is never resubmitted. The image's share of the job's price is reserved
+// again under the resume's event, which its audit settles or its end releases.
+func (s *Service) resumeImageJob(ctx context.Context, job media.Job, key clientkey.Key) (media.Job, error) {
+	if err := s.checkLedgerReady(); err != nil {
+		return media.Job{}, err
+	}
+	job.ResumeItem, job.ResumeGeneration = len(job.ResultAssetIDs), job.Generation
+	eventID := imageItemEventID(job, job.ResumeItem)
+	amount := int64(0)
+	if job.Price != nil {
+		amount = itemShare(job.Price.CostInUSDTicks, job.ItemCount, job.ResumeItem)
+	}
+	reserved, err := s.clientKeys.ReserveBilling(ctx, key, eventID, amount, mediaBillingReservationTTL)
+	if err != nil {
+		return media.Job{}, err
+	}
+	resumed, err := s.mediaJobs.ResumeMediaJob(ctx, job.ID, job.Generation, job.ResumeItem, time.Now().UTC())
+	if err != nil {
+		// A concurrent resume of the same generation shares the event and its
+		// reservation: the repeated request resolves to that resume.
+		shared := errors.Is(err, repository.ErrConflict) && resumed.ResumeGeneration == job.Generation && !resumed.Status.Terminal()
+		if shared {
+			return resumed, nil
+		}
+		if reserved {
+			s.cancelBillingReservation(eventID)
+		}
+		switch {
+		case errors.Is(err, repository.ErrConflict):
+			return media.Job{}, fmt.Errorf("%w: 任务状态已变化", ErrMediaJobNotRetryable)
+		case errors.Is(err, repository.ErrNotFound):
+			return media.Job{}, ErrResponseNotFound
+		}
+		return media.Job{}, err
+	}
+	if !s.enqueueMediaJob(resumed.ID) {
+		s.logger.Warn("image_job_queue_full", "job_id", resumed.ID)
+	}
+	return resumed, nil
 }
 
 // ImageJobOutput reads the delivered images and the usage estimate of a job.

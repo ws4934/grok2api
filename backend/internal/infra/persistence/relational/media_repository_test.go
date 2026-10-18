@@ -3,6 +3,7 @@ package relational
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -366,6 +367,60 @@ func TestMediaAssetRepositoryListMediaAssetsPaginatesAndCounts(t *testing.T) {
 	}
 	if stats.TotalImages != 3 || stats.TotalBytes != 3*1024 {
 		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestMediaJobRepositoryResumeMediaJobComparesAndSets(t *testing.T) {
+	dialectDatabases(t, testResumeMediaJobComparesAndSets)
+}
+
+func testResumeMediaJobComparesAndSets(t *testing.T, database *Database) {
+	ctx := context.Background()
+	// The PostgreSQL database is shared by the package's tests.
+	suffix := strconv.FormatInt(time.Now().UnixNano(), 36)
+	key := clientKeyModel{Name: "media-resume-key", Prefix: "resume-" + suffix, SecretHash: testSecretHash, EncryptedSecret: testEncryptedToken, Enabled: true, RPMLimit: 60, MaxConcurrent: 4}
+	if err := database.db.WithContext(ctx).Create(&key).Error; err != nil {
+		t.Fatal(err)
+	}
+	repo := NewMediaJobRepository(database)
+	now := time.Now().UTC().Truncate(time.Second)
+	job := testMediaJob("resp_img_resume_"+suffix, 0, key.ID, mediadomain.StatusFailed, now.Add(-time.Hour))
+	job.Kind, job.Provider, job.Seconds, job.ItemCount = mediadomain.KindImage, string(accountdomain.ProviderChatGPT), 0, 2
+	job.ResultAssetIDs, job.Checkpoint, job.Submitted = []string{"img_resume_result_000001"}, `{"submitted":true,"upstream_id":"conv"}`, true
+	job.Generation, job.ClaimToken, job.LeaseUntil, job.UsageRecordedAt = 3, "claim_resume_token_0001", &now, &now
+	job.ErrorCode, job.ErrorMessage = "media_download_failed", "denied"
+	if err := repo.CreateMediaJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ResumeMediaJob(ctx, job.ID, 2, 1, now); !errors.Is(err, repository.ErrConflict) {
+		t.Fatalf("resume at a stale generation = %v", err)
+	}
+	resumed, err := repo.ResumeMediaJob(ctx, job.ID, 3, 1, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != mediadomain.StatusInProgress || resumed.ErrorCode != "" || resumed.ErrorMessage != "" || resumed.CompletedAt != nil || resumed.UsageRecordedAt != nil ||
+		resumed.LeaseUntil != nil || resumed.ClaimToken != "" || resumed.Generation != 3 || resumed.ResumeItem != 1 || resumed.ResumeGeneration != 3 ||
+		resumed.Checkpoint != job.Checkpoint || !resumed.Submitted || len(resumed.ResultAssetIDs) != 1 {
+		t.Fatalf("resumed = %#v", resumed)
+	}
+	if again, err := repo.ResumeMediaJob(ctx, job.ID, 3, 1, now); !errors.Is(err, repository.ErrConflict) || again.ResumeGeneration != 3 {
+		t.Fatalf("second resume = %#v err = %v", again, err)
+	}
+	claimed, ok, err := repo.TryClaimMediaJob(ctx, job.ID, now, now.Add(time.Minute), "claim_after_resume_0001")
+	if err != nil || !ok || claimed.Generation != 4 || claimed.ResumeGeneration != 3 {
+		t.Fatalf("claim after resume = %#v %v %v", claimed, ok, err)
+	}
+	// Worker writes leave the resume record alone.
+	claimed.ResumeItem, claimed.ResumeGeneration = 0, 0
+	if err := repo.UpdateMediaJob(ctx, claimed); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := repo.GetMediaJob(ctx, job.ID, key.ID); err != nil || stored.ResumeGeneration != 3 || stored.ResumeItem != 1 {
+		t.Fatalf("stored = %#v err = %v", stored, err)
+	}
+	if _, err := repo.ResumeMediaJob(ctx, "resp_img_missing", 1, 0, now); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("resume of a missing job = %v", err)
 	}
 }
 

@@ -486,3 +486,252 @@ func TestImageJobFailureAuditKeepsUpstreamDiagnostic(t *testing.T) {
 		t.Fatalf("attempts = %#v", stored.Attempts)
 	}
 }
+
+// ResumeMediaJob completes the video test double; resumes are image-only.
+func (r *videoUsageRepository) ResumeMediaJob(context.Context, string, int, int, time.Time) (media.Job, error) {
+	return r.job, repository.ErrConflict
+}
+
+func (f *imageJobFixture) resetCalls() {
+	f.adapter.mu.Lock()
+	f.adapter.calls = nil
+	f.adapter.mu.Unlock()
+}
+
+func TestImageJobResumable(t *testing.T) {
+	resumable := media.Job{Kind: media.KindImage, Status: media.StatusFailed, AccountID: 1, Submitted: true, Checkpoint: `{"submitted":true,"upstream_id":"conv","outputs":["file"]}`}
+	if !ImageJobResumable(resumable) {
+		t.Fatal("failed job with an upstream ID is not resumable")
+	}
+	for name, change := range map[string]func(*media.Job){
+		"video":          func(job *media.Job) { job.Kind = media.KindVideo },
+		"uncertain":      func(job *media.Job) { job.Status = media.StatusUncertain },
+		"completed":      func(job *media.Job) { job.Status = media.StatusCompleted },
+		"not submitted":  func(job *media.Job) { job.Submitted, job.Checkpoint = false, "{}" },
+		"no upstream id": func(job *media.Job) { job.Checkpoint = `{"submitted":true}` },
+		"no account":     func(job *media.Job) { job.AccountID = 0 },
+	} {
+		job := resumable
+		change(&job)
+		if ImageJobResumable(job) {
+			t.Errorf("%s: resumable", name)
+		}
+	}
+}
+
+func TestRetryResumesDownloadFailedImageJobWithoutResubmitting(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	ctx := context.Background()
+	f.adapter.fetchErr = downloadDeniedError{}
+	job := f.create(t, ImageJobInput{})
+	f.service.processMediaJob(ctx, job.ID)
+	failed := f.job(t, job.ID)
+	if failed.Status != media.StatusFailed || failed.ErrorCode != "media_download_failed" || !ImageJobResumable(failed) {
+		t.Fatalf("failed job = %#v", failed)
+	}
+	if billed, reserved := f.billing(t); billed != 0 || reserved != 0 {
+		t.Fatalf("after failure: billed %d reserved %d", billed, reserved)
+	}
+
+	// The first resume fails the same way: its own failure audit, its reservation released.
+	f.resetCalls()
+	resumed, err := f.service.RetryMediaJob(ctx, job.ID, "")
+	if err != nil || resumed.ID != job.ID || resumed.Status != media.StatusInProgress || resumed.ErrorCode != "" || resumed.CompletedAt != nil || resumed.ResumeGeneration != 1 {
+		t.Fatalf("resume = %#v err = %v", resumed, err)
+	}
+	if public, err := f.service.GetImageJob(ctx, f.key, job.ID); err != nil || public.Status != media.StatusInProgress {
+		t.Fatalf("public status = %s err = %v", public.Status, err)
+	}
+	if _, reserved := f.billing(t); reserved != 400_000_000 {
+		t.Fatalf("resume reserved = %d", reserved)
+	}
+	f.service.processMediaJob(ctx, job.ID)
+	if stored := f.job(t, job.ID); stored.Status != media.StatusFailed || stored.ErrorCode != "media_download_failed" || !ImageJobResumable(stored) {
+		t.Fatalf("failed resume = %#v", stored)
+	}
+	if billed, reserved := f.billing(t); billed != 0 || reserved != 0 {
+		t.Fatalf("after failed resume: billed %d reserved %d", billed, reserved)
+	}
+
+	// The second resume delivers; a repeated click while it runs changes nothing.
+	f.adapter.fetchErr = nil
+	f.resetCalls()
+	if resumed, err = f.service.RetryMediaJob(ctx, job.ID, ""); err != nil || resumed.ID != job.ID || resumed.ResumeGeneration != 2 {
+		t.Fatalf("second resume = %#v err = %v", resumed, err)
+	}
+	if again, err := f.service.RetryMediaJob(ctx, job.ID, ""); !errors.Is(err, ErrMediaJobNotRetryable) || again.ID != "" {
+		t.Fatalf("repeated resume of a running job = %#v err = %v", again, err)
+	}
+	f.service.processMediaJob(ctx, job.ID)
+	if calls := f.adapter.Calls(); !slices.Equal(calls, []string{fmt.Sprintf("poll:%d:conv", f.accounts[0].ID), "fetch"}) {
+		t.Fatalf("resume calls = %v", calls)
+	}
+	stored := f.job(t, job.ID)
+	if stored.Status != media.StatusCompleted || len(stored.ResultAssetIDs) != 1 || stored.UsageRecordedAt == nil || stored.Submitted || ImageJobResumable(stored) {
+		t.Fatalf("resumed job = %#v", stored)
+	}
+	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
+		t.Fatalf("after resume: billed %d reserved %d", billed, reserved)
+	}
+	// Usage reconciliation replays the job's audits without billing twice.
+	if err := f.service.recordImageJobAudits(ctx, stored, 0); err != nil {
+		t.Fatal(err)
+	}
+	if billed, _ := f.billing(t); billed != 400_000_000 {
+		t.Fatalf("billed after replay = %d", billed)
+	}
+	audits := f.auditsByEvent(t)
+	original, first, second := imageUsageEventID(job.ID, 0), imageUsageEventID(job.ID, 0)+"_r1", imageUsageEventID(job.ID, 0)+"_r2"
+	if record := audits[original]; record.StatusCode < 400 || record.ErrorCode != "media_download_failed" {
+		t.Fatalf("original failure audit = %#v", record)
+	}
+	if record := audits[first]; record.StatusCode < 400 || record.EstimatedCostInUSDTicks != 0 {
+		t.Fatalf("failed resume audit = %#v", record)
+	}
+	if record := audits[second]; record.StatusCode != 200 || record.EstimatedCostInUSDTicks != 400_000_000 || record.PriceID != job.Price.PriceID || record.MediaOutputImages != 1 {
+		t.Fatalf("resume success audit = %#v", record)
+	}
+	if len(audits) != 3 {
+		t.Fatalf("audits = %v", audits)
+	}
+	if _, err := f.service.RetryMediaJob(ctx, job.ID, ""); !errors.Is(err, ErrMediaJobNotRetryable) {
+		t.Fatalf("retry of the completed job = %v", err)
+	}
+}
+
+func TestConcurrentResumeRunsTheImageJobOnce(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	ctx := context.Background()
+	f.adapter.fetchErr = downloadDeniedError{}
+	job := f.create(t, ImageJobInput{})
+	f.service.processMediaJob(ctx, job.ID)
+	f.adapter.fetchErr = nil
+	f.resetCalls()
+
+	// Every request read the failed job before any resume committed: one
+	// compare-and-set wins and the others resolve to it.
+	stale := f.job(t, job.ID)
+	var wait sync.WaitGroup
+	results := make([]error, 4)
+	for index := range results {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			resumed, err := f.service.resumeImageJob(ctx, stale, f.key)
+			if err == nil && (resumed.ID != job.ID || resumed.Status != media.StatusInProgress) {
+				err = fmt.Errorf("resumed %#v", resumed)
+			}
+			results[index] = err
+		}()
+	}
+	wait.Wait()
+	for _, err := range results {
+		if err != nil {
+			t.Fatalf("concurrent resume = %v", err)
+		}
+	}
+	if _, reserved := f.billing(t); reserved != 400_000_000 {
+		t.Fatalf("reserved = %d, want one reservation", reserved)
+	}
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			f.service.processMediaJob(ctx, job.ID)
+		}()
+	}
+	wait.Wait()
+	if calls := f.adapter.Calls(); !slices.Equal(calls, []string{fmt.Sprintf("poll:%d:conv", f.accounts[0].ID), "fetch"}) {
+		t.Fatalf("calls = %v", calls)
+	}
+	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
+		t.Fatalf("billed %d reserved %d", billed, reserved)
+	}
+}
+
+func TestResumedImageJobStaysResumableAndCountsClaimsFromTheResume(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	ctx := context.Background()
+	f.adapter.fetchErr = downloadDeniedError{}
+	job := f.create(t, ImageJobInput{})
+	f.service.processMediaJob(ctx, job.ID)
+	if _, err := f.service.RetryMediaJob(ctx, job.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Workers keep dying on the resumed job until its claims run out.
+	for index := range imageJobMaxClaims {
+		now := time.Now().UTC()
+		if _, ok, err := f.jobs.TryClaimMediaJob(ctx, job.ID, now, now.Add(-time.Second), fmt.Sprintf("claim_dead_worker_%02d", index)); err != nil || !ok {
+			t.Fatalf("claim %d = %v %v", index, ok, err)
+		}
+	}
+	f.resetCalls()
+	f.service.processMediaJob(ctx, job.ID)
+	stored := f.job(t, job.ID)
+	if stored.Status != media.StatusFailed || stored.ErrorCode != "recovery_exhausted" || !ImageJobResumable(stored) || len(f.adapter.Calls()) != 0 {
+		t.Fatalf("exhausted resume = %#v calls = %v", stored, f.adapter.Calls())
+	}
+	if billed, reserved := f.billing(t); billed != 0 || reserved != 0 {
+		t.Fatalf("after exhausted resume: billed %d reserved %d", billed, reserved)
+	}
+
+	// A later resume starts a fresh claim budget although the generation is high.
+	f.adapter.fetchErr = nil
+	if _, err := f.service.RetryMediaJob(ctx, job.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.service.processMediaJob(ctx, job.ID)
+	if stored := f.job(t, job.ID); stored.Status != media.StatusCompleted || stored.Generation <= imageJobMaxClaims {
+		t.Fatalf("second resume = %#v", stored)
+	}
+	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
+		t.Fatalf("after resume: billed %d reserved %d", billed, reserved)
+	}
+}
+
+func TestResumeOfMultiImageJobFetchesOnlyTheImageInFlight(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	ctx := context.Background()
+	submits := 0
+	f.adapter.submit = func(_ provider.ImageJobRequest, save func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error) {
+		submits++
+		if submits == 2 {
+			f.adapter.fetchErr = downloadDeniedError{}
+		}
+		cp := provider.ImageCheckpoint{Submitted: true, UpstreamID: fmt.Sprintf("conv-%d", submits)}
+		return cp, save(cp)
+	}
+	job := f.create(t, ImageJobInput{Count: 3})
+	f.service.processMediaJob(ctx, job.ID)
+	failed := f.job(t, job.ID)
+	if failed.Status != media.StatusFailed || len(failed.ResultAssetIDs) != 1 || !ImageJobResumable(failed) {
+		t.Fatalf("failed job = %#v", failed)
+	}
+	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
+		t.Fatalf("after failure: billed %d reserved %d", billed, reserved)
+	}
+
+	f.adapter.fetchErr = nil
+	f.resetCalls()
+	if _, err := f.service.RetryMediaJob(ctx, job.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	f.service.processMediaJob(ctx, job.ID)
+	if calls := f.adapter.Calls(); !slices.Equal(calls, []string{fmt.Sprintf("poll:%d:conv-2", f.accounts[0].ID), "fetch"}) {
+		t.Fatalf("resume calls = %v", calls)
+	}
+	stored := f.job(t, job.ID)
+	if stored.Status != media.StatusFailed || stored.ErrorCode != "partial_result" || len(stored.ResultAssetIDs) != 2 || stored.ResultAssetIDs[0] != failed.ResultAssetIDs[0] || ImageJobResumable(stored) {
+		t.Fatalf("resumed job = %#v", stored)
+	}
+	if billed, reserved := f.billing(t); billed != 800_000_000 || reserved != 0 {
+		t.Fatalf("after resume: billed %d reserved %d", billed, reserved)
+	}
+	audits := f.auditsByEvent(t)
+	if record := audits[imageUsageEventID(job.ID, 1)+"_r1"]; record.StatusCode != 200 || record.EstimatedCostInUSDTicks != 400_000_000 {
+		t.Fatalf("resumed image audit = %#v", record)
+	}
+	if _, ok := audits[imageUsageEventID(job.ID, 2)]; ok || len(audits) != 3 {
+		t.Fatalf("audits = %v", audits)
+	}
+}

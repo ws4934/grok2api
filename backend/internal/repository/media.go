@@ -93,6 +93,10 @@ type MediaJobRepository interface {
 	// CancelMediaJob cancels a job that has sent nothing irreversible; clientKeyID 0
 	// matches any key. ErrConflict means it is running past that point.
 	CancelMediaJob(ctx context.Context, id string, clientKeyID uint64, now time.Time) (media.Job, error)
+	// ResumeMediaJob returns a failed, submitted image job read at generation to
+	// the workers with its checkpoint, recording item and generation as the
+	// resume. ErrConflict (with the current job) means it changed since.
+	ResumeMediaJob(ctx context.Context, id string, generation, item int, now time.Time) (media.Job, error)
 }
 
 // MediaAssetRepository 定义媒体资源元数据持久化能力。

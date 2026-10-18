@@ -142,7 +142,7 @@ func TestAdminMediaJobsListStatsActionsAndDelete(t *testing.T) {
 		t.Fatalf("cancel: %d %v", code, envelope)
 	}
 	control.job = mediadomain.Job{ID: "resp_img_jobs_retried", Kind: mediadomain.KindImage, Status: mediadomain.StatusQueued, ItemCount: 1, CreatedAt: now}
-	if code, envelope := call("POST", "/media/jobs/"+uncertain.ID+"/retry", "", "Idempotency-Key", "admin-1"); code != 200 || control.key != "admin-1" || envelope["data"].(map[string]any)["id"] != "resp_img_jobs_retried" {
+	if code, envelope := call("POST", "/media/jobs/"+uncertain.ID+"/retry", "", "Idempotency-Key", "admin-1"); code != 200 || control.key != "admin-1" || envelope["data"].(map[string]any)["id"] != "resp_img_jobs_retried" || envelope["data"].(map[string]any)["resumed"] != false {
 		t.Fatalf("retry: %d %v key=%q", code, envelope, control.key)
 	}
 	control.err = gateway.ErrMediaJobNotRetryable
@@ -155,5 +155,23 @@ func TestAdminMediaJobsListStatsActionsAndDelete(t *testing.T) {
 	}
 	if code, envelope := call("DELETE", "/media/jobs", `{"ids":["`+uncertain.ID+`"]}`); code != 200 || envelope["data"].(map[string]any)["deleted"] != float64(1) {
 		t.Fatalf("delete uncertain job: %d %v", code, envelope)
+	}
+
+	// A failed image job whose checkpoint holds the upstream conversation is
+	// retryable and resumes in place; one without it is not.
+	newJob("resp_img_jobs_failed", mediadomain.KindImage, string(accountdomain.ProviderChatGPT), mediadomain.StatusFailed, now.Add(time.Minute))
+	resumable := newJob("resp_img_jobs_resumable", mediadomain.KindImage, string(accountdomain.ProviderChatGPT), mediadomain.StatusFailed, now.Add(2*time.Minute))
+	resumable.Submitted, resumable.Checkpoint = true, `{"submitted":true,"upstream_id":"conv","outputs":["file"]}`
+	if err := jobs.UpdateMediaJob(ctx, resumable); err != nil {
+		t.Fatal(err)
+	}
+	code, envelope = call("GET", "/media/jobs?kind=image&status=failed&sortBy=createdAt&sortOrder=desc", "")
+	if failed := items(envelope); code != 200 || len(failed) != 2 || failed[0]["id"] != resumable.ID || failed[0]["retryable"] != true || failed[1]["retryable"] != false {
+		t.Fatalf("failed image jobs: %d %v", code, envelope)
+	}
+	control.err, control.job = nil, resumable
+	control.job.Status = mediadomain.StatusInProgress
+	if code, envelope := call("POST", "/media/jobs/"+resumable.ID+"/retry", ""); code != 200 || envelope["data"].(map[string]any)["id"] != resumable.ID || envelope["data"].(map[string]any)["resumed"] != true {
+		t.Fatalf("resume: %d %v", code, envelope)
 	}
 }

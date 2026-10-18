@@ -120,4 +120,9 @@ type Job struct {
 	UpdatedAt       time.Time
 	CompletedAt     *time.Time
 	UsageRecordedAt *time.Time
+
+	// ResumeItem is the image the latest administrator resume re-fetches and
+	// ResumeGeneration the generation it resumed from (0: never resumed).
+	ResumeItem       int
+	ResumeGeneration int
 }

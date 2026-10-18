@@ -51,7 +51,16 @@ type mediaJobDTO struct {
 	ErrorCode     string   `json:"errorCode"`
 	ErrorMessage  string   `json:"errorMessage"`
 	Cancellable   bool     `json:"cancellable"`
-	Retryable     bool     `json:"retryable"`
+	// Retryable: an uncertain job (retried as a new job) or a failed image job
+	// whose drawn image can be fetched again (resumed in place).
+	Retryable bool `json:"retryable"`
+}
+
+// retryJobDTO is the retried job; Resumed means it is the same job fetching
+// its result again rather than a new job.
+type retryJobDTO struct {
+	mediaJobDTO
+	Resumed bool `json:"resumed"`
 }
 
 type jobStatsDTO struct {

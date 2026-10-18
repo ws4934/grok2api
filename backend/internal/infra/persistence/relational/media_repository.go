@@ -488,6 +488,29 @@ func (r *MediaJobRepository) CancelMediaJob(ctx context.Context, id string, clie
 	return job, nil
 }
 
+// ResumeMediaJob compares and sets failed → in_progress with no lease, so the
+// recovery claim (new generation and token) runs it once; the checkpoint and
+// delivered images stay, and usage is recorded again when it ends.
+func (r *MediaJobRepository) ResumeMediaJob(ctx context.Context, id string, generation, item int, now time.Time) (media.Job, error) {
+	result := r.db.db.WithContext(ctx).Model(&mediaJobModel{}).
+		Where("id = ? AND kind = ? AND status = ? AND submitted = ? AND generation = ?", id, media.KindImage, media.StatusFailed, true, generation).
+		Updates(map[string]any{
+			"status": media.StatusInProgress, "error_code": "", "error_message": "", "completed_at": nil, "usage_recorded_at": nil,
+			"lease_until": nil, "claim_token": "", "resume_item": item, "resume_generation": generation, "updated_at": now,
+		})
+	if result.Error != nil {
+		return media.Job{}, result.Error
+	}
+	var row mediaJobModel
+	if err := r.db.db.WithContext(ctx).Omit("input_json").Where("id = ?", id).First(&row).Error; err != nil {
+		return media.Job{}, mapError(err)
+	}
+	if result.RowsAffected == 0 {
+		return mediaJobToDomain(row), repository.ErrConflict
+	}
+	return mediaJobToDomain(row), nil
+}
+
 // DeleteMediaJob 仅删除终态任务，避免管理端与媒体 Worker 并发修改同一任务。
 func (r *MediaJobRepository) DeleteMediaJob(ctx context.Context, id string) error {
 	result := r.db.db.WithContext(ctx).
@@ -533,9 +556,10 @@ func (r *MediaJobRepository) ListMediaJobs(ctx context.Context, input repository
 		"createdAt":   {expression: "created_at", defaultDirection: repository.SortDescending},
 		"completedAt": {expression: "completed_at", nullsLast: true, defaultDirection: repository.SortDescending},
 	}, sortSpec{expression: "created_at", defaultDirection: repository.SortDescending}, "id")
+	// account_id and checkpoint_json tell whether a failed image job can resume.
 	if err := query.Select(
-		"id", "kind", "provider", "client_key_name", "account_name", "model", "operation", "prompt", "seconds", "size", "quality",
-		"status", "progress", "result_asset_id", "result_asset_ids", "item_count", "submitted", "error_code", "error_message", "created_at", "completed_at",
+		"id", "kind", "provider", "client_key_name", "account_id", "account_name", "model", "operation", "prompt", "seconds", "size", "quality",
+		"status", "progress", "result_asset_id", "result_asset_ids", "item_count", "checkpoint_json", "submitted", "error_code", "error_message", "created_at", "completed_at",
 	).Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
@@ -669,6 +693,7 @@ func mediaJobFromDomain(value media.Job) *mediaJobModel {
 		Status: string(value.Status), Progress: value.Progress, InputJSON: value.InputJSON, InputImageCount: mediaJobInputImageCount(value.InputImageCount), UpstreamURL: value.UpstreamURL,
 		ResultAssetID: value.ResultAssetID, ResultAssetIDs: string(resultAssetIDs), ItemCount: itemCount, CheckpointJSON: checkpoint, Submitted: value.Submitted,
 		ParamsJSON: string(params), IdempotencyKey: value.IdempotencyKey, PayloadHash: value.PayloadHash, Generation: value.Generation,
+		ResumeItem: value.ResumeItem, ResumeGeneration: value.ResumeGeneration,
 		ContentType: value.ContentType, ErrorCode: value.ErrorCode, ErrorMessage: value.ErrorMessage,
 		LeaseUntil: value.LeaseUntil, ClaimToken: value.ClaimToken, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
 		CompletedAt: value.CompletedAt, UsageRecordedAt: value.UsageRecordedAt,
@@ -711,6 +736,7 @@ func mediaJobToDomain(row mediaJobModel) media.Job {
 		Status: media.Status(row.Status), Progress: row.Progress, InputJSON: row.InputJSON, InputImageCount: inputImageCount, UpstreamURL: row.UpstreamURL,
 		ResultAssetID: row.ResultAssetID, ResultAssetIDs: resultAssetIDs, ItemCount: max(1, row.ItemCount), Checkpoint: row.CheckpointJSON, Submitted: row.Submitted,
 		Params: params, IdempotencyKey: row.IdempotencyKey, PayloadHash: row.PayloadHash, Generation: row.Generation,
+		ResumeItem: row.ResumeItem, ResumeGeneration: row.ResumeGeneration,
 		ContentType: row.ContentType, ErrorCode: row.ErrorCode, ErrorMessage: row.ErrorMessage,
 		LeaseUntil: row.LeaseUntil, ClaimToken: row.ClaimToken, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		CompletedAt: row.CompletedAt, UsageRecordedAt: row.UsageRecordedAt,
