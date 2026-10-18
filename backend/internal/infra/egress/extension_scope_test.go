@@ -35,6 +35,9 @@ func TestExtensionScopeLeasesItsOwnProxyNodes(t *testing.T) {
 	if lease.NodeID != 2 || lease.ProxyURL != "socks5h://Default.chatgpt_7:token@resin:2260" {
 		t.Fatalf("extension lease node=%d proxy=%q", lease.NodeID, lease.ProxyURL)
 	}
+	if len(manager.clients) != 0 {
+		t.Fatal("an extension lease built and cached a Grok browser client")
+	}
 
 	// Without a node of its own the channel connects directly, never through Grok nodes.
 	direct, err := NewManager(egressRepositoryTestStub{nodes: nodes[:1]}, cipher).AcquireCredential(context.Background(), "chatgpt", accountdomain.Credential{ID: 7, Provider: "chatgpt"})

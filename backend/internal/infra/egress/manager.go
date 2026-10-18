@@ -1152,9 +1152,14 @@ func (m *Manager) leaseForNodeWithOptions(ctx context.Context, scope domain.Scop
 	if scope != domain.ScopeConsoleAsset {
 		accountIdentity = isolationAccountIdentity(ctx, scope, affinity)
 	}
-	client, err := m.clientForWithOptions(selected.ID, scope, proxyURL, userAgent, cookies, sticky, accountIdentity, options)
-	if err != nil {
-		return nil, false, err
+	// Extension channels build their own transports from ProxyURL; a Grok
+	// browser client per lease would only fill the shared client cache.
+	var client cachedClient
+	if !domain.IsExtensionScope(scope) {
+		client, err = m.clientForWithOptions(selected.ID, scope, proxyURL, userAgent, cookies, sticky, accountIdentity, options)
+		if err != nil {
+			return nil, false, err
+		}
 	}
 	m.incrementInflight(selected.ID)
 	recordSelection(ctx, Selection{NodeID: selected.ID, NodeName: selected.Name, Scope: scope, Proxied: proxyURL != ""})
