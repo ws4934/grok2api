@@ -1,11 +1,45 @@
 package inference
 
 import (
+	"context"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
 )
+
+func TestResponsesImageToolKeyedJobSurvivesDisconnect(t *testing.T) {
+	f := newImageToolFixture(t)
+	body := `{"model":"gpt-image-2","input":"draw a cat","tools":[{"type":"image_generation"}]}`
+	// disconnect sends the request and drops the connection while the job is
+	// still queued (no worker runs yet).
+	disconnect := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		request := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body)).WithContext(ctx)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "client-retry-key-1")
+		f.router.ServeHTTP(httptest.NewRecorder(), request)
+	}
+	disconnect()
+	// A request already waiting on the job is not cancelled by a duplicate that disconnects.
+	waiting := make(chan map[string]any, 1)
+	go func() {
+		_, resp := f.call(t, "POST", "/v1/responses", body, "Idempotency-Key", "client-retry-key-1")
+		waiting <- resp
+	}()
+	time.Sleep(100 * time.Millisecond)
+	disconnect()
+	f.startWorkers(t)
+	if resp := <-waiting; resp["status"] != "completed" {
+		t.Fatalf("waiting request got %v", resp)
+	}
+	if code, retried := f.call(t, "POST", "/v1/responses", body, "Idempotency-Key", "client-retry-key-1"); code != 200 || retried["status"] != "completed" {
+		t.Fatalf("retry with the same Idempotency-Key: %d %v", code, retried)
+	}
+}
 
 func TestResponsesImageToolKeepsChatRequestsOnTheConversationPath(t *testing.T) {
 	f := newImageToolFixture(t)

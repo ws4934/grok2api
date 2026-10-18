@@ -827,15 +827,20 @@ func (s *Service) GetImageJob(ctx context.Context, key clientkey.Key, id string)
 	return job, err
 }
 
-// WaitImageJob polls the job until it ends, calling tick after every read.
-// A caller that gives up cancels the work that has not reached the upstream.
-func (s *Service) WaitImageJob(ctx context.Context, key clientkey.Key, id string, tick func(media.Job)) (media.Job, error) {
+// WaitImageJob polls created until it ends, calling tick after every read.
+// A caller that gives up cancels the work that has not reached the upstream,
+// unless the job has an Idempotency-Key: the client's retry, or a duplicate
+// request waiting on the same job, gets its result instead of a cancel.
+func (s *Service) WaitImageJob(ctx context.Context, key clientkey.Key, created media.Job, tick func(media.Job)) (media.Job, error) {
 	ticker := time.NewTicker(imageJobPollInterval)
 	defer ticker.Stop()
+	id := created.ID
 	giveUp := func(job media.Job) (media.Job, error) {
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_, _ = s.CancelImageJob(cleanup, key, id)
+		if created.IdempotencyKey == "" {
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			_, _ = s.CancelImageJob(cleanup, key, id)
+		}
 		return job, ctx.Err()
 	}
 	for {

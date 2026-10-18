@@ -230,8 +230,9 @@ func (h *Handler) handleImageResponse(c *gin.Context, body []byte, key clientkey
 	case request.Background:
 		h.writeImageResponse(c, job)
 	default:
-		// A disconnect cancels only unsubmitted work; the response stays readable.
-		if job, err = h.gateway.WaitImageJob(ctx, key, job.ID, nil); err != nil {
+		// A disconnect cancels only unsubmitted work of a job without an
+		// Idempotency-Key; the response stays readable.
+		if job, err = h.gateway.WaitImageJob(ctx, key, job, nil); err != nil {
 			if ctx.Err() == nil {
 				writeGatewayError(c, err)
 			}
@@ -415,7 +416,7 @@ func (h *Handler) streamImageResponse(c *gin.Context, key clientkeydomain.Key, j
 			send("response.image_generation_call.generating", gin.H{"output_index": 0, "item_id": id})
 		}
 	}
-	job, err := h.gateway.WaitImageJob(ctx, key, job.ID, func(job mediadomain.Job) {
+	job, err := h.gateway.WaitImageJob(ctx, key, job, func(job mediadomain.Job) {
 		if job.Submitted {
 			markGenerating()
 		}
