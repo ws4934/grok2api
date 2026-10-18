@@ -766,25 +766,65 @@ func TestValidateImageRequest(t *testing.T) {
 	}
 }
 
-func TestImageRoutesDefaultToChatGPTConversationModels(t *testing.T) {
+func TestImageRoutesFollowTheImageToolOfEachAccount(t *testing.T) {
 	a := NewAdapter(Config{}, nil, nil, nil)
-	got := a.NormalizeAccountModelCapabilities([]string{"auto", "gpt-6"}, nil, account.Credential{})
-	if strings.Join(got, ",") != "auto,gpt-6,gpt-image-2.5,gpt-image-2.5-flare,gpt-image-2.5-sunburst" {
+	// A free catalog: every model has the image tool, but there is no gpt-5-3.
+	a.rememberImageCatalog(1, map[string]bool{"auto": true, "gpt-6": true, "gpt-5-3-mini": true})
+	got := a.NormalizeAccountModelCapabilities([]string{"auto", "gpt-6", "gpt-5-3-mini"}, nil, account.Credential{ID: 1})
+	if strings.Join(got, ",") != "auto,gpt-6,gpt-5-3-mini,gpt-image-2.5,gpt-image-2.5-flare,gpt-image-2.5-sunburst" {
 		t.Fatalf("free catalog image routes = %v", got)
 	}
-	got = a.NormalizeAccountModelCapabilities([]string{"auto", "gpt-5-3"}, nil, account.Credential{})
-	if !slices.Contains(got, "gpt-image-2") {
-		t.Fatalf("gpt-image-2 needs gpt-5-3: %v", got)
+	// gpt-5-3 without the image tool does not open gpt-image-2.
+	a.rememberImageCatalog(2, map[string]bool{"gpt-5-3": false, "auto": true})
+	if got := a.NormalizeAccountModelCapabilities([]string{"gpt-5-3", "auto"}, nil, account.Credential{ID: 2}); slices.Contains(got, "gpt-image-2") {
+		t.Fatalf("gpt-image-2 opened without the image tool: %v", got)
 	}
-	if a.imageConversationModel("gpt-image-2") != "gpt-5-3" || a.imageConversationModel("gpt-image-2.5-sunburst") != "auto" || a.imageConversationModel("gpt-6") != "" {
-		t.Fatal("default conversation models")
+	a.rememberImageCatalog(3, map[string]bool{"gpt-5-3": true})
+	if got := a.NormalizeAccountModelCapabilities([]string{"gpt-5-3"}, nil, account.Credential{ID: 3}); !slices.Contains(got, "gpt-image-2") || slices.Contains(got, "gpt-image-2.5") {
+		t.Fatalf("gpt-5-3 catalog image routes = %v", got)
 	}
-	a.UpdateConfig(Config{ImageConversationModel: "gpt-6"})
-	if a.imageConversationModel("gpt-image-2.5") != "gpt-6" || a.QuotaMode("gpt-image-2.5-flare") != quotaModeImage {
-		t.Fatal("configured override")
+	// gpt-6 is preferred; auto is the fallback when gpt-6 cannot draw.
+	if pickImageModel(a.imageCandidates("gpt-image-2.5"), map[string]bool{"gpt-6": true, "auto": true}) != "gpt-6" ||
+		pickImageModel(a.imageCandidates("gpt-image-2.5"), map[string]bool{"gpt-6": false, "auto": true}) != "auto" ||
+		a.imageCandidates("gpt-6") != nil {
+		t.Fatal("conversation model preference")
+	}
+	a.UpdateConfig(Config{ImageConversationModel: "gpt-5-6"})
+	if got := a.imageCandidates("gpt-image-2.5"); len(got) != 1 || got[0] != "gpt-5-6" || a.QuotaMode("gpt-image-2.5-flare") != quotaModeImage {
+		t.Fatalf("configured override = %v", got)
 	}
 	if len(Routes()) != 8 {
 		t.Fatalf("routes = %d", len(Routes()))
+	}
+}
+
+func TestImageModelResolvesFromTheLiveCatalog(t *testing.T) {
+	var catalogs atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/models" {
+			t.Errorf("unexpected endpoint %s", r.URL.Path)
+			return
+		}
+		catalogs.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"slug":"gpt-6","enabled_tools":["tools","search"]},{"slug":"auto","enabled_tools":["tools","image_gen_tool_enabled"]}]}`))
+	}))
+	t.Cleanup(server.Close)
+	a, _ := newTestAdapter(t, server)
+	a.UpdateConfig(Config{})
+	credential := testCredential(t, a, credentials{AccessToken: "AT"})
+	credential.ID = 9
+	for range 2 {
+		model, err := a.resolveImageModel(context.Background(), credential, "gpt-image-2.5")
+		if err != nil || model != "auto" {
+			t.Fatalf("model = %q, err = %v", model, err)
+		}
+	}
+	if catalogs.Load() != 1 {
+		t.Fatalf("catalog fetched %d times, want 1 (cached)", catalogs.Load())
+	}
+	if _, err := a.resolveImageModel(context.Background(), credential, "gpt-image-2"); err == nil {
+		t.Fatal("gpt-image-2 resolved without gpt-5-3")
 	}
 }
 

@@ -33,12 +33,12 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
    - **浏览器 OAuth**：打开授权链接并登录，把浏览器地址栏里的完整回调 URL（`https://platform.openai.com/auth/callback?code=…&state=…`）粘贴回来。会话 10 分钟内有效。
    - **导入**：JSON、JSONL，或每行一个 access token。只有 refresh token 的记录会在导入时换取 token。导入时会查询身份和套餐（plan）。
 2. **设置**（设置 → ChatGPT）：
-   - **图片会话模型**：留空即可。留空时按图片模型自动选择 ChatGPT 会话模型：`gpt-image-2` 用 `gpt-5-3`，`gpt-image-2.5` 系列用 `auto`（与 chatgpt2api 一致）。填写后所有图片模型都改用该模型，它必须出现在账号的模型目录里。
+   - **图片会话模型**：留空即可。留空时按账号自动选择 ChatGPT 会话模型：`gpt-image-2` 用 `gpt-5-3`；`gpt-image-2.5` 系列优先用 `gpt-6`，不可用时用 `auto`。只有在 `/backend-api/models` 里开启了生图工具（`image_gen_tool_enabled`）的模型才会被选用。填写后所有图片模型都改用该模型。
    - **输出上限**：默认 16,384。
    - **单图 Token**：默认 256。
    - **默认图片模型**：Responses 图片工具没写模型时使用，留空为 `gpt-image-2.5`。
    - **Cloudflare Clearance**：默认关闭。
-3. **模型**：账号模型同步后，聊天模型自动出现为路由。图片路由在启动时注册：`gpt-image-2`、`gpt-image-2.5`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`，各有生图和编辑两条。账号的模型目录里有对应的会话模型时，该图片模型才可用。Free 账号通常没有 `gpt-5-3`，所以只能用 2.5 系列。
+3. **模型**：账号模型同步后，聊天模型自动出现为路由（来自 ChatGPT 的 `/backend-api/models`）。图片路由在启动时注册：`gpt-image-2`、`gpt-image-2.5`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`，各有生图和编辑两条。ChatGPT 网页端没有图片模型列表，这几个名字是兼容官方 API 的别名。账号里有可用的会话模型时，对应的图片模型才可用：`gpt-image-2` 需要 `gpt-5-3`，2.5 系列需要 `gpt-6` 或 `auto`。Free 账号通常没有 `gpt-5-3`，所以只能用 2.5 系列。
 
    ChatGPT 网页端自己决定用哪个图片引擎（目前为 Images 2.5），请求里无法指定 Flare 或 Sunburst。所以 `-flare`、`-sunburst` 只是兼容官方 API 的名称，出图效果与 `gpt-image-2.5` 相同；`quality` 只支持 `auto/low/medium/high`，不支持官方 API 的 `xhigh`、`max`。
 4. **价格**（模型页 → 设置价格）：ChatGPT 没有官方价。未设置价格时按 0 计费，模型页会标"未定价"。

@@ -40,6 +40,10 @@ type Adapter struct {
 	authURL  string
 	tokenURL string
 	logger   *slog.Logger
+
+	catalogMu sync.Mutex
+	// catalogs caches, per account, the conversation models whose image tool is enabled.
+	catalogs map[uint64]imageCatalog
 }
 
 // SetLogger routes the adapter's diagnostic logs to the application logger.

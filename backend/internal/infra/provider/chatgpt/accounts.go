@@ -506,13 +506,16 @@ func (a *Adapter) ListModels(ctx context.Context, credential account.Credential)
 			return err
 		}
 		out = nil
+		capable := map[string]bool{}
 		for _, raw := range toAnyList(models["models"]) {
 			if m, ok := raw.(map[string]any); ok {
 				if slug := aiString(m, "slug"); slug != "" {
 					out = append(out, slug)
+					capable[slug] = hasImageTool(m)
 				}
 			}
 		}
+		a.rememberImageCatalog(credential.ID, capable)
 		return nil
 	})
 	if err == nil && len(out) == 0 {
@@ -630,4 +633,19 @@ func (a *Adapter) CompleteAuthorization(ctx context.Context, challenge provider.
 	}
 	identity, _ := a.identity(ctx, pending, c)
 	return newSeed("", c, identity), nil
+}
+
+// hasImageTool reports whether a /backend-api/models entry can generate
+// images. Entries without enabled_tools (older catalog shapes) are trusted.
+func hasImageTool(model map[string]any) bool {
+	tools, ok := model["enabled_tools"].([]any)
+	if !ok {
+		return true
+	}
+	for _, tool := range tools {
+		if tool == "image_gen_tool_enabled" {
+			return true
+		}
+	}
+	return false
 }

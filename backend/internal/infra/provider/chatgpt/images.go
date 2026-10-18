@@ -117,9 +117,9 @@ func (a *Adapter) images(ctx context.Context, credential account.Credential, job
 	if err := a.ValidateImageRequest(job.options()); err != nil {
 		return errorResponse("", http.StatusBadRequest, "invalid_request", err.Error()), nil
 	}
-	model := a.imageConversationModel(job.model)
-	if model == "" {
-		return errorResponse("", http.StatusNotFound, "model_not_found", "Unknown ChatGPT image model "+job.model), nil
+	model, err := a.resolveImageModel(ctx, credential, job.model)
+	if err != nil {
+		return failureResponse("", err)
 	}
 	if a.assets == nil {
 		return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, errors.New("image storage is not configured"))
@@ -382,9 +382,9 @@ func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequ
 	if err := a.ValidateImageRequest(job.options()); err != nil {
 		return cp, err
 	}
-	model := a.imageConversationModel(job.model)
-	if model == "" {
-		return cp, invalidRequest("Unknown ChatGPT image model " + job.model)
+	model, err := a.resolveImageModel(ctx, request.Credential, job.model)
+	if err != nil {
+		return cp, err
 	}
 	c, err := a.decrypt(request.Credential)
 	if err != nil {

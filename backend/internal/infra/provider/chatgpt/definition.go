@@ -1,8 +1,6 @@
 package chatgpt
 
 import (
-	"slices"
-
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
@@ -16,33 +14,8 @@ const (
 	quotaModeUpload = "file_upload"
 )
 
-// imageModels lists the image routes and the ChatGPT Web conversation model
-// that draws each one (same mapping as chatgpt2api). ChatGPT Web picks the
-// image engine itself, so the 2.5 names are compatibility aliases on "auto";
-// they cannot force Flare or Sunburst. ImageConversationModel overrides all.
-var imageModels = []struct{ id, conversation string }{
-	{"gpt-image-2", "gpt-5-3"},
-	{"gpt-image-2.5", "auto"},
-	{"gpt-image-2.5-flare", "auto"},
-	{"gpt-image-2.5-sunburst", "auto"},
-}
-
 // DefaultImageModel is the Responses image tool fallback when none is configured.
 const DefaultImageModel = "gpt-image-2.5"
-
-// imageConversationModel returns the Web conversation model for an image
-// route, or "" when upstreamModel is not an image route.
-func (a *Adapter) imageConversationModel(upstreamModel string) string {
-	for _, item := range imageModels {
-		if item.id == upstreamModel {
-			if configured := a.config().ImageConversationModel; configured != "" {
-				return configured
-			}
-			return item.conversation
-		}
-	}
-	return ""
-}
 
 // Definition declares ChatGPT Web: Responses is the canonical conversation
 // protocol, usage is estimated locally, images run synchronously or as
@@ -88,7 +61,7 @@ func Routes() []modeldomain.Route {
 
 // QuotaMode follows the Web limits: every chat consumes "reason", every image "image_gen".
 func (a *Adapter) QuotaMode(upstreamModel string) string {
-	if a.imageConversationModel(upstreamModel) != "" {
+	if len(a.imageCandidates(upstreamModel)) > 0 {
 		return quotaModeImage
 	}
 	return quotaModeReason
@@ -97,11 +70,13 @@ func (a *Adapter) QuotaMode(upstreamModel string) string {
 func (a *Adapter) TierOrder(string) []account.WebTier { return nil }
 
 // NormalizeAccountModelCapabilities makes each image route schedulable on
-// accounts whose catalog contains the conversation model that draws it.
-func (a *Adapter) NormalizeAccountModelCapabilities(models []string, _ *account.Billing, _ account.Credential) []string {
+// accounts whose catalog has one of its conversation models with the image
+// tool enabled (image_gen_tool_enabled in /backend-api/models).
+func (a *Adapter) NormalizeAccountModelCapabilities(models []string, _ *account.Billing, credential account.Credential) []string {
+	capable := a.imageCapableFromCache(credential.ID, models)
 	result := models
 	for _, item := range imageModels {
-		if slices.Contains(models, a.imageConversationModel(item.id)) {
+		if pickImageModel(a.imageCandidates(item.id), capable) != "" {
 			result = append(result, item.id)
 		}
 	}
