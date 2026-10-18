@@ -68,6 +68,8 @@ type RequestOptions = {
   method?: "GET" | "POST";
   body?: Record<string, unknown>;
   signal?: AbortSignal;
+  // requestId is sent as X-Request-ID so the audit log carries the same ID even when the request is interrupted.
+  requestId?: string;
 };
 
 export async function createChatResponse(input: {
@@ -108,8 +110,9 @@ export async function generateImage(input: {
   prompt: string;
   params: ImageParams;
   signal?: AbortSignal;
+  requestId?: string;
 }): Promise<ImageResult[]> {
-  const payload = await publicApiRequest(input.apiKey, "/images/generations", { method: "POST", body: imageGenerationBody(input), signal: input.signal });
+  const payload = await publicApiRequest(input.apiKey, "/images/generations", { method: "POST", body: imageGenerationBody(input), signal: input.signal, requestId: input.requestId });
   const images = readImages(payload);
   if (images.length === 0) throw new CreativeApiError(200, "The image response did not contain any images", "invalid_response");
   return images.map((image) => ({ ...image, url: resolveMediaURL(image.url) }));
@@ -367,6 +370,7 @@ export async function transcribeSpeech(input: {
 
 async function publicApiRequest(apiKey: string, path: string, options: RequestOptions): Promise<unknown> {
   const headers = new Headers({ Accept: "application/json", Authorization: `Bearer ${apiKey}` });
+  if (options.requestId) headers.set("X-Request-ID", options.requestId);
   let body: string | undefined;
   if (options.body) {
     headers.set("Content-Type", "application/json");

@@ -909,9 +909,13 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const supportsQuality = !basicProtocol && model.toLowerCase().endsWith("grok-imagine-image-2.0");
 
   const mutation = useMutation({
-    mutationFn: ({ record, key }: { record: ImageHistoryRecord; key: string }) => generateImage({ apiKey: key, basicProtocol: record.basicProtocol, model: record.model, prompt: record.prompt, params: record.params }),
+    mutationFn: ({ record, key }: { record: ImageHistoryRecord; key: string }) => generateImage({ apiKey: key, basicProtocol: record.basicProtocol, model: record.model, prompt: record.prompt, params: record.params, requestId: record.id }),
     onSuccess: (images, { record }) => patchRecord(record.id, { status: "completed", images }),
-    onError: (error, { record }) => patchRecord(record.id, { status: "failed", error: describeError(error) }),
+    // The record ID doubles as the X-Request-ID, so even network failures stay traceable in the audit log.
+    onError: (error, { record }) => {
+      const detail = describeError(error);
+      patchRecord(record.id, { status: "failed", error: { ...detail, requestId: detail.requestId ?? record.id } });
+    },
   });
 
   function updateRecords(update: (current: ImageHistoryRecord[]) => ImageHistoryRecord[]): void {
