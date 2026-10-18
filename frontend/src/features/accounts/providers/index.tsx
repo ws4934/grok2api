@@ -17,7 +17,8 @@ function PlanType({ account }: { account: AccountDTO }) {
 function WindowQuota({ account, locale, quotaModes }: { account: AccountDTO; locale: string; quotaModes: readonly string[] }) {
   const { t } = useTranslation();
   const windows = orderQuotaWindows(quotaModes, account.quotaWindows ?? []);
-  if (windows.length === 0) return <QuotaNotSynced />;
+  // A synced account may report no limited windows at all; only a missing sync time means "not synced".
+  if (windows.length === 0) return account.quotaSyncedAt ? <span className="text-xs text-muted-foreground">{t("accounts.quotaSyncedNoLimits")}</span> : <QuotaNotSynced />;
   return <QuotaWindowRow locale={locale} items={windows.map((window) => ({ label: t(`accounts.quotaModes.${window.mode}`, { defaultValue: window.mode }), window }))} />;
 }
 

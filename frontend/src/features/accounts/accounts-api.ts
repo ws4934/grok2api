@@ -115,6 +115,8 @@ export type AccountDTO = {
   billing?: BillingDTO;
   quota: QuotaDTO;
   quotaWindows?: Array<{ mode: string; remaining: number; total: number; usagePercent: number; breakdown?: Array<{ productCode: number; usagePercent: number }>; windowSeconds: number; resetAt?: string; syncedAt?: string; source: "default" | "estimated" | "upstream" }>;
+  // Last successful quota sync (RFC3339); null or absent when never synced, and absent from older backends.
+  quotaSyncedAt?: string | null;
 };
 
 export type LinkedAccountDTO = {
@@ -203,6 +205,7 @@ const accountValidator = hasShape({
   enabledDoesNotClearCooldown: isOptional(isBoolean),
   linkedAccountId: isOptional(isString), linkedAccountName: isOptional(isString), linkedProvider: isOptional(isString), linkedAccounts: isOptional(isArrayOf(linkedAccountValidator)),
   createdAt: isString, billing: isOptional(billingValidator), quota: quotaValidator, quotaWindows: isOptional(isArrayOf(quotaWindowValidator)),
+  quotaSyncedAt: (value) => value === null || isOptional(isString)(value),
 });
 const decodeBilling = createValidatedDecoder<BillingDTO>("billing", billingValidator);
 const decodeAccount = createValidatedDecoder<AccountDTO>("account", accountValidator);
