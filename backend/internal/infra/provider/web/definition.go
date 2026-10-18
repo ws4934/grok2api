@@ -2,6 +2,7 @@ package web
 
 import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
@@ -10,6 +11,7 @@ import (
 func (a *Adapter) Definition() provider.Definition {
 	return provider.Definition{
 		Provider:       account.ProviderWeb,
+		Profile:        provider.ProfileSurface{Name: "Grok Web", ShortName: "Web", EgressScopes: []egressdomain.Scope{egressdomain.ScopeWeb, egressdomain.ScopeWebAsset}},
 		ModelNamespace: account.ProviderWeb.ModelNamespace(),
 		ModelCatalog:   provider.ModelCatalogStatic,
 		ModelCapabilities: []modeldomain.Capability{

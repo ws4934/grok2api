@@ -2043,6 +2043,11 @@ func (value staticTierOrder) TierOrder(account.Provider, string) []account.WebTi
 	return value.order
 }
 
+// TierExempt mirrors the production Console definition.
+func (staticTierOrder) TierExempt(provider account.Provider) bool {
+	return provider == account.ProviderConsole
+}
+
 type webVideoTierOrder struct{}
 
 func (webVideoTierOrder) TierOrder(account.Provider, string) []account.WebTier {

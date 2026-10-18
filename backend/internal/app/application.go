@@ -25,6 +25,7 @@ import (
 	invalidationapp "github.com/chenyme/grok2api/backend/internal/application/invalidation"
 	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	modelapp "github.com/chenyme/grok2api/backend/internal/application/model"
+	"github.com/chenyme/grok2api/backend/internal/application/providercatalog"
 	quotarecoveryapp "github.com/chenyme/grok2api/backend/internal/application/quotarecovery"
 	settingsapp "github.com/chenyme/grok2api/backend/internal/application/settings"
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
@@ -443,9 +444,29 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	if err != nil {
 		return nil, err
 	}
-	extensionScopes := []egressdomain.Scope{}
+	// Interim: ChatGPT is still served by the channel registry until it becomes a
+	// native adapter; the catalog already lists it beside the registry providers.
+	var interim []providercatalog.Entry
 	for _, d := range channelRegistry.Descriptors() {
-		extensionScopes = append(extensionScopes, egressdomain.Scope(d.ID))
+		interim = append(interim, providercatalog.Entry{
+			ID: string(d.ID), Name: d.Name, ShortName: d.Name,
+			Capabilities: []string{"chat", "responses", "image", "image_edit"},
+			Conversation: providercatalog.Conversation{Responses: true, ChatCompletions: true, Messages: true},
+			Media:        providercatalog.Media{ImageGeneration: d.Capabilities.ImageGeneration, ImageEdit: d.Capabilities.ImageEdit},
+			Quota:        string(provider.QuotaRemoteWindow), Usage: string(provider.UsageEstimated),
+			EgressScopes: []string{string(d.ID)},
+			Credential:   providercatalog.Credential{AuthType: string(account.AuthTypeOAuth), Import: true, Refresh: d.Capabilities.Refresh, RedirectOAuth: d.Capabilities.OAuth},
+		})
+	}
+	providerCatalog := providercatalog.New(providers, interim...)
+	builtinScopes := map[egressdomain.Scope]bool{egressdomain.ScopeBuild: true, egressdomain.ScopeWeb: true, egressdomain.ScopeConsole: true, egressdomain.ScopeWebAsset: true, egressdomain.ScopeConsoleAsset: true}
+	extensionScopes := []egressdomain.Scope{}
+	for _, entry := range providerCatalog.Entries() {
+		for _, scope := range entry.EgressScopes {
+			if !builtinScopes[egressdomain.Scope(scope)] {
+				extensionScopes = append(extensionScopes, egressdomain.Scope(scope))
+			}
+		}
 	}
 	egressdomain.SetExtensionScopes(extensionScopes)
 	channelService := channelapp.NewService(channelRegistry, relational.NewChannelRepository(database), cipher, refreshLock, modelRepo)
@@ -490,7 +511,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	if err := channelService.SetExecution(clientKeyService, auditService); err != nil {
 		return nil, err
 	}
-	router := httpserver.New(httpserver.Dependencies{Channels: channelService, Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
+	router := httpserver.New(httpserver.Dependencies{Providers: providerCatalog, Channels: channelService, Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
 	server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 	return &Application{channels: channelService, chatgpt: gptAdapter,
 		logger: logger, database: database, server: server,

@@ -674,8 +674,8 @@ func (s *Service) selectConversationRoute(routes []modeldomain.Route, key client
 func orderConversationRouteTargets(routes []modeldomain.Route, seed string) []modeldomain.Route {
 	ordered := append([]modeldomain.Route(nil), routes...)
 	sort.SliceStable(ordered, func(left, right int) bool {
-		leftPriority := routeProviderPriority(ordered[left].Provider)
-		rightPriority := routeProviderPriority(ordered[right].Provider)
+		leftPriority := ordered[left].Provider.Order()
+		rightPriority := ordered[right].Provider.Order()
 		if leftPriority != rightPriority {
 			return leftPriority < rightPriority
 		}
@@ -692,19 +692,6 @@ func orderConversationRouteTargets(routes []modeldomain.Route, seed string) []mo
 func routeTargetScore(seed string, routeID uint64) uint64 {
 	digest := sha256.Sum256([]byte(seed + ":" + strconv.FormatUint(routeID, 10)))
 	return binary.BigEndian.Uint64(digest[:8])
-}
-
-func routeProviderPriority(providerValue accountdomain.Provider) int {
-	switch providerValue {
-	case accountdomain.ProviderBuild:
-		return 0
-	case accountdomain.ProviderWeb:
-		return 1
-	case accountdomain.ProviderConsole:
-		return 2
-	default:
-		return 3
-	}
 }
 
 func routeTargetSeed(input Input) string {

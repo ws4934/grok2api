@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 )
 
@@ -82,9 +83,23 @@ type InferencePolicy struct {
 	RetryForbiddenAsEgress bool
 }
 
+// ProfileSurface presents the provider and declares traits the shared
+// gateway, egress and admin surfaces must honour.
+type ProfileSurface struct {
+	Name      string
+	ShortName string
+	// TierExempt providers ignore client-key tier restrictions: their accounts
+	// have no reliable free/paid classification.
+	TierExempt bool
+	// EgressScopes lists the egress scopes the provider uses. The first one is
+	// the primary scope and equals the provider ID.
+	EgressScopes []egressdomain.Scope
+}
+
 // Definition 是 Provider 注册表的权威静态描述；渠道专属协议仍由各 Adapter 实现。
 type Definition struct {
 	Provider          account.Provider
+	Profile           ProfileSurface
 	ModelNamespace    string
 	ModelCatalog      ModelCatalogKind
 	ModelCapabilities []modeldomain.Capability
@@ -104,7 +119,32 @@ type DefinitionAdapter interface {
 // Clone 返回可安全交给调用方读取的副本，避免切片字段被外部修改后污染注册表。
 func (d Definition) Clone() Definition {
 	d.ModelCapabilities = append([]modeldomain.Capability(nil), d.ModelCapabilities...)
+	d.Profile.EgressScopes = append([]egressdomain.Scope(nil), d.Profile.EgressScopes...)
 	return d
+}
+
+// DisplayName falls back to the provider ID when no profile name is declared.
+func (d Definition) DisplayName() string {
+	if d.Profile.Name != "" {
+		return d.Profile.Name
+	}
+	return string(d.Provider)
+}
+
+// ShortName falls back to the display name.
+func (d Definition) ShortName() string {
+	if d.Profile.ShortName != "" {
+		return d.Profile.ShortName
+	}
+	return d.DisplayName()
+}
+
+// EgressScopes returns the declared scopes, defaulting to the primary scope.
+func (d Definition) EgressScopes() []egressdomain.Scope {
+	if len(d.Profile.EgressScopes) == 0 {
+		return []egressdomain.Scope{egressdomain.Scope(d.Provider)}
+	}
+	return append([]egressdomain.Scope(nil), d.Profile.EgressScopes...)
 }
 
 // SupportsModelCapability 判断该渠道能否注册指定类型的模型路由。
@@ -142,6 +182,9 @@ func (d Definition) Validate() error {
 			return fmt.Errorf("Provider %s 重复声明模型能力 %q", d.Provider, capability)
 		}
 		capabilities[capability] = struct{}{}
+	}
+	if scopes := d.Profile.EgressScopes; len(scopes) > 0 && scopes[0] != egressdomain.Scope(d.Provider) {
+		return fmt.Errorf("Provider %s 的主出口作用域必须与 Provider ID 相同", d.Provider)
 	}
 	if d.Quota != QuotaBilling && d.Quota != QuotaRemoteWindow && d.Quota != QuotaLocalWindow {
 		return fmt.Errorf("Provider %s 的额度策略无效", d.Provider)

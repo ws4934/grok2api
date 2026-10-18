@@ -208,11 +208,11 @@ const modelAvailableRouteAccountCapabilityPredicate = `(
 	)
 )`
 
-func modelTierAvailabilityPredicate(tiers []string) string {
-	return modelTierAvailabilityPredicateWithAvailability(tiers, false)
+func modelTierAvailabilityPredicate(tiers, exempt []string) string {
+	return modelTierAvailabilityPredicateWithAvailability(tiers, exempt, false)
 }
 
-func modelTierAvailabilityPredicateWithAvailability(tiers []string, activeOnly bool) string {
+func modelTierAvailabilityPredicateWithAvailability(tiers, exempt []string, activeOnly bool) string {
 	parts := make([]string, 0, len(tiers))
 	for _, tier := range tiers {
 		switch tier {
@@ -231,7 +231,13 @@ func modelTierAvailabilityPredicateWithAvailability(tiers []string, activeOnly b
 		accountPredicate = " AND account.enabled = TRUE AND account.auth_status = 'active'"
 		capabilityPredicate = modelAvailableRouteAccountCapabilityPredicate
 	}
-	return `(model_routes.provider = 'grok_console' OR EXISTS (
+	exemptPredicate := ""
+	for _, provider := range exempt {
+		if account.Provider(provider).IsValid() { // ids are syntax-checked, so quoting is safe
+			exemptPredicate += "model_routes.provider = '" + provider + "' OR "
+		}
+	}
+	return `(` + exemptPredicate + `EXISTS (
 		SELECT 1 FROM provider_accounts account
 		WHERE account.provider = model_routes.provider
 		` + accountPredicate + `
@@ -241,10 +247,19 @@ func modelTierAvailabilityPredicateWithAvailability(tiers []string, activeOnly b
 }
 
 const (
-	modelProviderPriorityExpression = "CASE model_routes.provider WHEN 'grok_build' THEN 0 WHEN 'grok_web' THEN 1 WHEN 'grok_console' THEN 2 ELSE 3 END"
-	modelSupportSortExpression      = `(SELECT COUNT(*) FROM provider_accounts account WHERE account.provider = model_routes.provider AND account.enabled = TRUE AND account.auth_status = 'active' AND (EXISTS (SELECT 1 FROM model_route_accounts binding WHERE binding.model_route_id = model_routes.id AND binding.account_id = account.id) OR (NOT EXISTS (SELECT 1 FROM model_route_accounts binding WHERE binding.model_route_id = model_routes.id) AND (` + modelConsoleStaticSupportExpression + ` OR ` + modelWebBasicMediaStaticSupportExpression + ` OR EXISTS (SELECT 1 FROM account_model_capabilities capability WHERE capability.account_id = account.id AND capability.upstream_model = model_routes.upstream_model) OR ` + modelSharedPaidBuildSupportSortExpression + `))))`
-	modelSyncedSortExpression       = `(SELECT MAX(sync.last_success_at) FROM provider_accounts account JOIN account_model_sync_states sync ON sync.account_id = account.id WHERE account.provider = model_routes.provider AND account.enabled = TRUE AND account.auth_status = 'active')`
+	modelSupportSortExpression = `(SELECT COUNT(*) FROM provider_accounts account WHERE account.provider = model_routes.provider AND account.enabled = TRUE AND account.auth_status = 'active' AND (EXISTS (SELECT 1 FROM model_route_accounts binding WHERE binding.model_route_id = model_routes.id AND binding.account_id = account.id) OR (NOT EXISTS (SELECT 1 FROM model_route_accounts binding WHERE binding.model_route_id = model_routes.id) AND (` + modelConsoleStaticSupportExpression + ` OR ` + modelWebBasicMediaStaticSupportExpression + ` OR EXISTS (SELECT 1 FROM account_model_capabilities capability WHERE capability.account_id = account.id AND capability.upstream_model = model_routes.upstream_model) OR ` + modelSharedPaidBuildSupportSortExpression + `))))`
+	modelSyncedSortExpression  = `(SELECT MAX(sync.last_success_at) FROM provider_accounts account JOIN account_model_sync_states sync ON sync.account_id = account.id WHERE account.provider = model_routes.provider AND account.enabled = TRUE AND account.auth_status = 'active')`
 )
+
+// modelProviderPriorityExpression orders routes that share a public name by
+// account.Providers(), the same order the gateway uses.
+var modelProviderPriorityExpression = func() string {
+	parts := []string{"CASE model_routes.provider"}
+	for index, value := range account.Providers() {
+		parts = append(parts, fmt.Sprintf("WHEN '%s' THEN %d", value, index))
+	}
+	return strings.Join(append(parts, fmt.Sprintf("ELSE %d END", len(account.Providers()))), " ")
+}()
 
 func NewModelRepository(db *Database) *ModelRepository { return &ModelRepository{db: db} }
 
@@ -274,9 +289,9 @@ func (r *ModelRepository) List(ctx context.Context, input repository.ModelListQu
 	if len(input.Filter.Providers) > 0 {
 		query = query.Where("provider IN ?", input.Filter.Providers)
 	}
-	tierPredicate := modelTierAvailabilityPredicate(input.Filter.Tiers)
+	tierPredicate := modelTierAvailabilityPredicate(input.Filter.Tiers, input.Filter.TierExemptProviders)
 	if input.Filter.ActiveScope {
-		tierPredicate = modelTierAvailabilityPredicateWithAvailability(input.Filter.Tiers, true)
+		tierPredicate = modelTierAvailabilityPredicateWithAvailability(input.Filter.Tiers, input.Filter.TierExemptProviders, true)
 	}
 	if tierPredicate != "" {
 		query = query.Where(tierPredicate)
@@ -505,7 +520,7 @@ func (r *ModelRepository) ListEnabledForScope(ctx context.Context, filter reposi
 	if len(filter.Providers) > 0 {
 		query = query.Where("provider IN ?", filter.Providers)
 	}
-	if tierPredicate := modelTierAvailabilityPredicateWithAvailability(filter.Tiers, true); tierPredicate != "" {
+	if tierPredicate := modelTierAvailabilityPredicateWithAvailability(filter.Tiers, filter.TierExemptProviders, true); tierPredicate != "" {
 		query = query.Where(tierPredicate)
 	}
 	var rows []modelRouteModel

@@ -107,7 +107,7 @@ func assertModelListFiltersByClientKeyProviderAndTierScope(t *testing.T, databas
 	}
 
 	list := func(tiers []string, providers []string) map[string]bool {
-		values, _, err := repo.List(ctx, repository.ModelListQuery{Page: repository.PageQuery{Limit: 20}, Filter: repository.ModelListFilter{Providers: providers, Tiers: tiers}})
+		values, _, err := repo.List(ctx, repository.ModelListQuery{Page: repository.PageQuery{Limit: 20}, Filter: repository.ModelListFilter{Providers: providers, Tiers: tiers, TierExemptProviders: consoleTierExempt}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,7 +132,7 @@ func assertModelListFiltersByClientKeyProviderAndTierScope(t *testing.T, databas
 	}
 
 	enabledForScope := func(tiers []string, providers []string) map[string]bool {
-		values, err := repo.ListEnabledForScope(ctx, repository.ModelListFilter{Providers: providers, Tiers: tiers})
+		values, err := repo.ListEnabledForScope(ctx, repository.ModelListFilter{Providers: providers, Tiers: tiers, TierExemptProviders: consoleTierExempt})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -154,3 +154,6 @@ func assertModelListFiltersByClientKeyProviderAndTierScope(t *testing.T, databas
 		t.Fatalf("inactive Super accounts must not advertise routes: %#v", enabledSuper)
 	}
 }
+
+// consoleTierExempt mirrors the production Console definition (TierExempt).
+var consoleTierExempt = []string{string(account.ProviderConsole)}

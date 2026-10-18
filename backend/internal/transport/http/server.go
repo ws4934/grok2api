@@ -3,7 +3,9 @@ package httpserver
 import (
 	"context"
 	channelapp "github.com/chenyme/grok2api/backend/internal/application/channel"
+	"github.com/chenyme/grok2api/backend/internal/application/providercatalog"
 	channelhttp "github.com/chenyme/grok2api/backend/internal/transport/http/channel"
+	providercataloghttp "github.com/chenyme/grok2api/backend/internal/transport/http/providercatalog"
 	"log/slog"
 	"net/http"
 	"time"
@@ -39,6 +41,7 @@ import (
 )
 
 type Dependencies struct {
+	Providers          *providercatalog.Catalog
 	Channels           *channelapp.Service
 	Logger             *slog.Logger
 	RequestTimeout     time.Duration
@@ -152,6 +155,9 @@ func New(deps Dependencies) *gin.Engine {
 	adminProtected := adminRoot.Group("")
 	adminProtected.Use(middleware.AdminAuth(deps.AdminAuth))
 	authHandler.RegisterAuthenticated(adminProtected)
+	if deps.Providers != nil {
+		providercataloghttp.NewHandler(deps.Providers).Register(adminProtected)
+	}
 	if deps.Channels != nil {
 		channelhttp.NewHandler(deps.Channels).Register(adminProtected)
 	}

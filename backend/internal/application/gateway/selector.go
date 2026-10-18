@@ -554,7 +554,7 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 		if forcedEgressNodeID != 0 && value.EgressNodeID != forcedEgressNodeID {
 			continue
 		}
-		if !accountScopeAllowsCandidate(provider, accountScope, candidate) {
+		if !accountScopeAllowsCandidate(s.tierExempt(provider), provider, accountScope, candidate) {
 			continue
 		}
 		if excluded[value.ID] || value.AuthStatus != account.AuthStatusActive {
@@ -868,7 +868,7 @@ func (s *Selector) acquirePinned(ctx context.Context, provider account.Provider,
 		if value.ID != accountID {
 			continue
 		}
-		if !accountScopeAllowsCandidate(provider, accountScope, candidate) {
+		if !accountScopeAllowsCandidate(s.tierExempt(provider), provider, accountScope, candidate) {
 			if accountScope.IsRestricted() {
 				return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts, Scope: accountScope, AccountID: accountID, AccountName: value.Name}
 			}
@@ -947,8 +947,17 @@ func pinnedUnavailableError(accountID uint64, name string) *SelectionUnavailable
 	return &SelectionUnavailableError{Reason: SelectionPinnedUnavailable, AccountID: accountID, AccountName: name}
 }
 
-func accountScopeAllowsCandidate(provider account.Provider, scope clientkeydomain.AccountScope, candidate account.RoutingCandidate) bool {
-	if provider == account.ProviderConsole {
+// tierExempt asks the provider registry whether the provider ignores tier
+// scopes; without a registry every provider is tier-scoped.
+func (s *Selector) tierExempt(provider account.Provider) bool {
+	if registry, ok := s.tierOrders.(interface{ TierExempt(account.Provider) bool }); ok {
+		return registry.TierExempt(provider)
+	}
+	return false
+}
+
+func accountScopeAllowsCandidate(tierExempt bool, provider account.Provider, scope clientkeydomain.AccountScope, candidate account.RoutingCandidate) bool {
+	if tierExempt {
 		return true
 	}
 	tier := clientkeydomain.AccountTierUnknown

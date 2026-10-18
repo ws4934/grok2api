@@ -113,6 +113,8 @@ type ModelListFilter struct {
 	Provider    string
 	Providers   []string
 	Tiers       []string
+	// TierExemptProviders bypass the tier filter (no reliable free/paid classes).
+	TierExemptProviders []string
 	Enabled     *bool
 	ActiveScope bool
 }

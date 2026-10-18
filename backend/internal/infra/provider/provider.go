@@ -970,6 +970,15 @@ func (r *Registry) ResolveModelAlias(value string) (ModelAlias, bool) {
 	return result, ok
 }
 
+// TierExempt reports whether accounts of the provider ignore client-key tier scopes.
+func (r *Registry) TierExempt(value account.Provider) bool {
+	if r == nil {
+		return false
+	}
+	definition, ok := r.definitions[value]
+	return ok && definition.Profile.TierExempt
+}
+
 // Definition returns the stable capability declaration from a production Adapter.
 func (r *Registry) Definition(value account.Provider) (Definition, bool) {
 	definition, ok := r.definitions[value]

@@ -43,13 +43,7 @@ func applyMediaJobEgress(job *media.Job, trace *infraegress.Trace, provider acco
 	}
 }
 
+// primaryEgressScope: every provider's primary egress scope uses its own ID.
 func primaryEgressScope(provider accountdomain.Provider) egressdomain.Scope {
-	switch provider {
-	case accountdomain.ProviderWeb:
-		return egressdomain.ScopeWeb
-	case accountdomain.ProviderConsole:
-		return egressdomain.ScopeConsole
-	default:
-		return egressdomain.ScopeBuild
-	}
+	return egressdomain.Scope(provider)
 }

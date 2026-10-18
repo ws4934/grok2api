@@ -156,14 +156,9 @@ func (e InvalidationEvent) Valid() bool {
 		return e.Provider == "" && e.AccountID == 0 && e.UpstreamModel == ""
 	}
 	if e.Kind == InvalidationAccountHealthChanged {
-		return e.AccountID != 0 && (e.Provider == account.ProviderBuild || e.Provider == account.ProviderWeb || e.Provider == account.ProviderConsole)
+		return e.AccountID != 0 && e.Provider.IsValid()
 	}
-	switch e.Provider {
-	case "", account.ProviderBuild, account.ProviderWeb, account.ProviderConsole:
-		return true
-	default:
-		return false
-	}
+	return e.Provider == "" || e.Provider.IsValid()
 }
 
 type InvalidationObserver func(context.Context, InvalidationEvent)

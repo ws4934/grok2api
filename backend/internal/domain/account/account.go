@@ -29,8 +29,19 @@ type LinkedAccount struct {
 var providers = [...]Provider{ProviderBuild, ProviderWeb, ProviderConsole}
 
 // Providers 返回按产品展示和后台维护顺序排列的稳定 Provider 集合。
+// The order is also the routing priority when providers share a public model name.
 func Providers() []Provider {
 	return append([]Provider(nil), providers[:]...)
+}
+
+// Order returns the provider's position in Providers(); unknown providers sort last.
+func (p Provider) Order() int {
+	for index, value := range providers {
+		if value == p {
+			return index
+		}
+	}
+	return len(providers)
 }
 
 // IsValid validates the stable identifier syntax, not registration or enablement.

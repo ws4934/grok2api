@@ -104,7 +104,7 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 		value := filter.Status == "enabled"
 		enabled = &value
 	}
-	return s.models.List(ctx, repository.ModelListQuery{Page: repository.PageQuery{Offset: (page - 1) * pageSize, Limit: pageSize, Search: search, Sort: filter.Sort}, Filter: repository.ModelListFilter{Provider: filter.Provider, Providers: filter.Providers, Tiers: filter.Tiers, Enabled: enabled, ActiveScope: filter.ActiveScope}})
+	return s.models.List(ctx, repository.ModelListQuery{Page: repository.PageQuery{Offset: (page - 1) * pageSize, Limit: pageSize, Search: search, Sort: filter.Sort}, Filter: repository.ModelListFilter{Provider: filter.Provider, Providers: filter.Providers, Tiers: filter.Tiers, TierExemptProviders: s.tierExemptProviders(), Enabled: enabled, ActiveScope: filter.ActiveScope}})
 }
 
 func (s *Service) ListGroups(ctx context.Context, page, pageSize int, search string, filter ListFilter) ([]RouteGroup, int64, error) {
@@ -235,7 +235,7 @@ func (s *Service) ListEnabledForClientKey(ctx context.Context, key clientkeydoma
 	if len(tiers) == 1 && tiers[0] == "all" {
 		tiers = nil
 	}
-	return s.models.ListEnabledForScope(ctx, repository.ModelListFilter{Providers: providers, Tiers: tiers})
+	return s.models.ListEnabledForScope(ctx, repository.ModelListFilter{Providers: providers, Tiers: tiers, TierExemptProviders: s.tierExemptProviders()})
 }
 
 func (s *Service) Get(ctx context.Context, id uint64) (modeldomain.Route, error) {
@@ -670,4 +670,18 @@ func mapRepositoryError(err error) error {
 		return ErrConflict
 	}
 	return err
+}
+
+// tierExemptProviders lists registered providers that ignore client-key tier scopes.
+func (s *Service) tierExemptProviders() []string {
+	var out []string
+	if s.providers == nil {
+		return out
+	}
+	for _, value := range s.providers.Providers() {
+		if s.providers.TierExempt(value) {
+			out = append(out, string(value))
+		}
+	}
+	return out
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
@@ -10,6 +11,7 @@ import (
 func (a *Adapter) Definition() provider.Definition {
 	return provider.Definition{
 		Provider:          account.ProviderBuild,
+		Profile:           provider.ProfileSurface{Name: "Grok Build", ShortName: "Build", EgressScopes: []egressdomain.Scope{egressdomain.ScopeBuild}},
 		ModelNamespace:    account.ProviderBuild.ModelNamespace(),
 		ModelCatalog:      provider.ModelCatalogRemote,
 		ModelCapabilities: []modeldomain.Capability{modeldomain.CapabilityResponses, modeldomain.CapabilityVideo},

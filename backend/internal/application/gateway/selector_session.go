@@ -69,7 +69,7 @@ func (s *Selector) beginSelectionSessionForKey(ctx context.Context, provider acc
 
 	for index, candidate := range values {
 		value := applyHealthSnapshot(candidate.Credential, healthOverrides)
-		if !accountScopeAllowsCandidate(provider, accountScope, candidate) {
+		if !accountScopeAllowsCandidate(s.tierExempt(provider), provider, accountScope, candidate) {
 			continue
 		}
 		if excluded[value.ID] || value.AuthStatus != account.AuthStatusActive {
