@@ -14,7 +14,7 @@ import { providerLabel, providerShortLabel } from "@/entities/provider/provider-
 import { listClientKeys } from "@/features/client-keys/client-keys-api";
 import { listAccounts } from "@/features/accounts/accounts-api";
 import { RequestAuditDetailDialog } from "@/features/audits/request-audit-detail-dialog";
-import { buildAuditUsageView } from "@/features/audits/audit-usage";
+import { buildAuditUsageView, fallbackBillingBreakdown } from "@/features/audits/audit-usage";
 import { getRequestAudits, getRequestAuditSummary, type AuditBillingBreakdownDTO, type AuditBillingComponentDTO, type AuditDTO, type AuditPeriod } from "@/features/audits/request-audits-api";
 import { EmptyState, ErrorState, TableLoadingRow } from "@/shared/components/data-state";
 import { DataTableShell } from "@/shared/components/data-table-shell";
@@ -432,23 +432,6 @@ function BillingValue({ audit }: { audit: AuditDTO }) {
       ) : null}
     </div>
   );
-}
-
-function fallbackBillingBreakdown(audit: AuditDTO): AuditBillingBreakdownDTO | undefined {
-  if (audit.costInUsdTicks > 0) {
-    return { source: "upstream", method: "upstream_reported", components: [], totalInUsdTicks: audit.costInUsdTicks };
-  }
-  if (!audit.pricingModel) {
-    return undefined;
-  }
-  return {
-    source: "official",
-    method: "stored_estimate",
-    model: audit.pricingModel,
-    version: audit.pricingVersion,
-    components: [],
-    totalInUsdTicks: audit.estimatedCostInUsdTicks,
-  };
 }
 
 function BillingBreakdown({ billing, locale, estimation, priceId }: { billing: AuditBillingBreakdownDTO; locale: string; estimation?: AuditDTO["estimation"]; priceId?: string }) {

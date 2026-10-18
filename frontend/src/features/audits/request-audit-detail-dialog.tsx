@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { auditCustomPriced } from "@/features/audits/audit-usage";
 import { getRequestAudit, type AuditAttemptDTO, type AuditDTO } from "@/features/audits/request-audits-api";
 import { CopyButton } from "@/shared/components/copy-button";
 import { ErrorState, LoadingState } from "@/shared/components/data-state";
@@ -167,7 +168,7 @@ function RequestOverviewPanel({ audit }: { audit: AuditDTO }) {
 
   const costDisplay = useMemo(() => {
     return formatUSDTicksWithEstimate(
-      audit.costInUsdTicks,
+      auditCustomPriced(audit) ? 0 : audit.costInUsdTicks,
       audit.estimatedCostInUsdTicks,
       t("audits.estimated"),
     );

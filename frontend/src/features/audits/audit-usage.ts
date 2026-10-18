@@ -1,4 +1,30 @@
+import type { AuditBillingBreakdownDTO, AuditDTO } from "@/features/audits/request-audits-api";
+
 export const MISSING_AUDIT_USAGE_PLACEHOLDER = "—";
+
+// A custom price settles the request at its estimated cost even when the upstream reported one.
+export function auditCustomPriced(audit: Pick<AuditDTO, "priceId">): boolean {
+  return Boolean(audit.priceId) && audit.priceId !== "0";
+}
+
+// Billing shown when the server sent no breakdown.
+export function fallbackBillingBreakdown(audit: AuditDTO): AuditBillingBreakdownDTO | undefined {
+  const custom = auditCustomPriced(audit);
+  if (audit.costInUsdTicks > 0 && !custom) {
+    return { source: "upstream", method: "upstream_reported", components: [], totalInUsdTicks: audit.costInUsdTicks };
+  }
+  if (!audit.pricingModel && !custom) {
+    return undefined;
+  }
+  return {
+    source: custom ? "custom" : "official",
+    method: "stored_estimate",
+    model: audit.pricingModel,
+    version: audit.pricingVersion,
+    components: [],
+    totalInUsdTicks: audit.estimatedCostInUsdTicks,
+  };
+}
 
 export type AuditUsageOperation =
   | "responses"

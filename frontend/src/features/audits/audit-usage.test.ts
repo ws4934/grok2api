@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  auditCustomPriced,
   buildAuditUsageView,
+  fallbackBillingBreakdown,
   MISSING_AUDIT_USAGE_PLACEHOLDER,
   type AuditUsageInput,
   type AuditUsageLabels,
 } from "./audit-usage.ts";
+import type { AuditDTO } from "./request-audits-api.ts";
 
 const labels: AuditUsageLabels = {
   input: "输入",
@@ -136,5 +139,26 @@ describe("buildAuditUsageView", () => {
   it("keeps compaction and voice-style rows without a token grid", () => {
     assert.equal(buildAuditUsageView(audit({ operation: "compaction" }), formatNumber, labels).mode, "compaction");
     assert.equal(buildAuditUsageView(audit({ operation: "tts", durationMs: 1540 }), formatNumber, labels).mode, "duration");
+  });
+});
+
+describe("audit billing fallback", () => {
+  const billed = (fields: Partial<AuditDTO>) => ({ costInUsdTicks: 0, estimatedCostInUsdTicks: 0, ...fields }) as AuditDTO;
+
+  it("prefers the upstream cost unless a custom price settled the request", () => {
+    assert.deepEqual(fallbackBillingBreakdown(billed({ costInUsdTicks: 900, estimatedCostInUsdTicks: 500, pricingModel: "m" })), { source: "upstream", method: "upstream_reported", components: [], totalInUsdTicks: 900 });
+    assert.deepEqual(fallbackBillingBreakdown(billed({ costInUsdTicks: 900, estimatedCostInUsdTicks: 500, pricingModel: "m", priceId: "7" })), { source: "custom", method: "stored_estimate", model: "m", version: undefined, components: [], totalInUsdTicks: 500 });
+  });
+
+  it("falls back to the official estimate, or nothing without a pricing model", () => {
+    assert.equal(fallbackBillingBreakdown(billed({ estimatedCostInUsdTicks: 500, pricingModel: "m", pricingVersion: "v1" }))?.source, "official");
+    assert.equal(fallbackBillingBreakdown(billed({ estimatedCostInUsdTicks: 500 })), undefined);
+  });
+
+  it("treats an empty or zero price id as not custom-priced", () => {
+    assert.equal(auditCustomPriced({}), false);
+    assert.equal(auditCustomPriced({ priceId: "" }), false);
+    assert.equal(auditCustomPriced({ priceId: "0" }), false);
+    assert.equal(auditCustomPriced({ priceId: "12" }), true);
   });
 });
