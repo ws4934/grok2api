@@ -206,3 +206,29 @@ func TestLegacySettingsRequestMayOmitManagedClearance(t *testing.T) {
 		t.Fatal("missing managed-clearance fields were treated as an explicit update")
 	}
 }
+
+func TestProviderChatGPTSettingsWireShape(t *testing.T) {
+	var dto settingsConfigDTO
+	if err := json.Unmarshal([]byte(`{"server":{"maxConcurrentRequests":64}}`), &dto); err != nil {
+		t.Fatal(err)
+	}
+	if dto.toApplication().ProviderChatGPTProvided {
+		t.Fatal("missing providerChatGPT was treated as an explicit update")
+	}
+	body := `{"providerChatGPT":{"imageConversationModel":"gpt-5","outputTokenLimit":4096,"visionTokens":0,"defaultImageModel":"gpt-image-2","cloudflareClearance":true}}`
+	if err := json.Unmarshal([]byte(body), &dto); err != nil {
+		t.Fatal(err)
+	}
+	input := dto.toApplication()
+	want := settingsapp.ProviderChatGPTConfig{ImageConversationModel: "gpt-5", OutputTokenLimit: 4096, DefaultImageModel: "gpt-image-2", CloudflareClearance: true}
+	if !input.ProviderChatGPTProvided || input.ProviderChatGPT != want {
+		t.Fatalf("providerChatGPT input = %#v", input.ProviderChatGPT)
+	}
+	data, err := json.Marshal(newSettingsResponse(settingsapp.Snapshot{Config: settingsapp.EditableConfig{ProviderChatGPT: want}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), body[1:len(body)-1]) {
+		t.Fatalf("settings response providerChatGPT = %s", data)
+	}
+}

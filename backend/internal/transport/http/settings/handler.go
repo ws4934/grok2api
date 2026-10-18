@@ -25,6 +25,7 @@ type settingsConfigDTO struct {
 	ProviderBuild     providerBuildConfigDTO     `json:"providerBuild"`
 	ProviderWeb       providerWebConfigDTO       `json:"providerWeb"`
 	ProviderConsole   providerConsoleConfigDTO   `json:"providerConsole"`
+	ProviderChatGPT   *providerChatGPTConfigDTO  `json:"providerChatGPT,omitempty"`
 	Batch             batchConfigDTO             `json:"batch"`
 	Media             mediaConfigDTO             `json:"media"`
 	Frontend          frontendConfigDTO          `json:"frontend"`
@@ -42,6 +43,14 @@ type providerConsoleConfigDTO struct {
 	BaseURL           string `json:"baseURL"`
 	ChatTimeout       string `json:"chatTimeout"`
 	StreamIdleTimeout string `json:"streamIdleTimeout"`
+}
+
+type providerChatGPTConfigDTO struct {
+	ImageConversationModel string `json:"imageConversationModel"`
+	OutputTokenLimit       int    `json:"outputTokenLimit"`
+	VisionTokens           int    `json:"visionTokens"`
+	DefaultImageModel      string `json:"defaultImageModel"`
+	CloudflareClearance    bool   `json:"cloudflareClearance"`
 }
 
 type mediaConfigDTO struct {
@@ -251,6 +260,10 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 		}
 		result.Routing.SegmentedSelectorProvided = true
 	}
+	if value.ProviderChatGPT != nil {
+		result.ProviderChatGPT = settingsapp.ProviderChatGPTConfig(*value.ProviderChatGPT)
+		result.ProviderChatGPTProvided = true
+	}
 	if value.Accounts != nil {
 		result.Accounts = settingsapp.AccountsConfig{
 			AutoDisableDegradedAccounts:                  boolValue(value.Accounts.AutoDisableDegradedAccounts),
@@ -300,6 +313,11 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 			ProviderConsole: providerConsoleConfigDTO{
 				BaseURL: config.ProviderConsole.BaseURL, ChatTimeout: config.ProviderConsole.ChatTimeout,
 				StreamIdleTimeout: config.ProviderConsole.StreamIdleTimeout,
+			},
+			ProviderChatGPT: &providerChatGPTConfigDTO{
+				ImageConversationModel: config.ProviderChatGPT.ImageConversationModel, OutputTokenLimit: config.ProviderChatGPT.OutputTokenLimit,
+				VisionTokens: config.ProviderChatGPT.VisionTokens, DefaultImageModel: config.ProviderChatGPT.DefaultImageModel,
+				CloudflareClearance: config.ProviderChatGPT.CloudflareClearance,
 			},
 			Batch: batchConfigDTO{
 				ImportConcurrency: config.Batch.ImportConcurrency, ConversionConcurrency: config.Batch.ConversionConcurrency,

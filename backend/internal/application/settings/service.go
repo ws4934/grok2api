@@ -68,6 +68,15 @@ type ProviderConsoleConfig struct {
 	StreamIdleTimeout string
 }
 
+// ProviderChatGPTConfig 是管理接口使用的 ChatGPT Provider 可编辑输入。
+type ProviderChatGPTConfig struct {
+	ImageConversationModel string
+	OutputTokenLimit       int
+	VisionTokens           int
+	DefaultImageModel      string
+	CloudflareClearance    bool
+}
+
 // ServerConfig 是管理接口使用的推理入口容量输入。
 type ServerConfig struct {
 	MaxConcurrentRequests int
@@ -162,6 +171,7 @@ type EditableConfig struct {
 	ProviderBuild     ProviderBuildConfig
 	ProviderWeb       ProviderWebConfig
 	ProviderConsole   ProviderConsoleConfig
+	ProviderChatGPT   ProviderChatGPTConfig
 	Batch             BatchConfig
 	Media             MediaConfig
 	Frontend          FrontendConfig
@@ -169,6 +179,8 @@ type EditableConfig struct {
 	Audit             AuditConfig
 	ClientKeyDefaults ClientKeyDefaultsConfig
 	Accounts          AccountsConfig
+	// ProviderChatGPTProvided 区分旧管理端未发送 providerChatGPT 与显式提交。
+	ProviderChatGPTProvided bool
 	// AccountsProvided 区分旧管理端未发送 accounts 与显式提交默认值。
 	AccountsProvided bool
 }
@@ -373,6 +385,10 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 			base.Provider.Console.StreamIdleTimeout = config.Duration(settingsdomain.DefaultConsoleStreamIdleTimeout)
 		}
 	}
+	// ChatGPT 段同样是后续新增；保存过的段 outputTokenLimit 至少为 1，整段为零即旧 JSON。
+	if value.ProviderChatGPT != (settingsdomain.ProviderChatGPTConfig{}) {
+		base.Provider.ChatGPT = config.ChatGPTProviderConfig(value.ProviderChatGPT)
+	}
 	randomDelay := time.Duration(-1)
 	if value.Batch.RandomDelay != nil {
 		randomDelay = *value.Batch.RandomDelay
@@ -478,6 +494,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			BaseURL: value.Provider.Console.BaseURL, ChatTimeout: value.Provider.Console.ChatTimeout.Value(),
 			StreamIdleTimeout: value.Provider.Console.StreamIdleTimeout.Value(),
 		},
+		ProviderChatGPT: settingsdomain.ProviderChatGPTConfig(value.Provider.ChatGPT),
 		Batch: settingsdomain.BatchConfig{
 			ImportConcurrency: value.Batch.ImportConcurrency, ConversionConcurrency: value.Batch.ConversionConcurrency,
 			SyncConcurrency: value.Batch.SyncConcurrency, RefreshConcurrency: value.Batch.RefreshConcurrency,
@@ -575,6 +592,12 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		next.Provider.Web.FreeVideoDurationCap = settingsdomain.NormalizeWebFreeVideoDurationCap(input.ProviderWeb.FreeVideoDurationCap)
 	}
 	next.Provider.Console.BaseURL = strings.TrimSpace(input.ProviderConsole.BaseURL)
+	if input.ProviderChatGPTProvided {
+		chatGPT := input.ProviderChatGPT
+		chatGPT.ImageConversationModel = strings.TrimSpace(chatGPT.ImageConversationModel)
+		chatGPT.DefaultImageModel = strings.TrimSpace(chatGPT.DefaultImageModel)
+		next.Provider.ChatGPT = config.ChatGPTProviderConfig(chatGPT)
+	}
 	next.Batch = config.BatchConfig{
 		ImportConcurrency: input.Batch.ImportConcurrency, ConversionConcurrency: input.Batch.ConversionConcurrency,
 		SyncConcurrency: input.Batch.SyncConcurrency, RefreshConcurrency: input.Batch.RefreshConcurrency,
@@ -719,6 +742,8 @@ func toEditable(cfg config.Config) EditableConfig {
 			BaseURL: cfg.Provider.Console.BaseURL, ChatTimeout: cfg.Provider.Console.ChatTimeout.String(),
 			StreamIdleTimeout: cfg.Provider.Console.StreamIdleTimeout.String(),
 		},
+		ProviderChatGPT:         ProviderChatGPTConfig(cfg.Provider.ChatGPT),
+		ProviderChatGPTProvided: true,
 		Batch: BatchConfig{
 			ImportConcurrency: cfg.Batch.ImportConcurrency, ConversionConcurrency: cfg.Batch.ConversionConcurrency,
 			SyncConcurrency: cfg.Batch.SyncConcurrency, RefreshConcurrency: cfg.Batch.RefreshConcurrency,

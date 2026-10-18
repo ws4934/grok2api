@@ -958,3 +958,86 @@ func TestUpdateRejectsInvalidBuildForbiddenCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestProviderChatGPTSettingsRoundTripAndDefaults(t *testing.T) {
+	cfg := testConfig(t)
+	repository := &runtimeSettingsRepositoryStub{}
+	var applied config.Config
+	service := NewService(cfg, time.Time{}, 0, repository, nil, func(next config.Config) { applied = next })
+	input := service.Get().Config
+	if !input.ProviderChatGPTProvided || input.ProviderChatGPT != (ProviderChatGPTConfig{OutputTokenLimit: 16384, VisionTokens: 256}) {
+		t.Fatalf("default providerChatGPT = %#v", input.ProviderChatGPT)
+	}
+	input.ProviderChatGPT = ProviderChatGPTConfig{
+		ImageConversationModel: " gpt-5 ", OutputTokenLimit: 4096, VisionTokens: 0,
+		DefaultImageModel: " gpt-image-2 ", CloudflareClearance: true,
+	}
+	want := config.ChatGPTProviderConfig{ImageConversationModel: "gpt-5", OutputTokenLimit: 4096, DefaultImageModel: "gpt-image-2", CloudflareClearance: true}
+	snapshot, err := service.Update(context.Background(), 0, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.Provider.ChatGPT != want || snapshot.Config.ProviderChatGPT != ProviderChatGPTConfig(want) {
+		t.Fatalf("applied = %#v, snapshot = %#v", applied.Provider.ChatGPT, snapshot.Config.ProviderChatGPT)
+	}
+	reloaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
+	if err != nil || reloaded.Provider.ChatGPT != want {
+		t.Fatalf("reloaded = %#v, err = %v", reloaded.Provider.ChatGPT, err)
+	}
+
+	// An older management client that omits the section keeps the stored values.
+	input = snapshot.Config
+	input.ProviderChatGPT = ProviderChatGPTConfig{}
+	input.ProviderChatGPTProvided = false
+	if _, err := service.Update(context.Background(), snapshot.Revision, input); err != nil {
+		t.Fatal(err)
+	}
+	if applied.Provider.ChatGPT != want {
+		t.Fatalf("omitted section overwrote providerChatGPT: %#v", applied.Provider.ChatGPT)
+	}
+}
+
+func TestUpdateRejectsProviderChatGPTOutOfRange(t *testing.T) {
+	for _, value := range []ProviderChatGPTConfig{
+		{OutputTokenLimit: 0, VisionTokens: 256},
+		{OutputTokenLimit: 131073, VisionTokens: 256},
+		{OutputTokenLimit: 16384, VisionTokens: -1},
+		{OutputTokenLimit: 16384, VisionTokens: 100001},
+	} {
+		repository := &runtimeSettingsRepositoryStub{}
+		service := NewService(testConfig(t), time.Time{}, 0, repository, nil, nil)
+		input := service.Get().Config
+		input.ProviderChatGPT = value
+		if _, err := service.Update(context.Background(), 0, input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("%#v: error = %v, want ErrInvalidInput", value, err)
+		}
+		if repository.found {
+			t.Fatalf("%#v was persisted", value)
+		}
+	}
+}
+
+func TestLoadPersistedKeepsChatGPTDefaultsForOlderPayload(t *testing.T) {
+	cfg := testConfig(t)
+	data, err := json.Marshal(toDomainConfig(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	delete(payload, "ProviderChatGPT")
+	data, _ = json.Marshal(payload)
+	var legacy settingsdomain.Config
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, _, err := LoadPersisted(context.Background(), cfg, &runtimeSettingsRepositoryStub{value: legacy, found: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Provider.ChatGPT != cfg.Provider.ChatGPT || loaded.Provider.ChatGPT.OutputTokenLimit != config.DefaultChatGPTOutputTokenLimit {
+		t.Fatalf("legacy providerChatGPT = %#v, want %#v", loaded.Provider.ChatGPT, cfg.Provider.ChatGPT)
+	}
+}

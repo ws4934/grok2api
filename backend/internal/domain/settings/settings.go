@@ -34,6 +34,7 @@ type Config struct {
 	ProviderBuild     ProviderBuildConfig
 	ProviderWeb       ProviderWebConfig
 	ProviderConsole   ProviderConsoleConfig
+	ProviderChatGPT   ProviderChatGPTConfig
 	Batch             BatchConfig
 	Media             MediaConfig
 	Frontend          FrontendConfig
@@ -57,6 +58,15 @@ type ProviderConsoleConfig struct {
 	BaseURL           string
 	ChatTimeout       time.Duration
 	StreamIdleTimeout time.Duration
+}
+
+// ProviderChatGPTConfig 定义 ChatGPT Provider 的运行参数，字段与 config.ChatGPTProviderConfig 一一对应。
+type ProviderChatGPTConfig struct {
+	ImageConversationModel string
+	OutputTokenLimit       int
+	VisionTokens           int
+	DefaultImageModel      string
+	CloudflareClearance    bool
 }
 
 type MediaConfig struct {
