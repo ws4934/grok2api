@@ -15,6 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableActionCell, TableActionHead, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { channelsApi } from "@/features/channels/channels-api";
 import {
   createEgressSource,
   deleteEgressSource,
@@ -396,7 +397,9 @@ function supportsFallbackScope(nodeScope: EgressScope, requestScope: EgressScope
 }
 
 function ScopeSelect({ value, onChange, scopeLabel }: { value: EgressScope; onChange: (value: EgressScope) => void; scopeLabel: (scope: EgressScope) => string }) {
-  return <Select value={value} onValueChange={(next) => onChange(next as EgressScope)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{fallbackScopes.map((scope) => <SelectItem key={scope} value={scope}>{scopeLabel(scope)}</SelectItem>)}</SelectContent></Select>;
+  const channels = useQuery({ queryKey: ["channels"], queryFn: channelsApi.list });
+  const scopes = [...fallbackScopes, ...(channels.data?.map((channel) => channel.descriptor.id) ?? [])];
+  return <Select value={value} onValueChange={(next) => onChange(next as EgressScope)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{scopes.map((scope) => <SelectItem key={scope} value={scope}>{scopeLabel(scope)}</SelectItem>)}</SelectContent></Select>;
 }
 
 function OperationSectionHeader({ title, help, children }: { title: string; help: string; children?: ReactNode }) {

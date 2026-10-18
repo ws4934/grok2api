@@ -19,6 +19,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableActionCell, TableActionHead, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { channelsApi } from "@/features/channels/channels-api";
 import { EgressAutomation, EgressSources } from "@/features/settings/egress-operations";
 import { EgressProxyProfiles } from "@/features/settings/egress-proxy-profiles";
 import { cleanupUnhealthyEgressNodes, createEgressNode, deleteEgressNode, deleteEgressNodes, getEgressNodeProxyURL, getEgressProxyProfile, importEgressText, listEgressProxyProfiles, listEgressNodes, previewUnhealthyEgressNodes, refreshEgressClearance, testEgressNode, updateEgressNode, updateEgressNodesEnabled, type ClearanceMode, type EgressIPProbeDTO, type EgressNodeDTO, type EgressNodeInput, type EgressScope } from "@/features/settings/settings-api";
@@ -35,6 +36,8 @@ import { nextTableSort, type SortOrder, type TableSort } from "@/shared/lib/tabl
 const emptyInput: EgressNodeInput = { name: "", scope: "grok_build", enabled: true, proxyPool: false, accountCapacity: 0, proxyURL: "", userAgent: "", cloudflareCookies: "" };
 type ImportForm = { name: string; scope: EgressScope; accountCapacity: number; content: string };
 const emptyImport: ImportForm = { name: "", scope: "grok_build", accountCapacity: 0, content: "" };
+// Build and extension channel scopes (non-grok_ IDs such as "chatgpt") carry no browser user agent or Cloudflare clearance.
+const noBrowserIdentity = (scope: EgressScope) => scope === "grok_build" || !scope.startsWith("grok_");
 
 export function EgressNodes({ title, clearanceMode }: { title: string; clearanceMode: ClearanceMode }) {
   const { t } = useTranslation();
@@ -68,14 +71,15 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
     staleTime: 15_000,
     refetchOnWindowFocus: true,
   });
+  const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: channelsApi.list });
   const save = useMutation({
     mutationFn: () => {
       const normalizedProxyURL = form.proxyURL?.trim() || "";
       const input = {
         ...form,
         proxyURL: normalizedProxyURL && (!editing || normalizedProxyURL !== revealedProxyURL) ? normalizedProxyURL : undefined,
-        userAgent: form.scope === "grok_build" ? "" : form.userAgent,
-        cloudflareCookies: form.scope === "grok_build" ? undefined : form.cloudflareCookies?.trim() || undefined,
+        userAgent: noBrowserIdentity(form.scope) ? "" : form.userAgent,
+        cloudflareCookies: noBrowserIdentity(form.scope) ? undefined : form.cloudflareCookies?.trim() || undefined,
       };
       return editing ? updateEgressNode(editing.id, input) : createEgressNode(input);
     },
@@ -181,7 +185,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
   }
 
   function openEdit(node: EgressNodeDTO) {
-    setForm({ name: node.name, scope: node.scope, enabled: node.enabled, proxyPool: node.proxyPool, accountCapacity: node.accountCapacity, proxyProfileId: node.proxyProfileId, userAgent: node.scope === "grok_build" ? "" : node.userAgent, proxyURL: "", cloudflareCookies: "" });
+    setForm({ name: node.name, scope: node.scope, enabled: node.enabled, proxyPool: node.proxyPool, accountCapacity: node.accountCapacity, proxyProfileId: node.proxyProfileId, userAgent: noBrowserIdentity(node.scope) ? "" : node.userAgent, proxyURL: "", cloudflareCookies: "" });
     setProxyVisible(false);
     setRevealedProxyURL("");
     setEditing(node);
@@ -193,8 +197,8 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
     setForm({
       ...form,
       scope,
-      userAgent: scope === "grok_build" ? "" : (form.userAgent === "" || form.userAgent === previousDefault ? nextDefault : form.userAgent),
-      cloudflareCookies: scope === "grok_build" || scope === "grok_console_asset" ? "" : form.cloudflareCookies,
+      userAgent: noBrowserIdentity(scope) ? "" : (form.userAgent === "" || form.userAgent === previousDefault ? nextDefault : form.userAgent),
+      cloudflareCookies: noBrowserIdentity(scope) || scope === "grok_console_asset" ? "" : form.cloudflareCookies,
     });
   }
 
@@ -203,6 +207,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
     if (scope === "grok_console") return t("console.name");
     if (scope === "grok_web_asset") return t("settings.egress.scopeWebAsset");
     if (scope === "grok_console_asset") return t("settings.egress.scopeConsoleAsset");
+    if (!scope.startsWith("grok_")) return channelsQuery.data?.find((channel) => channel.descriptor.id === scope)?.descriptor.name ?? scope;
     return t("settings.egress.scopeWeb");
   }
 
@@ -424,10 +429,11 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
                   <SelectItem value="grok_console">{t("console.name")}</SelectItem>
                   <SelectItem value="grok_web_asset">{t("settings.egress.scopeWebAsset")}</SelectItem>
                   <SelectItem value="grok_console_asset">{t("settings.egress.scopeConsoleAsset")}</SelectItem>
+                  {channelsQuery.data?.map((channel) => <SelectItem key={channel.descriptor.id} value={channel.descriptor.id}>{channel.descriptor.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </Field>
-            {form.scope !== "grok_build" && form.scope !== "grok_console_asset" ? (
+            {!noBrowserIdentity(form.scope) && form.scope !== "grok_console_asset" ? (
               <div className="flex h-10 items-center justify-between gap-4 rounded-md bg-muted/45 px-3">
                 <span className="text-xs font-medium">{t("settings.egress.clearance")}</span>
                 <Badge variant="secondary" className="shrink-0 text-[10px]">
@@ -461,12 +467,12 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
               </div>
               <Switch id="egress-proxy-pool" className="mt-0.5" checked={form.proxyPool} disabled={!editing?.proxyConfigured && !form.proxyURL?.trim() && !form.proxyProfileId} onCheckedChange={(proxyPool) => setForm({ ...form, proxyPool })} />
             </div>
-            {form.scope !== "grok_build" && (clearanceMode === "manual" || form.scope === "grok_console_asset") ? (
+            {!noBrowserIdentity(form.scope) && (clearanceMode === "manual" || form.scope === "grok_console_asset") ? (
               <Field label={t("settings.egress.userAgent")} controlId="egress-user-agent">
                 <Input id="egress-user-agent" value={form.userAgent} onChange={(event) => setForm({ ...form, userAgent: event.target.value })} />
               </Field>
             ) : null}
-            {form.scope !== "grok_build" && form.scope !== "grok_console_asset" && clearanceMode === "manual" ? (
+            {!noBrowserIdentity(form.scope) && form.scope !== "grok_console_asset" && clearanceMode === "manual" ? (
               <Field label={t("settings.egress.cloudflareCookie")} controlId="egress-cookie">
                 <Input id="egress-cookie" type="password" autoComplete="new-password" placeholder={editing?.cookieConfigured ? t("settings.egress.keepConfigured") : "cf_clearance=...; __cf_bm=..."} value={form.cloudflareCookies} onChange={(event) => setForm({ ...form, cloudflareCookies: event.target.value })} />
               </Field>
@@ -494,6 +500,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
                     <SelectItem value="grok_console">{t("console.name")}</SelectItem>
                     <SelectItem value="grok_web_asset">{t("settings.egress.scopeWebAsset")}</SelectItem>
                     <SelectItem value="grok_console_asset">{t("settings.egress.scopeConsoleAsset")}</SelectItem>
+                    {channelsQuery.data?.map((channel) => <SelectItem key={channel.descriptor.id} value={channel.descriptor.id}>{channel.descriptor.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </Field>
@@ -613,7 +620,7 @@ function ErrorTooltip({ message }: { message: string }) {
 
 function ClearanceBadge({ node, clearanceMode }: { node: EgressNodeDTO; clearanceMode: ClearanceMode }) {
   const { t } = useTranslation();
-  if (node.scope === "grok_build") return <span className="text-xs text-muted-foreground">—</span>;
+  if (noBrowserIdentity(node.scope)) return <span className="text-xs text-muted-foreground">—</span>;
   if (clearanceMode === "flaresolverr") {
     return <Badge variant="secondary" className="text-[10px]">{node.accountBoundProxy ? `${t("settings.web.clearanceFlareSolverr")} · Resin` : t("settings.web.clearanceFlareSolverr")}</Badge>;
   }
