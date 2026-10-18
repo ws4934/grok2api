@@ -2707,6 +2707,10 @@ func (r *AccountRepository) saveQuotaWindows(ctx context.Context, accountID uint
 				return err
 			}
 		}
+		// The marker also records a sync that returned no windows (no limits).
+		if err := tx.Exec("UPDATE provider_accounts SET quota_synced_at = ? WHERE id = ?", syncedAt.UTC(), accountID).Error; err != nil {
+			return err
+		}
 		if replace {
 			if err := tx.Where("account_id = ?", accountID).Delete(&quotaWindowModel{}).Error; err != nil {
 				return err
@@ -2804,6 +2808,9 @@ func (r *AccountRepository) ListQuotaRecoveryWindows(ctx context.Context, limit 
 }
 
 // ListStaleQuotaAccountIDs 返回指定 Provider 中缺失或长期未同步额度的账号，供低优先级追赶任务使用。
+// An account is stale when its last quota sync is missing or older than before,
+// or when any window was flagged for resync (synced_at NULL). Never-synced and
+// flagged accounts come first on every dialect.
 func (r *AccountRepository) ListStaleQuotaAccountIDs(ctx context.Context, providers []account.Provider, before time.Time, limit int) ([]uint64, error) {
 	if len(providers) == 0 {
 		return []uint64{}, nil
@@ -2814,14 +2821,11 @@ func (r *AccountRepository) ListStaleQuotaAccountIDs(ctx context.Context, provid
 	var ids []uint64
 	err := r.db.db.WithContext(ctx).
 		Table("provider_accounts AS account").
-		Select("account.id").
-		Joins("LEFT JOIN account_quota_windows AS quota ON quota.account_id = account.id").
 		Where("account.provider IN ? AND account.enabled = ? AND account.auth_status = ?", providers, true, account.AuthStatusActive).
-		Group("account.id").
-		Having("MAX(quota.synced_at) IS NULL OR MAX(quota.synced_at) < ?", before.UTC()).
-		Order("MIN(quota.synced_at) ASC, account.id ASC").
+		Where("account.quota_synced_at IS NULL OR account.quota_synced_at < ? OR EXISTS (SELECT 1 FROM account_quota_windows AS quota WHERE quota.account_id = account.id AND quota.synced_at IS NULL)", before.UTC()).
+		Order("CASE WHEN account.quota_synced_at IS NULL THEN 0 ELSE 1 END, account.quota_synced_at ASC, account.id ASC").
 		Limit(limit).
-		Scan(&ids).Error
+		Pluck("account.id", &ids).Error
 	return ids, err
 }
 

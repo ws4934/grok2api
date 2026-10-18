@@ -64,6 +64,9 @@ type accountModel struct {
 	Credential           *accountCredentialModel `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 	WebProfile           *webAccountProfileModel `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 	EgressNode           *egressNodeModel        `gorm:"foreignKey:EgressNodeID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL"`
+	// QuotaSyncedAt is the last upstream quota sync, also of an empty snapshot.
+	// Only saveQuotaWindows writes it; read-only keeps account saves from clearing it.
+	QuotaSyncedAt *time.Time `gorm:"->"`
 }
 
 func (accountModel) TableName() string { return "provider_accounts" }

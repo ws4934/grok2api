@@ -143,6 +143,7 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	hadTierScope := hadClientKeys && db.Migrator().HasColumn(&clientKeyModel{}, "TierScopeMask")
 	hadLegacyAccountPool := hadClientKeys && db.Migrator().HasColumn("client_keys", "account_pool")
 	hadGlobalSubscriptionProxy := db.Migrator().HasTable("egress_operations_config") && db.Migrator().HasColumn("egress_operations_config", "encrypted_subscription_proxy_url")
+	missingQuotaSyncMarker := db.Migrator().HasTable(&accountModel{}) && !db.Migrator().HasColumn("provider_accounts", "quota_synced_at")
 	// all 作用域会让 Build 与 Web 共用 UA、健康度和冷却状态，升级时直接移除旧节点。
 	if db.Migrator().HasTable(&egressNodeModel{}) {
 		if err := db.Where("scope = ?", "all").Delete(&egressNodeModel{}).Error; err != nil {
@@ -253,6 +254,13 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	}
 	if err := d.rescheduleChatGPTCredentialRefresh(ctx); err != nil {
 		return fmt.Errorf("重排 ChatGPT 凭据续期时间: %w", err)
+	}
+	if missingQuotaSyncMarker {
+		// Accounts synced before the marker existed keep their last window sync
+		// time instead of all looking stale to the quota catch-up at once.
+		if err := db.Exec("UPDATE provider_accounts SET quota_synced_at = (SELECT MAX(quota.synced_at) FROM account_quota_windows AS quota WHERE quota.account_id = provider_accounts.id)").Error; err != nil {
+			return fmt.Errorf("回填账号额度同步时间: %w", err)
+		}
 	}
 	if err := d.resyncChatGPTQuotaWithoutResetTimes(ctx); err != nil {
 		return fmt.Errorf("标记缺少重置时间的 ChatGPT 额度: %w", err)
