@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
@@ -242,6 +243,7 @@ func (s *Service) executeImage(
 	quotaRefreshGroup := s.providers.QuotaRefreshGroup(route.Provider, route.UpstreamModel)
 	attemptPolicy := newRoutingAttemptPolicy(int(s.maxAttempts.Load()))
 	excluded := make(map[uint64]bool)
+	authRetried := make(map[uint64]bool)
 	selection := preselectedSession
 	var lease *accountLease
 	var credential accountdomain.Credential
@@ -305,6 +307,30 @@ func (s *Service) executeImage(
 			lastCredentialError = provider.ErrUnauthorized
 			response = nil
 			lease.Release()
+			continue
+		}
+		if response.StatusCode == http.StatusUnauthorized && s.providers.SupportsCredentialRefresh(credential.Provider) {
+			_, _ = readRetryableBody(response.Body)
+			response = nil
+			failedCredential := credential
+			lastCredentialFailure = &failedCredential
+			lastCredentialError = provider.ErrUnauthorized
+			lease.Release()
+			// Image 401s arrive before submission, so one retry on the same account after a forced refresh is safe.
+			if s.markPermanentlyUnrefreshableCredentialRejected(ctx, credential) || authRetried[credential.ID] {
+				continue
+			}
+			authRetried[credential.ID] = true
+			if _, refreshErr := s.accounts.EnsureCredential(ctx, credential, true); refreshErr != nil {
+				if errors.Is(refreshErr, accountapp.ErrCredentialRefreshPermanent) {
+					s.markCredentialRejectedAfterPermanentRefresh(ctx, credential)
+				}
+				continue
+			}
+			delete(excluded, credential.ID)
+			if selection != nil {
+				selection.RetryAccount(credential.ID)
+			}
 			continue
 		}
 		if s.providers.RetryForbiddenAsEgress(credential.Provider) && response.StatusCode == http.StatusForbidden && attempt == 0 && attemptPolicy.hasNext(attempt) {

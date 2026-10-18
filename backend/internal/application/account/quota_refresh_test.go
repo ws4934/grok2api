@@ -1431,3 +1431,22 @@ func (a *quotaCountingAdapter) SyncQuotaMode(_ context.Context, credential accou
 		WindowSeconds: 3600, ResetAt: &resetAt, SyncedAt: &now, Source: accountdomain.QuotaSourceUpstream, UpdatedAt: now,
 	}, nil
 }
+
+type declaredQuotaModeAdapter struct{}
+
+func (declaredQuotaModeAdapter) Provider() accountdomain.Provider { return "chatgpt" }
+func (declaredQuotaModeAdapter) Definition() provider.Definition {
+	return provider.Definition{Provider: "chatgpt", Profile: provider.ProfileSurface{QuotaModes: []string{"reason"}}}
+}
+
+func TestQuotaRefreshAcceptsProviderDeclaredModes(t *testing.T) {
+	service := NewService(nil, nil, nil, nil, provider.NewRegistry(declaredQuotaModeAdapter{}), nil, nil)
+	service.QueueQuotaRefresh(7, "reason")
+	service.QueueQuotaRefresh(7, "undeclared")
+
+	service.quotaRefreshMu.Lock()
+	defer service.quotaRefreshMu.Unlock()
+	if len(service.quotaRefreshes) != 1 || service.quotaRefreshes["7:reason"] == nil {
+		t.Fatalf("refresh states = %#v", service.quotaRefreshes)
+	}
+}

@@ -3202,7 +3202,7 @@ func (s *Service) QueueQuotaRefresh(id uint64, mode string) {
 	if isWebImagineQuotaMode(mode) {
 		mode = accountdomain.QuotaGroupWebImagine
 	}
-	if id == 0 || (!isConsoleUsageQuotaMode(mode) && mode != "weekly" && mode != accountdomain.QuotaGroupWebImagine && !isWebChatQuotaMode(mode)) {
+	if id == 0 || (!isConsoleUsageQuotaMode(mode) && mode != "weekly" && mode != accountdomain.QuotaGroupWebImagine && !isWebChatQuotaMode(mode) && !s.isDeclaredQuotaMode(mode)) {
 		return
 	}
 	key := strconv.FormatUint(id, 10) + ":" + mode
@@ -3639,6 +3639,20 @@ func (s *Service) ListDueWebQuotaWindows(ctx context.Context, now time.Time, lim
 
 func (s *Service) ListDueQuotaWindows(ctx context.Context, now time.Time, limit int) ([]accountdomain.QuotaWindow, error) {
 	return s.accounts.ListDueQuotaWindows(ctx, now, limit)
+}
+
+// isDeclaredQuotaMode reports whether any registered provider lists mode in its Definition.
+func (s *Service) isDeclaredQuotaMode(mode string) bool {
+	if s.providers == nil {
+		return false
+	}
+	for _, value := range s.providers.Providers() {
+		definition, ok := s.providers.Definition(value)
+		if ok && slices.Contains(definition.Profile.QuotaModes, mode) {
+			return true
+		}
+	}
+	return false
 }
 
 func isWebChatQuotaMode(mode string) bool {
