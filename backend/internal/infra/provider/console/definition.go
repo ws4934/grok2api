@@ -12,7 +12,7 @@ import (
 func (a *Adapter) Definition() provider.Definition {
 	return provider.Definition{
 		Provider:       account.ProviderConsole,
-		Profile:        provider.ProfileSurface{Name: "Grok Console", ShortName: "Console", TierExempt: true, EgressScopes: []egressdomain.Scope{egressdomain.ScopeConsole, egressdomain.ScopeConsoleAsset}},
+		Profile:        provider.ProfileSurface{Name: "Grok Console", OfficialPricing: true, ShortName: "Console", TierExempt: true, EgressScopes: []egressdomain.Scope{egressdomain.ScopeConsole, egressdomain.ScopeConsoleAsset}},
 		ModelNamespace: account.ProviderConsole.ModelNamespace(),
 		ModelCatalog:   provider.ModelCatalogStatic,
 		ModelCapabilities: []modeldomain.Capability{

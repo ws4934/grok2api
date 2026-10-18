@@ -254,3 +254,25 @@ func TestRoutePriceReportsSource(t *testing.T) {
 		t.Fatalf("custom route = %#v", got)
 	}
 }
+
+func TestOfficialRatesOnlyForOfficialProviders(t *testing.T) {
+	service := newTestService(t)
+	service.SetOfficialRates(func(value account.Provider) bool { return value != testProvider })
+	if _, priced := service.QuoteText(testProvider, "grok-4.5", 100, 0, 100, 100); priced {
+		t.Fatal("non-official provider got official text rates for an xAI model name")
+	}
+	if _, priced := service.QuoteTTS(testProvider, "voice", "hello"); priced {
+		t.Fatal("non-official provider got official TTS rates")
+	}
+	if _, priced := service.QuoteText(account.ProviderWeb, "grok-4.5", 100, 0, 100, 100); !priced {
+		t.Fatal("official provider lost official rates")
+	}
+	route := modeldomain.Route{Provider: testProvider, UpstreamModel: "grok-4.5", Capability: modeldomain.CapabilityResponses}
+	if got := service.RoutePrice(route); got.Source != SourceNone {
+		t.Fatalf("route price source = %q", got.Source)
+	}
+	mustPut(t, service, testProvider, "grok-4.5", pricingdomain.OperationText, map[pricingdomain.Component]string{pricingdomain.InputToken: "1", pricingdomain.OutputToken: "2"})
+	if _, priced := service.QuoteText(testProvider, "grok-4.5", 100, 0, 100, 100); !priced {
+		t.Fatal("custom price ignored for non-official provider")
+	}
+}

@@ -101,6 +101,9 @@ type ProfileSurface struct {
 	DefaultMaxConcurrent int
 	// QuotaModes lists the quota window modes shown for the provider's accounts.
 	QuotaModes []string
+	// OfficialPricing bills the provider with the official xAI price list
+	// (domain/audit/pricing.go) when no custom price exists.
+	OfficialPricing bool
 }
 
 // Definition 是 Provider 注册表的权威静态描述；渠道专属协议仍由各 Adapter 实现。

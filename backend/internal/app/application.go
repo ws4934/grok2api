@@ -376,6 +376,10 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	modelRepo.SetInvalidationObserver(invalidationService.Notify)
 	clientKeyRepo.SetInvalidationObserver(invalidationService.Notify)
 	pricingService.SetInvalidationObserver(invalidationService.Notify)
+	pricingService.SetOfficialRates(func(value account.Provider) bool {
+		definition, ok := providers.Definition(value)
+		return ok && definition.Profile.OfficialPricing
+	})
 	gatewayService := gateway.NewService(modelService, auditService, accountService, clientKeyService, providers, selector, responseRepo, cfg.Routing.MaxAttempts)
 	gatewayService.UpdateQualityRetry(qualityRetryRuntime(cfg.QualityGuard))
 	gatewayService.UpdateVideoMaxAttempts(cfg.Routing.VideoMaxAttempts)

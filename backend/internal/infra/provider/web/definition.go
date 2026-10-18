@@ -11,7 +11,7 @@ import (
 func (a *Adapter) Definition() provider.Definition {
 	return provider.Definition{
 		Provider:       account.ProviderWeb,
-		Profile:        provider.ProfileSurface{Name: "Grok Web", ShortName: "Web", EgressScopes: []egressdomain.Scope{egressdomain.ScopeWeb, egressdomain.ScopeWebAsset}},
+		Profile:        provider.ProfileSurface{Name: "Grok Web", OfficialPricing: true, ShortName: "Web", EgressScopes: []egressdomain.Scope{egressdomain.ScopeWeb, egressdomain.ScopeWebAsset}},
 		ModelNamespace: account.ProviderWeb.ModelNamespace(),
 		ModelCatalog:   provider.ModelCatalogStatic,
 		ModelCapabilities: []modeldomain.Capability{

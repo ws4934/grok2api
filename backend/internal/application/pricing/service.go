@@ -41,7 +41,10 @@ type Service struct {
 	repo         repository.ModelPriceRepository
 	isProvider   func(account.Provider) bool
 	pricingModel func(account.Provider, string) string
-	notify       func(context.Context, repository.InvalidationEvent)
+	// officialRates reports whether a provider is billed with the official
+	// xAI rates; nil applies them to every provider.
+	officialRates func(account.Provider) bool
+	notify        func(context.Context, repository.InvalidationEvent)
 
 	// ponytail: one mutex guards the snapshot and its reload (a small query once
 	// per TTL or edit); switch to an atomic snapshot if quoting contends.
@@ -86,6 +89,13 @@ func (s *Service) store(values []pricingdomain.Price) {
 	s.active, s.loadedAt = active, time.Now()
 }
 
+// SetOfficialRates limits the official xAI rates to the providers fn accepts.
+func (s *Service) SetOfficialRates(fn func(account.Provider) bool) { s.officialRates = fn }
+
+func (s *Service) official(provider account.Provider) bool {
+	return s == nil || s.officialRates == nil || s.officialRates(provider)
+}
+
 // custom returns the active administrator price for a quote, if any.
 func (s *Service) custom(provider account.Provider, model string, operation pricingdomain.Operation) (pricingdomain.Price, bool) {
 	if s == nil {
@@ -126,6 +136,9 @@ func (s *Service) QuoteText(provider account.Provider, model string, inputTokens
 	if price, ok := s.custom(provider, model, pricingdomain.OperationText); ok {
 		return price.Quote(price.Breakdown(inputTokens, cachedInputTokens, outputTokens, 0, 0, 0))
 	}
+	if !s.official(provider) {
+		return audit.PricingResult{}, false
+	}
 	return audit.EstimateOfficialCost(model, inputTokens, cachedInputTokens, outputTokens, contextInputTokens)
 }
 
@@ -135,12 +148,18 @@ func (s *Service) QuoteTextReservation(provider account.Provider, model string, 
 		inputTokens, outputTokens := audit.EstimateReservationTokens(body)
 		return price.Quote(price.Breakdown(inputTokens, 0, outputTokens, 0, 0, 0))
 	}
+	if !s.official(provider) {
+		return audit.PricingResult{}, false
+	}
 	return audit.EstimateOfficialTextReservation(model, body)
 }
 
 func (s *Service) QuoteImage(provider account.Provider, model, resolution, quality string, count int) (audit.PricingResult, bool) {
 	if price, ok := s.custom(provider, model, pricingdomain.OperationImage); ok {
 		return price.Quote(price.Breakdown(0, 0, 0, 0, int64(count), 0))
+	}
+	if !s.official(provider) {
+		return audit.PricingResult{}, false
 	}
 	return audit.EstimateOfficialImageCost(model, resolution, quality, count)
 }
@@ -149,12 +168,18 @@ func (s *Service) QuoteImageEdit(provider account.Provider, model, resolution, q
 	if price, ok := s.custom(provider, model, pricingdomain.OperationImageEdit); ok {
 		return price.Quote(price.Breakdown(0, 0, 0, int64(inputCount), int64(outputCount), 0))
 	}
+	if !s.official(provider) {
+		return audit.PricingResult{}, false
+	}
 	return audit.EstimateOfficialImageEditCost(model, resolution, quality, outputCount, inputCount)
 }
 
 func (s *Service) QuoteVideo(provider account.Provider, model, resolution string, seconds, inputImages int) (audit.PricingResult, bool) {
 	if price, ok := s.custom(provider, model, pricingdomain.OperationVideo); ok {
 		return price.Quote(price.Breakdown(0, 0, 0, int64(inputImages), 0, int64(seconds)))
+	}
+	if !s.official(provider) {
+		return audit.PricingResult{}, false
 	}
 	return audit.EstimateOfficialVideoCost(model, resolution, seconds, inputImages)
 }
@@ -163,12 +188,18 @@ func (s *Service) QuoteTTS(provider account.Provider, model, text string) (audit
 	if price, ok := s.custom(provider, model, pricingdomain.OperationTTS); ok {
 		return price.TTSCost(text)
 	}
+	if !s.official(provider) {
+		return audit.PricingResult{}, false
+	}
 	return audit.EstimateOfficialTTSCost(text)
 }
 
 func (s *Service) QuoteSTT(provider account.Provider, model string, durationSeconds float64, streaming bool) (audit.PricingResult, bool) {
 	if price, ok := s.custom(provider, model, pricingdomain.OperationSTT); ok {
 		return price.STTCost(durationSeconds)
+	}
+	if !s.official(provider) {
+		return audit.PricingResult{}, false
 	}
 	return audit.EstimateOfficialSTTCost(durationSeconds, streaming)
 }
@@ -282,6 +313,9 @@ func (s *Service) RoutePrice(route modeldomain.Route) RoutePrice {
 	result := RoutePrice{Source: SourceNone, PricingModel: normalizeModel(route.Provider, model), Operation: operation}
 	if price, ok := s.custom(route.Provider, model, operation); ok {
 		result.Source, result.Price = SourceCustom, &price
+		return result
+	}
+	if !s.official(route.Provider) {
 		return result
 	}
 	official := pricingdomain.Price{Provider: string(route.Provider), PricingModel: result.PricingModel, Operation: operation}

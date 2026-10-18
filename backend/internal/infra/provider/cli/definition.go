@@ -11,7 +11,7 @@ import (
 func (a *Adapter) Definition() provider.Definition {
 	return provider.Definition{
 		Provider:          account.ProviderBuild,
-		Profile:           provider.ProfileSurface{Name: "Grok Build", ShortName: "Build", EgressScopes: []egressdomain.Scope{egressdomain.ScopeBuild}},
+		Profile:           provider.ProfileSurface{Name: "Grok Build", OfficialPricing: true, ShortName: "Build", EgressScopes: []egressdomain.Scope{egressdomain.ScopeBuild}},
 		ModelNamespace:    account.ProviderBuild.ModelNamespace(),
 		ModelCatalog:      provider.ModelCatalogRemote,
 		ModelCapabilities: []modeldomain.Capability{modeldomain.CapabilityResponses, modeldomain.CapabilityVideo},
