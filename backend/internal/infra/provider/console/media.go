@@ -628,23 +628,18 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		}
 		// Persist the marker before the irreversible create and the upstream ID
 		// after it, so recovery polls instead of creating a second job.
-		if err := saveConsoleVideoCheckpoint(request, consoleVideoCheckpoint{Submitting: true}); err != nil {
+		if err := provider.SaveVideoCheckpoint(request, consoleVideoCheckpoint{Submitting: true}); err != nil {
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 		}
 		created, err := a.doConsoleVideoJSON(ctx, request.Credential, token, lease, http.MethodPost, consoleV1Endpoint(baseURL, createPath), body)
 		if err != nil {
-			stage := provider.VideoCreateFailureStage(err)
-			if stage == provider.VideoStageCreate {
-				// Explicitly refused: nothing was created, another account may retry.
-				_ = saveConsoleVideoCheckpoint(request, consoleVideoCheckpoint{})
-			}
-			return provider.VideoResult{}, provider.WrapVideoStage(stage, 0, err)
+			return provider.VideoResult{}, provider.VideoCreateFailed(request, err)
 		}
 		if requestID, err = parseConsoleVideoCreate(created); err != nil {
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, err)
 		}
 		// A failed write only costs resumability; the job itself is running.
-		_ = saveConsoleVideoCheckpoint(request, consoleVideoCheckpoint{RequestID: requestID})
+		_ = provider.SaveVideoCheckpoint(request, consoleVideoCheckpoint{RequestID: requestID})
 	}
 	if request.Progress != nil {
 		request.Progress(1)
@@ -675,20 +670,6 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 type consoleVideoCheckpoint struct {
 	RequestID  string `json:"request_id,omitempty"`
 	Submitting bool   `json:"submitting,omitempty"`
-}
-
-func saveConsoleVideoCheckpoint(request provider.VideoRequest, checkpoint consoleVideoCheckpoint) error {
-	if request.SaveCheckpoint == nil {
-		return nil
-	}
-	if checkpoint == (consoleVideoCheckpoint{}) {
-		return request.SaveCheckpoint("")
-	}
-	data, err := json.Marshal(checkpoint)
-	if err != nil {
-		return err
-	}
-	return request.SaveCheckpoint(string(data))
 }
 
 func (a *Adapter) doConsoleVideoJSON(ctx context.Context, credential account.Credential, token string, lease *infraegress.Lease, method, endpoint string, body []byte) ([]byte, error) {

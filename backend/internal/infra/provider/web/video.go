@@ -254,6 +254,15 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	if strings.TrimSpace(request.ImageURL) != "" || len(request.ReferenceURLs) > 0 {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, fmt.Errorf("Grok Web 当前仅支持文本生视频；图片视频请使用 Build 或 Console Provider"))
 	}
+	var checkpoint webVideoCheckpoint
+	_ = json.Unmarshal([]byte(request.Checkpoint), &checkpoint)
+	if checkpoint.URL != "" {
+		// The stream already delivered the video; only its download was lost.
+		return provider.VideoResult{URL: checkpoint.URL, ContentType: "video/mp4"}, nil
+	}
+	if checkpoint.Submitting {
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, fmt.Errorf("Grok Web 视频已提交，但结果只经由已中断的生成流返回，无法恢复"))
+	}
 	cfg := a.config()
 	token, err := a.cipher.Decrypt(request.Credential.EncryptedAccessToken)
 	if err != nil {
@@ -275,9 +284,12 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		resolution = "720p"
 	}
 	payload := videoCreatePayload(request.Prompt, ratio, resolution, segments[0])
+	if err := provider.SaveVideoCheckpoint(request, webVideoCheckpoint{Submitting: true}); err != nil {
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
+	}
 	response, err := a.postJSON(ctx, cfg, lease, token, cfg.BaseURL+"/rest/app-chat/conversations/new", payload, time.Duration(cfg.VideoTimeoutSeconds)*time.Second)
 	if err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoCreateFailureStage(err), 0, err)
+		return provider.VideoResult{}, provider.VideoCreateFailed(request, err)
 	}
 	result, _, parseErr := parseVideoStream(response, request.Progress)
 	_ = response.Body.Close()
@@ -285,16 +297,27 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		if upstreamErr, ok := parseErr.(*webMediaUpstreamError); ok {
 			a.logWebMediaUpstreamRejection("video_generation", response, upstreamErr)
 		}
-		stage := provider.VideoStagePoll
 		if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-			stage = provider.VideoCreateFailureStage(parseErr)
+			return provider.VideoResult{}, provider.VideoCreateFailed(request, parseErr)
 		}
-		return provider.VideoResult{}, provider.WrapVideoStage(stage, 0, parseErr)
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, parseErr)
 	}
 	if result.URL == "" {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, fmt.Errorf("视频生成完成但没有返回内容 URL"))
 	}
+	// A failed write only costs resuming the download.
+	_ = provider.SaveVideoCheckpoint(request, webVideoCheckpoint{URL: result.URL})
 	return result, nil
+}
+
+// webVideoCheckpoint is the resumable state of one Web video job. The video is
+// generated and delivered over the single create stream, which cannot be
+// reattached and has no verified fetch-by-ID endpoint, so only a delivered URL
+// is resumable; a run lost mid-stream ends as uncertain on recovery instead of
+// generating (and paying for) the video again.
+type webVideoCheckpoint struct {
+	URL        string `json:"url,omitempty"`
+	Submitting bool   `json:"submitting,omitempty"`
 }
 
 // DownloadVideo retrieves a completed Grok asset through its source SSO

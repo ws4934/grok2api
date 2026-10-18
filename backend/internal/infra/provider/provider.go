@@ -643,6 +643,30 @@ type VideoRequest struct {
 	SaveCheckpoint func(string) error
 }
 
+// SaveVideoCheckpoint stores provider state as JSON when the caller persists
+// checkpoints.
+func SaveVideoCheckpoint(request VideoRequest, checkpoint any) error {
+	if request.SaveCheckpoint == nil {
+		return nil
+	}
+	data, err := json.Marshal(checkpoint)
+	if err != nil {
+		return err
+	}
+	return request.SaveCheckpoint(string(data))
+}
+
+// VideoCreateFailed wraps a failed create with its stage. An explicit refusal
+// created nothing, so the submission marker is cleared and another account
+// may retry.
+func VideoCreateFailed(request VideoRequest, err error) error {
+	stage := VideoCreateFailureStage(err)
+	if stage == VideoStageCreate && request.SaveCheckpoint != nil {
+		_ = request.SaveCheckpoint("")
+	}
+	return WrapVideoStage(stage, 0, err)
+}
+
 type VideoResult struct {
 	URL         string
 	ContentType string

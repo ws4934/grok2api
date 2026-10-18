@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -164,6 +165,18 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 	}
 	credential := request.Credential
+	var checkpoint buildVideoCheckpoint
+	_ = json.Unmarshal([]byte(request.Checkpoint), &checkpoint)
+	if checkpoint.RequestID != "" {
+		// Recovery polls the job an earlier run created, on the route it used.
+		if checkpoint.XAI {
+			return a.pollVideoJob(ctx, credential, accessToken, a.fallbackBaseURL(), checkpoint.RequestID, checkpoint.AssetID, xaiVideoRequestProfile, request.Progress)
+		}
+		return a.pollVideoJob(ctx, credential, accessToken, a.primaryBaseURL(), checkpoint.RequestID, "", buildVideoRequestProfile, request.Progress)
+	}
+	if checkpoint.Submitting {
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, errors.New("Build 视频任务已提交但未记录 request_id，无法恢复"))
+	}
 	routeMode := normalizedBuildRouteMode(credential)
 	xaiEligible := account.IsBuildSuper(credential, request.Billing)
 	if routeMode == account.BuildRouteXAI || (routeMode == account.BuildRouteAuto && xaiEligible && a.CredentialMetadata(credential).BuildBotFlagged) {
@@ -179,12 +192,10 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	if err != nil {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 	}
-	createResp, createErr := a.doVideoJSON(ctx, credential, accessToken, http.MethodPost, primaryBase, "/videos/generations", body, buildVideoRequestProfile, true)
+	jobID, createErr := a.createVideoJob(ctx, request, credential, accessToken, primaryBase, body, buildVideoRequestProfile)
 	if createErr == nil {
-		jobID, parseErr := parseVideoCreateResponse(createResp)
-		if parseErr != nil {
-			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, parseErr)
-		}
+		// A failed write only costs resumability; the job itself is running.
+		_ = provider.SaveVideoCheckpoint(request, buildVideoCheckpoint{RequestID: jobID})
 		if request.Progress != nil {
 			request.Progress(1)
 		}
@@ -192,10 +203,10 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	}
 	var upstream *videoUpstreamError
 	if !asVideoUpstreamError(createErr, &upstream) || !isHTTPForbidden(upstream.status) {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoCreateFailureStage(createErr), 0, createErr)
+		return provider.VideoResult{}, createErr
 	}
 	if routeMode == account.BuildRouteBuild || !xaiEligible {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoCreateFailureStage(createErr), 0, createErr)
+		return provider.VideoResult{}, createErr
 	}
 	// 已确认 Super 的主地址 403：签发 upload_url 后探测 XAI；创建成功才标记降级。
 	return a.generateVideoOnXAI(ctx, request, credential, accessToken, true)
@@ -224,15 +235,13 @@ func (a *Adapter) generateVideoOnXAI(ctx context.Context, request provider.Video
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 	}
 	base := a.fallbackBaseURL()
-	createResp, err := a.doVideoJSON(ctx, credential, accessToken, http.MethodPost, base, "/videos/generations", body, xaiVideoRequestProfile, true)
-	if err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoCreateFailureStage(err), 0, err)
-	}
 	// 必须先解析到可用 job ID，再标记降级；畸形 2xx 不得激活或本地置位。
-	jobID, err := parseVideoCreateResponse(createResp)
+	jobID, err := a.createVideoJob(ctx, request, credential, accessToken, base, body, xaiVideoRequestProfile)
 	if err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, err)
+		return provider.VideoResult{}, err
 	}
+	// The result is PUT to assetID, so recovery needs it as well as the job ID.
+	_ = provider.SaveVideoCheckpoint(request, buildVideoCheckpoint{RequestID: jobID, XAI: true, AssetID: assetID})
 	if recordFallback {
 		a.activateBuildAPIFallback(ctx, &credential)
 	}
@@ -240,6 +249,32 @@ func (a *Adapter) generateVideoOnXAI(ctx context.Context, request provider.Video
 		request.Progress(1)
 	}
 	return a.pollVideoJob(ctx, credential, accessToken, base, jobID, assetID, xaiVideoRequestProfile, request.Progress)
+}
+
+// buildVideoCheckpoint is the resumable state of one Build video job.
+type buildVideoCheckpoint struct {
+	RequestID string `json:"request_id,omitempty"`
+	// XAI jobs are polled on the fallback base and delivered to AssetID.
+	XAI        bool   `json:"xai,omitempty"`
+	AssetID    string `json:"asset_id,omitempty"`
+	Submitting bool   `json:"submitting,omitempty"`
+}
+
+// createVideoJob sends the irreversible create. The marker saved before it
+// keeps recovery from creating a second job.
+func (a *Adapter) createVideoJob(ctx context.Context, request provider.VideoRequest, credential account.Credential, accessToken, base string, body []byte, profile videoRequestProfile) (string, error) {
+	if err := provider.SaveVideoCheckpoint(request, buildVideoCheckpoint{Submitting: true}); err != nil {
+		return "", provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
+	}
+	createResp, err := a.doVideoJSON(ctx, credential, accessToken, http.MethodPost, base, "/videos/generations", body, profile, true)
+	if err != nil {
+		return "", provider.VideoCreateFailed(request, err)
+	}
+	jobID, err := parseVideoCreateResponse(createResp)
+	if err != nil {
+		return "", provider.WrapVideoStage(provider.VideoStageSubmitted, 0, err)
+	}
+	return jobID, nil
 }
 
 // DownloadVideo 通过 Build egress 拉取已完成任务的公开 CDN URL。
@@ -496,14 +531,7 @@ func parseVideoStatusResponse(body []byte, progress func(int), allowMissingURL b
 }
 
 func asVideoUpstreamError(err error, target **videoUpstreamError) bool {
-	if err == nil {
-		return false
-	}
-	if v, ok := err.(*videoUpstreamError); ok {
-		*target = v
-		return true
-	}
-	return false
+	return errors.As(err, target)
 }
 
 func extractBuildVideoURL(root map[string]any) string {
