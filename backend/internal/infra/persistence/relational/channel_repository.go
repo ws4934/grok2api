@@ -55,6 +55,7 @@ func channelAccountProjection(a accountModel, x channelAccountModel) (channel.Ac
 	if a.Credential != nil {
 		v.ExpiresAt = a.Credential.ExpiresAt
 	}
+	v.EgressNodeID = a.EgressNodeID
 	if err := json.Unmarshal([]byte(x.ModelsJSON), &v.Models); err != nil {
 		return v, err
 	}

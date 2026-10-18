@@ -22,6 +22,7 @@ type Account struct {
 	Refreshable       bool             `json:"refreshable"`
 	ReplaceDuplicate  bool             `json:"-"`
 	ExpiresAt         *time.Time       `json:"expires_at,omitempty"`
+	EgressNodeID      *uint64          `json:"egress_node_id,omitempty"`
 	SyncedAt          *time.Time       `json:"synced_at,omitempty"`
 	Models            []string         `json:"models"`
 	Quotas            []FeatureQuota   `json:"quotas"`

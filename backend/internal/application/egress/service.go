@@ -1078,7 +1078,7 @@ func scopeSupportsProvider(scope domain.Scope, provider accountdomain.Provider) 
 	case accountdomain.ProviderConsole:
 		return domain.SupportsScope(scope, domain.ScopeConsole)
 	default:
-		return false
+		return domain.IsExtensionScope(scope) && string(scope) == string(provider)
 	}
 }
 
