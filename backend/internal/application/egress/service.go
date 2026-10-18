@@ -459,6 +459,9 @@ func (s *Service) publicNodes(values []domain.Node) []domain.PublicNode {
 }
 
 func validListScope(scope domain.Scope) bool {
+	if domain.IsExtensionScope(scope) {
+		return true
+	}
 	return scope == "" || scope == domain.ScopeBuild || scope == domain.ScopeWeb || scope == domain.ScopeConsole || scope == domain.ScopeWebAsset || scope == domain.ScopeConsoleAsset
 }
 

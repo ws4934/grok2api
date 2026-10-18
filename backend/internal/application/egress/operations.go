@@ -494,7 +494,7 @@ func (s *Service) applySourceInput(value domain.SubscriptionSource, input Subscr
 	if name == "" || len(name) > 160 {
 		return domain.SubscriptionSource{}, fmt.Errorf("%w: 订阅名称必须在 1 到 160 个字符之间", ErrInvalidInput)
 	}
-	if !validScope(input.Scope) {
+	if !validScope(input.Scope) && !domain.IsExtensionScope(input.Scope) {
 		return domain.SubscriptionSource{}, fmt.Errorf("%w: 订阅作用域无效", ErrInvalidInput)
 	}
 	value.Name, value.Scope, value.Enabled = name, input.Scope, input.Enabled
@@ -574,7 +574,7 @@ func allOperationScopes() []domain.Scope {
 }
 
 func validateImportInput(input ImportInput) error {
-	if strings.TrimSpace(input.Name) == "" || len(strings.TrimSpace(input.Name)) > 150 || !validScope(input.Scope) || input.AccountCapacity < 0 || input.AccountCapacity > maxEgressAccountCapacity || strings.TrimSpace(input.Content) == "" {
+	if strings.TrimSpace(input.Name) == "" || len(strings.TrimSpace(input.Name)) > 150 || !validScope(input.Scope) && !domain.IsExtensionScope(input.Scope) || input.AccountCapacity < 0 || input.AccountCapacity > maxEgressAccountCapacity || strings.TrimSpace(input.Content) == "" {
 		return fmt.Errorf("%w: 批量导入参数无效", ErrInvalidInput)
 	}
 	return nil

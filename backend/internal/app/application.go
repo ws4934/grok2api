@@ -443,6 +443,11 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	if err != nil {
 		return nil, err
 	}
+	extensionScopes := []egressdomain.Scope{}
+	for _, d := range channelRegistry.Descriptors() {
+		extensionScopes = append(extensionScopes, egressdomain.Scope(d.ID))
+	}
+	egressdomain.SetExtensionScopes(extensionScopes)
 	channelService := channelapp.NewService(channelRegistry, relational.NewChannelRepository(database), cipher, refreshLock, modelRepo)
 	channelService.SetClientKeys(clientKeyRepo)
 	channelService.SetEnvironment(func(ctx context.Context, p account.Provider, id uint64) (context.Context, func(), error) {

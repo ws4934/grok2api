@@ -2281,7 +2281,7 @@ func isGrokWebScope(scope domain.Scope) bool {
 }
 
 func allEgressScopes() []domain.Scope {
-	return []domain.Scope{domain.ScopeBuild, domain.ScopeWeb, domain.ScopeConsole, domain.ScopeWebAsset, domain.ScopeConsoleAsset}
+	return append([]domain.Scope{domain.ScopeBuild, domain.ScopeWeb, domain.ScopeConsole, domain.ScopeWebAsset, domain.ScopeConsoleAsset}, domain.ExtensionScopes()...)
 }
 
 func (m *Manager) isStickyProxyNode(value domain.Node) bool {
