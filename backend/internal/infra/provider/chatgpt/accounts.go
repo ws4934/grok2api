@@ -261,6 +261,10 @@ func (a *Adapter) MarshalCredentials(values []provider.CredentialSeed) ([]byte, 
 // PrepareImportedCredential exchanges the refresh token of seeds without a
 // usable access token (missing, expired or rejected) and resolves the
 // upstream identity and plan of every seed.
+// importExchangeTimeout bounds an import's refresh-token exchange, which is
+// detached from the request.
+const importExchangeTimeout = 30 * time.Second
+
 func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.CredentialSeed) (provider.CredentialSeed, error) {
 	c := credentialsOf(seed.AccessToken, seed.RefreshToken, seed.State)
 	if !seed.ExpiresAt.IsZero() {
@@ -269,7 +273,11 @@ func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.C
 	pending := pendingCredential(ctx, seed.SourceKey)
 	refreshed := false
 	refresh := func() error {
-		next, err := a.exchange(ctx, pending, map[string]string{"client_id": oauthClientID, "grant_type": "refresh_token", "refresh_token": c.RefreshToken}, c)
+		// ChatGPT spends the submitted refresh token as it answers, so the
+		// exchange outlives a request that leaves and its pair is kept.
+		exchangeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), importExchangeTimeout)
+		defer cancel()
+		next, err := a.exchange(exchangeCtx, pending, map[string]string{"client_id": oauthClientID, "grant_type": "refresh_token", "refresh_token": c.RefreshToken}, c)
 		if err == nil {
 			c, refreshed = next, true
 		}
