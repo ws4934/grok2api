@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { AudioLines, Clapperboard, Image as ImageIcon, MessagesSquare, MessageSquareText, Mic, MoreHorizontal, Paintbrush, Pencil, Plus, Radio, RefreshCw, Search, SquareTerminal, Trash2 } from "lucide-react";
+import { AudioLines, CircleDollarSign, Clapperboard, Image as ImageIcon, MessagesSquare, MessageSquareText, Mic, MoreHorizontal, Paintbrush, Pencil, Plus, Radio, RefreshCw, Search, SquareTerminal, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
@@ -22,9 +22,11 @@ import { Spinner } from "@/components/ui/spinner";
 import { Table, TableActionCell, TableActionHead, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createModel, deleteModel, deleteModels, listModelAccountOptions, listModelGroups, syncModels, updateModel, updateModelsEnabled } from "@/entities/model/model-api";
+import { distinctRoutePrices, priceHeadline, type RoutePriceEntry } from "@/entities/model/model-price";
 import type { ModelEndpointCapability, ModelRouteDTO, ModelRouteGroupDTO } from "@/entities/model/types";
 import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api";
 import { orderedProviderIds, providerColor, providerLabel } from "@/entities/provider/provider-presentation";
+import { ModelPriceDialog, PriceDetails, PriceSourceBadge } from "@/features/models/model-price-dialog";
 import { EmptyState, ErrorState, TableLoadingRow } from "@/shared/components/data-state";
 import { DataTableShell } from "@/shared/components/data-table-shell";
 import { DataTableFilters } from "@/shared/components/data-table-filters";
@@ -50,10 +52,13 @@ export function ModelsPage() {
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [editing, setEditing] = useState<ModelRouteDTO | "new" | null>(null);
   const [deleting, setDeleting] = useState<ModelRouteGroup | null>(null);
+  const [pricing, setPricing] = useState<RoutePriceEntry<ModelRouteDTO> | null>(null);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [accountSearch, setAccountSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search);
   const providers = useProviders().data;
+  // Providers that can register routes, with the capabilities the backend accepts for each.
+  const routeProviders = providers?.filter((provider) => provider.capabilities.length > 0) ?? [];
   const schema = z.object({
     publicId: z.string().min(1, t("errors.required")),
     provider: z.string(),
@@ -176,9 +181,18 @@ export function ModelsPage() {
   }
 
   function beginCreate(): void {
+    const [provider] = routeProviders;
     setEditing("new");
     setAccountSearch("");
-    form.reset({ publicId: "", provider: "grok_build", upstreamModel: "", capability: "responses", enabled: true, bindingMode: false, accountIds: [] });
+    form.reset({ publicId: "", provider: provider?.id ?? "grok_build", upstreamModel: "", capability: provider?.capabilities[0] ?? "responses", enabled: true, bindingMode: false, accountIds: [] });
+  }
+
+  function changeCreateProvider(id: string): void {
+    const capabilities = routeProviders.find((provider) => provider.id === id)?.capabilities ?? [];
+    form.setValue("provider", id);
+    if (!capabilities.includes(form.getValues("capability")) && capabilities[0]) form.setValue("capability", capabilities[0]);
+    form.setValue("accountIds", []);
+    form.clearErrors("accountIds");
   }
 
   function toggleBoundAccount(id: string, checked: boolean): void {
@@ -273,7 +287,7 @@ export function ModelsPage() {
         {modelsQuery.isError ? <ErrorState message={modelsQuery.error.message} onRetry={() => void modelsQuery.refetch()} /> : null}
         {!modelsQuery.isPending && !modelsQuery.isError && result?.items.length === 0 ? <EmptyState /> : null}
         {modelsQuery.isPending || (result && result.items.length > 0) ? (
-          <Table viewportRows={20} rowHeight={56} className="min-w-[1120px] table-fixed text-xs">
+          <Table viewportRows={20} rowHeight={56} className="min-w-[1280px] table-fixed text-xs">
             <colgroup>
               <col className="w-10" />
               <col className="w-56" />
@@ -283,6 +297,7 @@ export function ModelsPage() {
               <col className="w-32" />
               <col className="w-40" />
               <col className="w-44" />
+              <col className="w-40" />
               <col className="w-10" />
             </colgroup>
             <TableHeader>
@@ -295,13 +310,14 @@ export function ModelsPage() {
                 <SortableTableHead field="provider" sortBy={sort.field} sortOrder={sort.order} align="center" onSort={changeSort}>{t("models.provider")}</SortableTableHead>
                 <SortableTableHead field="accountSupport" sortBy={sort.field} sortOrder={sort.order} initialOrder="desc" align="center" onSort={changeSort}>{t("models.accountSupport")}</SortableTableHead>
                 <SortableTableHead field="lastSyncedAt" sortBy={sort.field} sortOrder={sort.order} initialOrder="desc" onSort={changeSort}>{t("models.lastSyncedAt")}</SortableTableHead>
+                <TableHead>{t("models.price")}</TableHead>
                 <TableActionHead />
               </TableRow>
             </TableHeader>
             {modelsQuery.isPending ? (
-              <TableBody><TableLoadingRow colSpan={9} /></TableBody>
+              <TableBody><TableLoadingRow colSpan={10} /></TableBody>
             ) : (
-              <VirtualTableBody items={result?.items ?? []} colSpan={9} rowHeight={56} renderRow={(model) => {
+              <VirtualTableBody items={result?.items ?? []} colSpan={10} rowHeight={56} renderRow={(model) => {
                 const selectedRoutes = model.routes.filter((route) => selected.has(route.id)).length;
                 return (
                 <TableRow className="group h-14" key={model.key} data-state={selectedRoutes > 0 ? "selected" : undefined}>
@@ -322,11 +338,13 @@ export function ModelsPage() {
                     </div>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(model.lastSyncedAt, i18n.language)}</TableCell>
+                  <TableCell className="min-w-0"><ModelPrice prices={model.prices} /></TableCell>
                   <TableActionCell>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" className="size-8" aria-label={t("common.actions")}><MoreHorizontal /></Button></DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         {model.routes.map((route) => <DropdownMenuItem key={route.id} onClick={() => beginEdit(route)}><Pencil />{model.routes.length === 1 ? t("common.edit") : t("models.editCapability", { capability: capabilityLabel(route.capability, t) })}</DropdownMenuItem>)}
+                        {model.prices.map((entry) => <DropdownMenuItem key={`price-${entry.route.id}`} onClick={() => setPricing(entry)}><CircleDollarSign />{model.prices.length === 1 ? t("models.editPrice") : t("models.editPriceFor", { operation: t(`models.priceOperations.${entry.operation}`) })}</DropdownMenuItem>)}
                         <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => setDeleting(model)}><Trash2 />{t("common.delete")}</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -352,16 +370,20 @@ export function ModelsPage() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label>{t("models.provider")}</Label>
-                    <Select value={selectedProvider} disabled>
+                    <Select value={selectedProvider} onValueChange={changeCreateProvider} disabled={routeProviders.length === 0}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent><SelectItem value="grok_build">{providerLabel("grok_build", providers)}</SelectItem></SelectContent>
+                      <SelectContent>
+                        {(routeProviders.length > 0 ? routeProviders.map((provider) => provider.id) : [selectedProvider]).map((id) => <SelectItem key={id} value={id}>{providerLabel(id, providers)}</SelectItem>)}
+                      </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
                     <Label>{t("models.capability")}</Label>
-                    <Select value={selectedCapability} disabled>
+                    <Select value={selectedCapability} onValueChange={(value) => form.setValue("capability", value as ModelRouteDTO["capability"])} disabled={routeProviders.length === 0}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent><SelectItem value="responses">Responses</SelectItem></SelectContent>
+                      <SelectContent>
+                        {(routeProviders.find((provider) => provider.id === selectedProvider)?.capabilities ?? [selectedCapability]).map((capability) => <SelectItem key={capability} value={capability}>{routeCapabilityLabel(capability, t)}</SelectItem>)}
+                      </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2 sm:col-span-2"><Label htmlFor="model-upstream-id">{t("models.upstream")}</Label><Input id="model-upstream-id" {...form.register("upstreamModel")} />{form.formState.errors.upstreamModel ? <p className="text-xs text-destructive">{form.formState.errors.upstreamModel.message}</p> : null}</div>
@@ -419,6 +441,8 @@ export function ModelsPage() {
         </DialogContent>
       </Dialog>
 
+      {pricing ? <ModelPriceDialog key={pricing.route.id} target={pricing} providers={providers} onClose={() => setPricing(null)} /> : null}
+
       <AlertDialog open={Boolean(deleting)} onOpenChange={(open) => !open && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{t("models.deleteTitle")}</AlertDialogTitle><AlertDialogDescription>{t(deleting && deleting.routes.length > 1 ? "models.deleteGroupDescription" : "models.deleteDescription", { name: deleting?.publicId ?? "", count: deleting?.routes.length ?? 0 })}</AlertDialogDescription></AlertDialogHeader>
@@ -442,6 +466,37 @@ function ModelProvider({ provider, providers }: { provider: ModelRouteDTO["provi
       <span className="size-2 rounded-full" style={{ backgroundColor: providerColor(provider, providers) }} />
       {providerLabel(provider, providers)}
     </span>
+  );
+}
+
+function ModelPrice({ prices }: { prices: RoutePriceEntry<ModelRouteDTO>[] }) {
+  const { t } = useTranslation();
+  if (prices.length === 0) return <span className="text-muted-foreground">-</span>;
+  const [{ operation, price }] = prices;
+  const headline = priceHeadline(operation, price);
+  const note = [price.source === "none" ? "" : t(`models.priceSources.${price.source}`), prices.length > 1 ? `+${prices.length - 1}` : ""].filter(Boolean).join(" · ");
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div tabIndex={0} className="min-w-0 cursor-help rounded outline-none focus-visible:ring-2 focus-visible:ring-ring/40">
+          {price.source === "none" ? <PriceSourceBadge source="none" /> : headline.values.length > 0 ? (
+            <span className="block truncate tabular-nums">{headline.values.join(" · ")} <span className="text-muted-foreground">{t(`models.priceUnits.${headline.unit}`)}</span></span>
+          ) : <span className="block truncate text-muted-foreground">{t("models.priceVaries")}</span>}
+          {note ? <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">{note}</span> : null}
+        </div>
+      </TooltipTrigger>
+      <TooltipContent className="w-72 space-y-2.5 text-left">
+        {prices.map((entry) => (
+          <div key={entry.route.id} className="space-y-1">
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="shrink-0 font-medium">{t(`models.priceOperations.${entry.operation}`)} · {t(`models.priceSources.${entry.price.source}`)}</span>
+              <code className="truncate text-[10px] text-primary-foreground/70">{entry.pricingModel}</code>
+            </div>
+            <PriceDetails operation={entry.operation} price={entry.price} labelClassName="text-primary-foreground/65" />
+          </div>
+        ))}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -492,6 +547,7 @@ type ModelRouteGroup = {
   provider: ModelRouteDTO["provider"];
   upstreamModel: string;
   capabilities: ModelDisplayCapability[];
+  prices: RoutePriceEntry<ModelRouteDTO>[];
   enabledState: "enabled" | "disabled" | "mixed";
   bindingState: "automatic" | "bound" | "mixed";
   supportedMax: number;
@@ -520,6 +576,7 @@ function newModelRouteGroup(value: ModelRouteGroupDTO, t: TFunction): ModelRoute
     provider: first.provider,
     upstreamModel: first.upstreamModel,
     capabilities: value.endpointCapabilities,
+    prices: distinctRoutePrices(routes),
     enabledState: enabledCount === routes.length ? "enabled" : enabledCount === 0 ? "disabled" : "mixed",
     bindingState: boundCount === routes.length ? "bound" : boundCount === 0 ? "automatic" : "mixed",
     supportedMax,
@@ -533,6 +590,10 @@ function newModelRouteGroup(value: ModelRouteGroupDTO, t: TFunction): ModelRoute
 function capabilityLabel(capability: ModelRouteDTO["capability"], t: TFunction): string {
   if (capability === "responses" || capability === "chat") return t("models.capabilityConversation");
   return displayCapabilityLabel(capability, t);
+}
+
+function routeCapabilityLabel(capability: ModelRouteDTO["capability"], t: TFunction): string {
+  return capability === "chat" ? t("models.capabilityChat") : displayCapabilityLabel(capability, t);
 }
 
 function displayCapabilityLabel(capability: ModelDisplayCapability, t: TFunction): string {

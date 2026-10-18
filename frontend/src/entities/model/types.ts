@@ -1,3 +1,5 @@
+import type { RoutePriceDTO } from "@/entities/model/model-price";
+
 export type ModelRouteDTO = {
   id: string;
   publicId: string;
@@ -14,6 +16,8 @@ export type ModelRouteDTO = {
   capabilityKnown: boolean;
   available: boolean;
   lastSyncedAt?: string;
+  // Absent when the server has no price book.
+  price?: RoutePriceDTO;
 };
 
 export type ModelEndpointCapability = "completions" | "responses" | "messages" | "image" | "image_edit" | "video" | "tts" | "stt" | "realtime";

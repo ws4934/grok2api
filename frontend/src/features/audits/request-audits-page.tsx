@@ -161,6 +161,7 @@ export function RequestAuditsPage() {
   const cacheRate = summary?.usage.inputTokens ? summary.usage.cachedInputTokens / summary.usage.inputTokens * 100 : 0;
   const estimatedCostTicks = summary?.usage.estimatedCostInUsdTicks ?? 0;
   const hasEstimatedCost = (summary?.pricing.pricedRequests ?? 0) > 0;
+  const customPricedRequests = summary?.pricing.customPricedRequests ?? 0;
   const modelOptions = useMemo(() => [...new Map((modelOptionsQuery.data?.items ?? []).map((model) => [model.publicId, { value: model.publicId, label: model.publicId }])).values()], [modelOptionsQuery.data?.items]);
   const openAudit = useCallback((audit: AuditDTO) => setSelectedAudit(audit), []);
   const renderAuditRow = useCallback((audit: AuditDTO) => <AuditRow key={audit.id} audit={audit} locale={i18n.language} providers={providers} onOpen={openAudit} />, [i18n.language, openAudit, providers]);
@@ -206,7 +207,10 @@ export function RequestAuditsPage() {
             label={t("audits.estimatedCost")}
             value={hasEstimatedCost ? formatUSDTicks(estimatedCostTicks, 2) : "-"}
             fullValue={hasEstimatedCost ? formatUSDTicks(estimatedCostTicks, 10) : undefined}
-            detail={t("audits.pricingCoverage", { priced: formatNumber(summary?.pricing.pricedRequests ?? 0, i18n.language, 0), unpriced: formatNumber(summary?.pricing.unpricedRequests ?? 0, i18n.language, 0) })}
+            detail={[
+              t("audits.pricingCoverage", { priced: formatNumber(summary?.pricing.pricedRequests ?? 0, i18n.language, 0), unpriced: formatNumber(summary?.pricing.unpricedRequests ?? 0, i18n.language, 0) }),
+              customPricedRequests > 0 ? t("audits.customPricedRequests", { count: formatNumber(customPricedRequests, i18n.language, 0) }) : "",
+            ].filter(Boolean).join(" · ")}
             tooltip={t("audits.pricingDescription")}
           />
         </div>
@@ -411,7 +415,7 @@ function BillingValue({ audit }: { audit: AuditDTO }) {
         <Tooltip>
           <TooltipTrigger asChild><span className="block cursor-help whitespace-nowrap text-xs tabular-nums" tabIndex={0}>{amount}</span></TooltipTrigger>
           <TooltipContent className="w-96 max-w-[calc(100vw-2rem)] p-3" side="top" align="start">
-            <BillingBreakdown estimation={audit.estimation} billing={billing} locale={i18n.language} />
+            <BillingBreakdown estimation={audit.estimation} billing={billing} priceId={audit.priceId} locale={i18n.language} />
           </TooltipContent>
         </Tooltip>
       ) : <span className="block whitespace-nowrap text-xs text-muted-foreground">{amount}</span>}
@@ -441,15 +445,16 @@ function fallbackBillingBreakdown(audit: AuditDTO): AuditBillingBreakdownDTO | u
   };
 }
 
-function BillingBreakdown({ billing, locale, estimation }: { billing: AuditBillingBreakdownDTO; locale: string; estimation?: AuditDTO["estimation"] }) {
+function BillingBreakdown({ billing, locale, estimation, priceId }: { billing: AuditBillingBreakdownDTO; locale: string; estimation?: AuditDTO["estimation"]; priceId?: string }) {
   const { t } = useTranslation();
   return (
     <div className="space-y-2.5 text-xs leading-5">
       <div className="space-y-1">
         {estimation?.tokenizer && <BillingDetailRow label="估算规则" value={`${estimation.tokenizer} · 图片 ${estimation.vision_tokens_per_image ?? 0} Token/张 · 本地输出上限 ${estimation.output_limit_tokens ?? 0}${estimation.truncated ? " · 已截断" : ""}`} />}
-        <BillingDetailRow label={t("audits.billingSource")} value={billing.source === "channel" ? "渠道配置价格 / 本地估算" : billing.source === "upstream" ? t("audits.billingSourceUpstream") : t("audits.billingSourceOfficial")} />
+        <BillingDetailRow label={t("audits.billingSource")} value={billing.source === "channel" ? "渠道配置价格 / 本地估算" : billing.source === "upstream" ? t("audits.billingSourceUpstream") : billing.source === "custom" ? t("audits.billingSourceCustom") : t("audits.billingSourceOfficial")} />
         {billing.model ? <BillingDetailRow label={t("audits.billingModel")} value={billing.model} mono /> : null}
         {billing.version ? <BillingDetailRow label={t("audits.billingVersion")} value={billing.version} /> : null}
+        {priceId ? <BillingDetailRow label={t("audits.billingPriceId")} value={`#${priceId}`} mono /> : null}
         {billing.tier === "long_context" ? <BillingDetailRow label={t("audits.billingRateTier")} value={t("audits.billingLongContextTier")} /> : null}
       </div>
       <div className="border-t border-primary-foreground/15 pt-2">

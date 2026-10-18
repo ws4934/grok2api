@@ -1,6 +1,7 @@
+import { decodeRoutePrice, priceComponentKeys, priceOperations, type ModelPriceDTO, type PriceComponents, type PriceOperation } from "@/entities/model/model-price";
 import type { ModelRouteDTO, ModelRouteGroupDTO } from "@/entities/model/types";
 import { ApiError, apiEventStream, apiRequest, type PaginatedDTO } from "@/shared/api/client";
-import { createObjectDecoder, createPaginatedDecoder, decodeBooleanResult, decodeCountResult, hasShape, isArrayOf, isBoolean, isNumber, isOneOf, isOptional, isString } from "@/shared/api/decoder";
+import { createObjectDecoder, createPaginatedDecoder, createValidatedDecoder, decodeBooleanResult, decodeCountResult, hasShape, isArrayOf, isBoolean, isNumber, isOneOf, isOptional, isString, type ApiDecoder } from "@/shared/api/decoder";
 import { i18n } from "@/shared/i18n";
 import type { SortOrder } from "@/shared/lib/table-sort";
 
@@ -41,13 +42,25 @@ const decodeModelRoute = createObjectDecoder<ModelRouteDTO>("model route", {
   enabled: isBoolean, accountIds: isArrayOf(isString), bindingMode: isBoolean, supportedAccounts: isNumber,
   syncedAccounts: isNumber, totalAccounts: isNumber, capabilityKnown: isBoolean, available: isBoolean, lastSyncedAt: isOptional(isString),
 });
-const decodeModelPage = createPaginatedDecoder<ModelRouteDTO>(modelRouteValidator);
+const decodeModelRoutePage = createPaginatedDecoder<ModelRouteDTO>(modelRouteValidator);
+const decodeModelPage: ApiDecoder<PaginatedDTO<ModelRouteDTO>> = (value) => {
+  const page = decodeModelRoutePage(value);
+  return { ...page, items: page.items.map(withRoutePrice) };
+};
+// Route prices decode leniently: a malformed price drops to undefined instead of failing the list.
+function withRoutePrice(route: ModelRouteDTO): ModelRouteDTO {
+  return { ...route, price: decodeRoutePrice(route.price) };
+}
 const modelRouteGroupValidator = hasShape({
   key: isString,
   routes: (value) => Array.isArray(value) && value.length > 0 && value.every(modelRouteValidator),
   endpointCapabilities: isArrayOf(isOneOf("completions", "responses", "messages", "image", "image_edit", "video", "tts", "stt", "realtime")),
 });
-const decodeModelGroupPage = createPaginatedDecoder<ModelRouteGroupDTO>(modelRouteGroupValidator);
+const decodeModelGroupRoutePage = createPaginatedDecoder<ModelRouteGroupDTO>(modelRouteGroupValidator);
+const decodeModelGroupPage: ApiDecoder<PaginatedDTO<ModelRouteGroupDTO>> = (value) => {
+  const page = decodeModelGroupRoutePage(value);
+  return { ...page, items: page.items.map((group) => ({ ...group, routes: group.routes.map(withRoutePrice) })) };
+};
 const modelAccountValidator = hasShape({ id: isString, name: isString });
 const decodeModelAccounts = createObjectDecoder<{ items: ModelAccountOptionDTO[] }>("model accounts", { items: isArrayOf(modelAccountValidator) });
 
@@ -155,4 +168,29 @@ export function deleteModels(ids: string[]): Promise<{ deleted: number }> {
 
 export function updateModelsEnabled(ids: string[], enabled: boolean): Promise<{ updated: number }> {
   return apiRequest("/api/admin/v1/models/batch", { method: "PATCH", body: { ids, enabled } }, decodeCountResult<{ updated: number }>("updated"));
+}
+
+const modelPriceValidator = hasShape({
+  id: isString, provider: isString, pricingModel: isString, operation: isOneOf(...priceOperations),
+  active: isBoolean, createdAt: isString, supersededAt: isOptional(isString),
+  ...Object.fromEntries(priceComponentKeys.map((component) => [component, isOptional(isString)])),
+});
+const decodeModelPrices = createObjectDecoder<{ items: ModelPriceDTO[] }>("model prices", { items: isArrayOf(modelPriceValidator) });
+
+// listModelPrices returns custom prices: active rows, or every version with includeHistory.
+export function listModelPrices(input: { provider: string; model: string; includeHistory?: boolean }): Promise<{ items: ModelPriceDTO[] }> {
+  const query = new URLSearchParams({ provider: input.provider, model: input.model, includeHistory: String(Boolean(input.includeHistory)) });
+  return apiRequest(`/api/admin/v1/model-prices?${query}`, {}, decodeModelPrices);
+}
+
+export type PutModelPriceInput = PriceComponents & { provider: string; pricingModel: string; operation: PriceOperation };
+
+// putModelPrice appends a new active custom price version for provider + pricing model + operation.
+export function putModelPrice(input: PutModelPriceInput): Promise<ModelPriceDTO> {
+  return apiRequest("/api/admin/v1/model-prices", { method: "PUT", body: input }, createValidatedDecoder<ModelPriceDTO>("model price", modelPriceValidator));
+}
+
+// deleteModelPrice supersedes the active custom price; billing falls back to official or unpriced.
+export function deleteModelPrice(id: string): Promise<{ deleted: boolean }> {
+  return apiRequest(`/api/admin/v1/model-prices/${id}`, { method: "DELETE" }, decodeBooleanResult<{ deleted: boolean }>("deleted"));
 }

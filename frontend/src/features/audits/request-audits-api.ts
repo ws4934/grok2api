@@ -14,8 +14,8 @@ export type AuditBillingComponentDTO = {
 };
 
 export type AuditBillingBreakdownDTO = {
-  source: "upstream" | "official" | "channel";
-  method: "upstream_reported" | "official_rates" | "stored_estimate";
+  source: "upstream" | "official" | "custom" | "channel";
+  method: "upstream_reported" | "official_rates" | "custom_rates" | "stored_estimate";
   model?: string;
   version?: string;
   tier?: "standard" | "long_context" | "media";
@@ -57,6 +57,8 @@ export type AuditDTO = {
   estimatedCostInUsdTicks: number;
   pricingModel?: string;
   pricingVersion?: string;
+  // Custom price version used for billing; absent for official or upstream costs.
+  priceId?: string;
   billing?: AuditBillingBreakdownDTO;
   estimation?: { version: number; price_version: number; tokenizer?: string; vision_tokens_per_image?: number; output_limit_tokens?: number; truncated?: boolean; image_job_id?: string; stage?: string; attempt?: number };
   numSourcesUsed: number;
@@ -132,6 +134,8 @@ export type AuditSummaryDTO = {
     unpricedRequests: number;
     pricedTokens: number;
     unpricedTokens: number;
+    // Priced requests billed by an administrator custom price; older servers omit it.
+    customPricedRequests?: number;
   };
 };
 
@@ -140,7 +144,7 @@ const auditBillingComponentValidator = hasShape({
   unit: isOneOf("token", "image", "second"), quantity: isNumber, unitPriceInUsdTicks: isNumber, subtotalInUsdTicks: isNumber,
 });
 const auditBillingValidator = hasShape({
-  source: isOneOf("upstream", "official", "channel"), method: isOneOf("upstream_reported", "official_rates", "stored_estimate"),
+  source: isOneOf("upstream", "official", "custom", "channel"), method: isOneOf("upstream_reported", "official_rates", "custom_rates", "stored_estimate"),
   model: isOptional(isString), version: isOptional(isString), tier: isOptional(isOneOf("standard", "long_context", "media")),
   components: isArrayOf(auditBillingComponentValidator), totalInUsdTicks: isNumber,
 });
@@ -155,7 +159,7 @@ const auditValidator = hasShape({
   statusCode: isNumber, streaming: isBoolean,
   mediaInputImages: isNumber, mediaOutputImages: isNumber, mediaOutputSeconds: isNumber, inputTokens: isNumber,
   cachedInputTokens: isNumber, outputTokens: isNumber, reasoningTokens: isNumber, totalTokens: isNumber,
-  costInUsdTicks: isNumber, estimatedCostInUsdTicks: isNumber, pricingModel: isOptional(isString), pricingVersion: isOptional(isString), billing: isOptional(auditBillingValidator), estimation: isOptional(hasShape({ version:isNumber, price_version:isNumber, tokenizer:isOptional(isString), vision_tokens_per_image:isOptional(isNumber), output_limit_tokens:isOptional(isNumber), truncated:isOptional(isBoolean), image_job_id:isOptional(isString), stage:isOptional(isString), attempt:isOptional(isNumber) })),
+  costInUsdTicks: isNumber, estimatedCostInUsdTicks: isNumber, pricingModel: isOptional(isString), pricingVersion: isOptional(isString), priceId: isOptional(isString), billing: isOptional(auditBillingValidator), estimation: isOptional(hasShape({ version:isNumber, price_version:isNumber, tokenizer:isOptional(isString), vision_tokens_per_image:isOptional(isNumber), output_limit_tokens:isOptional(isNumber), truncated:isOptional(isBoolean), image_job_id:isOptional(isString), stage:isOptional(isString), attempt:isOptional(isNumber) })),
   numSourcesUsed: isNumber, numServerSideToolsUsed: isNumber, contextInputTokens: isNumber, contextOutputTokens: isNumber,
   firstTokenMs: isOptional(isNumber), outputTokensPerSecond: isOptional(isNumber),
   durationMs: isNumber, errorCode: isOptional(isString), requestMethod: isOptional(isString), requestPath: isOptional(isString),
@@ -179,7 +183,7 @@ const decodeAuditSummary = createObjectDecoder<AuditSummaryDTO>("audit summary",
     averageDurationMs: isNumber, successRate: isNumber, estimatedCostInUsdTicks: isNumber,
   }),
   pricing: hasShape({
-    source: isString, asOf: isString, pricedRequests: isNumber, unpricedRequests: isNumber, pricedTokens: isNumber, unpricedTokens: isNumber,
+    source: isString, asOf: isString, pricedRequests: isNumber, unpricedRequests: isNumber, pricedTokens: isNumber, unpricedTokens: isNumber, customPricedRequests: isOptional(isNumber),
   }),
 });
 const decodeAuditDetail = createObjectDecoder<AuditDetailDTO>("audit detail", {
