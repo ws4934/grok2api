@@ -46,6 +46,8 @@ type accountModel struct {
 	LastUsedAt       *time.Time
 	ObservedModel    string `gorm:"size:255;check:chk_accounts_observed_model,length(observed_model) <= 255"`
 	ObservedModelAt  *time.Time
+	// Plan is the provider subscription label; empty when unknown.
+	Plan string `gorm:"size:64;not null;default:''"`
 	// BuildAPIFallback 仅对 grok_build 有意义：XAI 推理回退标记；其他 Provider 保持 false。
 	BuildAPIFallback bool `gorm:"not null;default:false"`
 	// BuildRouteMode 仅控制 grok_build 推理地址；其它 Provider 固定 auto。
@@ -73,6 +75,7 @@ type accountCredentialModel struct {
 	EncryptedPrimary                string `gorm:"type:text;not null;default:'';check:chk_account_credentials_secret,(encrypted_primary <> '' OR encrypted_refresh <> '') AND length(encrypted_primary) <= 65536 AND length(encrypted_refresh) <= 65536"`
 	EncryptedRefresh                string `gorm:"type:text;not null;default:''"`
 	EncryptedCloudflareCookie       string `gorm:"type:text;not null;default:'';check:chk_account_credentials_cf_cookie,length(encrypted_cloudflare_cookie) <= 65536"`
+	EncryptedState                  string `gorm:"type:text;not null;default:''"` // provider-owned state, encrypted JSON object
 	ExpiresAt                       *time.Time
 	RefreshDueAt                    *time.Time
 	LastRefreshAt                   *time.Time

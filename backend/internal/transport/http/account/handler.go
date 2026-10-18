@@ -17,8 +17,11 @@ import (
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	accountsyncapp "github.com/chenyme/grok2api/backend/internal/application/accountsync"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
+	admindomain "github.com/chenyme/grok2api/backend/internal/domain/admin"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -38,6 +41,7 @@ type accountModelSynchronizer interface {
 const (
 	maxAccountImportBytes         = 30 << 20
 	maxAccountImportFiles         = 1000
+	maxAuthCompleteBodyBytes      = 64 << 10
 	accountSyncQueueCapacity      = 20
 	accountEventHeartbeatInterval = 15 * time.Second
 	accountEventWriteTimeout      = 30 * time.Second
@@ -137,19 +141,17 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.GET("/accounts/export", h.exportCredentials)
 	router.POST("/accounts/export", h.exportSelectedCredentials)
 	router.GET("/accounts/:id", h.get)
-	router.POST("/accounts/device/start", h.startDevice)
-	router.POST("/accounts/device/:sessionId/poll", h.pollDevice)
-	router.POST("/accounts/import", h.importAuth)
-	router.POST("/accounts/web/import", h.importWebAuth)
-	router.POST("/accounts/console/import", h.importConsoleAuth)
+	// Provider-keyed routes live under the catalog resource; /accounts/:provider would clash with /accounts/:id.
+	router.POST("/providers/:provider/accounts/import", h.importAuth)
+	router.POST("/providers/:provider/accounts/auth/start", h.startAuthorization)
+	router.POST("/providers/:provider/accounts/auth/:sessionId/complete", h.completeAuthorization)
+	router.POST("/providers/:provider/accounts/refresh-quotas", h.refreshProviderQuotas)
 	router.POST("/accounts/web/convert-to-build", h.convertWebToBuild)
 	router.POST("/accounts/web/sync-to-console", h.syncWebToConsole)
 	router.POST("/accounts/web/run-scripts", h.runWebAccountScripts)
-	router.POST("/accounts/web/refresh-quotas", h.refreshAllWebQuotas)
 	router.POST("/accounts/web/:id/accept-terms", h.acceptWebTerms)
 	router.POST("/accounts/web/:id/birth-date", h.setWebBirthDate)
 	router.POST("/accounts/web/:id/nsfw", h.enableWebNSFW)
-	router.POST("/accounts/console/refresh-quotas", h.refreshAllConsoleQuotas)
 	router.POST("/accounts/refresh-billing", h.refreshAllBilling)
 	router.POST("/accounts/reset-quota", h.resetAllBuildQuota)
 	router.POST("/accounts/refresh-tokens", h.refreshAllTokens)
@@ -279,10 +281,22 @@ type accountImportResponse struct {
 	SyncFailed int `json:"syncFailed"`
 }
 
+type authStartResponse struct {
+	SessionID               string    `json:"sessionId"`
+	Kind                    string    `json:"kind"`
+	ExpiresAt               time.Time `json:"expiresAt"`
+	VerificationURI         string    `json:"verificationUri,omitempty"`
+	VerificationURIComplete string    `json:"verificationUriComplete,omitempty"`
+	UserCode                string    `json:"userCode,omitempty"`
+	IntervalSeconds         int       `json:"intervalSeconds,omitempty"`
+	AuthorizeURL            string    `json:"authorizeUrl,omitempty"`
+}
+
 type accountResponse struct {
 	ID                       uint64     `json:"id,string"`
 	Provider                 string     `json:"provider"`
 	AuthType                 string     `json:"authType"`
+	Plan                     string     `json:"plan"`
 	WebTier                  string     `json:"webTier,omitempty"`
 	WebTierSyncedAt          *time.Time `json:"webTierSyncedAt,omitempty"`
 	WebNSFWEnabledAt         *time.Time `json:"nsfwEnabledAt,omitempty"`
@@ -543,8 +557,8 @@ func (h *Handler) batchRefreshBilling(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
 	}
-	if request.Provider != string(accountdomain.ProviderBuild) {
-		response.Error(c, http.StatusBadRequest, "invalidProvider", "仅 Grok Build 账号支持 Billing 同步")
+	if definition, ok := h.service.ProviderDefinition(accountdomain.Provider(request.Provider)); ok && definition.Quota != provider.QuotaBilling {
+		response.Error(c, http.StatusBadRequest, "invalidProvider", "该账号来源不支持 Billing 同步")
 		return
 	}
 	if !h.validateProviderIDs(c, ids, request.Provider) {
@@ -712,16 +726,12 @@ func (h *Handler) batchRefreshQuotas(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
 	}
-	providerValue := accountdomain.Provider(request.Provider)
-	if !providerValue.IsValid() {
-		response.Error(c, http.StatusBadRequest, "invalidProvider", "账号来源无效")
-		return
-	}
 	if !h.validateProviderIDs(c, ids, request.Provider) {
 		return
 	}
+	definition, _ := h.service.ProviderDefinition(accountdomain.Provider(request.Provider))
 	var succeeded, failed int
-	if providerValue == accountdomain.ProviderBuild {
+	if definition.Quota == provider.QuotaBilling {
 		succeeded, failed, err = h.service.BatchRefreshBilling(c.Request.Context(), ids)
 	} else {
 		succeeded, failed, err = h.service.BatchRefreshQuota(c.Request.Context(), ids)
@@ -744,8 +754,8 @@ func (h *Handler) batchRefreshTokens(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
 	}
-	if request.Provider != string(accountdomain.ProviderBuild) {
-		response.Error(c, http.StatusBadRequest, "invalidProvider", "仅 Grok Build 账号支持凭据刷新")
+	if definition, ok := h.service.ProviderDefinition(accountdomain.Provider(request.Provider)); ok && !definition.Credential.Refresh {
+		response.Error(c, http.StatusBadRequest, "invalidProvider", "该账号来源不支持凭据刷新")
 		return
 	}
 	if !h.validateProviderIDs(c, ids, request.Provider) {
@@ -772,54 +782,72 @@ func (h *Handler) get(c *gin.Context) {
 	response.Success(c, http.StatusOK, newAccountResponse(value))
 }
 
-func (h *Handler) startDevice(c *gin.Context) {
-	value, err := h.service.StartDeviceLogin(c.Request.Context())
-	if err != nil {
-		response.Error(c, http.StatusBadGateway, "deviceLoginStartFailed", "启动 Device OAuth 失败")
+func (h *Handler) startAuthorization(c *gin.Context) {
+	providerValue, ok := h.pathProvider(c)
+	if !ok {
 		return
 	}
-	response.Success(c, http.StatusCreated, gin.H{"sessionId": value.SessionID, "userCode": value.UserCode, "verificationUri": value.VerificationURI, "verificationUriComplete": value.VerificationURIComplete, "intervalSeconds": int(value.Interval.Seconds()), "expiresAt": value.ExpiresAt})
+	adminID, ok := currentAdminID(c)
+	if !ok {
+		return
+	}
+	value, err := h.service.StartAuthorization(c.Request.Context(), providerValue, adminID)
+	if err != nil {
+		h.writeServiceError(c, "authorizationStartFailed", err, http.StatusBadGateway, "启动账号授权失败")
+		return
+	}
+	response.Success(c, http.StatusCreated, authStartResponse{
+		SessionID: value.SessionID, Kind: value.Kind, ExpiresAt: value.ExpiresAt,
+		VerificationURI: value.VerificationURI, VerificationURIComplete: value.VerificationURIComplete, UserCode: value.UserCode,
+		IntervalSeconds: int(value.Interval.Seconds()), AuthorizeURL: value.AuthorizeURL,
+	})
 }
 
-func (h *Handler) pollDevice(c *gin.Context) {
-	value, err := h.service.PollDeviceLogin(c.Request.Context(), c.Param("sessionId"))
-	if errors.Is(err, accountapp.ErrDevicePending) {
+// completeAuthorization polls a device login (empty body) or finishes a redirect login with {callbackUrl}.
+func (h *Handler) completeAuthorization(c *gin.Context) {
+	providerValue, ok := h.pathProvider(c)
+	if !ok {
+		return
+	}
+	adminID, ok := currentAdminID(c)
+	if !ok {
+		return
+	}
+	var request struct {
+		CallbackURL string `json:"callbackUrl"`
+	}
+	raw, err := io.ReadAll(io.LimitReader(c.Request.Body, maxAuthCompleteBodyBytes+1))
+	if err != nil || len(raw) > maxAuthCompleteBodyBytes {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
+		return
+	}
+	if len(bytes.TrimSpace(raw)) > 0 && json.Unmarshal(raw, &request) != nil {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
+		return
+	}
+	value, err := h.service.CompleteAuthorization(c.Request.Context(), providerValue, c.Param("sessionId"), adminID, strings.TrimSpace(request.CallbackURL))
+	switch {
+	case errors.Is(err, accountapp.ErrAuthPending):
 		response.Success(c, http.StatusAccepted, gin.H{"status": "pending"})
 		return
-	}
-	if errors.Is(err, accountapp.ErrDeviceSlowDown) {
+	case errors.Is(err, accountapp.ErrAuthSlowDown):
 		response.Error(c, http.StatusTooManyRequests, "devicePollTooFast", "轮询过快，请稍后重试")
 		return
-	}
-	if errors.Is(err, accountapp.ErrDeviceDenied) {
-		response.Error(c, http.StatusGone, "deviceLoginExpired", "Device OAuth 已拒绝或过期")
+	case errors.Is(err, accountapp.ErrAuthExpired):
+		response.Error(c, http.StatusGone, "deviceLoginExpired", "账号授权已拒绝或过期")
 		return
-	}
-	if err != nil {
-		response.Error(c, http.StatusBadGateway, "deviceLoginFailed", "Device OAuth 登录失败")
+	case errors.Is(err, accountapp.ErrInvalidInput):
+		response.Error(c, http.StatusBadRequest, "invalidRequest", err.Error())
+		return
+	case err != nil:
+		h.writeServiceError(c, "deviceLoginFailed", err, http.StatusBadGateway, "账号授权失败")
 		return
 	}
 	syncResult := h.syncInitial(c.Request.Context(), value.Credential.ID)
 	if refreshed, refreshErr := h.service.Get(c.Request.Context(), value.Credential.ID); refreshErr == nil {
 		value = refreshed
 	}
-	status := "succeeded"
-	if syncResult.Failed > 0 {
-		status = "syncFailed"
-	}
-	response.Success(c, http.StatusOK, gin.H{"status": status, "account": newAccountResponse(value), "synced": syncResult.Succeeded, "syncFailed": syncResult.Failed})
-}
-
-func (h *Handler) importAuth(c *gin.Context) {
-	h.importFile(c, accountdomain.ProviderBuild)
-}
-
-func (h *Handler) importWebAuth(c *gin.Context) {
-	h.importFile(c, accountdomain.ProviderWeb)
-}
-
-func (h *Handler) importConsoleAuth(c *gin.Context) {
-	h.importFile(c, accountdomain.ProviderConsole)
+	response.Success(c, http.StatusOK, gin.H{"status": "completed", "account": newAccountResponse(value), "synced": syncResult.Succeeded, "syncFailed": syncResult.Failed})
 }
 
 func (h *Handler) convertWebToBuild(c *gin.Context) {
@@ -1058,14 +1086,17 @@ func writeAccountEvent(c *gin.Context, event string, value any) error {
 	return (&accountEventStream{context: c}).Write(event, value)
 }
 
-func (h *Handler) importFile(c *gin.Context, providerValue accountdomain.Provider) {
-	fileDescription := "账号凭据 JSON、逐行 JSON 或 refresh token 文本"
-	if providerValue == accountdomain.ProviderWeb {
-		fileDescription = "Grok Web JSON、逐行 JSON 或 SSO 文本"
-	} else if providerValue == accountdomain.ProviderConsole {
-		fileDescription = "Grok Console JSON、逐行 JSON 或 SSO 文本"
+func (h *Handler) importAuth(c *gin.Context) {
+	providerValue, ok := h.pathProvider(c)
+	if !ok {
+		return
 	}
-	documents, ok := readAccountImportDocuments(c, fileDescription)
+	definition, _ := h.service.ProviderDefinition(providerValue)
+	if !definition.Credential.Import {
+		response.Error(c, http.StatusConflict, "accountOperationUnsupported", "该账号来源不支持导入")
+		return
+	}
+	documents, ok := readAccountImportDocuments(c, definition.DisplayName()+" 账号凭据（JSON、逐行 JSON 或文本）")
 	if !ok {
 		return
 	}
@@ -1073,15 +1104,7 @@ func (h *Handler) importFile(c *gin.Context, providerValue accountdomain.Provide
 	defer stream.Close()
 	var total atomic.Int64
 	pipeline := h.startSyncPipeline(c.Request.Context(), stream.SyncProgressObserver())
-	var result accountapp.ImportResult
-	var err error
-	if providerValue == accountdomain.ProviderWeb {
-		result, err = h.service.ImportWebCredentialDocumentsWithProgress(pipeline.ctx, documents, pipeline.Observe, stream.PhaseProgressObserver("importing", &total))
-	} else if providerValue == accountdomain.ProviderConsole {
-		result, err = h.service.ImportConsoleCredentialDocumentsWithProgress(pipeline.ctx, documents, pipeline.Observe, stream.PhaseProgressObserver("importing", &total))
-	} else {
-		result, err = h.service.ImportCredentialDocumentsWithProgress(pipeline.ctx, documents, pipeline.Observe, stream.PhaseProgressObserver("importing", &total))
-	}
+	result, err := h.service.ImportCredentialDocumentsWithProgress(pipeline.ctx, providerValue, documents, pipeline.Observe, stream.PhaseProgressObserver("importing", &total))
 	syncResult := pipeline.Finish(err != nil)
 	if err != nil {
 		stream.WriteError("authImportFailed", "导入账号失败")
@@ -1157,7 +1180,7 @@ func (h *Handler) refreshWebQuota(c *gin.Context) {
 }
 
 func (h *Handler) exportCredentials(c *gin.Context) {
-	providerValue := accountdomain.Provider(c.DefaultQuery("provider", string(accountdomain.ProviderBuild)))
+	providerValue := accountdomain.Provider(c.Query("provider"))
 	if limitText, pagedExport := c.GetQuery("limit"); pagedExport {
 		if _, usesOffset := c.GetQuery("offset"); usesOffset {
 			response.Error(c, http.StatusBadRequest, "accountExportFailed", "分批导出不支持 offset，请使用服务端返回的 afterId")
@@ -1178,6 +1201,9 @@ func (h *Handler) exportCredentials(c *gin.Context) {
 			response.Error(c, http.StatusBadRequest, "accountExportFailed", "导出快照上界必须为非负整数")
 			return
 		}
+		if !h.registeredProvider(c, providerValue) {
+			return
+		}
 		result, exportErr := h.service.ExportProviderCredentialsCursor(c.Request.Context(), providerValue, afterID, snapshotMaxID, limit)
 		if exportErr != nil {
 			h.writeServiceError(c, "accountExportFailed", exportErr, http.StatusInternalServerError, "导出账号失败")
@@ -1187,6 +1213,9 @@ func (h *Handler) exportCredentials(c *gin.Context) {
 		c.Header("X-Export-Snapshot-Max-ID", strconv.FormatUint(result.SnapshotMaxID, 10))
 		c.Header("X-Export-Has-More", strconv.FormatBool(result.HasMore))
 		h.writeCredentialExport(c, providerValue, result.ExportResult)
+		return
+	}
+	if !h.registeredProvider(c, providerValue) {
 		return
 	}
 	result, err := h.service.ExportProviderCredentials(c.Request.Context(), providerValue)
@@ -1209,6 +1238,9 @@ func (h *Handler) exportSelectedCredentials(c *gin.Context) {
 		return
 	}
 	providerValue := accountdomain.Provider(request.Provider)
+	if !h.registeredProvider(c, providerValue) {
+		return
+	}
 	result, err := h.service.ExportProviderCredentialsByIDs(c.Request.Context(), providerValue, ids)
 	if err != nil {
 		h.writeServiceError(c, "accountExportFailed", err, http.StatusInternalServerError, "导出账号失败")
@@ -1471,23 +1503,17 @@ func (h *Handler) refreshAllTokens(c *gin.Context) {
 	_ = stream.Write("complete", accountTokenRefreshResponse{Succeeded: succeeded, Failed: failed, Skipped: skipped})
 }
 
-func (h *Handler) refreshAllWebQuotas(c *gin.Context) {
-	stream := newAccountEventStream(c)
-	defer stream.Close()
-	succeeded, failed, err := h.service.SyncAllWebQuotasWithProgress(c.Request.Context(), stream.ProgressObserver())
-	if err != nil {
-		stream.WriteError("quotaRefreshFailed", "同步 Grok Web 账号额度失败")
+// refreshProviderQuotas syncs every enabled account of the provider: quota windows or billing, per its Definition.
+func (h *Handler) refreshProviderQuotas(c *gin.Context) {
+	providerValue, ok := h.pathProvider(c)
+	if !ok {
 		return
 	}
-	_ = stream.Write("complete", accountBatchResponse{Succeeded: succeeded, Failed: failed})
-}
-
-func (h *Handler) refreshAllConsoleQuotas(c *gin.Context) {
 	stream := newAccountEventStream(c)
 	defer stream.Close()
-	succeeded, failed, err := h.service.SyncAllConsoleQuotasWithProgress(c.Request.Context(), stream.ProgressObserver())
+	succeeded, failed, err := h.service.SyncAllQuotasWithProgress(c.Request.Context(), providerValue, stream.ProgressObserver())
 	if err != nil {
-		stream.WriteError("quotaRefreshFailed", "同步 Grok Console 账号额度失败")
+		stream.WriteError("quotaRefreshFailed", "同步账号额度失败")
 		return
 	}
 	_ = stream.Write("complete", accountBatchResponse{Succeeded: succeeded, Failed: failed})
@@ -1500,7 +1526,7 @@ func newAccountResponse(value accountapp.View) accountResponse {
 		buildRouteMode = accountdomain.BuildRouteAuto
 	}
 	result := accountResponse{
-		ID: c.ID, Provider: string(c.Provider), AuthType: string(c.AuthType), WebTier: string(c.WebTier),
+		ID: c.ID, Provider: string(c.Provider), AuthType: string(c.AuthType), Plan: c.Plan, WebTier: string(c.WebTier),
 		WebTierSyncedAt: c.WebTierSyncedAt, WebNSFWEnabledAt: c.WebNSFWEnabledAt, WebTermsAcceptedAt: c.WebTermsAcceptedAt, Name: c.Name, Email: c.Email, UserID: c.UserID, TeamID: c.TeamID,
 		Enabled: c.Enabled, AuthStatus: string(c.AuthStatus), Refreshable: c.EncryptedRefreshToken != "",
 		RefreshDueAt: c.RefreshDueAt, LastRefreshAt: c.LastRefreshAt,
@@ -1597,13 +1623,41 @@ func parseIDs(values []string) ([]uint64, error) {
 	return ids, nil
 }
 
-func (h *Handler) validateProviderIDs(c *gin.Context, ids []uint64, providerValue string) bool {
-	provider := accountdomain.Provider(providerValue)
-	if !provider.IsValid() {
+// pathProvider resolves the provider named in the route; providers missing from the registry are 404.
+func (h *Handler) pathProvider(c *gin.Context) (accountdomain.Provider, bool) {
+	value := accountdomain.Provider(c.Param("provider"))
+	if _, ok := h.service.ProviderDefinition(value); !ok {
+		response.Error(c, http.StatusNotFound, "providerNotFound", "账号来源不存在")
+		return "", false
+	}
+	return value, true
+}
+
+// registeredProvider rejects request-body providers that are not in the registry.
+func (h *Handler) registeredProvider(c *gin.Context, value accountdomain.Provider) bool {
+	if _, ok := h.service.ProviderDefinition(value); !ok {
 		response.Error(c, http.StatusBadRequest, "invalidProvider", "账号来源无效")
 		return false
 	}
-	valid, err := h.service.AccountsBelongToProvider(c.Request.Context(), ids, provider)
+	return true
+}
+
+func currentAdminID(c *gin.Context) (uint64, bool) {
+	value, _ := c.Get(middleware.AdminKey)
+	adminValue, ok := value.(admindomain.Admin)
+	if !ok || adminValue.ID == 0 {
+		response.Error(c, http.StatusUnauthorized, "adminUnauthorized", "管理员登录已失效")
+		return 0, false
+	}
+	return adminValue.ID, true
+}
+
+func (h *Handler) validateProviderIDs(c *gin.Context, ids []uint64, providerValue string) bool {
+	value := accountdomain.Provider(providerValue)
+	if !h.registeredProvider(c, value) {
+		return false
+	}
+	valid, err := h.service.AccountsBelongToProvider(c.Request.Context(), ids, value)
 	if err != nil {
 		h.writeServiceError(c, "accountPoolValidationFailed", err, http.StatusInternalServerError, "校验账号号池失败")
 		return false

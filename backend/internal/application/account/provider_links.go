@@ -13,10 +13,10 @@ import (
 
 type providerLinkRepository interface {
 	ReconcileProviderLinks(ctx context.Context, accountID uint64) error
-	UpdateIdentityMetadata(ctx context.Context, accountID uint64, email, userID, teamID string) error
+	UpdateIdentityMetadata(ctx context.Context, accountID uint64, email, userID, teamID, plan string) error
 }
 
-// SyncAccountIdentity best-effort fills stable Web/Console identity metadata and reconciles trusted links.
+// SyncAccountIdentity best-effort fills identity metadata (incl. plan) for providers that report it and reconciles trusted links.
 // Definitive unauthorized signals mark the current Provider account as reauthRequired and remove it from scheduling;
 // other synchronization failures do not affect account health.
 func (s *Service) SyncAccountIdentity(ctx context.Context, id uint64) error {
@@ -35,21 +35,18 @@ func (s *Service) syncAccountIdentity(ctx context.Context, id uint64) error {
 	if err != nil {
 		return mapRepositoryError(err)
 	}
-	if value.Provider != accountdomain.ProviderWeb && value.Provider != accountdomain.ProviderConsole {
-		return nil
-	}
-	// Web Gateway 要求 uid 为 UUID，因此旧账号即使已经保存 email，也必须用
-	// SSO Session 补齐或纠正 user_id。Console 不依赖 Gateway uid，继续沿用
-	// 任一稳定身份字段已存在即不重复访问上游的行为。
-	if accountIdentityComplete(value) {
-		return mapRepositoryError(links.ReconcileProviderLinks(ctx, id))
-	}
 	if s.providers == nil {
 		return fmt.Errorf("Provider 注册表未初始化")
 	}
 	adapter, ok := s.providers.AccountIdentity(value.Provider)
 	if !ok {
 		return nil
+	}
+	// Web Gateway 要求 uid 为 UUID，因此旧账号即使已经保存 email，也必须用
+	// SSO Session 补齐或纠正 user_id。其他 Provider 沿用任一稳定身份字段
+	// 已存在即不重复访问上游的行为。
+	if accountIdentityComplete(value) {
+		return mapRepositoryError(links.ReconcileProviderLinks(ctx, id))
 	}
 	identity, err := adapter.SyncAccountIdentity(ctx, value)
 	if err != nil {
@@ -68,7 +65,7 @@ func (s *Service) syncAccountIdentity(ctx context.Context, id uint64) error {
 			return fmt.Errorf("Grok Web Session 未返回合法的 Gateway 用户 UUID")
 		}
 	}
-	if err := links.UpdateIdentityMetadata(ctx, id, identity.Email, identity.UserID, identity.TeamID); err != nil {
+	if err := links.UpdateIdentityMetadata(ctx, id, identity.Email, identity.UserID, identity.TeamID, identity.Plan); err != nil {
 		return mapRepositoryError(err)
 	}
 	return mapRepositoryError(links.ReconcileProviderLinks(ctx, id))

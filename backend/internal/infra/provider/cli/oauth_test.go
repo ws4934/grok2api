@@ -177,15 +177,15 @@ func TestOAuthDeviceFlowMatchesOfficialWireContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if authorization.DeviceCode != "device" || authorization.UserCode != "ABCD-EFGH" || authorization.Interval != 5*time.Second || authorization.ExpiresIn != 30*time.Minute {
+	if authorization.Kind != provider.AuthorizationDevice || authorization.State != "device" || authorization.UserCode != "ABCD-EFGH" || authorization.Interval != 5*time.Second || authorization.ExpiresIn != 30*time.Minute {
 		t.Fatalf("authorization = %#v", authorization)
 	}
 
 	version = "0.2.112"
-	if _, err := client.pollDevice(context.Background(), authorization.DeviceCode); !errors.Is(err, provider.ErrAuthorizationPending) {
+	if _, err := client.pollDevice(context.Background(), authorization.State); !errors.Is(err, provider.ErrAuthorizationPending) {
 		t.Fatalf("poll error = %v", err)
 	}
-	tokens, err := client.pollDevice(context.Background(), authorization.DeviceCode)
+	tokens, err := client.pollDevice(context.Background(), authorization.State)
 	if err != nil {
 		t.Fatal(err)
 	}

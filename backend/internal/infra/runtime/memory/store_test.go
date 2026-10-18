@@ -135,12 +135,12 @@ func TestDeviceSessionStoreCleansExpiredAndStaysBounded(t *testing.T) {
 	ctx := context.Background()
 	store := NewDeviceSessionStore()
 	now := time.Now().UTC()
-	if err := store.Create(ctx, account.DeviceSession{ID: "expired", ExpiresAt: now.Add(-time.Minute)}); err != nil {
+	if err := store.Create(ctx, account.AuthSession{ID: "expired", ExpiresAt: now.Add(-time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	for index := range maxDeviceSessions + 1 {
 		id := fmt.Sprintf("session-%d", index)
-		if err := store.Create(ctx, account.DeviceSession{ID: id, ExpiresAt: now.Add(time.Duration(index+1) * time.Minute)}); err != nil {
+		if err := store.Create(ctx, account.AuthSession{ID: id, ExpiresAt: now.Add(time.Duration(index+1) * time.Minute)}); err != nil {
 			t.Fatal(err)
 		}
 	}

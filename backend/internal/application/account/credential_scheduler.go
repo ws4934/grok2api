@@ -21,7 +21,7 @@ type CredentialStartupReport struct {
 func (s *Service) ReconcileCredentialSchedules(ctx context.Context) (int, error) {
 	total := 0
 	for {
-		count, err := s.accounts.BackfillCredentialRefreshSchedules(ctx, s.now(), credentialRefreshBatchSize)
+		count, err := s.accounts.BackfillCredentialRefreshSchedules(ctx, s.refreshableProviders(), s.now(), credentialRefreshBatchSize)
 		total += count
 		if err != nil || count < credentialRefreshBatchSize {
 			return total, err
@@ -41,7 +41,7 @@ func (s *Service) RecoverCriticalCredentials(ctx context.Context, expiresWithin 
 		limit = credentialRefreshBatchSize
 	}
 	now := s.now()
-	ids, err := s.accounts.ListCriticalCredentialRefreshIDs(ctx, now, now.Add(expiresWithin), limit)
+	ids, err := s.accounts.ListCriticalCredentialRefreshIDs(ctx, s.refreshableProviders(), now, now.Add(expiresWithin), limit)
 	if err != nil {
 		return report, err
 	}
@@ -113,7 +113,7 @@ func (s *Service) refreshDueCredentials(ctx context.Context) error {
 		return err
 	}
 	for {
-		ids, err := s.accounts.ListDueCredentialRefreshIDs(ctx, s.now(), credentialRefreshBatchSize)
+		ids, err := s.accounts.ListDueCredentialRefreshIDs(ctx, s.refreshableProviders(), s.now(), credentialRefreshBatchSize)
 		if err != nil {
 			return err
 		}
@@ -155,7 +155,7 @@ func (s *Service) refreshDueCredentials(ctx context.Context) error {
 }
 
 func (s *Service) nextCredentialRefreshDelay(ctx context.Context) (time.Duration, error) {
-	next, err := s.accounts.NextCredentialRefreshDueAt(ctx)
+	next, err := s.accounts.NextCredentialRefreshDueAt(ctx, s.refreshableProviders())
 	if err != nil {
 		return 0, err
 	}

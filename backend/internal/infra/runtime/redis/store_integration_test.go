@@ -195,12 +195,12 @@ func TestRedisRuntimeStoreIntegration(t *testing.T) {
 	}
 
 	deviceStore := NewDeviceSessionStore(store)
-	session := account.DeviceSession{ID: "device", DeviceCode: "code", ExpiresAt: expiresAt}
+	session := account.AuthSession{ID: "device", Provider: account.ProviderBuild, AdminID: 7, Kind: "device", EncryptedState: "sealed", ExpiresAt: expiresAt}
 	if err := deviceStore.Create(ctx, session); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := deviceStore.Get(ctx, session.ID, time.Now().UTC()); err != nil {
-		t.Fatal(err)
+	if stored, err := deviceStore.Get(ctx, session.ID, time.Now().UTC()); err != nil || stored.AdminID != 7 || stored.EncryptedState != "sealed" || stored.Provider != account.ProviderBuild {
+		t.Fatalf("stored auth session = %#v, err = %v", stored, err)
 	}
 	if err := deviceStore.Delete(ctx, session.ID); err != nil {
 		t.Fatal(err)

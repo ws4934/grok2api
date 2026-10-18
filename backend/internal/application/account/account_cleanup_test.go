@@ -35,7 +35,7 @@ func TestCleanupAccountsDeletesOnlySelectedCurrentStatuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	repo := relational.NewAccountRepository(database)
-	service := NewService(repo, nil, nil, memory.NewStickyStore(), nil, cipher, nil)
+	service := NewService(repo, nil, nil, memory.NewStickyStore(), grokTestRegistry(), cipher, nil)
 	service.now = func() time.Time { return now }
 
 	create := func(name string, providerValue accountdomain.Provider, mutate func(*accountdomain.Credential)) uint64 {
@@ -84,7 +84,7 @@ func TestCleanupAccountsDeletesOnlySelectedCurrentStatuses(t *testing.T) {
 }
 
 func TestCleanupAccountsRequiresStatus(t *testing.T) {
-	service := NewService(nil, nil, nil, nil, nil, nil, nil)
+	service := NewService(nil, nil, nil, nil, grokTestRegistry(), nil, nil)
 	if _, err := service.CleanupAccounts(context.Background(), accountdomain.ProviderBuild, nil, nil); err == nil {
 		t.Fatal("empty cleanup status unexpectedly succeeded")
 	}

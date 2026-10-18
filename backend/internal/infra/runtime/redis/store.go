@@ -861,7 +861,7 @@ func (s *Store) RescheduleQuotaRecovery(ctx context.Context, value account.Quota
 	return nil
 }
 
-func (s *Store) Create(ctx context.Context, value account.DeviceSession) error {
+func (s *Store) Create(ctx context.Context, value account.AuthSession) error {
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -871,7 +871,7 @@ func (s *Store) Create(ctx context.Context, value account.DeviceSession) error {
 		return repository.ErrNotFound
 	}
 	now := time.Now().UTC()
-	result, err := createDeviceSessionScript.Run(ctx, s.client, []string{s.key("device", value.ID), s.key("device-index", "sessions")}, payload, now.UnixMilli(), ttl.Milliseconds(), maxDeviceSessions, value.ExpiresAt.UnixMilli()).Int()
+	result, err := createDeviceSessionScript.Run(ctx, s.client, []string{s.key("auth-session", value.ID), s.key("auth-session-index", "sessions")}, payload, now.UnixMilli(), ttl.Milliseconds(), maxDeviceSessions, value.ExpiresAt.UnixMilli()).Int()
 	if err != nil {
 		return err
 	}
@@ -881,26 +881,26 @@ func (s *Store) Create(ctx context.Context, value account.DeviceSession) error {
 	return nil
 }
 
-func (s *Store) GetDevice(ctx context.Context, id string, now time.Time) (account.DeviceSession, error) {
-	payload, err := s.client.Get(ctx, s.key("device", id)).Bytes()
+func (s *Store) GetAuthSession(ctx context.Context, id string, now time.Time) (account.AuthSession, error) {
+	payload, err := s.client.Get(ctx, s.key("auth-session", id)).Bytes()
 	if errors.Is(err, redisclient.Nil) {
-		return account.DeviceSession{}, repository.ErrNotFound
+		return account.AuthSession{}, repository.ErrNotFound
 	}
 	if err != nil {
-		return account.DeviceSession{}, err
+		return account.AuthSession{}, err
 	}
-	var value account.DeviceSession
+	var value account.AuthSession
 	if err := json.Unmarshal(payload, &value); err != nil {
-		return account.DeviceSession{}, err
+		return account.AuthSession{}, err
 	}
 	if !now.Before(value.ExpiresAt) {
-		_ = deleteDeviceSessionScript.Run(ctx, s.client, []string{s.key("device", id), s.key("device-index", "sessions")}).Err()
-		return account.DeviceSession{}, repository.ErrNotFound
+		_ = deleteDeviceSessionScript.Run(ctx, s.client, []string{s.key("auth-session", id), s.key("auth-session-index", "sessions")}).Err()
+		return account.AuthSession{}, repository.ErrNotFound
 	}
 	return value, nil
 }
 
-func (s *Store) Update(ctx context.Context, value account.DeviceSession) error {
+func (s *Store) Update(ctx context.Context, value account.AuthSession) error {
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -909,7 +909,7 @@ func (s *Store) Update(ctx context.Context, value account.DeviceSession) error {
 	if ttl <= 0 {
 		return repository.ErrNotFound
 	}
-	result, err := updateDeviceSessionScript.Run(ctx, s.client, []string{s.key("device", value.ID), s.key("device-index", "sessions")}, payload, ttl.Milliseconds(), value.ExpiresAt.UnixMilli()).Int()
+	result, err := updateDeviceSessionScript.Run(ctx, s.client, []string{s.key("auth-session", value.ID), s.key("auth-session-index", "sessions")}, payload, ttl.Milliseconds(), value.ExpiresAt.UnixMilli()).Int()
 	if err != nil {
 		return err
 	}
@@ -920,7 +920,7 @@ func (s *Store) Update(ctx context.Context, value account.DeviceSession) error {
 }
 
 func (s *Store) Delete(ctx context.Context, id string) error {
-	return deleteDeviceSessionScript.Run(ctx, s.client, []string{s.key("device", id), s.key("device-index", "sessions")}).Err()
+	return deleteDeviceSessionScript.Run(ctx, s.client, []string{s.key("auth-session", id), s.key("auth-session-index", "sessions")}).Err()
 }
 
 func (s *Store) acquireLock(ctx context.Context, key string, ttl time.Duration) (func(), bool, error) {
@@ -957,13 +957,13 @@ type DeviceSessionStore struct{ store *Store }
 func NewDeviceSessionStore(store *Store) *DeviceSessionStore {
 	return &DeviceSessionStore{store: store}
 }
-func (s *DeviceSessionStore) Create(ctx context.Context, value account.DeviceSession) error {
+func (s *DeviceSessionStore) Create(ctx context.Context, value account.AuthSession) error {
 	return s.store.Create(ctx, value)
 }
-func (s *DeviceSessionStore) Get(ctx context.Context, id string, now time.Time) (account.DeviceSession, error) {
-	return s.store.GetDevice(ctx, id, now)
+func (s *DeviceSessionStore) Get(ctx context.Context, id string, now time.Time) (account.AuthSession, error) {
+	return s.store.GetAuthSession(ctx, id, now)
 }
-func (s *DeviceSessionStore) Update(ctx context.Context, value account.DeviceSession) error {
+func (s *DeviceSessionStore) Update(ctx context.Context, value account.AuthSession) error {
 	return s.store.Update(ctx, value)
 }
 func (s *DeviceSessionStore) Delete(ctx context.Context, id string) error {

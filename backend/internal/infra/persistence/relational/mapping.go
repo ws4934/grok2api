@@ -33,13 +33,14 @@ func toAccountDomain(value accountModel) account.Credential {
 	var lastRefreshErrorResponse string
 	var refreshPermanent bool
 	var authType account.AuthType
-	var clientID, encryptedPrimary, encryptedRefresh, encryptedCloudflareCookie string
+	var clientID, encryptedPrimary, encryptedRefresh, encryptedCloudflareCookie, encryptedState string
 	if value.Credential != nil {
 		authType = account.AuthType(value.Credential.AuthType)
 		clientID = value.Credential.ClientID
 		encryptedPrimary = value.Credential.EncryptedPrimary
 		encryptedRefresh = value.Credential.EncryptedRefresh
 		encryptedCloudflareCookie = value.Credential.EncryptedCloudflareCookie
+		encryptedState = value.Credential.EncryptedState
 		// The account-level Cloudflare cookie is intentionally never exposed by
 		// the transport DTO; it is only used when constructing the upstream Cookie header.
 		if value.Credential.ExpiresAt != nil {
@@ -81,6 +82,7 @@ func toAccountDomain(value accountModel) account.Credential {
 		ID: value.ID, Provider: account.Provider(value.Provider), AuthType: authType, Name: value.Name, Email: value.Email,
 		UserID: value.UserID, TeamID: value.TeamID, SourceKey: value.SourceKey, OIDCClientID: clientID,
 		EncryptedAccessToken: encryptedPrimary, EncryptedRefreshToken: encryptedRefresh, EncryptedCloudflareCookie: encryptedCloudflareCookie,
+		EncryptedState: encryptedState, Plan: value.Plan,
 		ExpiresAt: expiresAt, RefreshDueAt: refreshDueAt, LastRefreshAt: lastRefreshAt,
 		RefreshFailureCount: refreshFailures, RefreshUnclassifiedAuthCount: refreshUnclassifiedAuthFailures, LastRefreshErrorStatus: lastRefreshErrorStatus, LastRefreshErrorCode: lastRefreshError, LastRefreshErrorMessage: lastRefreshErrorMessage, LastRefreshErrorResponse: lastRefreshErrorResponse, RefreshPermanent: refreshPermanent,
 		Enabled: value.Enabled, AuthStatus: account.AuthStatus(value.AuthStatus), ReauthMarkedAt: value.ReauthMarkedAt, Priority: value.Priority,
@@ -104,7 +106,7 @@ func toCredentialMaterialDomain(value accountCredentialModel, provider account.P
 	return account.CredentialMaterial{
 		AccountID: value.AccountID, Provider: provider, AuthType: account.AuthType(value.AuthType), OIDCClientID: value.ClientID,
 		EncryptedAccessToken: value.EncryptedPrimary, EncryptedRefreshToken: value.EncryptedRefresh,
-		EncryptedCloudflareCookie: value.EncryptedCloudflareCookie, ExpiresAt: expiresAt,
+		EncryptedCloudflareCookie: value.EncryptedCloudflareCookie, EncryptedState: value.EncryptedState, ExpiresAt: expiresAt,
 		RefreshDueAt: value.RefreshDueAt, LastRefreshAt: value.LastRefreshAt,
 		RefreshFailureCount: value.RefreshFailures, RefreshUnclassifiedAuthCount: value.RefreshUnclassifiedAuthFailures, LastRefreshErrorStatus: value.LastRefreshErrorStatus, LastRefreshErrorCode: value.LastRefreshError, LastRefreshErrorMessage: value.LastRefreshErrorMessage, LastRefreshErrorResponse: value.LastRefreshErrorResponse,
 		RefreshPermanent: value.RefreshPermanent, UpdatedAt: value.UpdatedAt,
@@ -125,7 +127,7 @@ func fromAccountDomain(value account.Credential) accountModel {
 		Enabled: value.Enabled, AuthStatus: string(value.AuthStatus), ReauthMarkedAt: value.ReauthMarkedAt, Priority: value.Priority,
 		MaxConcurrent: value.MaxConcurrent, MinimumRemaining: value.MinimumRemaining, FailureCount: value.FailureCount,
 		CooldownUntil: value.CooldownUntil, LastError: value.LastError, LastUsedAt: value.LastUsedAt,
-		ObservedModel: value.ObservedModel, ObservedModelAt: value.ObservedModelAt,
+		ObservedModel: value.ObservedModel, ObservedModelAt: value.ObservedModelAt, Plan: truncate(strings.TrimSpace(value.Plan), 64),
 		BuildAPIFallback: buildAPIFallback, BuildRouteMode: string(buildRouteMode), BuildSuperEntitled: buildSuperEntitled,
 		EgressNodeID: egressNodeID(value.EgressNodeID), EgressAssignmentMode: string(value.EgressAssignmentMode), EgressAssignedAt: value.EgressAssignedAt,
 		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
@@ -169,8 +171,8 @@ func fromAccountCredentialDomain(value account.Credential) accountCredentialMode
 	return accountCredentialModel{
 		AccountID: value.ID, AuthType: string(authType), ClientID: value.OIDCClientID,
 		EncryptedPrimary: value.EncryptedAccessToken, EncryptedRefresh: value.EncryptedRefreshToken,
-		EncryptedCloudflareCookie: value.EncryptedCloudflareCookie,
-		ExpiresAt:                 expiresAt, RefreshDueAt: refreshDueAt, LastRefreshAt: value.LastRefreshAt,
+		EncryptedCloudflareCookie: value.EncryptedCloudflareCookie, EncryptedState: value.EncryptedState,
+		ExpiresAt: expiresAt, RefreshDueAt: refreshDueAt, LastRefreshAt: value.LastRefreshAt,
 		RefreshFailures: value.RefreshFailureCount, RefreshUnclassifiedAuthFailures: value.RefreshUnclassifiedAuthCount, LastRefreshErrorStatus: value.LastRefreshErrorStatus, LastRefreshError: value.LastRefreshErrorCode, LastRefreshErrorMessage: value.LastRefreshErrorMessage, LastRefreshErrorResponse: value.LastRefreshErrorResponse, RefreshPermanent: value.RefreshPermanent,
 		BuildBotFlagSource: normalizeBuildBotFlagSource(value.Provider, value.BuildBotFlagSource),
 		UpdatedAt:          time.Now().UTC(),

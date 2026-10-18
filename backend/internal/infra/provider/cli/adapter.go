@@ -1056,16 +1056,18 @@ func (a *Adapter) RefreshCredential(ctx context.Context, credential account.Cred
 	return provider.RefreshedCredential{EncryptedAccessToken: accessEncrypted, EncryptedRefreshToken: refreshEncrypted, ExpiresAt: tokens.ExpiresAt, RefreshTokenRotated: tokens.RefreshTokenRotated}, nil
 }
 
-func (a *Adapter) StartDeviceAuthorization(ctx context.Context) (provider.DeviceAuthorization, error) {
+// StartAuthorization starts xAI Device OAuth; the device code is the challenge state.
+func (a *Adapter) StartAuthorization(ctx context.Context) (provider.AuthorizationChallenge, error) {
 	ctx, cancel := context.WithTimeout(ctx, buildControlTimeout)
 	defer cancel()
 	return a.oauth.startDevice(ctx)
 }
 
-func (a *Adapter) PollDeviceAuthorization(ctx context.Context, deviceCode string) (provider.CredentialSeed, error) {
+// CompleteAuthorization polls the device code once; the input is unused.
+func (a *Adapter) CompleteAuthorization(ctx context.Context, challenge provider.AuthorizationChallenge, _ string) (provider.CredentialSeed, error) {
 	ctx, cancel := context.WithTimeout(ctx, buildControlTimeout)
 	defer cancel()
-	tokens, err := a.oauth.pollDevice(ctx, deviceCode)
+	tokens, err := a.oauth.pollDevice(ctx, challenge.State)
 	if err != nil {
 		return provider.CredentialSeed{}, err
 	}

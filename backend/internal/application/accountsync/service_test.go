@@ -213,9 +213,10 @@ func TestSyncAccountUsesQuotaForConsoleProvider(t *testing.T) {
 }
 
 func TestSyncAccountIgnoresBestEffortSSOIdentityFailure(t *testing.T) {
-	for _, providerValue := range []accountdomain.Provider{accountdomain.ProviderWeb, accountdomain.ProviderConsole} {
-		t.Run(string(providerValue), func(t *testing.T) {
-			reader := &identityAccountReaderStub{accountReaderStub: accountReaderStub{provider: providerValue}, err: errors.New("session unavailable")}
+	// Identity sync is capability-driven: any provider's account goes through it.
+	for _, stub := range []accountReaderStub{{provider: accountdomain.ProviderWeb}, {provider: accountdomain.ProviderConsole}, {provider: "acme_chat", quota: provider.QuotaRemoteWindow}} {
+		t.Run(string(stub.provider), func(t *testing.T) {
+			reader := &identityAccountReaderStub{accountReaderStub: stub, err: errors.New("session unavailable")}
 			quota := &quotaStub{}
 			models := &modelStub{hasSnapshot: true}
 			service := NewService(slog.Default(), reader, &billingStub{}, quota, models)
@@ -231,9 +232,9 @@ func TestSyncAccountIgnoresBestEffortSSOIdentityFailure(t *testing.T) {
 }
 
 func TestSyncAccountStopsAfterSSOIdentityUnauthorized(t *testing.T) {
-	for _, providerValue := range []accountdomain.Provider{accountdomain.ProviderWeb, accountdomain.ProviderConsole} {
-		t.Run(string(providerValue), func(t *testing.T) {
-			reader := &identityAccountReaderStub{accountReaderStub: accountReaderStub{provider: providerValue}, err: provider.ErrUnauthorized}
+	for _, stub := range []accountReaderStub{{provider: accountdomain.ProviderWeb}, {provider: accountdomain.ProviderConsole}, {provider: "acme_chat", quota: provider.QuotaRemoteWindow}} {
+		t.Run(string(stub.provider), func(t *testing.T) {
+			reader := &identityAccountReaderStub{accountReaderStub: stub, err: provider.ErrUnauthorized}
 			quota := &quotaStub{}
 			models := &modelStub{hasSnapshot: true}
 			service := NewService(slog.Default(), reader, &billingStub{}, quota, models)
@@ -439,14 +440,6 @@ func (a *countingAdapter) ForwardResponse(context.Context, provider.ResponseReso
 
 func (a *countingAdapter) RefreshCredential(context.Context, accountdomain.Credential) (provider.RefreshedCredential, error) {
 	return provider.RefreshedCredential{}, nil
-}
-
-func (a *countingAdapter) StartDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
-	return provider.DeviceAuthorization{}, nil
-}
-
-func (a *countingAdapter) PollDeviceAuthorization(context.Context, string) (provider.CredentialSeed, error) {
-	return provider.CredentialSeed{}, nil
 }
 
 func (a *countingAdapter) ParseImportedCredentials([]byte) ([]provider.CredentialSeed, error) {

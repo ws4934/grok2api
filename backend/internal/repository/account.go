@@ -141,11 +141,13 @@ type AccountRepository interface {
 	ListAutoCleanReauthCandidates(ctx context.Context, markedBefore time.Time, includeDisabled bool, afterID uint64, limit int) ([]uint64, error)
 	// DeleteAutoCleanReauthCandidates 在事务内重新校验状态与年龄并跳过活动视频任务，返回实际删除 ID。
 	DeleteAutoCleanReauthCandidates(ctx context.Context, markedBefore time.Time, includeDisabled bool, candidateIDs []uint64) ([]uint64, error)
-	UpdateTokens(ctx context.Context, id uint64, accessToken, refreshToken string, expiresAt time.Time, buildBotFlagSource int) (account.Credential, error)
-	BackfillCredentialRefreshSchedules(ctx context.Context, now time.Time, limit int) (int, error)
-	ListCriticalCredentialRefreshIDs(ctx context.Context, now, expiresBefore time.Time, limit int) ([]uint64, error)
-	ListDueCredentialRefreshIDs(ctx context.Context, now time.Time, limit int) ([]uint64, error)
-	NextCredentialRefreshDueAt(ctx context.Context) (*time.Time, error)
+	// UpdateTokens stores rotated tokens; empty refreshToken or state keeps the stored value.
+	UpdateTokens(ctx context.Context, id uint64, accessToken, refreshToken, state string, expiresAt time.Time, buildBotFlagSource int) (account.Credential, error)
+	// The credential refresh schedule queries cover only the given refreshable providers.
+	BackfillCredentialRefreshSchedules(ctx context.Context, providers []account.Provider, now time.Time, limit int) (int, error)
+	ListCriticalCredentialRefreshIDs(ctx context.Context, providers []account.Provider, now, expiresBefore time.Time, limit int) ([]uint64, error)
+	ListDueCredentialRefreshIDs(ctx context.Context, providers []account.Provider, now time.Time, limit int) ([]uint64, error)
+	NextCredentialRefreshDueAt(ctx context.Context, providers []account.Provider) (*time.Time, error)
 	UpdateCredentialRefreshFailure(ctx context.Context, id uint64, failure CredentialRefreshFailure) error
 	UpdateObservedModel(ctx context.Context, id uint64, model string, observedAt time.Time) error
 	UpdateHealth(ctx context.Context, id uint64, provider account.Provider, failureCount int, cooldownUntil *time.Time, lastError string, success bool) error
@@ -180,5 +182,6 @@ type AccountRepository interface {
 	ExhaustQuotaWindow(ctx context.Context, accountID uint64, mode string, resetAt *time.Time, now time.Time) error
 	ListDueQuotaWindows(ctx context.Context, now time.Time, limit int) ([]account.QuotaWindow, error)
 	ListQuotaRecoveryWindows(ctx context.Context, limit int) ([]account.QuotaWindow, error)
-	ListStaleWebQuotaAccountIDs(ctx context.Context, before time.Time, limit int) ([]uint64, error)
+	// ListStaleQuotaAccountIDs returns active accounts of the given providers whose quota windows are missing or older than before.
+	ListStaleQuotaAccountIDs(ctx context.Context, providers []account.Provider, before time.Time, limit int) ([]uint64, error)
 }

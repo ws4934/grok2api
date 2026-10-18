@@ -84,7 +84,7 @@ func TestImportRefreshTokensPersistsSuccessfulRotations(t *testing.T) {
 	repository := relational.NewAccountRepository(database)
 	service := NewService(repository, nil, nil, nil, provider.NewRegistry(rtImportAdapter{}), cipher, nil)
 	progress := make([][2]int, 0, 3)
-	result, err := service.ImportCredentialsWithProgress(ctx, []byte("ignored"), nil, func(completed, total int) error {
+	result, err := service.ImportCredentialDocumentsWithProgress(ctx, accountdomain.ProviderBuild, [][]byte{[]byte("ignored")}, nil, func(completed, total int) error {
 		progress = append(progress, [2]int{completed, total})
 		return nil
 	})
@@ -137,7 +137,7 @@ func TestImportRefreshTokenPersistsRotationWhenRequestCancelsAfterExchange(t *te
 	}
 	repository := relational.NewAccountRepository(database)
 	service := NewService(repository, nil, nil, nil, provider.NewRegistry(cancelingRTImportAdapter{cancel: cancel}), cipher, nil)
-	result, err := service.ImportCredentials(ctx, []byte("ignored"))
+	result, err := service.ImportCredentialDocumentsWithProgress(ctx, accountdomain.ProviderBuild, [][]byte{[]byte("ignored")}, nil, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context canceled", err)
 	}
@@ -178,7 +178,7 @@ func TestImportRefreshTokenPersistsRotationBeforeProgressFailure(t *testing.T) {
 	service := NewService(repository, nil, nil, nil, provider.NewRegistry(cancelingRTImportAdapter{cancel: func() {}}), cipher, nil)
 	progressFailure := errors.New("progress stream closed")
 	progressCalls := 0
-	result, err := service.ImportCredentialsWithProgress(ctx, []byte("ignored"), nil, func(_, _ int) error {
+	result, err := service.ImportCredentialDocumentsWithProgress(ctx, accountdomain.ProviderBuild, [][]byte{[]byte("ignored")}, nil, func(_, _ int) error {
 		progressCalls++
 		if progressCalls > 1 {
 			return progressFailure

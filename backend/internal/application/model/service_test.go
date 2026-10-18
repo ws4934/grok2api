@@ -570,12 +570,6 @@ func (a *modelCapabilityAdapter) GetBilling(context.Context, account.Credential)
 func (a *modelCapabilityAdapter) RefreshCredential(context.Context, account.Credential) (provider.RefreshedCredential, error) {
 	return provider.RefreshedCredential{}, nil
 }
-func (a *modelCapabilityAdapter) StartDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
-	return provider.DeviceAuthorization{}, nil
-}
-func (a *modelCapabilityAdapter) PollDeviceAuthorization(context.Context, string) (provider.CredentialSeed, error) {
-	return provider.CredentialSeed{}, nil
-}
 func (a *modelCapabilityAdapter) ParseImportedCredentials([]byte) ([]provider.CredentialSeed, error) {
 	return nil, nil
 }

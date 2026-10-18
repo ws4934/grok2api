@@ -193,7 +193,7 @@ func TestEnsureCredentialRefreshesWhenAccessTokenIsMissing(t *testing.T) {
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	service, credential, adapter := newCredentialRefreshTestService(t, now)
 	service.now = func() time.Time { return now }
-	credential, err := service.accounts.UpdateTokens(ctx, credential.ID, "", "refresh-only", now.Add(time.Hour), 0)
+	credential, err := service.accounts.UpdateTokens(ctx, credential.ID, "", "refresh-only", "", now.Add(time.Hour), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestStartupRecoveryRefreshesExpiredCredential(t *testing.T) {
 	now := time.Now().UTC()
 	service, credential, adapter := newCredentialRefreshTestService(t, now)
 	service.now = func() time.Time { return now }
-	expired, err := service.accounts.UpdateTokens(context.Background(), credential.ID, credential.EncryptedAccessToken, credential.EncryptedRefreshToken, now.Add(-time.Minute), 0)
+	expired, err := service.accounts.UpdateTokens(context.Background(), credential.ID, credential.EncryptedAccessToken, credential.EncryptedRefreshToken, "", now.Add(-time.Minute), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +316,7 @@ func TestStartupRecoveryRespectsContextBudget(t *testing.T) {
 	now := time.Now().UTC()
 	service, credential, adapter := newCredentialRefreshTestService(t, now)
 	service.now = func() time.Time { return now }
-	if _, err := service.accounts.UpdateTokens(context.Background(), credential.ID, credential.EncryptedAccessToken, credential.EncryptedRefreshToken, now.Add(-time.Minute), 0); err != nil {
+	if _, err := service.accounts.UpdateTokens(context.Background(), credential.ID, credential.EncryptedAccessToken, credential.EncryptedRefreshToken, "", now.Add(-time.Minute), 0); err != nil {
 		t.Fatal(err)
 	}
 	adapter.delay = time.Second
@@ -348,14 +348,14 @@ func TestCredentialRefreshDueQueryStaysBoundedForLargePool(t *testing.T) {
 	if _, err := service.accounts.UpsertManyByIdentity(ctx, values); err != nil {
 		t.Fatal(err)
 	}
-	ids, err := service.accounts.ListDueCredentialRefreshIDs(ctx, now, credentialRefreshBatchSize)
+	ids, err := service.accounts.ListDueCredentialRefreshIDs(ctx, service.refreshableProviders(), now, credentialRefreshBatchSize)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ids) != credentialRefreshBatchSize {
 		t.Fatalf("due batch size = %d", len(ids))
 	}
-	next, err := service.accounts.NextCredentialRefreshDueAt(ctx)
+	next, err := service.accounts.NextCredentialRefreshDueAt(ctx, service.refreshableProviders())
 	if err != nil || next == nil || next.After(now) {
 		t.Fatalf("next due = %v, err = %v", next, err)
 	}
@@ -391,14 +391,14 @@ func TestCredentialRefreshFailureDistinguishesTransientAndPermanent(t *testing.T
 	if permanent.AuthStatus != accountdomain.AuthStatusActive || permanent.RefreshFailureCount != 2 || permanent.LastRefreshErrorStatus != 400 || permanent.LastRefreshErrorCode != "invalid_grant" || permanent.LastRefreshErrorMessage != "Refresh token has expired" || permanent.LastRefreshErrorResponse == "" || !permanent.RefreshPermanent || permanent.RefreshDueAt == nil || !permanent.RefreshDueAt.Equal(permanent.ExpiresAt) {
 		t.Fatalf("permanent with valid token should stay active: %#v", permanent)
 	}
-	dueIDs, err := service.accounts.ListDueCredentialRefreshIDs(ctx, now, credentialRefreshBatchSize)
+	dueIDs, err := service.accounts.ListDueCredentialRefreshIDs(ctx, service.refreshableProviders(), now, credentialRefreshBatchSize)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(dueIDs) != 0 {
 		t.Fatalf("permanent refresh failure remained immediately due: %#v", dueIDs)
 	}
-	dueAtExpiry, err := service.accounts.ListDueCredentialRefreshIDs(ctx, permanent.ExpiresAt, credentialRefreshBatchSize)
+	dueAtExpiry, err := service.accounts.ListDueCredentialRefreshIDs(ctx, service.refreshableProviders(), permanent.ExpiresAt, credentialRefreshBatchSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +429,7 @@ func TestCredentialRefreshFailureDistinguishesTransientAndPermanent(t *testing.T
 	service.clearRefreshState(credential.ID)
 	expiredCredential := permanent
 	expiredCredential.ExpiresAt = now.Add(-time.Minute)
-	if _, err := service.accounts.UpdateTokens(ctx, permanent.ID, permanent.EncryptedAccessToken, permanent.EncryptedRefreshToken, expiredCredential.ExpiresAt, 0); err != nil {
+	if _, err := service.accounts.UpdateTokens(ctx, permanent.ID, permanent.EncryptedAccessToken, permanent.EncryptedRefreshToken, "", expiredCredential.ExpiresAt, 0); err != nil {
 		t.Fatal(err)
 	}
 	adapter.refreshErr = &provider.CredentialRefreshError{Status: 400, Code: "invalid_grant", Permanent: true}
@@ -890,14 +890,6 @@ func (a *credentialRefreshAdapter) GetBilling(context.Context, accountdomain.Cre
 	}
 	a.billingCount.Add(1)
 	return a.billing, a.billingErr
-}
-
-func (a *credentialRefreshAdapter) StartDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
-	return provider.DeviceAuthorization{}, nil
-}
-
-func (a *credentialRefreshAdapter) PollDeviceAuthorization(context.Context, string) (provider.CredentialSeed, error) {
-	return provider.CredentialSeed{}, nil
 }
 
 func (a *credentialRefreshAdapter) ParseImportedCredentials([]byte) ([]provider.CredentialSeed, error) {

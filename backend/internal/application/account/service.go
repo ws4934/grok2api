@@ -28,9 +28,6 @@ import (
 )
 
 var (
-	ErrDevicePending       = errors.New("Device OAuth 等待用户授权")
-	ErrDeviceSlowDown      = errors.New("Device OAuth 轮询过快")
-	ErrDeviceDenied        = errors.New("Device OAuth 已拒绝或过期")
 	ErrInvalidFilter       = errors.New("账号筛选条件无效")
 	ErrInvalidInput        = errors.New("账号参数无效")
 	ErrInvalidImport       = errors.New("账号凭据格式无效")
@@ -223,15 +220,6 @@ const (
 	CleanupStatusReauthRequired CleanupStatus = "reauthRequired"
 )
 
-type DeviceStartResult struct {
-	SessionID               string
-	UserCode                string
-	VerificationURI         string
-	VerificationURIComplete string
-	Interval                time.Duration
-	ExpiresAt               time.Time
-}
-
 type ImportResult struct {
 	Created    int
 	Updated    int
@@ -352,8 +340,12 @@ func (s *Service) Summary(ctx context.Context) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	result := Summary{Providers: make(map[string]ProviderSummary, len(accountdomain.Providers()))}
-	for _, providerValue := range accountdomain.Providers() {
+	providers := accountdomain.Providers()
+	if s.providers != nil {
+		providers = s.providers.Providers()
+	}
+	result := Summary{Providers: make(map[string]ProviderSummary, len(providers))}
+	for _, providerValue := range providers {
 		result.Providers[string(providerValue)] = ProviderSummary{}
 	}
 	for _, row := range rows {
@@ -952,8 +944,9 @@ type CleanupResult struct {
 }
 
 // validateCleanupSelection validates cleanup states and linked target providers.
-func validateCleanupSelection(providerValue accountdomain.Provider, statuses []CleanupStatus, targets []accountdomain.Provider) (map[CleanupStatus]struct{}, error) {
-	if !providerValue.IsLegacy() {
+// Any registered provider can be cleaned; linked targets exist only between Grok providers.
+func (s *Service) validateCleanupSelection(providerValue accountdomain.Provider, statuses []CleanupStatus, targets []accountdomain.Provider) (map[CleanupStatus]struct{}, error) {
+	if _, ok := s.ProviderDefinition(providerValue); !ok {
 		return nil, invalidInput("账号来源无效")
 	}
 	selected := make(map[CleanupStatus]struct{}, len(statuses))
@@ -984,7 +977,7 @@ func validateCleanupSelection(providerValue accountdomain.Provider, statuses []C
 // The ID cursor always advances, so skipped groups cannot stall a cleanup batch.
 func (s *Service) CleanupAccounts(ctx context.Context, providerValue accountdomain.Provider, statuses []CleanupStatus, targets []accountdomain.Provider) (CleanupResult, error) {
 	out := CleanupResult{DeletedByProvider: map[accountdomain.Provider]int64{}}
-	selected, err := validateCleanupSelection(providerValue, statuses, targets)
+	selected, err := s.validateCleanupSelection(providerValue, statuses, targets)
 	if err != nil {
 		return out, err
 	}
@@ -1027,7 +1020,7 @@ func (s *Service) CleanupAccounts(ctx context.Context, providerValue accountdoma
 // PreviewCleanup returns root and linked-peer counts for the cleanup confirmation dialog.
 // The preview is informational; deletion revalidates state inside each transaction.
 func (s *Service) PreviewCleanup(ctx context.Context, providerValue accountdomain.Provider, statuses []CleanupStatus, targets []accountdomain.Provider) (repository.CleanupPreview, error) {
-	selected, err := validateCleanupSelection(providerValue, statuses, targets)
+	selected, err := s.validateCleanupSelection(providerValue, statuses, targets)
 	if err != nil {
 		return repository.CleanupPreview{}, err
 	}
@@ -1284,137 +1277,12 @@ func isEstimatedFreeBillingProfile(billing *accountdomain.Billing) bool {
 	return billing != nil && (billing.HasFreeProfileSignal() || billing.HasInferredFreeProfileSignal())
 }
 
-// StartDeviceLogin 启动短期 Device OAuth，会话只保存在有界运行态存储中。
-func (s *Service) StartDeviceLogin(ctx context.Context) (DeviceStartResult, error) {
-	adapter, ok := s.providers.DeviceOAuth(accountdomain.ProviderBuild)
+// ImportCredentialDocumentsWithProgress 使用 Provider 自身的凭据编解码器合并解析多个文件，并作为一个批次写入和同步。
+func (s *Service) ImportCredentialDocumentsWithProgress(ctx context.Context, providerValue accountdomain.Provider, documents [][]byte, observer ImportedAccountObserver, progress BatchProgressObserver) (ImportResult, error) {
+	adapter, ok := s.providers.CredentialCodec(providerValue)
 	if !ok {
-		return DeviceStartResult{}, fmt.Errorf("CLI Provider 未注册")
+		return ImportResult{}, fmt.Errorf("%w: Provider %s 不支持凭据导入", ErrUnsupported, providerValue)
 	}
-	authorization, err := adapter.StartDeviceAuthorization(ctx)
-	if err != nil {
-		return DeviceStartResult{}, err
-	}
-	sessionID, err := security.NewOpaqueToken(18)
-	if err != nil {
-		return DeviceStartResult{}, err
-	}
-	now := time.Now().UTC()
-	session := accountdomain.DeviceSession{ID: sessionID, DeviceCode: authorization.DeviceCode, UserCode: authorization.UserCode, VerificationURI: authorization.VerificationURI, VerificationURIComplete: authorization.VerificationURIComplete, Interval: authorization.Interval, NextPollAt: now.Add(authorization.Interval), ExpiresAt: now.Add(authorization.ExpiresIn)}
-	if err := s.deviceSessions.Create(ctx, session); err != nil {
-		return DeviceStartResult{}, err
-	}
-	return DeviceStartResult{SessionID: sessionID, UserCode: session.UserCode, VerificationURI: session.VerificationURI, VerificationURIComplete: session.VerificationURIComplete, Interval: session.Interval, ExpiresAt: session.ExpiresAt}, nil
-}
-
-// PollDeviceLogin 执行一次上游轮询，成功后立即加密并写入账号仓储。
-func (s *Service) PollDeviceLogin(ctx context.Context, sessionID string) (View, error) {
-	now := time.Now().UTC()
-	session, err := s.deviceSessions.Get(ctx, sessionID, now)
-	if err != nil {
-		return View{}, ErrDeviceDenied
-	}
-	if now.Before(session.NextPollAt) {
-		return View{}, ErrDeviceSlowDown
-	}
-	adapter, ok := s.providers.DeviceOAuth(accountdomain.ProviderBuild)
-	if !ok {
-		return View{}, fmt.Errorf("CLI Provider 未注册")
-	}
-	seed, err := adapter.PollDeviceAuthorization(ctx, session.DeviceCode)
-	session.NextPollAt = now.Add(session.Interval)
-	_ = s.deviceSessions.Update(ctx, session)
-	if errors.Is(err, provider.ErrAuthorizationPending) {
-		return View{}, ErrDevicePending
-	}
-	if errors.Is(err, provider.ErrSlowDown) {
-		session.Interval += 5 * time.Second
-		session.NextPollAt = now.Add(session.Interval)
-		_ = s.deviceSessions.Update(ctx, session)
-		return View{}, ErrDeviceSlowDown
-	}
-	if errors.Is(err, provider.ErrAuthorizationDenied) {
-		_ = s.deviceSessions.Delete(ctx, sessionID)
-		return View{}, ErrDeviceDenied
-	}
-	if err != nil {
-		return View{}, err
-	}
-	value, _, err := s.persistSeed(ctx, seed)
-	if err != nil {
-		return View{}, err
-	}
-	s.reconcileProviderLinksBestEffort(ctx, value.ID)
-	_ = s.deviceSessions.Delete(ctx, sessionID)
-	return s.Get(ctx, value.ID)
-}
-
-// ImportCredentials 导入用户上传的 OAuth 账号凭据。
-func (s *Service) ImportCredentials(ctx context.Context, data []byte) (ImportResult, error) {
-	return s.ImportCredentialsWithObserver(ctx, data, nil)
-}
-
-func (s *Service) ImportCredentialsWithObserver(ctx context.Context, data []byte, observer ImportedAccountObserver) (ImportResult, error) {
-	return s.ImportCredentialsWithProgress(ctx, data, observer, nil)
-}
-
-// ImportCredentialsWithProgress 导入 Build 凭据并报告已写入流水线的账号数。
-func (s *Service) ImportCredentialsWithProgress(ctx context.Context, data []byte, observer ImportedAccountObserver, progress BatchProgressObserver) (ImportResult, error) {
-	return s.ImportCredentialDocumentsWithProgress(ctx, [][]byte{data}, observer, progress)
-}
-
-// ImportCredentialDocumentsWithProgress 合并解析多个 Build 凭据文件，并作为一个批次写入和同步。
-func (s *Service) ImportCredentialDocumentsWithProgress(ctx context.Context, documents [][]byte, observer ImportedAccountObserver, progress BatchProgressObserver) (ImportResult, error) {
-	adapter, ok := s.providers.CredentialCodec(accountdomain.ProviderBuild)
-	if !ok {
-		return ImportResult{}, fmt.Errorf("CLI Provider 未注册")
-	}
-	return s.importCredentialDocumentsWithProgress(ctx, adapter, documents, observer, progress)
-}
-
-// ImportWebCredentials 导入版本化或旧号池格式的 Grok Web SSO 凭据。
-func (s *Service) ImportWebCredentials(ctx context.Context, data []byte) (ImportResult, error) {
-	return s.ImportWebCredentialsWithObserver(ctx, data, nil)
-}
-
-func (s *Service) ImportWebCredentialsWithObserver(ctx context.Context, data []byte, observer ImportedAccountObserver) (ImportResult, error) {
-	return s.ImportWebCredentialsWithProgress(ctx, data, observer, nil)
-}
-
-// ImportWebCredentialsWithProgress 导入 Web 凭据并报告已写入流水线的账号数。
-func (s *Service) ImportWebCredentialsWithProgress(ctx context.Context, data []byte, observer ImportedAccountObserver, progress BatchProgressObserver) (ImportResult, error) {
-	return s.ImportWebCredentialDocumentsWithProgress(ctx, [][]byte{data}, observer, progress)
-}
-
-// ImportWebCredentialDocumentsWithProgress 合并解析多个 Web JSON 或 SSO 文本文件，并作为一个批次写入和同步。
-func (s *Service) ImportWebCredentialDocumentsWithProgress(ctx context.Context, documents [][]byte, observer ImportedAccountObserver, progress BatchProgressObserver) (ImportResult, error) {
-	adapter, ok := s.providers.CredentialCodec(accountdomain.ProviderWeb)
-	if !ok {
-		return ImportResult{}, fmt.Errorf("Grok Web Provider 未注册")
-	}
-	return s.importCredentialDocumentsWithProgress(ctx, adapter, documents, observer, progress)
-}
-
-func (s *Service) ImportConsoleCredentials(ctx context.Context, data []byte) (ImportResult, error) {
-	return s.ImportConsoleCredentialsWithObserver(ctx, data, nil)
-}
-
-func (s *Service) ImportConsoleCredentialsWithObserver(ctx context.Context, data []byte, observer ImportedAccountObserver) (ImportResult, error) {
-	return s.ImportConsoleCredentialsWithProgress(ctx, data, observer, nil)
-}
-
-func (s *Service) ImportConsoleCredentialsWithProgress(ctx context.Context, data []byte, observer ImportedAccountObserver, progress BatchProgressObserver) (ImportResult, error) {
-	return s.ImportConsoleCredentialDocumentsWithProgress(ctx, [][]byte{data}, observer, progress)
-}
-
-func (s *Service) ImportConsoleCredentialDocumentsWithProgress(ctx context.Context, documents [][]byte, observer ImportedAccountObserver, progress BatchProgressObserver) (ImportResult, error) {
-	adapter, ok := s.providers.CredentialCodec(accountdomain.ProviderConsole)
-	if !ok {
-		return ImportResult{}, fmt.Errorf("Grok Console Provider 未注册")
-	}
-	return s.importCredentialDocumentsWithProgress(ctx, adapter, documents, observer, progress)
-}
-
-func (s *Service) importCredentialDocumentsWithProgress(ctx context.Context, adapter provider.CredentialCodecAdapter, documents [][]byte, observer ImportedAccountObserver, progress BatchProgressObserver) (ImportResult, error) {
 	if len(documents) == 0 {
 		return ImportResult{}, fmt.Errorf("%w: 没有可导入的账号文件", ErrInvalidImport)
 	}
@@ -1435,6 +1303,12 @@ func (s *Service) importCredentialDocumentsWithProgress(ctx context.Context, ada
 			return ImportResult{}, fmt.Errorf("%w: 单次最多导入 %d 个账号", ErrImportLimit, maxCredentialImportAccounts)
 		}
 		for _, value := range values {
+			if value.Provider == "" {
+				value.Provider = providerValue
+			}
+			if value.Provider != providerValue {
+				return ImportResult{}, fmt.Errorf("%w: 第 %d 个文件包含其他 Provider 的账号", ErrInvalidImport, index+1)
+			}
 			if value.SourceKey != "" {
 				key := string(value.Provider) + "\x00" + value.SourceKey
 				if _, exists := seen[key]; exists {
@@ -1448,22 +1322,13 @@ func (s *Service) importCredentialDocumentsWithProgress(ctx context.Context, ada
 	}
 	var result ImportResult
 	var err error
-	if preparer, ok := adapter.(provider.CredentialImportPreparer); ok && hasRefreshTokenOnlySeed(seeds) {
+	if preparer, ok := adapter.(provider.CredentialImportPreparer); ok {
 		result, err = s.persistPreparedImportedSeeds(ctx, seeds, preparer, observer, progress)
 	} else {
 		result, err = s.persistImportedSeeds(ctx, seeds, observer, progress)
 	}
 	result.Skipped += skipped
 	return result, err
-}
-
-func hasRefreshTokenOnlySeed(seeds []provider.CredentialSeed) bool {
-	for _, seed := range seeds {
-		if strings.TrimSpace(seed.AccessToken) == "" && strings.TrimSpace(seed.RefreshToken) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Service) persistPreparedImportedSeeds(ctx context.Context, seeds []provider.CredentialSeed, preparer provider.CredentialImportPreparer, observer ImportedAccountObserver, progress BatchProgressObserver) (ImportResult, error) {
@@ -1482,19 +1347,15 @@ func (s *Service) persistPreparedImportedSeeds(ctx context.Context, seeds []prov
 		persisted bool
 		seen      = make(map[string]struct{}, len(seeds))
 	)
-	_, batchErr := batch.ForEachObserved(prepareCtx, seeds, batch.Options{Workers: credentialImportPrepareWorkers}, func(itemCtx context.Context, seed provider.CredentialSeed) (provider.CredentialSeed, error) {
-		if strings.TrimSpace(seed.AccessToken) == "" && strings.TrimSpace(seed.RefreshToken) != "" {
-			return preparer.PrepareImportedCredential(itemCtx, seed)
-		}
-		return seed, nil
-	}, func(index int, item batch.Result[provider.CredentialSeed]) {
+	// Every seed goes through the preparer: it may exchange tokens or resolve identity.
+	_, batchErr := batch.ForEachObserved(prepareCtx, seeds, batch.Options{Workers: credentialImportPrepareWorkers}, preparer.PrepareImportedCredential, func(index int, item batch.Result[provider.CredentialSeed]) {
 		mu.Lock()
 		defer mu.Unlock()
 		completed++
 		if !item.Completed || item.Err != nil {
 			result.Failed++
 			if item.Err != nil {
-				s.logger.Warn("account_rt_import_failed", "index", index+1, "error", item.Err)
+				s.logger.Warn("account_import_prepare_failed", "index", index+1, "error", item.Err)
 			}
 			reportCredentialImportProgress(progress, completed, len(seeds), &firstErr, cancelPrepare)
 			return
@@ -2056,11 +1917,6 @@ func (s *Service) convertWebAccountToBuild(ctx context.Context, id uint64, strat
 	return buildAccount.ID, created, false, nil
 }
 
-// ExportCredentials 保留 Grok Build 默认导出语义，供旧调用方兼容。
-func (s *Service) ExportCredentials(ctx context.Context) (ExportResult, error) {
-	return s.ExportProviderCredentials(ctx, accountdomain.ProviderBuild)
-}
-
 // ExportProviderCredentials 导出可由对应 Provider 导入接口重新读取的凭据文档。
 func (s *Service) ExportProviderCredentials(ctx context.Context, providerValue accountdomain.Provider) (ExportResult, error) {
 	return s.exportProviderCredentials(ctx, providerValue, repository.AccountListQuery{
@@ -2199,11 +2055,15 @@ func (s *Service) marshalProviderCredentials(providerValue accountdomain.Provide
 		if accessToken == "" && refreshToken == "" {
 			return ExportResult{}, fmt.Errorf("账号 %d 没有可导出的凭据", value.ID)
 		}
+		state, err := s.decryptCredentialState(value.EncryptedState)
+		if err != nil {
+			return ExportResult{}, fmt.Errorf("解密账号 %d 凭据状态: %w", value.ID, err)
+		}
 		seeds = append(seeds, provider.CredentialSeed{
 			Provider: value.Provider, AuthType: value.AuthType, WebTier: value.WebTier,
 			Name: value.Name, Email: value.Email, UserID: value.UserID, TeamID: value.TeamID,
 			OIDCClientID: value.OIDCClientID, AccessToken: accessToken, RefreshToken: refreshToken,
-			CloudflareCookies: cloudflareCookies, ExpiresAt: value.ExpiresAt,
+			CloudflareCookies: cloudflareCookies, ExpiresAt: value.ExpiresAt, Plan: value.Plan, State: state,
 			WebNSFWEnabledAt: value.WebNSFWEnabledAt, WebTermsAcceptedAt: value.WebTermsAcceptedAt,
 			WebTermsAcceptedVersion: value.WebTermsAcceptedVersion, WebBirthDateSetAt: value.WebBirthDateSetAt,
 		})
@@ -2509,7 +2369,7 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 			botFlagSource = metadata.BuildBotFlagSource
 		}
 		persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), credentialStateWriteTimeout)
-		updated, err := s.accounts.UpdateTokens(persistCtx, latest.ID, refreshed.EncryptedAccessToken, refreshed.EncryptedRefreshToken, refreshed.ExpiresAt, botFlagSource)
+		updated, err := s.accounts.UpdateTokens(persistCtx, latest.ID, refreshed.EncryptedAccessToken, refreshed.EncryptedRefreshToken, refreshed.EncryptedState, refreshed.ExpiresAt, botFlagSource)
 		cancelPersist()
 		if err != nil {
 			s.logger.Error("credential_refresh_token_write_failed",
@@ -2967,8 +2827,7 @@ func (s *Service) RefreshQuota(ctx context.Context, id uint64) ([]accountdomain.
 	}
 	// 身份补全是非关键操作：只在额度落库和恢复任务调度完成后执行，
 	// 并沿用调用方取消语义，不能反向影响额度同步结果。
-	value := refreshed.Credential
-	if (value.Provider == accountdomain.ProviderWeb || value.Provider == accountdomain.ProviderConsole) && ctx.Err() == nil {
+	if _, ok := s.providers.AccountIdentity(refreshed.Credential.Provider); ok && ctx.Err() == nil {
 		// SyncAccountIdentity 会自行判断身份是否完整。Web 账号必须具备合法
 		// Gateway UUID，不能因为旧记录里只有 email 就跳过迁移。
 		if identityErr := s.syncAccountIdentityBestEffort(ctx, id); errors.Is(identityErr, provider.ErrUnauthorized) {
@@ -2976,10 +2835,6 @@ func (s *Service) RefreshQuota(ctx context.Context, id uint64) ([]accountdomain.
 		}
 	}
 	return refreshed.Windows, nil
-}
-
-func (s *Service) RefreshWebQuota(ctx context.Context, id uint64) ([]accountdomain.QuotaWindow, error) {
-	return s.RefreshQuota(ctx, id)
 }
 
 func (s *Service) refreshQuota(ctx context.Context, id uint64) (quotaRefreshResult, error) {
@@ -3836,23 +3691,6 @@ func (s *Service) SyncAllBillingWithProgress(ctx context.Context, progress Batch
 	return s.refreshBillings(ctx, ids, progress)
 }
 
-// SyncAllWebQuotas 尽力同步全部启用 Grok Web 账号的分模式额度。
-func (s *Service) SyncAllWebQuotas(ctx context.Context) (int, int, error) {
-	return s.SyncAllWebQuotasWithProgress(ctx, nil)
-}
-
-func (s *Service) SyncAllWebQuotasWithProgress(ctx context.Context, progress BatchProgressObserver) (int, int, error) {
-	return s.syncAllQuotasWithProgress(ctx, accountdomain.ProviderWeb, "web_quota_sync", progress)
-}
-
-func (s *Service) SyncAllConsoleQuotas(ctx context.Context) (int, int, error) {
-	return s.SyncAllConsoleQuotasWithProgress(ctx, nil)
-}
-
-func (s *Service) SyncAllConsoleQuotasWithProgress(ctx context.Context, progress BatchProgressObserver) (int, int, error) {
-	return s.syncAllQuotasWithProgress(ctx, accountdomain.ProviderConsole, "console_quota_sync", progress)
-}
-
 // SyncIncompleteConsoleQuotas replaces pre-/usage synthetic windows and
 // partial snapshots without refreshing accounts that already have all three
 // authoritative Console quota kinds. It is safe to run periodically and uses
@@ -4023,21 +3861,30 @@ func completeConsoleUsageSnapshot(windows []accountdomain.QuotaWindow) bool {
 	return present == 7
 }
 
-func (s *Service) syncAllQuotasWithProgress(ctx context.Context, providerValue accountdomain.Provider, operation string, progress BatchProgressObserver) (int, int, error) {
+// SyncAllQuotasWithProgress 尽力同步一个 Provider 全部启用账号的额度：
+// 窗口额度 Provider 同步额度窗口，Billing Provider 同步 Billing 快照。
+func (s *Service) SyncAllQuotasWithProgress(ctx context.Context, providerValue accountdomain.Provider, progress BatchProgressObserver) (int, int, error) {
+	quotaKind, ok := s.providers.QuotaKind(providerValue)
+	if !ok {
+		return 0, 0, fmt.Errorf("%w: Provider %s 未注册", ErrUnsupported, providerValue)
+	}
 	ids, err := s.accounts.ListEnabledAccountIDs(ctx, providerValue, false)
 	if err != nil {
 		return 0, 0, err
 	}
-	return s.runAccountBatch(ctx, operation, ids, s.syncPool, progress, func(workCtx context.Context, id uint64) error {
+	if quotaKind == provider.QuotaBilling {
+		return s.refreshBillings(ctx, ids, progress)
+	}
+	return s.runAccountBatch(ctx, string(providerValue)+"_quota_sync", ids, s.syncPool, progress, func(workCtx context.Context, id uint64) error {
 		_, err := s.RefreshQuota(workCtx, id)
 		return err
 	})
 }
 
-// SyncWebQuotaAccounts 同步指定 Web 账号集合，供启动追赶任务复用共享并发池。
-func (s *Service) SyncWebQuotaAccounts(ctx context.Context, ids []uint64) (int, int, error) {
-	return s.runAccountBatch(ctx, "web_quota_startup_catchup", ids, s.syncPool, nil, func(workCtx context.Context, id uint64) error {
-		_, err := s.RefreshWebQuota(workCtx, id)
+// SyncQuotaAccounts 同步指定账号集合的额度窗口，供追赶任务复用共享并发池。
+func (s *Service) SyncQuotaAccounts(ctx context.Context, ids []uint64) (int, int, error) {
+	return s.runAccountBatch(ctx, "quota_stale_catchup", ids, s.syncPool, nil, func(workCtx context.Context, id uint64) error {
+		_, err := s.RefreshQuota(workCtx, id)
 		return err
 	})
 }
@@ -4053,10 +3900,7 @@ func (s *Service) RefreshAllTokensWithProgress(ctx context.Context, progress Bat
 	}
 	allIDs := make([]uint64, 0)
 	ids := make([]uint64, 0)
-	for _, providerValue := range s.providers.Providers() {
-		if !s.providers.SupportsCredentialRefresh(providerValue) {
-			continue
-		}
+	for _, providerValue := range s.refreshableProviders() {
 		providerIDs, err := s.accounts.ListEnabledCredentialRefreshAccountIDs(ctx, providerValue, false)
 		if err != nil {
 			return 0, 0, 0, err
@@ -4598,6 +4442,47 @@ func (s *Service) persistSeed(ctx context.Context, seed provider.CredentialSeed)
 	return stored, created, err
 }
 
+// refreshableProviders lists the registered providers whose Definition declares credential refresh.
+func (s *Service) refreshableProviders() []accountdomain.Provider {
+	if s.providers == nil {
+		return nil
+	}
+	var values []accountdomain.Provider
+	for _, providerValue := range s.providers.Providers() {
+		if s.providers.SupportsCredentialRefresh(providerValue) {
+			values = append(values, providerValue)
+		}
+	}
+	return values
+}
+
+// encryptCredentialState stores provider state as encrypted JSON; an empty map stores "".
+func (s *Service) encryptCredentialState(state map[string]string) (string, error) {
+	if len(state) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return "", err
+	}
+	return s.cipher.Encrypt(string(data))
+}
+
+func (s *Service) decryptCredentialState(value string) (map[string]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+	plain, err := s.cipher.Decrypt(value)
+	if err != nil {
+		return nil, err
+	}
+	var state map[string]string
+	if err := json.Unmarshal([]byte(plain), &state); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
 func (s *Service) credentialFromSeed(seed provider.CredentialSeed) (accountdomain.Credential, error) {
 	accessEncrypted, err := s.cipher.Encrypt(seed.AccessToken)
 	if err != nil {
@@ -4622,22 +4507,31 @@ func (s *Service) credentialFromSeed(seed provider.CredentialSeed) (accountdomai
 	if sourceKey == "" {
 		sourceKey = "device:" + security.HashToken(seed.AccessToken)
 	}
+	stateEncrypted, err := s.encryptCredentialState(seed.State)
+	if err != nil {
+		return accountdomain.Credential{}, err
+	}
 	providerValue := seed.Provider
 	if providerValue == "" {
-		providerValue = accountdomain.ProviderBuild
+		return accountdomain.Credential{}, fmt.Errorf("账号凭据缺少 Provider")
+	}
+	var definition provider.Definition
+	registered := false
+	if s.providers != nil {
+		definition, registered = s.providers.Definition(providerValue)
 	}
 	authType := seed.AuthType
 	if authType == "" {
-		if s.providers == nil {
-			return accountdomain.Credential{}, fmt.Errorf("Provider 注册表未初始化")
-		}
-		definition, ok := s.providers.Definition(providerValue)
-		if !ok {
+		if !registered {
 			return accountdomain.Credential{}, fmt.Errorf("Provider %s 未注册", providerValue)
 		}
 		authType = definition.Credential.AuthType
 	}
-	value := accountdomain.Credential{Provider: providerValue, AuthType: authType, WebTier: seed.WebTier, Name: seed.Name, Email: seed.Email, UserID: seed.UserID, TeamID: seed.TeamID, SourceKey: sourceKey, OIDCClientID: seed.OIDCClientID, EncryptedAccessToken: accessEncrypted, EncryptedRefreshToken: refreshEncrypted, EncryptedCloudflareCookie: cloudflareEncrypted, ExpiresAt: seed.ExpiresAt, Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: accountdomain.DefaultPriority, MaxConcurrent: accountdomain.DefaultMaxConcurrent, MinimumRemaining: accountdomain.DefaultMinimumRemaining, WebNSFWEnabledAt: seed.WebNSFWEnabledAt, WebTermsAcceptedAt: seed.WebTermsAcceptedAt, WebTermsAcceptedVersion: seed.WebTermsAcceptedVersion, WebBirthDateSetAt: seed.WebBirthDateSetAt}
+	maxConcurrent := accountdomain.DefaultMaxConcurrent
+	if definition.Profile.DefaultMaxConcurrent > 0 {
+		maxConcurrent = definition.Profile.DefaultMaxConcurrent
+	}
+	value := accountdomain.Credential{Provider: providerValue, AuthType: authType, WebTier: seed.WebTier, Name: seed.Name, Email: seed.Email, UserID: seed.UserID, TeamID: seed.TeamID, SourceKey: sourceKey, OIDCClientID: seed.OIDCClientID, EncryptedAccessToken: accessEncrypted, EncryptedRefreshToken: refreshEncrypted, EncryptedCloudflareCookie: cloudflareEncrypted, EncryptedState: stateEncrypted, Plan: seed.Plan, ExpiresAt: seed.ExpiresAt, Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: accountdomain.DefaultPriority, MaxConcurrent: maxConcurrent, MinimumRemaining: accountdomain.DefaultMinimumRemaining, WebNSFWEnabledAt: seed.WebNSFWEnabledAt, WebTermsAcceptedAt: seed.WebTermsAcceptedAt, WebTermsAcceptedVersion: seed.WebTermsAcceptedVersion, WebBirthDateSetAt: seed.WebBirthDateSetAt}
 	value.BuildBotFlagSource = s.credentialMetadata(value).BuildBotFlagSource
 	if providerValue == accountdomain.ProviderWeb && strings.TrimSpace(seed.AccessToken) != "" {
 		value.EgressIdentity = "sso_" + security.HashToken(seed.AccessToken)[:32]

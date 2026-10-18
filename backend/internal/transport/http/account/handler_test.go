@@ -504,7 +504,7 @@ func TestRefreshTokenImportHTTPReturnsPartialResult(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/api/admin/v1/accounts/import", &body)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/api/admin/v1/providers/grok_build/accounts/import", &body)
 	if err != nil {
 		t.Fatal(err)
 	}

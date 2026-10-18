@@ -394,6 +394,9 @@ func (a *Application) queueDueWebQuotaRefresh(ctx context.Context) {
 	}
 }
 
+// runWebQuotaCatchup periodically syncs stale quota windows of every
+// remote-window provider (Grok Web, ChatGPT, ...). Console keeps its own
+// /usage catch-up in runConsoleQuotaCatchup.
 func (a *Application) runWebQuotaCatchup(ctx context.Context) {
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
@@ -403,11 +406,11 @@ func (a *Application) runWebQuotaCatchup(ctx context.Context) {
 			return
 		case <-timer.C:
 		}
-		ids, err := a.accountRepo.ListStaleWebQuotaAccountIDs(ctx, time.Now().UTC().Add(-webQuotaStaleAfter), 100)
+		ids, err := a.accountRepo.ListStaleQuotaAccountIDs(ctx, staleQuotaCatchupProviders(a.providers), time.Now().UTC().Add(-webQuotaStaleAfter), 100)
 		if err == nil && len(ids) > 0 {
 			runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			var succeeded int
-			succeeded, _, err = a.accounts.SyncWebQuotaAccounts(runCtx, ids)
+			succeeded, _, err = a.accounts.SyncQuotaAccounts(runCtx, ids)
 			cancel()
 			a.startup.updateReport(func(report *startupReport) {
 				report.StaleWebQuotasFound = len(ids)
@@ -419,6 +422,16 @@ func (a *Application) runWebQuotaCatchup(ctx context.Context) {
 		}
 		resetTimer(timer, webQuotaCatchupEvery)
 	}
+}
+
+func staleQuotaCatchupProviders(registry *provider.Registry) []accountdomain.Provider {
+	var values []accountdomain.Provider
+	for _, value := range registry.Providers() {
+		if kind, _ := registry.QuotaKind(value); kind == provider.QuotaRemoteWindow && value != accountdomain.ProviderConsole {
+			values = append(values, value)
+		}
+	}
+	return values
 }
 
 func (a *Application) runConsoleUsageMigration(ctx context.Context) {

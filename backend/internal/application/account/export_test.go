@@ -52,7 +52,7 @@ func TestExportCredentialsRoundTripsImportFormat(t *testing.T) {
 	adapter := cliprovider.NewAdapter(cliprovider.Config{}, cipher)
 	service := NewService(repository, nil, nil, nil, provider.NewRegistry(adapter), cipher, nil)
 
-	result, err := service.ExportCredentials(ctx)
+	result, err := service.ExportProviderCredentials(ctx, accountdomain.ProviderBuild)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestExportCredentialsRoundTripsImportFormat(t *testing.T) {
 		t.Fatalf("round-trip credential = %#v", value)
 	}
 	progress := make([][2]int, 0, 2)
-	if _, err := service.ImportCredentialsWithProgress(ctx, result.Data, nil, func(completed, total int) error {
+	if _, err := service.ImportCredentialDocumentsWithProgress(ctx, accountdomain.ProviderBuild, [][]byte{result.Data}, nil, func(completed, total int) error {
 		progress = append(progress, [2]int{completed, total})
 		return nil
 	}); err != nil {
@@ -89,7 +89,7 @@ func TestExportCredentialsRoundTripsImportFormat(t *testing.T) {
 	}
 
 	multiProgress := make([][2]int, 0, 3)
-	multiResult, err := service.ImportCredentialDocumentsWithProgress(ctx, [][]byte{
+	multiResult, err := service.ImportCredentialDocumentsWithProgress(ctx, accountdomain.ProviderBuild, [][]byte{
 		result.Data,
 		result.Data,
 		[]byte(`{"provider":"grok_build","name":"secondary","access_token":"second-access","refresh_token":"second-refresh","user_id":"user-2"}`),
@@ -267,12 +267,7 @@ func TestExportProviderCredentialsRoundTripsSSOProviders(t *testing.T) {
 			if test.providerValue == accountdomain.ProviderWeb && (values[0].WebTier != accountdomain.WebTierSuper || values[0].WebNSFWEnabledAt == nil || !values[0].WebNSFWEnabledAt.Equal(nsfwAt) || values[0].WebTermsAcceptedAt == nil || !values[0].WebTermsAcceptedAt.Equal(tosAt) || values[0].WebTermsAcceptedVersion != accountdomain.CurrentWebTermsVersion || values[0].WebBirthDateSetAt == nil || !values[0].WebBirthDateSetAt.Equal(birthDateAt)) {
 				t.Fatalf("web metadata = %#v", values[0])
 			}
-			var imported ImportResult
-			if test.providerValue == accountdomain.ProviderWeb {
-				imported, err = service.ImportWebCredentialsWithProgress(ctx, result.Data, nil, nil)
-			} else {
-				imported, err = service.ImportConsoleCredentialsWithProgress(ctx, result.Data, nil, nil)
-			}
+			imported, err := service.ImportCredentialDocumentsWithProgress(ctx, test.providerValue, [][]byte{result.Data}, nil, nil)
 			if err != nil || len(imported.AccountIDs) != 1 {
 				t.Fatalf("reimport result = %#v, error = %v", imported, err)
 			}

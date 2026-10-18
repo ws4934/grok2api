@@ -68,11 +68,12 @@ type ObservedModelStateRepository interface {
 	SetObservedModelState(ctx context.Context, accountID uint64, value ObservedModelState, ttl time.Duration) error
 }
 
-// DeviceSessionRepository 定义短期 Device OAuth 会话状态。
+// DeviceSessionRepository stores short-lived interactive auth sessions
+// (device and redirect); the name predates redirect logins.
 type DeviceSessionRepository interface {
-	Create(ctx context.Context, value account.DeviceSession) error
-	Get(ctx context.Context, id string, now time.Time) (account.DeviceSession, error)
-	Update(ctx context.Context, value account.DeviceSession) error
+	Create(ctx context.Context, value account.AuthSession) error
+	Get(ctx context.Context, id string, now time.Time) (account.AuthSession, error)
+	Update(ctx context.Context, value account.AuthSession) error
 	Delete(ctx context.Context, id string) error
 }
 

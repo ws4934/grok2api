@@ -208,17 +208,16 @@ func (s *Service) syncAccount(ctx context.Context, accountID uint64) error {
 	if !ok {
 		return fmt.Errorf("Provider %s 未注册生命周期策略", view.Credential.Provider)
 	}
-	if view.Credential.Provider == accountdomain.ProviderWeb || view.Credential.Provider == accountdomain.ProviderConsole {
-		if identity, ok := s.accounts.(identitySynchronizer); ok {
-			operationCtx, cancel := context.WithTimeout(ctx, operationTimeout)
-			identityErr := identity.SyncAccountIdentity(operationCtx, accountID)
-			if identityErr != nil {
-				s.logger.Warn("account_initial_identity_sync_failed", "account_id", accountID, "error", identityErr)
-			}
-			cancel()
-			if errors.Is(identityErr, provider.ErrUnauthorized) {
-				return fmt.Errorf("同步账号身份: %w", identityErr)
-			}
+	// The identity synchronizer is a no-op for providers without an identity adapter.
+	if identity, ok := s.accounts.(identitySynchronizer); ok {
+		operationCtx, cancel := context.WithTimeout(ctx, operationTimeout)
+		identityErr := identity.SyncAccountIdentity(operationCtx, accountID)
+		if identityErr != nil {
+			s.logger.Warn("account_initial_identity_sync_failed", "account_id", accountID, "error", identityErr)
+		}
+		cancel()
+		if errors.Is(identityErr, provider.ErrUnauthorized) {
+			return fmt.Errorf("同步账号身份: %w", identityErr)
 		}
 	}
 	if definition.Quota == provider.QuotaRemoteWindow || definition.Quota == provider.QuotaLocalWindow {

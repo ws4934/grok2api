@@ -71,7 +71,7 @@ func TestImportConsoleDocumentsAcceptsExactlyAtAggregateLimitAcrossFiles(t *test
 	arrayDoc := []byte("[" + consoleEntries(0, half, distinctConsoleToken) + "]")
 	wrapperDoc := []byte(`{"provider":"grok_console","accounts":[` + consoleEntries(half, rest, distinctConsoleToken) + "]}")
 
-	result, err := service.ImportConsoleCredentialDocumentsWithProgress(context.Background(), [][]byte{arrayDoc, wrapperDoc}, nil, nil)
+	result, err := service.ImportCredentialDocumentsWithProgress(context.Background(), accountdomain.ProviderConsole, [][]byte{arrayDoc, wrapperDoc}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestImportConsoleDocumentsRejectsAggregateOverflowWithoutPartialWrites(t *t
 	arrayDoc := []byte("[" + consoleEntries(0, half, distinctConsoleToken) + "]")
 	wrapperDoc := []byte(`{"provider":"grok_console","accounts":[` + consoleEntries(half, rest, distinctConsoleToken) + "]}")
 
-	_, err := service.ImportConsoleCredentialDocumentsWithProgress(context.Background(), [][]byte{arrayDoc, wrapperDoc}, nil, nil)
+	_, err := service.ImportCredentialDocumentsWithProgress(context.Background(), accountdomain.ProviderConsole, [][]byte{arrayDoc, wrapperDoc}, nil, nil)
 	if !errors.Is(err, ErrImportLimit) {
 		t.Fatalf("error = %v, want import limit", err)
 	}
@@ -104,7 +104,7 @@ func TestImportConsoleDocumentsCountDeduplicatedTokens(t *testing.T) {
 	duplicateDoc := []byte(`[{"sso_token":"shared"},{"sso_token":"shared"}]`)
 	sameAgainDoc := []byte(`[{"sso_token":"shared"},{"sso_token":"fresh"}]`)
 
-	result, err := service.ImportConsoleCredentialDocumentsWithProgress(context.Background(), [][]byte{duplicateDoc, sameAgainDoc}, nil, nil)
+	result, err := service.ImportCredentialDocumentsWithProgress(context.Background(), accountdomain.ProviderConsole, [][]byte{duplicateDoc, sameAgainDoc}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestImportConsoleDocumentsCountsCrossFileDuplicatesTowardLimit(t *testing.T
 	fullDoc := []byte("[" + consoleEntries(0, maxCredentialImportAccounts, distinctConsoleToken) + "]")
 	duplicateDoc := []byte(`[{"sso_token":"token-0"}]`)
 
-	_, err := service.ImportConsoleCredentialDocumentsWithProgress(context.Background(), [][]byte{fullDoc, duplicateDoc}, nil, nil)
+	_, err := service.ImportCredentialDocumentsWithProgress(context.Background(), accountdomain.ProviderConsole, [][]byte{fullDoc, duplicateDoc}, nil, nil)
 	if !errors.Is(err, ErrImportLimit) {
 		t.Fatalf("error = %v, want import limit", err)
 	}
@@ -153,7 +153,7 @@ func TestImportBuildDocumentsCountsDuplicateSourcesTowardLimit(t *testing.T) {
 	duplicateDoc := []byte("[" + strings.Repeat(duplicateEntry+",", maxCredentialImportAccounts-2) + duplicateEntry + "]")
 	freshDoc := []byte(`[{"refresh_token":"fresh-1"},{"refresh_token":"fresh-2"}]`)
 
-	_, err = service.ImportCredentialDocumentsWithProgress(ctx, [][]byte{duplicateDoc, freshDoc}, nil, nil)
+	_, err = service.ImportCredentialDocumentsWithProgress(ctx, accountdomain.ProviderBuild, [][]byte{duplicateDoc, freshDoc}, nil, nil)
 	if !errors.Is(err, ErrImportLimit) {
 		t.Fatalf("error = %v, want import limit", err)
 	}

@@ -125,11 +125,11 @@ func TestUpdateTokensUpdatesAndNormalizesBuildBotFlagSourceAtomically(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated, err := repo.UpdateTokens(ctx, build.ID, "new", "", time.Now().UTC().Add(time.Hour), 2)
+	updated, err := repo.UpdateTokens(ctx, build.ID, "new", "", "", time.Now().UTC().Add(time.Hour), 2)
 	if err != nil || updated.EncryptedAccessToken != "new" || updated.BuildBotFlagSource != 2 {
 		t.Fatalf("updated Build credential = %#v, err=%v", updated, err)
 	}
-	updated, err = repo.UpdateTokens(ctx, build.ID, "newer", "", time.Now().UTC().Add(time.Hour), 3)
+	updated, err = repo.UpdateTokens(ctx, build.ID, "newer", "", "", time.Now().UTC().Add(time.Hour), 3)
 	if err != nil || updated.BuildBotFlagSource != 0 {
 		t.Fatalf("normalized Build credential = %#v, err=%v", updated, err)
 	}
@@ -141,7 +141,7 @@ func TestUpdateTokensUpdatesAndNormalizesBuildBotFlagSourceAtomically(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	web, err = repo.UpdateTokens(ctx, web.ID, "new", "", time.Now().UTC().Add(time.Hour), 2)
+	web, err = repo.UpdateTokens(ctx, web.ID, "new", "", "", time.Now().UTC().Add(time.Hour), 2)
 	if err != nil || web.BuildBotFlagSource != 0 {
 		t.Fatalf("web credential = %#v, err=%v", web, err)
 	}

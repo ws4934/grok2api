@@ -81,11 +81,12 @@ func linkWebToConsole(tx *gorm.DB, webAccountID, consoleAccountID uint64) error 
 	return tx.Create(&webConsoleAccountLinkModel{WebAccountID: webAccountID, ConsoleAccountID: consoleAccountID, CreatedAt: time.Now().UTC()}).Error
 }
 
-func (r *AccountRepository) UpdateIdentityMetadata(ctx context.Context, accountID uint64, email, userID, teamID string) error {
+// UpdateIdentityMetadata fills non-empty identity fields; empty values keep the stored ones.
+func (r *AccountRepository) UpdateIdentityMetadata(ctx context.Context, accountID uint64, email, userID, teamID, plan string) error {
 	if accountID == 0 {
 		return repository.ErrNotFound
 	}
-	updates := make(map[string]any, 3)
+	updates := make(map[string]any, 4)
 	if email = strings.TrimSpace(email); email != "" {
 		updates["email"] = email
 	}
@@ -94,6 +95,9 @@ func (r *AccountRepository) UpdateIdentityMetadata(ctx context.Context, accountI
 	}
 	if teamID = strings.TrimSpace(teamID); teamID != "" {
 		updates["team_id"] = teamID
+	}
+	if plan = strings.TrimSpace(plan); plan != "" {
+		updates["plan"] = truncate(plan, 64)
 	}
 	if len(updates) == 0 {
 		return nil

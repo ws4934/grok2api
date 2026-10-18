@@ -43,7 +43,7 @@ func newOAuthClient(httpClient *http.Client, version func() string) *oauthClient
 	return &oauthClient{http: httpClient, clientID: defaultOAuthClientID, scope: defaultOAuthScope, deviceURL: defaultDeviceURL, tokenURL: defaultTokenURL, version: version}
 }
 
-func (c *oauthClient) startDevice(ctx context.Context) (provider.DeviceAuthorization, error) {
+func (c *oauthClient) startDevice(ctx context.Context) (provider.AuthorizationChallenge, error) {
 	form := url.Values{"client_id": {c.clientID}, "scope": {c.scope}, "referrer": {"grok-build"}}
 	var payload struct {
 		DeviceCode              string `json:"device_code"`
@@ -54,10 +54,10 @@ func (c *oauthClient) startDevice(ctx context.Context) (provider.DeviceAuthoriza
 		ExpiresIn               int    `json:"expires_in"`
 	}
 	if err := c.postForm(ctx, c.deviceURL, form, &payload, true); err != nil {
-		return provider.DeviceAuthorization{}, err
+		return provider.AuthorizationChallenge{}, err
 	}
 	if payload.DeviceCode == "" || payload.UserCode == "" || payload.VerificationURI == "" {
-		return provider.DeviceAuthorization{}, fmt.Errorf("xAI Device OAuth 返回字段不完整")
+		return provider.AuthorizationChallenge{}, fmt.Errorf("xAI Device OAuth 返回字段不完整")
 	}
 	if payload.Interval <= 0 {
 		payload.Interval = 5
@@ -65,7 +65,7 @@ func (c *oauthClient) startDevice(ctx context.Context) (provider.DeviceAuthoriza
 	if payload.ExpiresIn <= 0 {
 		payload.ExpiresIn = 1800
 	}
-	return provider.DeviceAuthorization{DeviceCode: payload.DeviceCode, UserCode: payload.UserCode, VerificationURI: payload.VerificationURI, VerificationURIComplete: payload.VerificationURIComplete, Interval: time.Duration(payload.Interval) * time.Second, ExpiresIn: time.Duration(payload.ExpiresIn) * time.Second}, nil
+	return provider.AuthorizationChallenge{Kind: provider.AuthorizationDevice, State: payload.DeviceCode, UserCode: payload.UserCode, VerificationURI: payload.VerificationURI, VerificationURIComplete: payload.VerificationURIComplete, Interval: time.Duration(payload.Interval) * time.Second, ExpiresIn: time.Duration(payload.ExpiresIn) * time.Second}, nil
 }
 
 func (c *oauthClient) pollDevice(ctx context.Context, deviceCode string) (tokenPayload, error) {

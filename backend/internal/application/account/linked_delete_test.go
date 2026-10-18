@@ -179,7 +179,7 @@ func newLinkedDeleteTestService(t *testing.T, dbName string) (*relational.Accoun
 		t.Fatal(err)
 	}
 	repo := relational.NewAccountRepository(database)
-	return repo, &Service{accounts: repo, sticky: stickyStub{}, logger: nil}
+	return repo, &Service{accounts: repo, sticky: stickyStub{}, providers: grokTestRegistry(), logger: nil}
 }
 
 func seedLinkedTrio(t *testing.T, repo *relational.AccountRepository, digest, userID string) (web, build, console accountdomain.Credential) {

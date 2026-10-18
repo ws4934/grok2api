@@ -1357,12 +1357,21 @@ func providerSourceLookupKey(providerValue, sourceKey string) string {
 func upsertKnownAccountByIdentity(tx *gorm.DB, value account.Credential, existing *accountModel) (repository.AccountUpsertResult, accountModel, error) {
 	row := fromAccountDomain(value)
 	if existing != nil {
-		if value.EncryptedCloudflareCookie == "" {
+		if value.EncryptedCloudflareCookie == "" || value.EncryptedState == "" {
 			var storedCredential accountCredentialModel
 			if err := tx.Where("account_id = ?", existing.ID).First(&storedCredential).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 				return repository.AccountUpsertResult{}, accountModel{}, err
 			}
-			value.EncryptedCloudflareCookie = storedCredential.EncryptedCloudflareCookie
+			if value.EncryptedCloudflareCookie == "" {
+				value.EncryptedCloudflareCookie = storedCredential.EncryptedCloudflareCookie
+			}
+			// Re-imports without provider state keep the stored state.
+			if value.EncryptedState == "" {
+				value.EncryptedState = storedCredential.EncryptedState
+			}
+		}
+		if row.Plan == "" {
+			row.Plan = existing.Plan
 		}
 		row.ID = existing.ID
 		row.CreatedAt = existing.CreatedAt
@@ -2018,7 +2027,7 @@ func applyAssociationFilter(query *gorm.DB, providerValue, association string) *
 	}
 }
 
-func (r *AccountRepository) UpdateTokens(ctx context.Context, id uint64, accessToken, refreshToken string, expiresAt time.Time, buildBotFlagSource int) (account.Credential, error) {
+func (r *AccountRepository) UpdateTokens(ctx context.Context, id uint64, accessToken, refreshToken, state string, expiresAt time.Time, buildBotFlagSource int) (account.Credential, error) {
 	now := time.Now().UTC()
 	refreshDueAt := account.CredentialRefreshDueAt(id, expiresAt)
 	if err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -2033,6 +2042,9 @@ func (r *AccountRepository) UpdateTokens(ctx context.Context, id uint64, accessT
 		}
 		if refreshToken != "" {
 			updates["encrypted_refresh"] = refreshToken
+		}
+		if state != "" {
+			updates["encrypted_state"] = state
 		}
 		if err := tx.Model(&accountCredentialModel{}).Where("account_id = ?", id).Updates(updates).Error; err != nil {
 			return err
@@ -2052,8 +2064,8 @@ func (r *AccountRepository) UpdateTokens(ctx context.Context, id uint64, accessT
 }
 
 // BackfillCredentialRefreshSchedules 为升级前凭据分批补齐调度时间，不解密 Token，也不发起 OAuth 请求。
-func (r *AccountRepository) BackfillCredentialRefreshSchedules(ctx context.Context, now time.Time, limit int) (int, error) {
-	if limit < 1 {
+func (r *AccountRepository) BackfillCredentialRefreshSchedules(ctx context.Context, providers []account.Provider, now time.Time, limit int) (int, error) {
+	if limit < 1 || len(providers) == 0 {
 		return 0, nil
 	}
 	var rows []struct {
@@ -2065,7 +2077,7 @@ func (r *AccountRepository) BackfillCredentialRefreshSchedules(ctx context.Conte
 		Table("account_credentials AS credential").
 		Select("credential.account_id, credential.expires_at, credential.encrypted_primary").
 		Joins("JOIN provider_accounts AS account ON account.id = credential.account_id").
-		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ?", account.ProviderBuild, true, account.AuthStatusActive).
+		Where("account.provider IN ? AND account.enabled = ? AND account.auth_status = ?", providers, true, account.AuthStatusActive).
 		Where("credential.auth_type = ? AND credential.encrypted_refresh <> '' AND credential.refresh_due_at IS NULL", account.AuthTypeOAuth).
 		Where("credential.expires_at IS NOT NULL OR credential.encrypted_primary = ''").
 		Order("credential.account_id ASC").Limit(limit).Scan(&rows).Error
@@ -2088,8 +2100,8 @@ func (r *AccountRepository) BackfillCredentialRefreshSchedules(ctx context.Conte
 }
 
 // ListCriticalCredentialRefreshIDs 只返回重启后必须优先恢复的凭据，避免启动时刷新整个账号池。
-func (r *AccountRepository) ListCriticalCredentialRefreshIDs(ctx context.Context, now, expiresBefore time.Time, limit int) ([]uint64, error) {
-	if limit < 1 {
+func (r *AccountRepository) ListCriticalCredentialRefreshIDs(ctx context.Context, providers []account.Provider, now, expiresBefore time.Time, limit int) ([]uint64, error) {
+	if limit < 1 || len(providers) == 0 {
 		return []uint64{}, nil
 	}
 	var ids []uint64
@@ -2097,7 +2109,7 @@ func (r *AccountRepository) ListCriticalCredentialRefreshIDs(ctx context.Context
 		Table("account_credentials AS credential").
 		Select("credential.account_id").
 		Joins("JOIN provider_accounts AS account ON account.id = credential.account_id").
-		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ?", account.ProviderBuild, true, account.AuthStatusActive).
+		Where("account.provider IN ? AND account.enabled = ? AND account.auth_status = ?", providers, true, account.AuthStatusActive).
 		Where("credential.auth_type = ? AND credential.encrypted_refresh <> ''", account.AuthTypeOAuth).
 		Where("credential.encrypted_primary = '' OR credential.expires_at <= ? OR (credential.refresh_failures > 0 AND credential.refresh_due_at IS NOT NULL AND credential.refresh_due_at <= ?)", expiresBefore.UTC(), now.UTC()).
 		Order(gorm.Expr("CASE WHEN credential.encrypted_primary = '' THEN 0 WHEN credential.expires_at <= ? THEN 1 ELSE 2 END, credential.expires_at ASC, credential.account_id ASC", now.UTC())).
@@ -2106,8 +2118,8 @@ func (r *AccountRepository) ListCriticalCredentialRefreshIDs(ctx context.Context
 	return ids, err
 }
 
-func (r *AccountRepository) ListDueCredentialRefreshIDs(ctx context.Context, now time.Time, limit int) ([]uint64, error) {
-	if limit < 1 {
+func (r *AccountRepository) ListDueCredentialRefreshIDs(ctx context.Context, providers []account.Provider, now time.Time, limit int) ([]uint64, error) {
+	if limit < 1 || len(providers) == 0 {
 		return []uint64{}, nil
 	}
 	var ids []uint64
@@ -2115,19 +2127,22 @@ func (r *AccountRepository) ListDueCredentialRefreshIDs(ctx context.Context, now
 		Table("account_credentials AS credential").
 		Select("credential.account_id").
 		Joins("JOIN provider_accounts AS account ON account.id = credential.account_id").
-		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ?", account.ProviderBuild, true, account.AuthStatusActive).
+		Where("account.provider IN ? AND account.enabled = ? AND account.auth_status = ?", providers, true, account.AuthStatusActive).
 		Where("credential.auth_type = ? AND credential.encrypted_refresh <> '' AND credential.refresh_due_at IS NOT NULL AND credential.refresh_due_at <= ?", account.AuthTypeOAuth, now).
 		Order("credential.refresh_due_at ASC, credential.account_id ASC").Limit(limit).Scan(&ids).Error
 	return ids, err
 }
 
-func (r *AccountRepository) NextCredentialRefreshDueAt(ctx context.Context) (*time.Time, error) {
+func (r *AccountRepository) NextCredentialRefreshDueAt(ctx context.Context, providers []account.Provider) (*time.Time, error) {
+	if len(providers) == 0 {
+		return nil, nil
+	}
 	var rows []struct{ RefreshDueAt time.Time }
 	err := r.db.db.WithContext(ctx).
 		Table("account_credentials AS credential").
 		Select("credential.refresh_due_at").
 		Joins("JOIN provider_accounts AS account ON account.id = credential.account_id").
-		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ?", account.ProviderBuild, true, account.AuthStatusActive).
+		Where("account.provider IN ? AND account.enabled = ? AND account.auth_status = ?", providers, true, account.AuthStatusActive).
 		Where("credential.auth_type = ? AND credential.encrypted_refresh <> '' AND credential.refresh_due_at IS NOT NULL", account.AuthTypeOAuth).
 		Order("credential.refresh_due_at ASC, credential.account_id ASC").Limit(1).Scan(&rows).Error
 	if err != nil || len(rows) == 0 {
@@ -2787,8 +2802,11 @@ func (r *AccountRepository) ListQuotaRecoveryWindows(ctx context.Context, limit 
 	return values, nil
 }
 
-// ListStaleWebQuotaAccountIDs 返回缺失或长期未同步额度的 Web 账号，供重启后的低优先级追赶任务使用。
-func (r *AccountRepository) ListStaleWebQuotaAccountIDs(ctx context.Context, before time.Time, limit int) ([]uint64, error) {
+// ListStaleQuotaAccountIDs 返回指定 Provider 中缺失或长期未同步额度的账号，供低优先级追赶任务使用。
+func (r *AccountRepository) ListStaleQuotaAccountIDs(ctx context.Context, providers []account.Provider, before time.Time, limit int) ([]uint64, error) {
+	if len(providers) == 0 {
+		return []uint64{}, nil
+	}
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
@@ -2797,7 +2815,7 @@ func (r *AccountRepository) ListStaleWebQuotaAccountIDs(ctx context.Context, bef
 		Table("provider_accounts AS account").
 		Select("account.id").
 		Joins("LEFT JOIN account_quota_windows AS quota ON quota.account_id = account.id").
-		Where("account.provider = ? AND account.enabled = ? AND account.auth_status = ?", account.ProviderWeb, true, account.AuthStatusActive).
+		Where("account.provider IN ? AND account.enabled = ? AND account.auth_status = ?", providers, true, account.AuthStatusActive).
 		Group("account.id").
 		Having("MAX(quota.synced_at) IS NULL OR MAX(quota.synced_at) < ?", before.UTC()).
 		Order("MIN(quota.synced_at) ASC, account.id ASC").

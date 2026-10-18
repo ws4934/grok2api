@@ -4967,12 +4967,6 @@ func (a *failoverAdapter) GetBilling(context.Context, account.Credential) (accou
 func (a *failoverAdapter) RefreshCredential(context.Context, account.Credential) (provider.RefreshedCredential, error) {
 	return provider.RefreshedCredential{}, nil
 }
-func (a *failoverAdapter) StartDeviceAuthorization(context.Context) (provider.DeviceAuthorization, error) {
-	return provider.DeviceAuthorization{}, nil
-}
-func (a *failoverAdapter) PollDeviceAuthorization(context.Context, string) (provider.CredentialSeed, error) {
-	return provider.CredentialSeed{}, nil
-}
 func (a *failoverAdapter) ParseImportedCredentials([]byte) ([]provider.CredentialSeed, error) {
 	return nil, nil
 }

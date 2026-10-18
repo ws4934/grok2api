@@ -261,6 +261,7 @@ type CredentialMaterial struct {
 	EncryptedAccessToken         string
 	EncryptedRefreshToken        string
 	EncryptedCloudflareCookie    string
+	EncryptedState               string
 	ExpiresAt                    time.Time
 	RefreshDueAt                 *time.Time
 	LastRefreshAt                *time.Time
@@ -286,6 +287,7 @@ func (m CredentialMaterial) ApplyTo(value Credential) (Credential, bool) {
 	value.EncryptedAccessToken = m.EncryptedAccessToken
 	value.EncryptedRefreshToken = m.EncryptedRefreshToken
 	value.EncryptedCloudflareCookie = m.EncryptedCloudflareCookie
+	value.EncryptedState = m.EncryptedState
 	value.ExpiresAt = m.ExpiresAt
 	value.RefreshDueAt = m.RefreshDueAt
 	value.LastRefreshAt = m.LastRefreshAt
@@ -529,13 +531,19 @@ type EgressLeaseBlockCursor struct {
 	NodeID        uint64
 }
 
-// DeviceSession 表示一次短期 Device OAuth 授权流程。
-type DeviceSession struct {
+// AuthSession is one short-lived interactive login (device poll or browser
+// redirect) bound to the administrator who started it. EncryptedState holds the
+// adapter's opaque challenge state and is never returned to clients.
+type AuthSession struct {
 	ID                      string
-	DeviceCode              string
+	Provider                Provider
+	AdminID                 uint64
+	Kind                    string
+	EncryptedState          string
 	UserCode                string
 	VerificationURI         string
 	VerificationURIComplete string
+	AuthorizeURL            string
 	Interval                time.Duration
 	NextPollAt              time.Time
 	ExpiresAt               time.Time

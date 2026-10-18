@@ -326,17 +326,17 @@ func shardIndex(key string) uint32 {
 
 func maxEntriesPerShard() int { return (maxEntries + shardCount - 1) / shardCount }
 
-// DeviceSessionStore 保存不会跨重启恢复的短期 OAuth 会话。
+// DeviceSessionStore 保存不会跨重启恢复的短期交互授权会话。
 type DeviceSessionStore struct {
 	mu       sync.Mutex
-	sessions map[string]account.DeviceSession
+	sessions map[string]account.AuthSession
 }
 
 func NewDeviceSessionStore() *DeviceSessionStore {
-	return &DeviceSessionStore{sessions: make(map[string]account.DeviceSession)}
+	return &DeviceSessionStore{sessions: make(map[string]account.AuthSession)}
 }
 
-func (s *DeviceSessionStore) Create(_ context.Context, value account.DeviceSession) error {
+func (s *DeviceSessionStore) Create(_ context.Context, value account.AuthSession) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
@@ -360,18 +360,18 @@ func (s *DeviceSessionStore) Create(_ context.Context, value account.DeviceSessi
 	return nil
 }
 
-func (s *DeviceSessionStore) Get(_ context.Context, id string, now time.Time) (account.DeviceSession, error) {
+func (s *DeviceSessionStore) Get(_ context.Context, id string, now time.Time) (account.AuthSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	value, ok := s.sessions[id]
 	if !ok || !now.Before(value.ExpiresAt) {
 		delete(s.sessions, id)
-		return account.DeviceSession{}, repository.ErrNotFound
+		return account.AuthSession{}, repository.ErrNotFound
 	}
 	return value, nil
 }
 
-func (s *DeviceSessionStore) Update(_ context.Context, value account.DeviceSession) error {
+func (s *DeviceSessionStore) Update(_ context.Context, value account.AuthSession) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.sessions[value.ID]; !ok {

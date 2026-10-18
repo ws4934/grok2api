@@ -452,16 +452,6 @@ func ReadDiagnosticBody(body io.Reader) ([]byte, bool, error) {
 	return data[:MaxDiagnosticBodyBytes], true, err
 }
 
-// DeviceAuthorization represents the result of starting Device OAuth.
-type DeviceAuthorization struct {
-	DeviceCode              string
-	UserCode                string
-	VerificationURI         string
-	VerificationURIComplete string
-	Interval                time.Duration
-	ExpiresIn               time.Duration
-}
-
 // CredentialSeed represents an OAuth credential not yet persisted after login or import.
 type CredentialSeed struct {
 	Provider                account.Provider
@@ -730,12 +720,6 @@ type BillingAdapter interface {
 type CredentialRefreshAdapter interface {
 	Adapter
 	RefreshCredential(ctx context.Context, credential account.Credential) (RefreshedCredential, error)
-}
-
-type DeviceOAuthAdapter interface {
-	Adapter
-	StartDeviceAuthorization(ctx context.Context) (DeviceAuthorization, error)
-	PollDeviceAuthorization(ctx context.Context, deviceCode string) (CredentialSeed, error)
 }
 
 // AuthorizationKind distinguishes polled device flows from browser redirects.
@@ -1124,14 +1108,9 @@ func (r *Registry) Validate() error {
 				return fmt.Errorf("Provider %s 声明凭据刷新但未实现适配器", value)
 			}
 		}
-		if definition.Credential.RedirectOAuth {
+		if definition.Credential.DeviceOAuth || definition.Credential.RedirectOAuth {
 			if _, ok := adapter.(InteractiveAuthAdapter); !ok {
-				return fmt.Errorf("Provider %s 声明了跳转授权但未实现交互授权接口", value)
-			}
-		}
-		if definition.Credential.DeviceOAuth {
-			if _, ok := adapter.(DeviceOAuthAdapter); !ok {
-				return fmt.Errorf("Provider %s 声明 Device OAuth 但未实现适配器", value)
+				return fmt.Errorf("Provider %s 声明交互授权但未实现交互授权接口", value)
 			}
 		}
 		if definition.Media.ImageGeneration {
@@ -1242,15 +1221,6 @@ func (r *Registry) CredentialRefresh(value account.Provider) (CredentialRefreshA
 		return nil, false
 	}
 	result, ok := adapter.(CredentialRefreshAdapter)
-	return result, ok
-}
-
-func (r *Registry) DeviceOAuth(value account.Provider) (DeviceOAuthAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(DeviceOAuthAdapter)
 	return result, ok
 }
 
