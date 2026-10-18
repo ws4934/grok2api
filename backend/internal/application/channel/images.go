@@ -32,6 +32,9 @@ type MediaStore interface {
 	OpenImage(context.Context, string) (media.Asset, io.ReadCloser, error)
 	PublicImageURL(string) string
 }
+// ResponseIDPrefix makes every image job addressable as an OpenAI Responses object.
+const ResponseIDPrefix = "resp_"
+
 type ImageExecution struct {
 	jobs  domain.JobRepository
 	media MediaStore
@@ -137,7 +140,7 @@ func (s *Service) SubmitImages(ctx context.Context, key clientkey.Key, route mod
 		return zero, e
 	}
 	sum := sha256.Sum256(b)
-	job := domain.ImageJob{ID: uuid.NewString(), ClientKeyID: key.ID, Provider: route.Provider, ModelRouteID: route.ID, BoundAccountIDs: append([]uint64(nil), route.BoundAccountIDs...), Request: r, Price: price, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(24 * time.Hour), IdempotencyKey: idempotency, PayloadHash: hex.EncodeToString(sum[:])}
+	job := domain.ImageJob{ID: ResponseIDPrefix + strings.ReplaceAll(uuid.NewString(), "-", ""), ClientKeyID: key.ID, Provider: route.Provider, ModelRouteID: route.ID, BoundAccountIDs: append([]uint64(nil), route.BoundAccountIDs...), Request: r, Price: price, CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(24 * time.Hour), IdempotencyKey: idempotency, PayloadHash: hex.EncodeToString(sum[:])}
 	if idempotency != "" {
 		if prior, ok, e := s.images.jobs.FindImageJob(ctx, key.ID, idempotency); e != nil {
 			return zero, e

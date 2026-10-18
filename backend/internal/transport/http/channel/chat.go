@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	app "github.com/chenyme/grok2api/backend/internal/application/channel"
 	domain "github.com/chenyme/grok2api/backend/internal/domain/channel"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
@@ -182,11 +183,16 @@ func publicError(c *gin.Context, status int, code, message string) {
 func (h *Handler) Dispatch() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.Request.URL.Path
-		if c.Request.Method == "POST" && (path == "/v1/images/generations" || path == "/v1/images/edits") {
-			if h.imageRequest(c, false, false) {
-				return
+		if c.Request.Method == "GET" && strings.HasPrefix(path, "/v1/responses/"+app.ResponseIDPrefix) {
+			if !h.getImageResponse(c) {
+				c.Next()
 			}
-			c.Next()
+			return
+		}
+		if c.Request.Method == "POST" && (path == "/v1/images/generations" || path == "/v1/images/edits") {
+			if !h.imageRequest(c) {
+				c.Next()
+			}
 			return
 		}
 		responses := path == "/v1/responses"
@@ -197,6 +203,10 @@ func (h *Handler) Dispatch() gin.HandlerFunc {
 		data, e := io.ReadAll(io.LimitReader(c.Request.Body, 32<<20+1))
 		if e != nil || len(data) > 32<<20 {
 			publicError(c, 413, "request_too_large", "Request exceeds the body limit")
+			return
+		}
+		c.Request.Body = io.NopCloser(bytes.NewReader(data))
+		if responses && h.imageResponse(c, data) {
 			return
 		}
 		c.Request.Body = io.NopCloser(bytes.NewReader(data))

@@ -150,6 +150,10 @@ type ImageRequest struct {
 	Background        string       `json:"background"`
 	Inputs            []ImageInput `json:"inputs,omitempty"`
 	Mask              *ImageInput  `json:"mask,omitempty"`
+	// PublicModel and Async echo the client's Responses request when the job is
+	// read back through GET /v1/responses/{id}.
+	PublicModel string `json:"public_model,omitempty"`
+	Async       bool   `json:"async,omitempty"`
 }
 
 // Checkpoint contains upstream references only; credentials stay in the account store.
