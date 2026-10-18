@@ -4,6 +4,9 @@ import (
 	"context"
 	"time"
 
+	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/domain/audit"
+	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/pkg/perfmetrics"
 )
 
@@ -46,4 +49,23 @@ func (b finalizationBudget) run(stage string, limit time.Duration, action func(c
 		Subsystem: "gateway", Operation: b.operation, Provider: b.provider, Stage: stage, Outcome: outcome,
 	}, time.Since(started))
 	return err
+}
+
+// persistFailureAudit stamps a terminal failure record (duration, time, the
+// failed account when known, egress) and writes it on a fresh context, so a
+// canceled request still leaves its audit.
+func (s *Service) persistFailureAudit(record audit.Record, startedAt time.Time, trace *infraegress.Trace, account *accountdomain.Credential) {
+	record.DurationMS = time.Since(startedAt).Milliseconds()
+	record.CreatedAt = time.Now().UTC()
+	if account != nil && account.ID != 0 {
+		accountID := account.ID
+		record.AccountID = &accountID
+		record.AccountName = account.Name
+	}
+	applyAuditEgress(&record, trace, accountdomain.Provider(record.Provider))
+	persistCtx, cancel := context.WithTimeout(context.Background(), finalizationTimeout)
+	defer cancel()
+	if err := s.audits.Create(persistCtx, record); err != nil {
+		s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", record.RequestID, "error", err)
+	}
 }

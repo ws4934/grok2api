@@ -1723,21 +1723,9 @@ attemptLoop:
 	if lastFailure != nil {
 		record := auditBase
 		record.StatusCode = lastFailure.HTTPStatus
-		record.DurationMS = time.Since(startedAt).Milliseconds()
 		record.ErrorCode = lastFailure.AuditCode()
 		record.Attempts = failureAttempts.snapshot()
-		record.CreatedAt = time.Now().UTC()
-		applyAuditEgress(&record, egressTrace, route.Provider)
-		if lastFailure.AccountID != 0 {
-			accountID := lastFailure.AccountID
-			record.AccountID = &accountID
-			record.AccountName = lastFailure.AccountName
-		}
-		persistCtx, cancel := context.WithTimeout(context.Background(), finalizationTimeout)
-		defer cancel()
-		if err := s.audits.Create(persistCtx, record); err != nil {
-			s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", input.RequestID, "error", err)
-		}
+		s.persistFailureAudit(record, startedAt, egressTrace, &accountdomain.Credential{ID: lastFailure.AccountID, Name: lastFailure.AccountName})
 		return nil, lastFailure
 	}
 	if lastErr == nil {
@@ -1745,30 +1733,19 @@ attemptLoop:
 	}
 	record := auditBase
 	record.StatusCode = http.StatusServiceUnavailable
-	record.DurationMS = time.Since(startedAt).Milliseconds()
 	record.ErrorCode = "upstream_unavailable"
+	failedAccount := accountdomain.Credential{}
 	var selectionFailure *SelectionUnavailableError
 	if errors.As(lastErr, &selectionFailure) {
 		record.StatusCode = selectionFailure.HTTPStatus()
 		record.ErrorCode = selectionFailure.Code()
-		if selectionFailure.AccountID != 0 {
-			accountID := selectionFailure.AccountID
-			record.AccountID = &accountID
-			record.AccountName = selectionFailure.AccountName
-		}
+		failedAccount = accountdomain.Credential{ID: selectionFailure.AccountID, Name: selectionFailure.AccountName}
 	}
-	if record.AccountID == nil && ownership != nil {
-		accountID := ownership.AccountID
-		record.AccountID = &accountID
+	if failedAccount.ID == 0 && ownership != nil {
+		failedAccount.ID = ownership.AccountID
 	}
 	record.Attempts = failureAttempts.snapshot()
-	record.CreatedAt = time.Now().UTC()
-	applyAuditEgress(&record, egressTrace, route.Provider)
-	persistCtx, cancel := context.WithTimeout(context.Background(), finalizationTimeout)
-	defer cancel()
-	if err := s.audits.Create(persistCtx, record); err != nil {
-		s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", input.RequestID, "error", err)
-	}
+	s.persistFailureAudit(record, startedAt, egressTrace, &failedAccount)
 	return nil, fmt.Errorf("%w: %w", ErrNoAvailableAccount, lastErr)
 }
 

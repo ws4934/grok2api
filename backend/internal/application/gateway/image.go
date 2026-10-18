@@ -198,19 +198,7 @@ func (s *Service) executeImage(
 		record := auditBase
 		record.StatusCode = statusCode
 		record.ErrorCode = errorCode
-		record.DurationMS = time.Since(startedAt).Milliseconds()
-		record.CreatedAt = time.Now().UTC()
-		if credential != nil {
-			accountID := credential.ID
-			record.AccountID = &accountID
-			record.AccountName = credential.Name
-		}
-		applyAuditEgress(&record, egressTrace, route.Provider)
-		persistCtx, cancel := context.WithTimeout(context.Background(), finalizationTimeout)
-		defer cancel()
-		if auditErr := s.audits.Create(persistCtx, record); auditErr != nil {
-			s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", requestID, "error", auditErr)
-		}
+		s.persistFailureAudit(record, startedAt, egressTrace, credential)
 	}
 	pricingModel := s.providers.PricingModel(route.Provider, route.UpstreamModel)
 	pricingResolution, pricingQuality := resolution, quality

@@ -101,19 +101,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 		record := auditBase
 		record.StatusCode = statusCode
 		record.ErrorCode = errorCode
-		record.DurationMS = time.Since(startedAt).Milliseconds()
-		record.CreatedAt = time.Now().UTC()
-		if cred != nil {
-			accountID := cred.ID
-			record.AccountID = &accountID
-			record.AccountName = cred.Name
-		}
-		applyAuditEgress(&record, egressTrace, route.Provider)
-		persistCtx, cancel := context.WithTimeout(context.Background(), finalizationTimeout)
-		defer cancel()
-		if auditErr := s.audits.Create(persistCtx, record); auditErr != nil {
-			s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", input.RequestID, "error", auditErr)
-		}
+		s.persistFailureAudit(record, startedAt, egressTrace, cred)
 	}
 
 	for attempt := 0; attemptPolicy.allows(attempt); attempt++ {
