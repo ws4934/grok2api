@@ -1,6 +1,7 @@
 package channelhttp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 
 	app "github.com/chenyme/grok2api/backend/internal/application/channel"
 	domain "github.com/chenyme/grok2api/backend/internal/domain/channel"
+	"github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/gin-gonic/gin"
 )
 
@@ -54,8 +56,8 @@ func decodeImageResponse(data []byte) (imageResponseRequest, imageResponseInput,
 	if e := strictJSON(data, &r); e != nil {
 		return r, out, fmt.Errorf("unsupported or invalid parameter: %v", e)
 	}
-	if r.Stream {
-		return r, out, errors.New("streaming image responses are unsupported; use background mode")
+	if r.Stream && r.Background {
+		return r, out, errors.New("background image responses cannot be streamed; poll GET /v1/responses/{id}")
 	}
 	if len(r.Tools) != 1 || strictJSON(r.Tools[0], &out.Tool) != nil || out.Tool.Type != "image_generation" {
 		return r, out, errors.New("exactly one image_generation tool with supported options is required")
@@ -153,25 +155,37 @@ func (h *Handler) imageResponse(c *gin.Context, data []byte) bool {
 	if json.Unmarshal(data, &head) != nil {
 		return false
 	}
-	model, found := "", false
+	toolModel, found := "", false
 	for _, t := range head.Tools {
 		if t.Type == "image_generation" {
-			found, model = true, t.Model
+			found, toolModel = true, t.Model
 		}
 	}
 	if !found {
 		return false
 	}
-	if model == "" {
-		model = head.Model
+	name := toolModel
+	if name == "" {
+		name = head.Model
 	}
 	ctx := c.Request.Context()
-	generate, generateOK, e := h.service.Resolve(ctx, model, "image")
-	if e != nil {
-		publicError(c, 503, "channel_unavailable", "Channel lookup failed")
-		return true
+	var generate, edit model.Route
+	var generateOK, editOK bool
+	resolve := func(public string) (e error) {
+		if generate, generateOK, e = h.service.Resolve(ctx, public, "image"); e != nil {
+			return e
+		}
+		edit, editOK, e = h.service.Resolve(ctx, public, "image_edit")
+		return e
 	}
-	edit, editOK, e := h.service.Resolve(ctx, model, "image_edit")
+	e := resolve(name)
+	if e == nil && !generateOK && !editOK && toolModel == "" {
+		// Official semantics: the top-level model is the mainline (text) model.
+		if fallback := h.defaultImageModel(ctx, head.Model); fallback != "" {
+			name = fallback
+			e = resolve(name)
+		}
+	}
 	if e != nil {
 		publicError(c, 503, "channel_unavailable", "Channel lookup failed")
 		return true
@@ -203,7 +217,7 @@ func (h *Handler) imageResponse(c *gin.Context, data []byte) bool {
 		return true
 	}
 	t := in.Tool
-	request := domain.ImageRequest{Operation: operation, Model: model, PublicModel: r.Model, Async: r.Background, Prompt: in.Prompt, N: 1, Size: t.Size, Quality: t.Quality, OutputFormat: t.OutputFormat, Background: t.Background}
+	request := domain.ImageRequest{Operation: operation, Model: name, PublicModel: r.Model, Async: r.Background, Prompt: in.Prompt, N: 1, Size: t.Size, Quality: t.Quality, OutputFormat: t.OutputFormat, Background: t.Background}
 	for i, u := range in.Images {
 		data, e := readImageURL(c, u)
 		if e != nil {
@@ -235,6 +249,10 @@ func (h *Handler) imageResponse(c *gin.Context, data []byte) bool {
 		imageRejected(c, e)
 		return true
 	}
+	if r.Stream {
+		h.streamImageResponse(c, key.ID, job)
+		return true
+	}
 	if !r.Background {
 		// A disconnect cancels only unsubmitted work; the response stays readable.
 		if job, e = h.service.WaitImageJob(ctx, key.ID, job.ID); e != nil {
@@ -243,6 +261,23 @@ func (h *Handler) imageResponse(c *gin.Context, data []byte) bool {
 	}
 	h.writeImageResponse(c, key.ID, job)
 	return true
+}
+
+// defaultImageModel returns the channel's default public image route when the
+// top-level model of an image_generation request is a channel text model.
+func (h *Handler) defaultImageModel(ctx context.Context, name string) string {
+	for _, operation := range []string{"responses", "chat"} {
+		route, ok, e := h.service.Resolve(ctx, name, operation)
+		if e != nil || !ok {
+			continue
+		}
+		cfg, e := h.service.Settings(ctx, route.Provider)
+		if e != nil {
+			return ""
+		}
+		return cfg.DefaultImageModel
+	}
+	return ""
 }
 
 // getImageResponse serves GET /v1/responses/{id} for image jobs and returns
@@ -308,22 +343,34 @@ func (h *Handler) cancelImageResponse(c *gin.Context) {
 func terminal(status string) bool { return status != "queued" && status != "running" }
 
 func (h *Handler) writeImageResponse(c *gin.Context, key uint64, job domain.ImageJob) {
+	body, e := h.imageResponseBody(c.Request.Context(), key, job)
+	if e != nil {
+		publicError(c, 503, "result_unavailable", "Image result unavailable")
+		return
+	}
+	c.JSON(200, body)
+}
+
+// imageResponseBody renders a job with its images and, once completed, usage.
+func (h *Handler) imageResponseBody(ctx context.Context, key uint64, job domain.ImageJob) (gin.H, error) {
 	var results []app.ImageResult
+	var usage any
 	if job.Status == "succeeded" || job.Status == "partially_succeeded" {
 		var e error
-		if results, e = h.service.ImageResults(c.Request.Context(), key, job.ID, "b64_json"); e != nil {
-			publicError(c, 503, "result_unavailable", "Image result unavailable")
-			return
+		if results, e = h.service.ImageResults(ctx, key, job.ID, "b64_json"); e != nil {
+			return nil, e
 		}
+		usage = h.imageUsage(ctx, job, job.Items)
 	}
-	c.JSON(200, imageResponseObject(job, results))
+	return imageResponseObject(job, results, usage), nil
 }
+func imageCallID(item domain.ImageItem) string { return "ig_" + strings.ReplaceAll(item.ID, "-", "") }
 
 // imageResponseObject renders a job as an OpenAI Response with one
 // image_generation_call per generated image.
-func imageResponseObject(job domain.ImageJob, results []app.ImageResult) gin.H {
+func imageResponseObject(job domain.ImageJob, results []app.ImageResult, usage any) gin.H {
 	r := job.Request
-	status, failure, uncertain := "failed", "", false
+	status := "failed"
 	switch job.Status {
 	case "queued":
 		status = "queued"
@@ -337,7 +384,7 @@ func imageResponseObject(job domain.ImageJob, results []app.ImageResult) gin.H {
 	output := []any{}
 	next := 0
 	for _, item := range job.Items {
-		call := gin.H{"id": "ig_" + strings.ReplaceAll(item.ID, "-", ""), "type": "image_generation_call", "status": "failed", "result": nil}
+		call := gin.H{"id": imageCallID(item), "type": "image_generation_call", "status": "failed", "result": nil}
 		switch item.Status {
 		case "queued":
 			if job.Status == "queued" {
@@ -359,28 +406,14 @@ func imageResponseObject(job domain.ImageJob, results []app.ImageResult) gin.H {
 			if format == "" {
 				format = "png"
 			}
-			call["output_format"], call["background"], call["quality"], call["size"] = format, r.Background, r.Quality, r.Size
-			if item.Width > 0 {
-				call["size"] = fmt.Sprintf("%dx%d", item.Width, item.Height)
-			}
-		case "uncertain":
-			uncertain = true
-		}
-		if item.Error != "" && failure == "" {
-			failure = item.Error
+			call["output_format"], call["background"], call["quality"], call["size"] = format, r.Background, r.Quality, imageSize(item, r)
 		}
 		output = append(output, call)
 	}
 	var problem any
 	if status == "failed" {
-		code := "image_generation_failed"
-		if uncertain {
-			code = "result_uncertain"
-		}
-		if failure == "" {
-			failure = "Image generation failed"
-		}
-		problem = gin.H{"code": code, "message": failure}
+		code, message := jobFailure(job)
+		problem = gin.H{"code": code, "message": message}
 	}
 	model := r.PublicModel
 	if model == "" {
@@ -390,7 +423,57 @@ func imageResponseObject(job domain.ImageJob, results []app.ImageResult) gin.H {
 		"id": job.ID, "object": "response", "created_at": job.CreatedAt.Unix(), "status": status,
 		"background": r.Async, "error": problem, "incomplete_details": nil, "instructions": nil,
 		"metadata": gin.H{}, "model": model, "output": output, "parallel_tool_calls": false,
-		"tool_choice": gin.H{"type": "image_generation"}, "store": true, "usage": nil,
+		"tool_choice": gin.H{"type": "image_generation"}, "store": true, "usage": usage,
 		"tools": []any{gin.H{"type": "image_generation", "model": r.Model, "size": r.Size, "quality": r.Quality, "background": r.Background, "output_format": r.OutputFormat}},
 	}
+}
+
+// streamImageResponse emits the official Responses event sequence for one
+// image_generation_call while the job runs. There are no partial images.
+func (h *Handler) streamImageResponse(c *gin.Context, key uint64, job domain.ImageJob) {
+	ctx := c.Request.Context()
+	sequence := 0
+	send := func(name string, body gin.H) {
+		body["type"], body["sequence_number"] = name, sequence
+		sequence++
+		sseEvent(c, name, body)
+	}
+	startSSE(c)
+	head := imageResponseObject(job, nil, nil)
+	head["status"], head["output"] = "in_progress", []any{}
+	send("response.created", gin.H{"response": head})
+	send("response.in_progress", gin.H{"response": head})
+	id := imageCallID(job.Items[0])
+	send("response.output_item.added", gin.H{"output_index": 0, "item": gin.H{"id": id, "type": "image_generation_call", "status": "in_progress", "result": nil}})
+	send("response.image_generation_call.in_progress", gin.H{"output_index": 0, "item_id": id})
+	generating := false
+	markGenerating := func() {
+		if !generating {
+			generating = true
+			send("response.image_generation_call.generating", gin.H{"output_index": 0, "item_id": id})
+		}
+	}
+	job, e := h.watchImageJob(c, key, job, func(job domain.ImageJob) error {
+		if stage := job.Items[0].Stage; stage == "polling" || stage == "downloading" {
+			markGenerating()
+		}
+		return nil
+	})
+	if ctx.Err() != nil {
+		return
+	}
+	final, err := h.imageResponseBody(ctx, key, job)
+	if e != nil || err != nil {
+		send("error", gin.H{"code": "result_unavailable", "message": "Image result unavailable", "param": nil})
+		return
+	}
+	output, _ := final["output"].([]any)
+	if final["status"] != "completed" || len(output) == 0 {
+		send("response.failed", gin.H{"response": final})
+		return
+	}
+	markGenerating()
+	send("response.image_generation_call.completed", gin.H{"output_index": 0, "item_id": id})
+	send("response.output_item.done", gin.H{"output_index": 0, "item": output[0]})
+	send("response.completed", gin.H{"response": final})
 }
