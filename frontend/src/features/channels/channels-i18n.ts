@@ -8,6 +8,7 @@ const zhCN = {
   done: "操作已完成",
   failed: "操作失败",
   creativeLink: "参考图 / 蒙版编辑",
+  egressFallbackHelp: "{{name}} 没有可用主出口时使用的回退方式。",
   tabs: { accounts: "账户", models: "模型与价格", access: "密钥授权", jobs: "图片任务", settings: "设置" },
   status: {
     pending: "待检测",
@@ -70,6 +71,11 @@ const zhCN = {
     oauthSaved: "账户已保存，Web 验证结果见账户状态",
     oauthComplete: "完成授权并保存",
     report: "操作结果",
+    egress: "出口节点",
+    noEgress: "未绑定",
+    chooseEgress: "选择出口节点",
+    bindEgress: "绑定到出口节点",
+    unbindEgress: "解绑出口",
   },
   settings: {
     title: "渠道设置",
@@ -81,6 +87,11 @@ const zhCN = {
     image_workers: "图片 Worker 数",
     help: "聊天费用使用本地 o200k_base 估算。启用渠道后仍需配置价格、建立模型路由并授权客户端密钥。",
     save: "保存设置",
+    clearance: "Cloudflare clearance（FlareSolverr，按需）",
+    clearanceHelp: "开启后，遇到 Cloudflare 质询时会通过账户的出口调用 FlareSolverr 求解，之后的请求使用求解器的浏览器身份。FlareSolverr 地址与超时沿用 系统设置 → Grok Web 中的 Clearance 配置。默认关闭。",
+    defaultImageModel: "默认图片路由",
+    noDefaultImageModel: "无",
+    defaultImageModelHelp: "当 Responses 的 image_generation 工具未指定模型、且顶层模型为聊天模型时使用。",
   },
   models: {
     title: "价格与模型开放",
@@ -164,6 +175,7 @@ const en: typeof zhCN = {
   done: "Operation completed",
   failed: "Operation failed",
   creativeLink: "Reference image / mask editing",
+  egressFallbackHelp: "Fallback used when no {{name}} primary egress is available.",
   tabs: { accounts: "Accounts", models: "Models & prices", access: "Key access", jobs: "Image jobs", settings: "Settings" },
   status: {
     pending: "Pending check",
@@ -226,6 +238,11 @@ const en: typeof zhCN = {
     oauthSaved: "Account saved. Check the account status for the Web verification result.",
     oauthComplete: "Complete authorization and save",
     report: "Operation results",
+    egress: "Egress node",
+    noEgress: "Not bound",
+    chooseEgress: "Select egress node",
+    bindEgress: "Bind to egress node",
+    unbindEgress: "Unbind egress",
   },
   settings: {
     title: "Channel settings",
@@ -237,6 +254,11 @@ const en: typeof zhCN = {
     image_workers: "Image workers",
     help: "Chat costs are estimated locally with o200k_base. After enabling the channel you still need to configure prices, create model routes, and grant client keys.",
     save: "Save settings",
+    clearance: "Cloudflare clearance (FlareSolverr, on demand)",
+    clearanceHelp: "When enabled, a Cloudflare challenge triggers a FlareSolverr solve through the account's egress, and requests then use the solver's browser identity. Uses the FlareSolverr URL and timeout configured under System settings → Grok Web clearance. Off by default.",
+    defaultImageModel: "Default image route",
+    noDefaultImageModel: "None",
+    defaultImageModelHelp: "Used when a Responses image_generation tool names no model and the top-level model is a chat model.",
   },
   models: {
     title: "Prices & model exposure",

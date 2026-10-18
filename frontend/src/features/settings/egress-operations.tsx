@@ -16,6 +16,7 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableActionCell, TableActionHead, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { channelsApi } from "@/features/channels/channels-api";
+import "@/features/channels/channels-i18n";
 import {
   createEgressSource,
   deleteEgressSource,
@@ -82,6 +83,7 @@ function operationsFormFrom(value?: EgressOperationsConfigDTO): Omit<EgressOpera
     autoBalanceEnabled: value.autoBalanceEnabled,
     assignmentIntervalSeconds: value.assignmentIntervalSeconds,
     fallbacks: {
+      ...value.fallbacks,
       grok_build: { ...defaults.grok_build, ...value.fallbacks.grok_build },
       grok_web: { ...defaults.grok_web, ...value.fallbacks.grok_web },
       grok_console: { ...defaults.grok_console, ...value.fallbacks.grok_console },
@@ -120,6 +122,7 @@ export function EgressAutomation({ scopeLabel }: { scopeLabel: (scope: EgressSco
   const [operationsDraft, setOperationsDraft] = useState<Omit<EgressOperationsConfigDTO, "updatedAt"> | null>(null);
   const operationsQuery = useQuery({ queryKey: ["egress-operations"], queryFn: getEgressOperationsConfig });
   const nodesQuery = useQuery({ queryKey: ["egress-nodes", "fallback-options"], queryFn: () => listAllEgressNodes() });
+  const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: channelsApi.list });
   const operationsForm = operationsDraft ?? operationsFormFrom(operationsQuery.data);
 
   const invalidate = () => {
@@ -153,7 +156,7 @@ export function EgressAutomation({ scopeLabel }: { scopeLabel: (scope: EgressSco
   function setFallbackMode(scope: EgressScope, mode: EgressFallbackMode) {
     const candidates = fallbackNodeCandidates(nodesQuery.data?.items ?? [], scope);
     const current = operationsForm.fallbacks[scope];
-    const currentCandidate = candidates.find((node) => node.id === current.nodeId);
+    const currentCandidate = candidates.find((node) => node.id === current?.nodeId);
     setFallback(scope, {
       mode,
       nodeId: mode === "fixed" ? (currentCandidate?.id ?? candidates[0]?.id) : undefined,
@@ -201,15 +204,15 @@ export function EgressAutomation({ scopeLabel }: { scopeLabel: (scope: EgressSco
                 </Tooltip>
               </div>
               <div className="mt-3 space-y-2">
-                {fallbackScopes.map((scope) => {
-                  const fallback = operationsForm.fallbacks[scope];
+                {[...fallbackScopes, ...(channelsQuery.data?.map((channel) => channel.descriptor.id) ?? [])].map((scope) => {
+                  const fallback: EgressFallbackConfigDTO = operationsForm.fallbacks[scope] ?? { mode: "none" };
                   const candidates = fallbackNodeCandidates(nodesQuery.data?.items ?? [], scope);
                   const selectedAvailable = candidates.some((node) => node.id === fallback.nodeId);
                   return (
                     <div className="grid min-w-0 gap-2.5 py-1 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] sm:items-center sm:gap-8" key={scope}>
                       <div className="min-w-0">
                         <div className="flex min-h-5 items-center"><Label className="text-xs font-medium">{scopeLabel(scope)}</Label></div>
-                        <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">{t(fallbackDescriptionKeys[scope])}</p>
+                        <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">{t(fallbackDescriptionKeys[scope] ?? "channels.egressFallbackHelp", { name: scopeLabel(scope) })}</p>
                       </div>
                       <div className={fallback.mode === "fixed" ? "grid min-w-0 gap-2 sm:grid-cols-2" : "grid min-w-0"}>
                         <Select value={fallback.mode} onValueChange={(mode) => setFallbackMode(scope, mode as EgressFallbackMode)}>

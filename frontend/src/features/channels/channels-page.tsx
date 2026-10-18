@@ -5,7 +5,9 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { listClientKeys } from "@/features/client-keys/client-keys-api";
+import { assignEgressAccounts, listAllEgressNodes, unassignEgressAccounts } from "@/features/settings/settings-api";
 import { ImageWorkbench } from "./image-workbench";
 import { channelsApi, type ChannelSettings, type ChannelView } from "./channels-api";
 import "./channels-i18n";
@@ -108,7 +110,16 @@ function ChannelDetail({ channel }: { channel: ChannelView }) {
           <Jobs id={id} run={run} busy={busy} />
         </>
       )}
-      {tab === "settings" && <Settings key={JSON.stringify(channel.settings)} id={id} initial={channel.settings} run={run} busy={busy} />}
+      {tab === "settings" && (
+        <Settings
+          key={JSON.stringify(channel.settings)}
+          id={id}
+          initial={channel.settings}
+          clearanceURL={channel.descriptor.clearance_url}
+          run={run}
+          busy={busy}
+        />
+      )}
     </>
   );
 }
@@ -129,6 +140,9 @@ function Accounts({ id, run, busy }: Actions) {
   const [name, setName] = useState("");
   const [concurrency, setConcurrency] = useState(1);
   const [token, setToken] = useState("");
+  const nodes = useQuery({ queryKey: ["egress-nodes", "channel", id], queryFn: () => listAllEgressNodes({ scope: id }) });
+  const [nodeID, setNodeID] = useState("");
+  const nodeName = (nodeId: number) => nodes.data?.items.find((node) => node.id === String(nodeId))?.name ?? `#${nodeId}`;
 
   const exportAccounts = (ids: number[]) => run(async () => {
     const result = await channelsApi.export(id, ids);
@@ -166,6 +180,26 @@ function Accounts({ id, run, busy }: Actions) {
           <Button size="sm" variant="outline" disabled={busy} onClick={() => void exportAccounts([])}>
             {t("channels.accounts.exportAll")}
           </Button>
+          <select aria-label={t("channels.accounts.egress")} className={selectClass} value={nodeID} onChange={(event) => setNodeID(event.target.value)}>
+            <option value="">{t("channels.accounts.chooseEgress")}</option>
+            {nodes.data?.items.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}
+          </select>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy || !selected.length || !nodeID}
+            onClick={() => void run(async () => setReport(JSON.stringify(await assignEgressAccounts(nodeID, id, selected.map(String)), null, 2)))}
+          >
+            {t("channels.accounts.bindEgress")}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy || !selected.length}
+            onClick={() => void run(async () => setReport(JSON.stringify(await unassignEgressAccounts(id, selected.map(String)), null, 2)))}
+          >
+            {t("channels.accounts.unbindEgress")}
+          </Button>
         </div>
         {query.error && <p role="alert">{query.error.message}</p>}
         <div className="overflow-x-auto">
@@ -177,6 +211,7 @@ function Accounts({ id, run, busy }: Actions) {
                 <th>{t("channels.accounts.status")}</th>
                 <th>{t("channels.accounts.quota")}</th>
                 <th>{t("channels.accounts.credentials")}</th>
+                <th>{t("channels.accounts.egress")}</th>
                 <th>{t("common.actions")}</th>
               </tr>
             </thead>
@@ -210,6 +245,7 @@ function Accounts({ id, run, busy }: Actions) {
                     {a.refreshable ? t("channels.accounts.refreshable") : t("channels.accounts.notRefreshable")}
                     <div className="text-xs">{a.expires_at ? new Date(a.expires_at).toLocaleString() : t("channels.accounts.expiryUnknown")}</div>
                   </td>
+                  <td>{a.egress_node_id ? nodeName(a.egress_node_id) : t("channels.accounts.noEgress")}</td>
                   <td>
                     <Button
                       size="sm"
@@ -348,9 +384,16 @@ function Accounts({ id, run, busy }: Actions) {
   );
 }
 
-function Settings({ id, initial, run, busy }: Actions & { initial: ChannelSettings }) {
+function Settings({ id, initial, clearanceURL, run, busy }: Actions & { initial: ChannelSettings; clearanceURL?: string }) {
   const { t } = useTranslation();
   const [value, setValue] = useState(initial);
+  const models = useQuery({ queryKey: ["channels", id, "models"], queryFn: () => channelsApi.models(id) });
+  // Clients address channel routes without the "<channel>/" namespace, so store the unprefixed name.
+  const prefix = `${id}/`.toLowerCase();
+  const imageRoutes = models.data
+    ?.filter((m) => m.Enabled && m.Capability === "image")
+    .map((m) => (m.PublicID.toLowerCase().startsWith(prefix) ? m.PublicID.slice(prefix.length) : m.PublicID)) ?? [];
+  if (value.default_image_model && !imageRoutes.includes(value.default_image_model)) imageRoutes.push(value.default_image_model);
 
   return (
     <Panel title={t("channels.settings.title")}>
@@ -365,9 +408,29 @@ function Settings({ id, initial, run, busy }: Actions & { initial: ChannelSettin
           <input type="checkbox" checked={value.enabled} onChange={(event) => setValue({ ...value, enabled: event.target.checked })} />
           {t("channels.settings.enabled")}
         </label>
+        {clearanceURL && (
+          <div className="grid gap-2 text-sm">
+            <div className="flex items-center gap-2">
+              <Switch
+                id="channel-cloudflare-clearance"
+                checked={value.cloudflare_clearance}
+                onCheckedChange={(checked) => setValue({ ...value, cloudflare_clearance: checked })}
+              />
+              <Label htmlFor="channel-cloudflare-clearance">{t("channels.settings.clearance")}</Label>
+            </div>
+            <p className="text-muted-foreground">{t("channels.settings.clearanceHelp")}</p>
+          </div>
+        )}
         <Field label={t("channels.settings.imageModel")}>
           <Input value={value.image_conversation_model} onChange={(event) => setValue({ ...value, image_conversation_model: event.target.value })} />
         </Field>
+        <Field label={t("channels.settings.defaultImageModel")}>
+          <select className={selectClass} value={value.default_image_model} onChange={(event) => setValue({ ...value, default_image_model: event.target.value })}>
+            <option value="">{t("channels.settings.noDefaultImageModel")}</option>
+            {imageRoutes.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </Field>
+        <p className="text-sm text-muted-foreground">{t("channels.settings.defaultImageModelHelp")}</p>
         {settingsFields.map((key) => (
           <Field key={key} label={t(`channels.settings.${key}`)}>
             <Input

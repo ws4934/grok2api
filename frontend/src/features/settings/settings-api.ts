@@ -502,10 +502,10 @@ export function rebalanceEgressAccounts(): Promise<EgressRebalanceResultDTO> {
   return apiRequest("/api/admin/v1/egress-operations/rebalance", { method: "POST" }, decodeEgressRebalanceResult);
 }
 
-export function assignEgressAccounts(nodeID: string, provider: "grok_build" | "grok_web" | "grok_console", ids: string[], mode: "manual" | "auto" = "manual"): Promise<{ assigned: number }> {
+export function assignEgressAccounts(nodeID: string, provider: string, ids: string[], mode: "manual" | "auto" = "manual"): Promise<{ assigned: number }> {
   return apiRequest(`/api/admin/v1/egress-nodes/${nodeID}/accounts`, { method: "POST", body: { provider, ids, mode } }, createObjectDecoder<{ assigned: number }>("egress account assignment", { assigned: isNumber }));
 }
 
-export function unassignEgressAccounts(provider: "grok_build" | "grok_web" | "grok_console", ids: string[]): Promise<{ assigned: number }> {
+export function unassignEgressAccounts(provider: string, ids: string[]): Promise<{ assigned: number }> {
   return apiRequest("/api/admin/v1/egress-nodes/accounts", { method: "DELETE", body: { provider, ids } }, createObjectDecoder<{ assigned: number }>("egress account assignment", { assigned: isNumber }));
 }

@@ -9,6 +9,8 @@ const settingsSchema = z.object({
   vision_tokens: z.number(),
   account_concurrency: z.number(),
   image_workers: z.number(),
+  cloudflare_clearance: z.boolean().default(false),
+  default_image_model: z.string().default(""),
 });
 
 const descriptorSchema = z.object({
@@ -26,6 +28,7 @@ const descriptorSchema = z.object({
     refresh: z.boolean(),
   }),
   auth_methods: z.array(z.string()),
+  clearance_url: z.string().optional(),
 });
 
 const accountSchema = z.object({
@@ -46,6 +49,7 @@ const accountSchema = z.object({
   refreshable: z.boolean(),
   expires_at: z.string().optional(),
   synced_at: z.string().optional(),
+  egress_node_id: z.number().optional(),
   models: z.array(z.string()).nullable(),
   quotas: z.array(z.object({ feature: z.string(), remaining: z.number().nullable(), reset_at: z.string().optional() })).nullable(),
 });
