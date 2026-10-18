@@ -49,6 +49,7 @@ type ImageOutputValidator interface {
 type JobRepository interface {
 	AcquireChannelSlot(context.Context, uint64, string, time.Time) error
 	ReleaseChannelSlot(context.Context, string) error
+	RenewChannelSlot(context.Context, string, time.Time) error
 	FindImageJob(context.Context, uint64, string) (ImageJob, bool, error)
 	CreateImageJob(context.Context, ImageJob) (ImageJob, bool, error)
 	GetImageJob(context.Context, string, uint64) (ImageJob, error)

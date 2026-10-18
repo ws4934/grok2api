@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 	"time"
 
 	auditdomain "github.com/chenyme/grok2api/backend/internal/domain/audit"
@@ -30,7 +29,6 @@ type Execution struct {
 	billing Billing
 	audits  AuditWriter
 	codec   tokenizer.Codec
-	mu      sync.Mutex
 }
 
 func (s *Service) SetExecution(billing Billing, audits AuditWriter) error {
@@ -41,11 +39,42 @@ func (s *Service) SetExecution(billing Billing, audits AuditWriter) error {
 	s.execution = &Execution{billing: billing, audits: audits, codec: codec}
 	return nil
 }
+
+// SetRequestTimeout aligns channel chats with the server request timeout.
+func (s *Service) SetRequestTimeout(v time.Duration) { s.requestTimeout = v }
+func (s *Service) chatTimeout() time.Duration {
+	if s.requestTimeout > 0 {
+		return s.requestTimeout
+	}
+	return 2 * time.Hour
+}
+
+// count is safe for concurrent use: the codec only reads its vocabulary.
 func (s *Service) count(text string) (int64, error) {
-	s.execution.mu.Lock()
-	defer s.execution.mu.Unlock()
+	if text == "" {
+		return 0, nil
+	}
 	n, e := s.execution.codec.Count(text)
 	return int64(n), e
+}
+
+// fit returns the longest rune prefix of text whose estimate stays within budget.
+func (s *Service) fit(text string, budget int64) (string, int64, error) {
+	runes := []rune(text)
+	lo, hi, used := 0, len(runes), int64(0)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		n, e := s.count(string(runes[:mid]))
+		if e != nil {
+			return "", 0, e
+		}
+		if n <= budget {
+			lo, used = mid, n
+		} else {
+			hi = mid - 1
+		}
+	}
+	return string(runes[:lo]), used, nil
 }
 func (s *Service) estimate(r domain.ChatRequest, vision int) (int64, error) {
 	n := int64(3)
@@ -82,6 +111,30 @@ type ChatResult struct {
 
 var errOutputLimit = errors.New("local output limit")
 
+// Execution slots expire unless renewed, so a crashed instance frees the account.
+const slotLease = 90 * time.Second
+
+func (s *Service) renewSlot(ctx context.Context, holder string) func() {
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(slotLease / 3)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				_ = s.images.jobs.RenewChannelSlot(ctx, holder, time.Now().UTC().Add(slotLease))
+			}
+		}
+	}()
+	return func() { close(stop); <-done }
+}
+
 func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route, r domain.ChatRequest, stream bool, emit func(domain.ChatEvent) error) (ChatResult, error) {
 	result := ChatResult{}
 	cfg, e := s.authorize(ctx, key, route)
@@ -113,7 +166,9 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 	}
 	event := uuid.NewString()
 	reserve := tokenCost(result.InputTokens, price.InputPerMillionTicks) + tokenCost(int64(cfg.OutputTokenLimit), price.OutputPerMillionTicks)
-	_, e = s.execution.billing.ReserveBilling(ctx, key, event, reserve, 3*time.Minute)
+	// Like the legacy gateway, keep the reservation past the request deadline
+	// plus a crash grace so a slow settlement cannot release it early.
+	_, e = s.execution.billing.ReserveBilling(ctx, key, event, reserve, s.chatTimeout()+10*time.Minute)
 	if e != nil {
 		return result, e
 	}
@@ -125,7 +180,7 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 			_ = s.execution.billing.CancelBilling(cleanup, event)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, s.chatTimeout())
 	defer cancel()
 	var selected domain.Account
 	var release func()
@@ -141,7 +196,7 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 			if s.images == nil {
 				return result, errors.New("channel slot store unavailable")
 			}
-			if e := s.images.jobs.AcquireChannelSlot(ctx, a.ID, event, time.Now().UTC().Add(2*time.Minute)); e == nil {
+			if e := s.images.jobs.AcquireChannelSlot(ctx, a.ID, event, time.Now().UTC().Add(slotLease)); e == nil {
 				if policy, ok := m.(domain.QuotaPolicy); ok {
 					if err := s.images.jobs.ReserveChannelQuota(ctx, a.ID, event, policy.ChatQuota(r)); err != nil {
 						_ = s.images.jobs.ReleaseChannelSlot(ctx, event)
@@ -151,7 +206,9 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 						return result, err
 					}
 				}
+				stopHeartbeat := s.renewSlot(ctx, event)
 				release = func() {
+					stopHeartbeat()
 					c, end := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 					defer end()
 					_ = s.images.jobs.ReleaseChannelSlot(c, event)
@@ -191,49 +248,41 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 	defer releaseEnvironment()
 	ctx = domain.WithQuotaObserver(ctx, func(feature string) error { return s.images.jobs.MarkChannelQuotaSent(ctx, event, feature) })
 	started := time.Now()
+	// Deltas are counted on their own, so a long stream costs O(n) tokenization.
+	// Per-delta counts never undercount the joined text, which keeps the local
+	// limit conservative; billing uses one exact count of the final output.
+	limit, used := int64(cfg.OutputTokenLimit), int64(0)
+	take := func(part string) (string, error) {
+		if part == "" || result.Truncated {
+			return "", nil
+		}
+		n, e := s.count(part)
+		if e != nil {
+			return "", e
+		}
+		if used+n <= limit {
+			used += n
+			return part, nil
+		}
+		result.Truncated = true
+		part, n, e = s.fit(part, limit-used)
+		used += n
+		return part, e
+	}
 	runErr := adapter.Chat(ctx, credentials, r, func(ev domain.ChatEvent) error {
 		if ev.Done && ev.Text == "" && ev.Reasoning == "" {
 			return nil
 		}
 		ev.Done = false // Completion is emitted after durable settlement.
-		oldText, oldReason := result.Text, result.Reasoning
-		result.Text += ev.Text
+		var e error
+		if ev.Reasoning, e = take(ev.Reasoning); e != nil {
+			return e
+		}
+		if ev.Text, e = take(ev.Text); e != nil {
+			return e
+		}
 		result.Reasoning += ev.Reasoning
-		count, e := s.count(result.Text + result.Reasoning)
-		if e != nil {
-			return e
-		}
-		if count > int64(cfg.OutputTokenLimit) {
-			combined := []rune(ev.Text + ev.Reasoning)
-			lo, hi := 0, len(combined)
-			for lo < hi {
-				mid := (lo + hi + 1) / 2
-				n, e := s.count(oldText + oldReason + string(combined[:mid]))
-				if e != nil {
-					return e
-				}
-				if n <= int64(cfg.OutputTokenLimit) {
-					lo = mid
-				} else {
-					hi = mid - 1
-				}
-			}
-			result.Text = oldText
-			result.Reasoning = oldReason
-			if ev.Text != "" {
-				ev.Text = string(combined[:lo])
-				ev.Reasoning = ""
-				result.Text += ev.Text
-			} else {
-				ev.Reasoning = string(combined[:lo])
-				result.Reasoning += ev.Reasoning
-			}
-			result.Truncated = true
-		}
-		result.OutputTokens, e = s.count(result.Text + result.Reasoning)
-		if e != nil {
-			return e
-		}
+		result.Text += ev.Text
 		if ev.Text != "" || ev.Reasoning != "" {
 			if e := emit(ev); e != nil {
 				return e
@@ -247,6 +296,15 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 	if errors.Is(runErr, errOutputLimit) {
 		runErr = nil
 	}
+	textTokens, e := s.count(result.Text)
+	if e != nil {
+		return result, e
+	}
+	reasoningTokens, e := s.count(result.Reasoning)
+	if e != nil {
+		return result, e
+	}
+	result.OutputTokens = textTokens + reasoningTokens
 	amount := int64(0)
 	if result.Text != "" || result.Reasoning != "" {
 		amount = tokenCost(result.InputTokens, price.InputPerMillionTicks) + tokenCost(result.OutputTokens, price.OutputPerMillionTicks)

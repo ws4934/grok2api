@@ -287,3 +287,27 @@ func TestChannelQuotaSeparatesCapabilitiesAndUnsentUploads(t *testing.T) {
 		}
 	})
 }
+
+func TestChannelSlotRenewalKeepsLongExecutionsCounted(t *testing.T) {
+	channelDatabases(t, func(t *testing.T, db *Database) {
+		ctx := context.Background()
+		r, a, _ := channelFixture(t, db)
+		a.MaxConcurrent = 1
+		if _, e := r.SaveAccount(ctx, a, a.CredentialVersion); e != nil {
+			t.Fatal(e)
+		}
+		// An expired lease is reclaimable unless the holder renewed it in time.
+		if e := r.AcquireChannelSlot(ctx, a.ID, "long-chat", time.Now().Add(-time.Second)); e != nil {
+			t.Fatal(e)
+		}
+		if e := r.RenewChannelSlot(ctx, "long-chat", time.Now().Add(time.Hour)); e != nil {
+			t.Fatal(e)
+		}
+		if e := r.AcquireChannelSlot(ctx, a.ID, "other", time.Now().Add(time.Minute)); !errors.Is(e, channel.ErrConflict) {
+			t.Fatalf("renewed slot was reclaimed: %v", e)
+		}
+		if e := r.RenewChannelSlot(ctx, "missing", time.Now().Add(time.Minute)); !errors.Is(e, channel.ErrConflict) {
+			t.Fatalf("renewing an unknown holder: %v", e)
+		}
+	})
+}

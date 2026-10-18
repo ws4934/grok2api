@@ -42,3 +42,6 @@ func (r *ChannelRepository) AcquireChannelSlot(ctx context.Context, id uint64, h
 func (r *ChannelRepository) ReleaseChannelSlot(ctx context.Context, holder string) error {
 	return r.db.db.WithContext(ctx).Delete(&channelExecutionSlotModel{}, "holder = ?", holder).Error
 }
+func (r *ChannelRepository) RenewChannelSlot(ctx context.Context, holder string, until time.Time) error {
+	return checkedImageUpdate(r.db.db.WithContext(ctx).Model(&channelExecutionSlotModel{}).Where("holder = ?", holder).Update("lease_until", until.UTC()))
+}

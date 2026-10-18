@@ -567,7 +567,9 @@ func (r *ModelRepository) GetByPublicIDCandidates(ctx context.Context, publicID 
 // a distinct Web conversation model). Preserve Grok's availability query above.
 func (r *ModelRepository) GetConfiguredByPublicIDCandidates(ctx context.Context, publicID string) ([]model.Route, error) {
 	rows, err := findModelRoutesByPublicID(r.db.db.WithContext(ctx).Where("enabled = ?", true), publicID)
-	if err != nil { return nil, mapError(err) }
+	if err != nil {
+		return nil, mapError(err)
+	}
 	return mapModelRows(rows), nil
 }
 

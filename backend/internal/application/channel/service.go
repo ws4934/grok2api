@@ -32,6 +32,8 @@ type Service struct {
 	cipher      Cipher
 	locks       repository.DistributedLock
 	models      repository.ModelRepository
+
+	requestTimeout time.Duration
 }
 
 func (s *Service) SetClientKeys(keys repository.ClientKeyRepository) { s.clientKeys = keys }

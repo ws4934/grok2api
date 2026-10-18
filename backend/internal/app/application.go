@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	channelapp "github.com/chenyme/grok2api/backend/internal/application/channel"
-	channeldomain "github.com/chenyme/grok2api/backend/internal/domain/channel"
-	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -20,6 +17,7 @@ import (
 	accountsyncapp "github.com/chenyme/grok2api/backend/internal/application/accountsync"
 	"github.com/chenyme/grok2api/backend/internal/application/adminauth"
 	auditapp "github.com/chenyme/grok2api/backend/internal/application/audit"
+	channelapp "github.com/chenyme/grok2api/backend/internal/application/channel"
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
 	dashboardapp "github.com/chenyme/grok2api/backend/internal/application/dashboard"
 	egressapp "github.com/chenyme/grok2api/backend/internal/application/egress"
@@ -32,12 +30,14 @@ import (
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
 	"github.com/chenyme/grok2api/backend/internal/buildinfo"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	channeldomain "github.com/chenyme/grok2api/backend/internal/domain/channel"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	inframedia "github.com/chenyme/grok2api/backend/internal/infra/media"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt"
 	cliprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/cli"
 	consoleprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/console"
 	webprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/web"
@@ -457,6 +457,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		return channeldomain.WithEnvironment(ctx, channeldomain.Environment{ProxyURL: lease.ProxyURL, NodeID: lease.NodeID}), lease.Release, nil
 	})
 	channelService.SetImages(relational.NewChannelRepository(database), mediaService)
+	channelService.SetRequestTimeout(cfg.Server.RequestTimeout.Value())
 	if err := channelService.SetExecution(clientKeyService, auditService); err != nil {
 		return nil, err
 	}
