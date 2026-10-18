@@ -56,21 +56,7 @@ func aiString(v map[string]any, keys ...string) string {
 	}
 	return ""
 }
-func redactImageError(s string, secrets ...string) string {
-	for _, secret := range secrets {
-		if secret != "" {
-			s = strings.ReplaceAll(s, secret, "[redacted]")
-		}
-	}
-	return s
-}
 
-type proxyContextKey struct{}
-
-// WithProxy pins all requests in a workflow to the egress selected by the application.
-func WithProxy(ctx context.Context, proxy string) context.Context {
-	return context.WithValue(ctx, proxyContextKey{}, proxy)
-}
 func (o *OpenAIImage) doAbsolute(ctx context.Context, method, endpoint string, a wireAccount, body io.Reader, extra map[string]string, stream bool) (*http.Response, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.User != nil || u.Scheme != "https" || u.Host == "" {

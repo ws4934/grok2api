@@ -11,10 +11,6 @@ import (
 
 type modelObserverKey struct{}
 
-func WithModelObserver(ctx context.Context, fn func(string)) context.Context {
-	return context.WithValue(ctx, modelObserverKey{}, fn)
-}
-
 // Observe only structural assistant metadata, never content or user-supplied text.
 // A Web conversation model slug is not proof of the image tool's model version.
 func notifyUpstreamModel(ctx context.Context, value any) {

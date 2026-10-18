@@ -2,7 +2,6 @@
 package chatgpt
 
 import (
-	"errors"
 	"regexp"
 	"strings"
 	"unicode"
@@ -16,14 +15,6 @@ const maxImageErrorDetailRunes = 64 * 1024
 type ImageErrorDetail struct {
 	Message   string
 	Truncated bool
-}
-
-func ImageErrorDetails(err error) ImageErrorDetail {
-	var terminal *imageTerminalError
-	if errors.As(err, &terminal) {
-		return terminal.detail
-	}
-	return ImageErrorDetail{}
 }
 
 var imageErrorRedactions = []struct {

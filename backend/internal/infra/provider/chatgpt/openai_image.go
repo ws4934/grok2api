@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
@@ -53,58 +52,7 @@ type OpenAIImageInput struct {
 
 var openAIImageFileIDPattern = regexp.MustCompile(`(?i)^file_[a-z0-9][a-z0-9_-]{5,}$`)
 
-// OpenAIImageStageFunc receives the elapsed time for a completed image-pipeline
-// stage. It is intentionally kept in the provider package so callers can add
-// observability without coupling the provider to HTTP handlers.
-type OpenAIImageStageFunc func(metric string, elapsed time.Duration)
-
-// OpenAIImageEgressFunc receives the proxy URL selected for an upstream call.
-// Callers should sanitize it before exposing it in logs or UI.
-type OpenAIImageEgressFunc func(proxyURL string)
-
-type openAIImageStageContextKey struct{}
-type openAIImageEgressContextKey struct{}
-
-// WithOpenAIImageStage attaches an optional stage observer to ctx.
-func WithOpenAIImageStage(ctx context.Context, observer OpenAIImageStageFunc) context.Context {
-	if observer == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, openAIImageStageContextKey{}, observer)
-}
-
-// WithOpenAIImageEgress attaches an optional egress observer to ctx.
-func WithOpenAIImageEgress(ctx context.Context, observer OpenAIImageEgressFunc) context.Context {
-	if observer == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, openAIImageEgressContextKey{}, observer)
-}
-
-func notifyOpenAIImageStage(ctx context.Context, metric string, started time.Time) {
-	if observer, ok := ctx.Value(openAIImageStageContextKey{}).(OpenAIImageStageFunc); ok && observer != nil {
-		observer(metric, time.Since(started))
-	}
-}
-
-func notifyOpenAIImageEgress(ctx context.Context, proxyURL string) {
-	if observer, ok := ctx.Value(openAIImageEgressContextKey{}).(OpenAIImageEgressFunc); ok && observer != nil {
-		observer(proxyURL)
-	}
-}
-
-const openAIImageDefaultPollTimeout = 3 * time.Minute
-const openAIImageUploadAttemptTimeout = 60 * time.Second
-const openAIImagePollAttemptTimeout = 20 * time.Second
 const openAIImageReferenceUploadConcurrency = 3
-
-const (
-	openAIImageSlowUpload       = 30 * time.Second
-	openAIImageSlowBootstrap    = 15 * time.Second
-	openAIImageSlowRequirements = 15 * time.Second
-	openAIImageSlowPrepare      = 15 * time.Second
-	openAIImageSlowDownload     = 20 * time.Second
-)
 
 func (o *OpenAIImage) uploadInputs(ctx context.Context, account wireAccount, inputs []OpenAIImageInput) ([]openAIImageReference, error) {
 	if len(inputs) == 0 {
@@ -514,10 +462,6 @@ type imageTerminalError struct {
 
 func (e *imageTerminalError) Error() string { return e.err.Error() }
 func (e *imageTerminalError) Unwrap() error { return e.err }
-func IsImageTerminalError(err error) bool {
-	var terminal *imageTerminalError
-	return errors.As(err, &terminal)
-}
 
 func openAIImageTerminalError(value any, secrets ...string) error {
 	reason := openAIImageTerminalReason(value)
@@ -680,33 +624,6 @@ func (o *OpenAIImage) uploadInputWithPurpose(ctx context.Context, account wireAc
 	}
 	_ = response.Body.Close()
 	return openAIImageReference{FileID: fileID, FileName: name, FileSize: len(input.Data), MIME: mimeType, Width: width, Height: height}, nil
-}
-
-func isRetryableOpenAIUploadError(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) {
-		return false
-	}
-	var upstream *upstreamError
-	if errors.As(err, &upstream) {
-		return upstream.Status == http.StatusForbidden || upstream.Status == http.StatusRequestTimeout ||
-			upstream.Status == http.StatusTooManyRequests || upstream.Status >= http.StatusInternalServerError
-	}
-	return openAIImageProxyFailure(err)
-}
-
-func isRetryableOpenAITransferError(err error) bool {
-	return isRetryableOpenAIUploadError(err)
-}
-
-// The remote generation has already completed when this error is returned.
-// Callers may report failure/refund, but must not start another generation.
-type imageDownloadError struct{ err error }
-
-func (e *imageDownloadError) Error() string { return e.err.Error() }
-func (e *imageDownloadError) Unwrap() error { return e.err }
-func IsImageDownloadError(err error) bool {
-	var download *imageDownloadError
-	return errors.As(err, &download)
 }
 
 func (o *OpenAIImage) downloadFile(ctx context.Context, account wireAccount, fileID string) ([]byte, string, error) {
@@ -1205,14 +1122,6 @@ func imageDimensions(raw []byte) (int, int) {
 	return config.Width, config.Height
 }
 
-func randomMediaID() string {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err == nil {
-		return fmt.Sprintf("%x", raw[:])
-	}
-	return fmt.Sprintf("%x", time.Now().UnixNano())
-}
-
 func firstStringValue(value map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if text := stringValue(value[key]); text != "" {
@@ -1242,16 +1151,6 @@ func uniqueStrings(values []string) []string {
 		}
 	}
 	return result
-}
-
-func minDuration(a, b time.Duration) time.Duration {
-	if a <= 0 {
-		return b
-	}
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func isRetryableOpenAIError(err error) bool {

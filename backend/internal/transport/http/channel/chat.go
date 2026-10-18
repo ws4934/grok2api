@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
 	"time"
 
@@ -347,5 +346,3 @@ func (h *Handler) Dispatch() gin.HandlerFunc {
 		}
 	}
 }
-
-var _ = http.StatusOK

@@ -84,11 +84,11 @@ func TestImageOutputDefaultsToPNG(t *testing.T) {
 	if err := jpeg.Encode(&source, canvas, nil); err != nil {
 		t.Fatal(err)
 	}
-	raw, mime, err := (ImageOutputOptions{}).apply(source.Bytes(), "image/jpeg")
+	_, mime, err := (ImageOutputOptions{}).apply(source.Bytes(), "image/jpeg")
 	if err != nil || mime != "image/png" {
 		t.Fatalf("default must encode PNG: %s %v", mime, err)
 	}
-	raw, mime, err = (ImageOutputOptions{OutputFormat: "png"}).apply(source.Bytes(), "image/jpeg")
+	raw, mime, err := (ImageOutputOptions{OutputFormat: "png"}).apply(source.Bytes(), "image/jpeg")
 	if err != nil || mime != "image/png" {
 		t.Fatal(err)
 	}

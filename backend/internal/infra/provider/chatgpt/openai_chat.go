@@ -38,17 +38,6 @@ type OpenAIChatImage struct {
 	Input        OpenAIImageInput
 }
 
-func (c *OpenAIChat) Complete(ctx context.Context, account wireAccount, request wireChatRequest, images ...OpenAIChatImage) (string, string, error) {
-	var text strings.Builder
-	var thinking strings.Builder
-	err := c.Stream(ctx, account, request, func(event OpenAIChatEvent) error {
-		text.WriteString(event.Text)
-		thinking.WriteString(event.Thinking)
-		return nil
-	}, images...)
-	return text.String(), thinking.String(), err
-}
-
 func (c *OpenAIChat) Stream(ctx context.Context, account wireAccount, request wireChatRequest, onEvent func(OpenAIChatEvent) error, images ...OpenAIChatImage) error {
 	if c == nil || c.Image == nil {
 		return fmt.Errorf("OpenAI chat provider is not configured")
@@ -397,19 +386,4 @@ func appendDelta(current *string, candidate string) string {
 	}
 	*current += candidate
 	return candidate
-}
-
-// ChatErrorDetails preserves a bounded, redacted cause for administrator logs.
-// Public responses may map this cause to a stable, user-facing error instead.
-func ChatErrorDetails(err error, account wireAccount) ImageErrorDetail {
-	if err == nil {
-		return ImageErrorDetail{}
-	}
-	secrets := webSessionSecrets(account.Fields, account.Token)
-	for _, key := range []string{"access_token", "accessToken", "token", "refresh_token", "id_token", "cookie_header", "cookie", "cookies", "session_token", "password", "login_password", "email", "user_id"} {
-		secrets = append(secrets, aiString(account.Fields, key))
-	}
-	detail := imageErrorDetail(err.Error(), secrets...)
-	detail.Message = strings.TrimPrefix(detail.Message, imageTerminalPrefix)
-	return detail
 }

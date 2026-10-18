@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -268,7 +267,6 @@ func (s *Service) authorize(ctx context.Context, key clientkey.Key, r model.Rout
 	}
 	return cfg, nil
 }
-func cleanOperation(s string) string { return strings.TrimSpace(s) }
 
 func (s *Service) CheckAccess(ctx context.Context, key clientkey.Key, r model.Route) error {
 	_, e := s.authorize(ctx, key, r)

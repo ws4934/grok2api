@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
@@ -127,27 +126,9 @@ func webSessionSecrets(fields map[string]any, token string) []string {
 	return out
 }
 
-// Custom/test origins use the configured standard HTTP client. Restore only
-// cookies matching its exact origin, with the same jar rules as the TLS client.
-func applySavedWebCookies(req *http.Request, origin string, fields map[string]any, token string) {
-	if req.Header.Get("Cookie") != "" || fields["web_cookies"] == nil {
-		return
-	}
-	jar := browserprofile.NewCookieJar(origin)
-	jar.Restore(savedWebCookies(fields, token))
-	for _, c := range jar.Cookies(req.URL) {
-		req.AddCookie(&http.Cookie{Name: c.Name, Value: c.Value})
-	}
-}
-
 func savedWebCookies(fields map[string]any, token string) []browserprofile.Cookie {
 	if token == "" || aiString(fields, "web_cookies_token_hash") != browserprofile.TokenBinding(token) {
 		return nil
 	}
 	return browserprofile.ParseCookies(fields["web_cookies"])
-}
-
-func hasKnownBrowserProfile(account map[string]any) bool {
-	fp, _ := account["fp"].(map[string]any)
-	return account["browser_profile"] != nil || aiString(fp, "profile") != ""
 }

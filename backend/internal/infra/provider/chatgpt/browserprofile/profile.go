@@ -1,10 +1,8 @@
 package browserprofile
 
 import (
-	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"sort"
 	"strings"
 	"time"
@@ -114,21 +112,6 @@ var browserProfilePool = []Profile{
 	Base(1728, 1117, 10, 4294967296),
 	Base(1800, 1169, 10, 4294967296),
 	Base(2056, 1329, 12, 4294967296),
-}
-
-// New selects a profile for a new protocol session. The
-// selected profile is a value, so callers can safely persist and reuse it.
-func New() Profile {
-	if len(browserProfilePool) == 0 {
-		return Base(1680, 1050, 8, 4294967296)
-	}
-	index, err := crand.Int(crand.Reader, big.NewInt(int64(len(browserProfilePool))))
-	if err != nil {
-		index = big.NewInt(0)
-	}
-	profile := browserProfilePool[int(index.Int64())]
-	profile.NavigatorLanguages = append([]string(nil), profile.NavigatorLanguages...)
-	return profile
 }
 
 func (p Profile) Valid() bool {

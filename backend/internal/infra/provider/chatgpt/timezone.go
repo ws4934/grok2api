@@ -8,7 +8,6 @@ import (
 type openAITimezoneSnapshot struct {
 	location *time.Location
 	at       time.Time
-	egress   [32]byte
 }
 
 func (s openAITimezoneSnapshot) offset() int {
