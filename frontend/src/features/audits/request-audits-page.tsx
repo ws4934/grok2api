@@ -456,8 +456,8 @@ function BillingBreakdown({ billing, locale, estimation, priceId }: { billing: A
   return (
     <div className="space-y-2.5 text-xs leading-5">
       <div className="space-y-1">
-        {estimation?.tokenizer && <BillingDetailRow label="估算规则" value={`${estimation.tokenizer} · 图片 ${estimation.vision_tokens_per_image ?? 0} Token/张 · 本地输出上限 ${estimation.output_limit_tokens ?? 0}${estimation.truncated ? " · 已截断" : ""}`} />}
-        <BillingDetailRow label={t("audits.billingSource")} value={billing.source === "channel" ? "渠道配置价格 / 本地估算" : billing.source === "upstream" ? t("audits.billingSourceUpstream") : billing.source === "custom" ? t("audits.billingSourceCustom") : t("audits.billingSourceOfficial")} />
+        {estimation?.tokenizer && <BillingDetailRow label={t("audits.billingEstimation")} value={`${t("audits.billingEstimationRule", { tokenizer: estimation.tokenizer, visionTokens: estimation.vision_tokens_per_image ?? 0, outputLimit: estimation.output_limit_tokens ?? 0 })}${estimation.truncated ? ` · ${t("audits.billingEstimationTruncated")}` : ""}`} />}
+        <BillingDetailRow label={t("audits.billingSource")} value={billing.source === "channel" ? t("audits.billingSourceChannel") : billing.source === "upstream" ? t("audits.billingSourceUpstream") : billing.source === "custom" ? t("audits.billingSourceCustom") : t("audits.billingSourceOfficial")} />
         {billing.model ? <BillingDetailRow label={t("audits.billingModel")} value={billing.model} mono /> : null}
         {billing.version ? <BillingDetailRow label={t("audits.billingVersion")} value={billing.version} /> : null}
         {priceId ? <BillingDetailRow label={t("audits.billingPriceId")} value={`#${priceId}`} mono /> : null}
