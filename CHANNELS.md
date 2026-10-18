@@ -17,8 +17,20 @@
 
 ## 出口代理与 FlareSolverr
 
-- **出口代理**：复用原项目的出口管理。在“设置 → 出口节点”新建节点或订阅源时，作用域选择渠道（如 ChatGPT）。同一账号按亲和性固定使用同一节点（支持 `{account}` 粘性代理模板，账号标识为 `chatgpt_<账号ID>`），聊天、上传下载和 OAuth 续期都走该节点。没有该渠道的节点时直连，不会借用 Grok 节点。扩展作用域不支持回退节点配置。
-- **FlareSolverr**：未使用。原项目的 FlareSolverr 只处理 Grok Web 的 Cloudflare clearance；ChatGPT 渠道与参考项目主路径一致，依赖 TLS 浏览器指纹和每账号 Cookie。真实测试若遇到 Cloudflare 挑战，再评估是否接入。
+**出口代理**复用原项目的出口管理：
+
+- 在“设置 → 出口节点”新建节点或订阅源时，作用域选择渠道（如 ChatGPT）。支持 HTTP(S)、SOCKS4/5 和 Trojan/VLESS/SS/VMess 隧道，代理可以部署在内网或本机（例如 sidecar）。
+- 同一账号按亲和性固定使用同一节点（`{account}` 粘性代理模板的账号标识为 `chatgpt_<账号ID>`）。聊天、上传下载和 OAuth 续期都走该节点。也可以在渠道中心把账号手动绑定到指定节点。
+- **故障处理**：连接失败的节点进入指数退避冷却并触发探测；被 Cloudflare 拦截的节点降低健康度，账号随之迁移。请求在到达上游之前失败时，立即换一个出口重试一次。已经发出的请求不会重放，避免重复生成和重复扣额度。
+- **备用出口**：在“设置 → 出口运维”为渠道配置备用出口（不回退 / 直连 / 指定节点）。主节点全部不可用时启用；指定节点在主节点健康时不承担流量。
+- 没有该渠道的节点且未配置备用出口时直连，不会借用 Grok 节点。审计记录出口节点 ID 和名称。
+
+**Cloudflare 与 FlareSolverr**：
+
+- 网关会识别 Cloudflare 挑战（403 加 `cf-mitigated: challenge` 响应头或挑战页面），与账号自身的 403 分开处理。
+- 渠道设置中的 **Cloudflare clearance** 开关默认关闭。开启后，某个出口遇到挑战时，下一次请求会通过系统设置里配置的 FlareSolverr（与 Grok Web 共用地址、超时和刷新间隔）在该出口上求解 `https://chatgpt.com`，然后带着求解得到的 cookie 重试。clearance 按节点或粘性代理账号缓存，与 Grok 互不覆盖。
+- `cf_clearance` 只对求解浏览器的 UA 和出口 IP 有效。所以带 clearance 的请求会改用求解浏览器的身份：UA、client hints、TLS 指纹和 Sentinel 环境，一般是 Linux Chrome。没有挑战时继续使用账号自己的浏览器档案。
+- 每次轮换 IP 的代理池无法复用 clearance。FlareSolverr 不支持隧道协议代理。
 
 ## 账号导入格式
 
@@ -127,7 +139,9 @@ curl https://<host>/v1/responses/resp_… -H "Authorization: Bearer $KEY"
 | `backend/internal/infra/persistence/relational/models.go`、`schema.go`、`schema_channels.go` | 去掉 Provider/出口作用域/认证类型的枚举 `CHECK`，并阻止旧迁移重建 |
 | `backend/internal/infra/persistence/relational/{audit_repository,mapping,model_repository,media_repository,egress_repository,account_links}.go` | 审计估算字段、动态 Provider 路由、渠道资产保护、保留出口作用域 `all` |
 | `backend/internal/domain/audit/audit.go`、`transport/http/audit/handler.go` | 审计记录估算规则 |
-| `backend/internal/application/egress/{service,operations}.go`、`backend/internal/infra/egress/manager.go` | 出口节点、订阅源和节点缓存接受已注册的扩展作用域（`backend/internal/domain/egress/extension.go`） |
+| `backend/internal/application/egress/{service,operations}.go`、`backend/internal/transport/http/egress/handler.go` | 出口节点、订阅源、账号绑定和备用出口接受已注册的扩展作用域（`backend/internal/domain/egress/extension.go`） |
+| `backend/internal/infra/egress/manager.go` | 扩展作用域的 clearance 配置与缓存键（`extension_clearance.go`），扩展租约不再构造 Grok 浏览器客户端 |
+| `backend/internal/infra/persistence/relational/{egress_repository,schema}.go` | 扩展作用域的备用出口存放在新表 `egress_extension_fallbacks`（`egress_extension_fallbacks.go`），不改原有列 |
 | 前端 `app-shell`、`router`、`deferred-pages`、`i18n`（1 个导航词条）、模型/审计页 Provider 类型、创作控制台 | 渠道中心入口，Provider 类型放宽为字符串 |
 
 ### 合并演练
