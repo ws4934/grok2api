@@ -299,6 +299,7 @@ type accountResponse struct {
 	Plan                     string     `json:"plan"`
 	WebTier                  string     `json:"webTier,omitempty"`
 	WebTierSyncedAt          *time.Time `json:"webTierSyncedAt,omitempty"`
+	QuotaSyncedAt            *time.Time `json:"quotaSyncedAt,omitempty"`
 	WebNSFWEnabledAt         *time.Time `json:"nsfwEnabledAt,omitempty"`
 	WebTermsAcceptedAt       *time.Time `json:"termsAcceptedAt,omitempty"`
 	Name                     string     `json:"name"`
@@ -1527,7 +1528,7 @@ func newAccountResponse(value accountapp.View) accountResponse {
 	}
 	result := accountResponse{
 		ID: c.ID, Provider: string(c.Provider), AuthType: string(c.AuthType), Plan: c.Plan, WebTier: string(c.WebTier),
-		WebTierSyncedAt: c.WebTierSyncedAt, WebNSFWEnabledAt: c.WebNSFWEnabledAt, WebTermsAcceptedAt: c.WebTermsAcceptedAt, Name: c.Name, Email: c.Email, UserID: c.UserID, TeamID: c.TeamID,
+		WebTierSyncedAt: c.WebTierSyncedAt, QuotaSyncedAt: c.QuotaSyncedAt, WebNSFWEnabledAt: c.WebNSFWEnabledAt, WebTermsAcceptedAt: c.WebTermsAcceptedAt, Name: c.Name, Email: c.Email, UserID: c.UserID, TeamID: c.TeamID,
 		Enabled: c.Enabled, AuthStatus: string(c.AuthStatus), Refreshable: c.EncryptedRefreshToken != "",
 		RefreshDueAt: c.RefreshDueAt, LastRefreshAt: c.LastRefreshAt,
 		RefreshFailures: c.RefreshFailureCount, LastRefreshErrorStatus: c.LastRefreshErrorStatus, LastRefreshError: c.LastRefreshErrorCode, LastRefreshErrorMessage: c.LastRefreshErrorMessage, LastRefreshErrorResponse: c.LastRefreshErrorResponse,
