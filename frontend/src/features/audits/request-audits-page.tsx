@@ -9,6 +9,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { listModels } from "@/entities/model/model-api";
+import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api";
+import { providerLabel, providerShortLabel } from "@/entities/provider/provider-presentation";
 import { listClientKeys } from "@/features/client-keys/client-keys-api";
 import { listAccounts } from "@/features/accounts/accounts-api";
 import { RequestAuditDetailDialog } from "@/features/audits/request-audit-detail-dialog";
@@ -55,6 +57,7 @@ export function RequestAuditsPage() {
   const debouncedSearch = useDebouncedValue(search);
   const debouncedKeyFilter = useDebouncedValue(keyFilter);
   const debouncedAccountFilter = useDebouncedValue(accountFilter);
+  const providers = useProviders().data;
   const period: AuditPeriod = toPeriodValue(periodDays);
   const cursorScope = useMemo(() => JSON.stringify([
     pageSize, debouncedSearch, modelFilter, statusFilter, modeFilter,
@@ -115,7 +118,7 @@ export function RequestAuditsPage() {
   const keyFilterOptionsFetching = keyFilterOptionsQuery.isFetching;
   const accountFilterOptionsFailed = accountFilterOptionsQuery.isError;
   const accountFilterOptionsFetching = accountFilterOptionsQuery.isFetching;
-  // 账号范围覆盖三种 provider，审计记录可能来自任一 provider 的账号。
+  // 账号范围覆盖全部 provider，审计记录可能来自任一 provider 的账号。
   const keyFilterOptions = keyFilterOptionsQuery.data?.items ?? [];
   const accountFilterOptions = accountFilterOptionsQuery.data?.items ?? [];
   const keyFilterGroups = [
@@ -142,7 +145,7 @@ export function RequestAuditsPage() {
         value: String(account.id),
         label: account.name || account.email || `#${account.id}`,
         description: `#${account.id}`,
-        badge: providerShortLabel(account.provider),
+        badge: providerShortLabel(account.provider, providers),
       })),
       loading: accountFilterOptionsFetching, hasMore: accountFilterOptionsFailed,
       actionLabel: t("common.retry"), onAction: () => { void accountFilterOptionsQuery.refetch(); },
@@ -160,7 +163,7 @@ export function RequestAuditsPage() {
   const hasEstimatedCost = (summary?.pricing.pricedRequests ?? 0) > 0;
   const modelOptions = useMemo(() => [...new Map((modelOptionsQuery.data?.items ?? []).map((model) => [model.publicId, { value: model.publicId, label: model.publicId }])).values()], [modelOptionsQuery.data?.items]);
   const openAudit = useCallback((audit: AuditDTO) => setSelectedAudit(audit), []);
-  const renderAuditRow = useCallback((audit: AuditDTO) => <AuditRow key={audit.id} audit={audit} locale={i18n.language} onOpen={openAudit} />, [i18n.language, openAudit]);
+  const renderAuditRow = useCallback((audit: AuditDTO) => <AuditRow key={audit.id} audit={audit} locale={i18n.language} providers={providers} onOpen={openAudit} />, [i18n.language, openAudit, providers]);
 
   function refreshAll(): void {
     setManualRefreshing(true);
@@ -313,7 +316,7 @@ export function RequestAuditsPage() {
   );
 }
 
-const AuditRow = memo(function AuditRow({ audit, locale, onOpen }: { audit: AuditDTO; locale: string; onOpen: (audit: AuditDTO) => void }) {
+const AuditRow = memo(function AuditRow({ audit, locale, providers, onOpen }: { audit: AuditDTO; locale: string; providers?: ProviderDTO[]; onOpen: (audit: AuditDTO) => void }) {
   const createdAt = formatCompactDateTime(audit.createdAt, locale);
   const createdAtLabel = formatDateTime(audit.createdAt, locale);
   return (
@@ -326,7 +329,7 @@ const AuditRow = memo(function AuditRow({ audit, locale, onOpen }: { audit: Audi
           clientKey={audit.clientKeyName || `#${audit.clientKeyId}`}
           clientIp={audit.clientIp}
           requestId={audit.requestId}
-          provider={audit.provider}
+          provider={providerLabel(audit.provider, providers)}
           operation={audit.operation}
           sources={audit.numSourcesUsed}
         />
@@ -539,7 +542,8 @@ function ModelRouteValue({ model, upstreamModel, account, clientKey, clientIp, r
   clientKey: string;
   clientIp?: string;
   requestId: string;
-  provider: AuditDTO["provider"];
+  // Display label of the audit provider.
+  provider: string;
   operation: AuditDTO["operation"];
   sources: number;
 }) {
@@ -562,7 +566,7 @@ function ModelRouteValue({ model, upstreamModel, account, clientKey, clientIp, r
         </button>
       </TooltipTrigger>
       <TooltipContent className="w-72 max-w-[calc(100vw-2rem)] space-y-1.5 py-2" side="top" align="start">
-        <RouteDetailRow label={t("audits.channelProtocol")} value={`${providerLabel(provider)} · ${auditProtocolLabel(operation)}`} />
+        <RouteDetailRow label={t("audits.channelProtocol")} value={`${provider} · ${auditProtocolLabel(operation)}`} />
         <RouteDetailRow label={t("audits.requestId")} value={requestId} breakAll />
         {clientIp ? <RouteDetailRow label={t("audits.clientIp")} value={clientIp} breakAll /> : null}
         <RouteDetailRow label={t("audits.actualModel")} value={upstreamModel} breakAll />
@@ -736,19 +740,6 @@ function statusTone(statusCode: number, hasError = false): { dot: string; text: 
   return { dot: "bg-muted-foreground/50", text: "text-muted-foreground" };
 }
 
-function providerLabel(provider: AuditDTO["provider"]): string {
-  switch (provider) {
-    case "grok_build":
-      return "Grok Build";
-    case "grok_web":
-      return "Grok Web";
-    case "grok_console":
-      return "Grok Console";
-    default:
-      return provider === "chatgpt" ? "ChatGPT" : provider;
-  }
-}
-
 function auditProtocolLabel(operation: AuditDTO["operation"]): string {
   switch (operation) {
     case "responses": return "Responses";
@@ -762,19 +753,6 @@ function auditProtocolLabel(operation: AuditDTO["operation"]): string {
     case "stt": return "Audio Transcriptions";
     case "realtime": return "Realtime";
     case "voice": return "Voice";
-  }
-}
-
-function providerShortLabel(provider: AuditDTO["provider"]): string {
-  switch (provider) {
-    case "grok_build":
-      return "Build";
-    case "grok_web":
-      return "Web";
-    case "grok_console":
-      return "Console";
-    default:
-      return provider === "chatgpt" ? "ChatGPT" : provider;
   }
 }
 

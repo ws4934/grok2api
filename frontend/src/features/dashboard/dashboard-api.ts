@@ -1,5 +1,5 @@
 import { apiRequest } from "@/shared/api/client";
-import { createObjectDecoder, hasShape, isArrayOf, isNumber, isOneOf, isOptional, isString } from "@/shared/api/decoder";
+import { createObjectDecoder, hasShape, isArrayOf, isNumber, isOneOf, isOptional, isRecordOf, isString } from "@/shared/api/decoder";
 import type { PeriodValue } from "@/shared/lib/period";
 
 export type DashboardPeriod = PeriodValue;
@@ -31,6 +31,8 @@ export type DashboardDTO = {
     buildAccounts: number;
     webAccounts: number;
     consoleAccounts: number;
+    // Account count per provider id; when absent only the three Grok counts above are known.
+    accountsByProvider?: Record<string, number>;
     enabledModels: number;
     totalModels: number;
 	activeClientKeys: number;
@@ -62,7 +64,7 @@ const decodeDashboard = createObjectDecoder<DashboardDTO>("dashboard", {
   generatedAt: isString,
   range: hasShape({ start: isString, end: isString }),
   resources: hasShape({
-    activeAccounts: isNumber, totalAccounts: isNumber, buildAccounts: isNumber, webAccounts: isNumber, consoleAccounts: isNumber, enabledModels: isNumber, totalModels: isNumber,
+    activeAccounts: isNumber, totalAccounts: isNumber, buildAccounts: isNumber, webAccounts: isNumber, consoleAccounts: isNumber, accountsByProvider: isOptional(isRecordOf(isNumber)), enabledModels: isNumber, totalModels: isNumber,
 		activeClientKeys: isNumber, totalClientKeys: isNumber,
   }),
   usage: dashboardUsage,

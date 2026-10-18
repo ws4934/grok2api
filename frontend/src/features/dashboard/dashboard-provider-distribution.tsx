@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
-import type { TFunction } from "i18next";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 
 import { Spinner } from "@/components/ui/spinner";
+import { useProviders } from "@/entities/provider/provider-api";
+import { orderedProviderIds, providerColor, providerLabel } from "@/entities/provider/provider-presentation";
 import type { DashboardDTO } from "@/features/dashboard/dashboard-api";
 import { DashboardPanel } from "@/features/dashboard/dashboard-panel";
 import { cn } from "@/shared/lib/cn";
@@ -15,22 +16,17 @@ type DashboardProviderDistributionProps = {
   loading: boolean;
 };
 
-type ProviderKey = "grok_build" | "grok_web" | "grok_console";
-
 const STRIPE_COUNT = 40;
-const PROVIDERS: Array<{ key: ProviderKey; color: string; dot: string }> = [
-  { key: "grok_build", color: "bg-quota-product-1", dot: "bg-quota-product-1" },
-  { key: "grok_web", color: "bg-quota-product-2", dot: "bg-quota-product-2" },
-  { key: "grok_console", color: "bg-quota-product-4", dot: "bg-quota-product-4" },
-];
 
 export function DashboardProviderDistribution({ dashboard, locale, loading }: DashboardProviderDistributionProps) {
   const { t } = useTranslation();
   const [stripeHover, setStripeHover] = useState<{ index: number; x: number; y: number } | null>(null);
-  const providers = useMemo(() => PROVIDERS.map((provider) => {
-    const usage = dashboard?.providers.find((item) => item.provider === provider.key);
-    return { ...provider, requests: usage?.requests ?? 0, successfulRequests: usage?.successfulRequests ?? 0, tokens: usage?.tokens ?? 0 };
-  }), [dashboard?.providers]);
+  const catalog = useProviders().data;
+  // Every catalog provider gets a row; usage from providers outside the catalog is appended so it never disappears.
+  const providers = useMemo(() => orderedProviderIds(catalog, dashboard?.providers.map((item) => item.provider)).map((key) => {
+    const usage = dashboard?.providers.find((item) => item.provider === key);
+    return { key, label: providerLabel(key, catalog), color: providerColor(key, catalog), requests: usage?.requests ?? 0, successfulRequests: usage?.successfulRequests ?? 0, tokens: usage?.tokens ?? 0 };
+  }), [catalog, dashboard?.providers]);
   const totalRequests = providers.reduce((total, item) => total + item.requests, 0);
   const totalSuccessfulRequests = providers.reduce((total, item) => total + item.successfulRequests, 0);
   const averageSuccessRate = totalRequests > 0 ? totalSuccessfulRequests / totalRequests * 100 : 0;
@@ -38,7 +34,7 @@ export function DashboardProviderDistribution({ dashboard, locale, loading }: Da
   const hoveredProvider = stripeHover === null ? null : stripes[stripeHover.index] ?? null;
   const hoveredShare = hoveredProvider && totalRequests > 0 ? hoveredProvider.requests / totalRequests * 100 : 0;
   const stripeTooltip = hoveredProvider
-    ? t("dashboard.providerStripeDetail", { provider: providerLabel(hoveredProvider.key, t), requests: formatNumber(hoveredProvider.requests, locale), share: formatNumber(hoveredShare, locale, 1) })
+    ? t("dashboard.providerStripeDetail", { provider: hoveredProvider.label, requests: formatNumber(hoveredProvider.requests, locale), share: formatNumber(hoveredShare, locale, 1) })
     : t("dashboard.providerNoRequests");
   const successRateSummary = loading ? <Spinner className="size-3.5" /> : <span className="text-base font-medium tabular-nums">{formatNumber(averageSuccessRate, locale, 1)}%</span>;
 
@@ -75,23 +71,24 @@ export function DashboardProviderDistribution({ dashboard, locale, loading }: Da
                   className={cn(
                     "pointer-events-none min-w-0 flex-1 rounded-[2px] transition-[transform,opacity] duration-150",
                     stripeHover?.index === index && "-translate-y-1 opacity-75",
-                    provider ? provider.color : "bg-muted",
+                    !provider && "bg-muted",
                   )}
+                  style={provider ? { backgroundColor: provider.color } : undefined}
                 />
               ))}
             </div>
           </div>
 
-          <div className="mt-3 grid flex-1 grid-rows-3 divide-y">
+          <div className="mt-3 grid flex-1 divide-y" style={{ gridTemplateRows: `repeat(${providers.length}, minmax(0, 1fr))` }}>
             {providers.map((provider) => {
               const share = totalRequests > 0 ? provider.requests / totalRequests * 100 : 0;
               const successRate = provider.requests > 0 ? provider.successfulRequests / provider.requests * 100 : 0;
               return (
                 <div key={provider.key} className="flex min-h-16 items-center justify-between gap-4 py-3 first:pt-0 last:pb-0">
                   <div className="flex min-w-0 items-center gap-2.5">
-                    <span className={cn("size-2 shrink-0 rounded-full", provider.dot)} />
+                    <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: provider.color }} />
                     <div className="min-w-0">
-                      <p className="truncate text-xs">{providerLabel(provider.key, t)}</p>
+                      <p className="truncate text-xs">{provider.label}</p>
                       <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{t("dashboard.providerDetail", { rate: formatNumber(successRate, locale, 1), tokens: formatNumber(provider.tokens, locale) })}</p>
                     </div>
                   </div>
@@ -131,12 +128,6 @@ function buildProviderStripes<T extends { requests: number }>(providers: T[], to
     const providerIndex = boundaries.findIndex((boundary) => position <= boundary);
     return providers[providerIndex >= 0 ? providerIndex : providers.length - 1] ?? null;
   });
-}
-
-function providerLabel(provider: ProviderKey, t: TFunction): string {
-  if (provider === "grok_build") return t("models.providerGrokBuild");
-  if (provider === "grok_web") return t("models.providerGrokWeb");
-  return t("console.name");
 }
 
 function clampTooltipX(value: number): number {

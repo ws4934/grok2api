@@ -21,6 +21,8 @@ import { channelsApi } from "@/features/channels/channels-api";
 import "@/features/channels/channels-i18n";
 import { listModels } from "@/entities/model/model-api";
 import type { ModelRouteDTO } from "@/entities/model/types";
+import { useProviders } from "@/entities/provider/provider-api";
+import { isGrokProvider } from "@/entities/provider/provider-presentation";
 import {
   createChatResponse,
   createVideo,
@@ -138,7 +140,13 @@ export function CreativeConsolePage() {
       return groups.flat();
     },
   });
-  const availableModels = useMemo(() => [...(modelsQuery.data ?? []).filter(model => ["grok_build", "grok_web", "grok_console"].includes(model.provider)), ...(extensionModelsQuery.data ?? [])].filter((model) => model.enabled && model.available), [modelsQuery.data, extensionModelsQuery.data]);
+  const availableModels = useMemo(() => {
+    const nativeModels = modelsQuery.data ?? [];
+    // Native routes win; extension routes only fill in providers the native catalog does not serve yet.
+    const nativeProviders = new Set(nativeModels.map((model) => model.provider));
+    const extensionModels = (extensionModelsQuery.data ?? []).filter((model) => !nativeProviders.has(model.provider));
+    return [...nativeModels, ...extensionModels].filter((model) => model.enabled && model.available);
+  }, [modelsQuery.data, extensionModelsQuery.data]);
   const permittedModels = useMemo(() => {
     if (!selectedKey || selectedKey.allowedModelIds.length === 0) return availableModels;
     const allowedModelIds = new Set(selectedKey.allowedModelIds);
@@ -292,7 +300,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
   const activeRequestSeqRef = useRef(0);
   const restoredInitialModelRef = useRef(false);
   const selectedModelRoute = useMemo(() => modelOptions.find((option) => option.publicId === model), [model, modelOptions]);
-  const basicProtocol = Boolean(selectedModelRoute && !["grok_build", "grok_web", "grok_console"].includes(selectedModelRoute.provider));
+  const basicProtocol = !usesGrokDialect(selectedModelRoute);
   const fixedReasoningModel = isFixedReasoningConsoleModel(selectedModelRoute);
   const effectiveReasoningEffort: ReasoningEffort = fixedReasoningModel ? "auto" : reasoningEffort;
   const reasoningEffortOptions: ReasoningEffort[] = fixedReasoningModel ? ["auto"] : ["auto", "none", "low", "medium", "high", "xhigh"];
@@ -391,7 +399,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
       requestControllerRef.current = controller;
       activeRequestSeqRef.current = request.requestSeq;
       return createChatResponse({
-        basicProtocol: !["grok_build", "grok_web", "grok_console"].includes(modelOptions.find(m => m.publicId === request.model)?.provider ?? "grok_build"),
+        basicProtocol: !usesGrokDialect(modelOptions.find((option) => option.publicId === request.model)),
         apiKey: request.apiKey,
         model: request.model,
         messages: request.messages,
@@ -890,7 +898,10 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   const [resolution, setResolution] = useState("1k");
   const [quality, setQuality] = useState<"low" | "medium">("medium");
   const [images, setImages] = useState<ImageResult[]>([]);
-  const basicProtocol = !["grok_build", "grok_web", "grok_console"].includes(modelOptions.find(m => m.publicId === model)?.provider ?? "grok_build");
+  const selectedModelRoute = modelOptions.find((option) => option.publicId === model);
+  const basicProtocol = !usesGrokDialect(selectedModelRoute);
+  const providers = useProviders().data;
+  const supportsImageEdit = Boolean(selectedModelRoute && providers?.find((provider) => provider.id === selectedModelRoute.provider)?.media.imageEdit);
   const supportsQuality = model.toLowerCase().endsWith("grok-imagine-image-2.0");
 
   const mutation = useMutation({
@@ -936,7 +947,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
               <CompactSelect value={count} options={["1", "2", "3", "4"]} onChange={setCount} ariaLabel={t("creativeConsole.count")} suffix="×" icon={<Images />} />
               {!basicProtocol && <><CompactSelect value={aspectRatio} options={imageAspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
               <CompactSelect value={resolution} options={imageResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} /></>}
-              {basicProtocol && <a className="px-2 text-xs text-primary underline" href="/channels">{t("channels.creativeLink")}</a>}
+              {basicProtocol && supportsImageEdit && <a className="px-2 text-xs text-primary underline" href="/channels">{t("channels.creativeLink")}</a>}
               {supportsQuality ? <CompactSelect value={quality} options={["low", "medium"]} onChange={(value) => setQuality(value as "low" | "medium")} ariaLabel={t("creativeConsole.quality")} /> : null}
             </div>
             <Button type="submit" size="icon" aria-label={t("creativeConsole.generateImage")} disabled={!apiKey || !model || !prompt.trim() || mutation.isPending}>{mutation.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />}</Button>
@@ -1783,6 +1794,12 @@ function uniqueModelsByPublicID(models: ModelRouteDTO[]): ModelRouteDTO[] {
     seen.add(model.publicId);
     return true;
   });
+}
+
+// Grok routes speak the xAI dialect (search tools, reasoning controls, aspect_ratio/resolution images);
+// other providers get the plain OpenAI-compatible request. Unknown routes default to Grok as before.
+function usesGrokDialect(model: ModelRouteDTO | undefined): boolean {
+  return !model || isGrokProvider(model.provider);
 }
 
 function isFixedReasoningConsoleModel(model: ModelRouteDTO | undefined): boolean {

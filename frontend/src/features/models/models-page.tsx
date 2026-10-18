@@ -23,6 +23,8 @@ import { Table, TableActionCell, TableActionHead, TableBody, TableCell, TableHea
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createModel, deleteModel, deleteModels, listModelAccountOptions, listModelGroups, syncModels, updateModel, updateModelsEnabled } from "@/entities/model/model-api";
 import type { ModelEndpointCapability, ModelRouteDTO, ModelRouteGroupDTO } from "@/entities/model/types";
+import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api";
+import { orderedProviderIds, providerColor, providerLabel } from "@/entities/provider/provider-presentation";
 import { EmptyState, ErrorState, TableLoadingRow } from "@/shared/components/data-state";
 import { DataTableShell } from "@/shared/components/data-table-shell";
 import { DataTableFilters } from "@/shared/components/data-table-filters";
@@ -51,9 +53,10 @@ export function ModelsPage() {
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
   const [accountSearch, setAccountSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search);
+  const providers = useProviders().data;
   const schema = z.object({
     publicId: z.string().min(1, t("errors.required")),
-    provider: z.enum(["grok_build", "grok_web", "grok_console"]),
+    provider: z.string(),
     upstreamModel: z.string().min(1, t("errors.required")),
     capability: z.enum(["responses", "chat", "image", "image_edit", "video", "tts", "stt", "realtime"]),
     enabled: z.boolean(),
@@ -159,7 +162,6 @@ export function ModelsPage() {
   }
 
   function beginEdit(model: ModelRouteDTO): void {
-    if (model.provider !== "grok_build" && model.provider !== "grok_web" && model.provider !== "grok_console") { window.location.assign("/channels"); return; }
     setEditing(model);
     setAccountSearch("");
     form.reset({
@@ -241,9 +243,7 @@ export function ModelsPage() {
               </div>
               <DataTableFilters filters={[
                 { id: "provider", label: t("models.provider"), value: providerFilter, onChange: (value) => { setProviderFilter(value as ModelRouteDTO["provider"] | ""); setPage(1); setSelected(new Set()); }, options: [
-                  { value: "grok_build", label: t("models.providerGrokBuild") },
-                  { value: "grok_web", label: t("models.providerGrokWeb") },
-                  { value: "grok_console", label: t("console.name") },
+                  ...orderedProviderIds(providers).map((id) => ({ value: id, label: providerLabel(id, providers) })),
                 ] },
                 { id: "status", label: t("models.status"), value: statusFilter, onChange: (value) => { setStatusFilter(value); setPage(1); setSelected(new Set()); }, options: [
                   { value: "enabled", label: t("common.enabled") },
@@ -314,7 +314,7 @@ export function ModelsPage() {
                   </TableCell>
                   <TableCell className="text-center"><ModelCapabilities capabilities={model.capabilities} /></TableCell>
                   <TableCell className="text-center">{model.enabledState === "enabled" ? <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">{t("common.enabled")}</Badge> : model.enabledState === "disabled" ? <Badge variant="outline" className="text-muted-foreground">{t("common.disabled")}</Badge> : <Badge variant="outline" className="text-amber-700 dark:text-amber-300">{t("models.partiallyEnabled")}</Badge>}</TableCell>
-                  <TableCell className="text-center"><ModelProvider provider={model.provider} /></TableCell>
+                  <TableCell className="text-center"><ModelProvider provider={model.provider} providers={providers} /></TableCell>
                   <TableCell className="text-center text-xs">
                     <div title={model.supportTitle}>
                       <span className="inline-flex items-baseline gap-1 tabular-nums"><span className={cn("font-medium", model.supportedMax > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>{model.supportedLabel}</span><span className="text-muted-foreground">/ {model.totalLabel}</span></span>
@@ -354,7 +354,7 @@ export function ModelsPage() {
                     <Label>{t("models.provider")}</Label>
                     <Select value={selectedProvider} disabled>
                       <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent><SelectItem value="grok_build">{t("models.providerGrokBuild")}</SelectItem></SelectContent>
+                      <SelectContent><SelectItem value="grok_build">{providerLabel("grok_build", providers)}</SelectItem></SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
@@ -436,14 +436,11 @@ export function ModelsPage() {
   );
 }
 
-function ModelProvider({ provider }: { provider: ModelRouteDTO["provider"] }) {
-  const { t } = useTranslation();
-  const label = provider === "grok_web" ? t("models.providerGrokWeb") : provider === "grok_console" ? t("console.name") : provider === "grok_build" ? t("models.providerGrokBuild") : provider;
-  const color = provider === "grok_web" ? "bg-quota-product-2" : provider === "grok_console" ? "bg-quota-product-4" : "bg-quota-product-1";
+function ModelProvider({ provider, providers }: { provider: ModelRouteDTO["provider"]; providers?: ProviderDTO[] }) {
   return (
     <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
-      <span className={cn("size-2 rounded-full", color)} />
-      {label}
+      <span className="size-2 rounded-full" style={{ backgroundColor: providerColor(provider, providers) }} />
+      {providerLabel(provider, providers)}
     </span>
   );
 }

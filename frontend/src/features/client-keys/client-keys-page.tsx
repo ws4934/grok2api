@@ -22,6 +22,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { Table, TableActionCell, TableActionHead, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { listModels } from "@/entities/model/model-api";
+import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api";
+import { orderedProviderIds, providerShortLabel } from "@/entities/provider/provider-presentation";
 import { createClientKey, deleteClientKey, deleteClientKeys, getClientKeySecret, listClientKeys, updateClientKey, updateClientKeysEnabled, type ClientKeyDTO, type CreateKeyResponseDTO, type ProviderScopeValue, type TierScopeValue } from "@/features/client-keys/client-keys-api";
 import { EmptyState, ErrorState, LoadingState, TableLoadingRow } from "@/shared/components/data-state";
 import { DataTableShell } from "@/shared/components/data-table-shell";
@@ -62,6 +64,7 @@ export function ClientKeysPage() {
   const [statusReferenceTime] = useState(() => Date.now());
   const debouncedSearch = useDebouncedValue(search);
   const debouncedModelOptionsSearch = useDebouncedValue(modelOptionsSearch);
+  const providers = useProviders().data;
   const schema = z.object({
     name: z.string().min(1, t("errors.required")),
     enabled: z.boolean(),
@@ -76,7 +79,10 @@ export function ClientKeysPage() {
     allowModelAliases: z.boolean(),
     modelScopeMode: z.enum(["all", "restricted"]),
     allowedModelIds: z.array(z.string()),
-    providerScope: z.array(z.enum(["all", "grok_build", "grok_web", "grok_console"])).min(1),
+    providerScope: z.array(z.string()).min(1).refine(
+      (values) => !providers || values.every((value) => value === "all" || providers.some((provider) => provider.id === value)),
+      { message: t("keys.unknownProviderScope") },
+    ),
     tierScope: z.array(z.enum(["all", "free", "super"])).min(1),
   }).superRefine((value, context) => {
     if (!value.expiryUnlimited && !value.expiresAt) {
@@ -101,9 +107,12 @@ export function ClientKeysPage() {
   const rpmUnlimited = useWatch({ control: form.control, name: "rpmUnlimited" });
   const concurrencyUnlimited = useWatch({ control: form.control, name: "concurrencyUnlimited" });
   const billingUnlimited = useWatch({ control: form.control, name: "billingUnlimited" });
-  const modelProviderScope = providerScope.filter((value): value is Exclude<ProviderScopeValue, "all"> => value !== "all");
+  const modelProviderScope = providerScope.filter((value) => value !== "all");
   const modelTierScope = tierScope.filter((value): value is Exclude<TierScopeValue, "all"> => value !== "all");
-  const providerScopeSummary = providerScope.includes("all") ? t("keys.allProviders") : modelProviderScope.map((value) => ({ grok_build: "Build", grok_web: "Web", grok_console: "Console" })[value]).join(" · ");
+  const providerScopeSummary = providerScope.includes("all") ? t("keys.allProvidersIncludingFuture") : modelProviderScope.map((value) => providerShortLabel(value, providers)).join(" · ");
+  // Selected ids missing from the catalog stay listed so they can be unchecked.
+  const providerScopeOptions = orderedProviderIds(providers, modelProviderScope).map((id) => ({ value: id, label: providerShortLabel(id, providers) }));
+  const tierExemptProviders = (providers ?? []).filter((provider) => !provider.tierScoped).map((provider) => provider.name).join(" · ");
   const tierScopeSummary = tierScope.includes("all") ? t("keys.allTiers") : modelTierScope.map((value) => value === "free" ? "Free" : "Super").join(" · ");
   const modelScopeSummary = modelScopeMode === "all" ? t("keys.allModels") : t("keys.selectedModels", { count: selectedModels.length });
 
@@ -353,7 +362,7 @@ export function ClientKeysPage() {
                     </div>
                   </TableCell>
                   <TableCell className="text-center"><ClientKeyStatus value={key} referenceTime={statusReferenceTime} /></TableCell>
-                  <TableCell className="text-center"><AccountScopeSummary providerScope={key.providerScope ?? ["all"]} tierScope={key.tierScope ?? ["all"]} /></TableCell>
+                  <TableCell className="text-center"><AccountScopeSummary providerScope={key.providerScope ?? ["all"]} tierScope={key.tierScope ?? ["all"]} providers={providers} /></TableCell>
                   <TableCell className="text-center text-xs tabular-nums">{key.rpmLimit > 0 ? key.rpmLimit : t("keys.unlimited")}</TableCell>
                   <TableCell className="text-center text-xs tabular-nums">{key.maxConcurrent > 0 ? key.maxConcurrent : t("keys.unlimited")}</TableCell>
                   <TableCell><BillingUsage value={key} /></TableCell>
@@ -494,15 +503,12 @@ export function ClientKeysPage() {
                             toast.info(t("keys.modelsClearedForScopeChange"));
                           }
                         }}
-                        normalizeAllWhenComplete
-                        options={[
-                          { value: "grok_build", label: "Build" },
-                          { value: "grok_web", label: "Web" },
-                          { value: "grok_console", label: "Console" },
-                        ]}
+                        allLabel={t("keys.allProvidersIncludingFuture")}
+                        options={providerScopeOptions}
                       />
                     )} />
                   </div>
+                  {form.formState.errors.providerScope ? <p className="px-3 py-2 text-xs text-destructive">{form.formState.errors.providerScope.message}</p> : null}
                   <div className="flex min-h-12 items-center gap-3 px-3">
                     <div className="flex shrink-0 items-center gap-1.5">
                       <Label>{t("keys.tierScope")}</Label>
@@ -512,7 +518,10 @@ export function ClientKeysPage() {
                             <CircleHelp className="size-3.5" />
                           </button>
                         </TooltipTrigger>
-                        <TooltipContent className="max-w-80 leading-relaxed">{t("keys.accountScopeDescription")}</TooltipContent>
+                        <TooltipContent className="max-w-80 leading-relaxed">
+                          {t("keys.accountScopeDescription")}
+                          {tierExemptProviders ? <span className="mt-1 block">{t("keys.tierExemptProviders", { providers: tierExemptProviders })}</span> : null}
+                        </TooltipContent>
                       </Tooltip>
                     </div>
                     <Controller control={form.control} name="tierScope" render={({ field }) => (
@@ -683,7 +692,7 @@ function ClientKeyStatus({ value, referenceTime }: { value: ClientKeyDTO; refere
   return <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">{t("keys.statusActive")}</Badge>;
 }
 
-function ScopeDropdown({ allLabel, ariaLabel, summary, value, onChange, options, normalizeAllWhenComplete = false }: { allLabel?: string; ariaLabel: string; summary: string; value: string[]; onChange: (value: string[]) => void; options: Array<{ value: string; label: string }>; normalizeAllWhenComplete?: boolean }) {
+function ScopeDropdown({ allLabel, ariaLabel, summary, value, onChange, options }: { allLabel?: string; ariaLabel: string; summary: string; value: string[]; onChange: (value: string[]) => void; options: Array<{ value: string; label: string }> }) {
   function toggle(nextValue: string): void {
     if (nextValue === "all") {
       onChange(["all"]);
@@ -692,10 +701,6 @@ function ScopeDropdown({ allLabel, ariaLabel, summary, value, onChange, options,
     const current = value.includes("all") ? (allLabel ? [] : options.map((option) => option.value)) : value;
     const next = current.includes(nextValue) ? current.filter((item) => item !== nextValue) : [...current, nextValue];
     if (next.length === 0) {
-      return;
-    }
-    if (normalizeAllWhenComplete && next.length === options.length) {
-      onChange(["all"]);
       return;
     }
     onChange(next);
@@ -727,13 +732,12 @@ function ScopeDropdown({ allLabel, ariaLabel, summary, value, onChange, options,
   );
 }
 
-function AccountScopeSummary({ providerScope, tierScope }: { providerScope: ProviderScopeValue[]; tierScope: TierScopeValue[] }) {
+function AccountScopeSummary({ providerScope, tierScope, providers }: { providerScope: ProviderScopeValue[]; tierScope: TierScopeValue[]; providers?: ProviderDTO[] }) {
   const { t } = useTranslation();
-  const providerLabels: Record<ProviderScopeValue, string> = { all: t("keys.allProviders"), grok_build: "Build", grok_web: "Web", grok_console: "Console" };
   const tierLabels: Record<TierScopeValue, string> = { all: t("keys.allTiers"), free: "Free", super: "Super" };
   return (
     <span className="inline-flex max-w-full flex-col items-start gap-0.5 text-left text-[10px] leading-4">
-      <span className="max-w-full truncate text-foreground">{providerScope.map((value) => providerLabels[value]).join(" · ")}</span>
+      <span className="max-w-full truncate text-foreground">{providerScope.map((value) => value === "all" ? t("keys.allProviders") : providerShortLabel(value, providers)).join(" · ")}</span>
       <span className="max-w-full truncate text-muted-foreground">{tierScope.map((value) => tierLabels[value]).join(" · ")}</span>
     </span>
   );

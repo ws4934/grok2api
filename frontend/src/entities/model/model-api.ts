@@ -10,7 +10,8 @@ export type ListModelsInput = {
   search?: string;
   status?: string;
   provider?: string;
-  providerScope?: Array<"grok_build" | "grok_web" | "grok_console">;
+  // Catalog provider ids; empty means every provider.
+  providerScope?: string[];
   tierScope?: Array<"free" | "super">;
   activeScope?: boolean;
   sortBy?: string;

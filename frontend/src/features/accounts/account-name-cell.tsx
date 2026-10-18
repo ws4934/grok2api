@@ -1,22 +1,13 @@
-import { Bot, Compass, Handshake, SquareTerminal, VenusAndMars, Webhook, type LucideIcon } from "lucide-react";
+import { Bot, Handshake, VenusAndMars } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { AccountDTO, AccountProvider, LinkedAccountDTO } from "@/features/accounts/accounts-api";
+import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api";
+import { providerIcon } from "@/entities/provider/provider-icon";
+import { providerColor, providerLabel, providerRank } from "@/entities/provider/provider-presentation";
+import type { AccountDTO, LinkedAccountDTO } from "@/features/accounts/accounts-api";
 import { cn } from "@/shared/lib/cn";
 import { formatDateTime } from "@/shared/lib/format";
-
-const providerOrder: Record<AccountProvider, number> = {
-  grok_build: 0,
-  grok_web: 1,
-  grok_console: 2,
-};
-
-const providerIcon: Record<AccountProvider, { icon: LucideIcon; className: string }> = {
-  grok_build: { icon: SquareTerminal, className: "text-quota-product-1" },
-  grok_web: { icon: Compass, className: "text-quota-product-2" },
-  grok_console: { icon: Webhook, className: "text-quota-product-4" },
-};
 
 function identityDetails(name: string, email?: string, userId?: string): string[] {
   const values = [email?.trim() || name.trim(), userId?.trim()];
@@ -30,25 +21,21 @@ function identityDetails(name: string, email?: string, userId?: string): string[
   });
 }
 
-function accountLinks(account: AccountDTO): LinkedAccountDTO[] {
+function accountLinks(account: AccountDTO, providers?: ProviderDTO[]): LinkedAccountDTO[] {
   const links = account.linkedAccounts ?? (account.linkedAccountId && account.linkedProvider
     ? [{ id: account.linkedAccountId, provider: account.linkedProvider, name: account.linkedAccountName ?? "" }]
     : []);
-  return [...links].sort((left, right) => providerOrder[left.provider] - providerOrder[right.provider] || left.id.localeCompare(right.id));
+  return [...links].sort((left, right) => providerRank(left.provider, providers) - providerRank(right.provider, providers) || left.id.localeCompare(right.id));
 }
 
 export function AccountNameCell({ account }: { account: AccountDTO }) {
   const { t, i18n } = useTranslation();
-  const links = accountLinks(account);
-  const providerLabel = (provider: AccountProvider) => provider === "grok_build"
-    ? t("models.providerGrokBuild")
-    : provider === "grok_web"
-      ? t("models.providerGrokWeb")
-      : t("console.name");
+  const providers = useProviders().data;
+  const links = accountLinks(account, providers);
   const connections = [
     { id: account.id, provider: account.provider, details: identityDetails(account.name, account.email, account.userId) },
     ...links.filter((linked) => linked.provider !== account.provider).map((linked) => ({ id: linked.id, provider: linked.provider, details: identityDetails(linked.name, linked.email, linked.userId) })),
-  ].sort((left, right) => providerOrder[left.provider] - providerOrder[right.provider]);
+  ].sort((left, right) => providerRank(left.provider, providers) - providerRank(right.provider, providers));
 
   return (
     <div className="flex min-h-9 min-w-0 flex-col justify-center gap-0.5">
@@ -65,23 +52,23 @@ export function AccountNameCell({ account }: { account: AccountDTO }) {
           <TooltipTrigger asChild>
             <div
               tabIndex={0}
-              aria-label={connections.map((connection) => providerLabel(connection.provider)).join(", ")}
+              aria-label={connections.map((connection) => providerLabel(connection.provider, providers)).join(", ")}
               className="flex min-w-0 cursor-help items-center gap-1.5 overflow-hidden rounded-sm focus-visible:outline-none"
             >
               {connections.map((connection) => {
-                const { icon: ProviderIcon, className } = providerIcon[connection.provider];
-                return <ProviderIcon key={`${connection.provider}:${connection.id}`} className={cn("size-3.5 shrink-0", className)} />;
+                const ProviderIcon = providerIcon(connection.provider);
+                return <ProviderIcon key={`${connection.provider}:${connection.id}`} className="size-3.5 shrink-0" style={{ color: providerColor(connection.provider, providers) }} />;
               })}
             </div>
           </TooltipTrigger>
           <TooltipContent className="min-w-44 space-y-2 px-2.5 py-2">
             {connections.map((connection) => {
-              const label = providerLabel(connection.provider);
-              const { icon: ProviderIcon, className } = providerIcon[connection.provider];
+              const label = providerLabel(connection.provider, providers);
+              const ProviderIcon = providerIcon(connection.provider);
               return (
                 <div key={`${connection.provider}:${connection.id}`} className="space-y-0.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium">
-                    <ProviderIcon className={cn("size-3.5", className)} />
+                    <ProviderIcon className="size-3.5" style={{ color: providerColor(connection.provider, providers) }} />
                     <span>{label}</span>
                   </div>
                   {(connection.details.length > 0 ? connection.details : [label]).map((detail, index) => (

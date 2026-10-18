@@ -4,6 +4,8 @@ import { Pie, PieChart } from "recharts";
 
 import { ChartContainer, type ChartConfig } from "@/components/ui/chart";
 import { Spinner } from "@/components/ui/spinner";
+import { useProviders } from "@/entities/provider/provider-api";
+import { providerRank, providerShortLabel } from "@/entities/provider/provider-presentation";
 import type { DashboardDTO } from "@/features/dashboard/dashboard-api";
 import { formatUSD, formatUSDValue } from "@/features/dashboard/dashboard-format";
 import { DashboardPanel } from "@/features/dashboard/dashboard-panel";
@@ -19,8 +21,14 @@ type DashboardDataProps = {
 
 export function DashboardOverview({ dashboard, locale, loading }: DashboardDataProps) {
   const { t } = useTranslation();
+  const providers = useProviders().data;
   const resources = dashboard?.resources;
   const usage = dashboard?.usage;
+  const accountCounts = resources?.accountsByProvider ?? { grok_build: resources?.buildAccounts ?? 0, grok_web: resources?.webAccounts ?? 0, grok_console: resources?.consoleAccounts ?? 0 };
+  const accountDistribution = Object.keys(accountCounts)
+    .sort((left, right) => providerRank(left, providers) - providerRank(right, providers))
+    .map((id) => `${providerShortLabel(id, providers)} ${formatNumber(accountCounts[id], locale)}`)
+    .join(" · ");
   const cacheHitRate = (usage?.inputTokens ?? 0) > 0 ? (usage?.cachedInputTokens ?? 0) / (usage?.inputTokens ?? 1) * 100 : 0;
   const averageRequestCost = (usage?.requests ?? 0) > 0 ? usdTicksToValue(usage?.billedCostUsdTicks ?? 0) / (usage?.requests ?? 1) : 0;
   const hasFirstTokenSamples = (usage?.firstTokenSamples ?? 0) > 0;
@@ -36,7 +44,7 @@ export function DashboardOverview({ dashboard, locale, loading }: DashboardDataP
           icon={UsersRound}
           label={t("dashboard.accountCount")}
           value={formatNumber(resources?.totalAccounts ?? 0, locale)}
-          detail={t("dashboard.accountDistribution", { build: formatNumber(resources?.buildAccounts ?? 0, locale), web: formatNumber(resources?.webAccounts ?? 0, locale), console: formatNumber(resources?.consoleAccounts ?? 0, locale) })}
+          detail={accountDistribution}
           loading={loading}
         />
         <DashboardMetric

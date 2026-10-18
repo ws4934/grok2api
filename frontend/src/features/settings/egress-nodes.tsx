@@ -19,7 +19,8 @@ import { Switch } from "@/components/ui/switch";
 import { Table, TableActionCell, TableActionHead, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { channelsApi } from "@/features/channels/channels-api";
+import { useProviders } from "@/entities/provider/provider-api";
+import { extensionEgressScopes, providerLabel } from "@/entities/provider/provider-presentation";
 import { EgressAutomation, EgressSources } from "@/features/settings/egress-operations";
 import { EgressProxyProfiles } from "@/features/settings/egress-proxy-profiles";
 import { cleanupUnhealthyEgressNodes, createEgressNode, deleteEgressNode, deleteEgressNodes, getEgressNodeProxyURL, getEgressProxyProfile, importEgressText, listEgressProxyProfiles, listEgressNodes, previewUnhealthyEgressNodes, refreshEgressClearance, testEgressNode, updateEgressNode, updateEgressNodesEnabled, type ClearanceMode, type EgressIPProbeDTO, type EgressNodeDTO, type EgressNodeInput, type EgressScope } from "@/features/settings/settings-api";
@@ -36,7 +37,8 @@ import { nextTableSort, type SortOrder, type TableSort } from "@/shared/lib/tabl
 const emptyInput: EgressNodeInput = { name: "", scope: "grok_build", enabled: true, proxyPool: false, accountCapacity: 0, proxyURL: "", userAgent: "", cloudflareCookies: "" };
 type ImportForm = { name: string; scope: EgressScope; accountCapacity: number; content: string };
 const emptyImport: ImportForm = { name: "", scope: "grok_build", accountCapacity: 0, content: "" };
-// Build and extension channel scopes (non-grok_ IDs such as "chatgpt") carry no browser user agent or Cloudflare clearance.
+const grokEgressScopes: EgressScope[] = ["grok_build", "grok_web", "grok_console", "grok_web_asset", "grok_console_asset"];
+// Build and extension provider scopes (non-grok_ IDs such as "chatgpt") carry no browser user agent or Cloudflare clearance.
 const noBrowserIdentity = (scope: EgressScope) => scope === "grok_build" || !scope.startsWith("grok_");
 
 export function EgressNodes({ title, clearanceMode }: { title: string; clearanceMode: ClearanceMode }) {
@@ -71,7 +73,8 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
     staleTime: 15_000,
     refetchOnWindowFocus: true,
   });
-  const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: channelsApi.list });
+  const providers = useProviders().data;
+  const scopes = [...grokEgressScopes, ...extensionEgressScopes(providers)];
   const save = useMutation({
     mutationFn: () => {
       const normalizedProxyURL = form.proxyURL?.trim() || "";
@@ -207,7 +210,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
     if (scope === "grok_console") return t("console.name");
     if (scope === "grok_web_asset") return t("settings.egress.scopeWebAsset");
     if (scope === "grok_console_asset") return t("settings.egress.scopeConsoleAsset");
-    if (!scope.startsWith("grok_")) return channelsQuery.data?.find((channel) => channel.descriptor.id === scope)?.descriptor.name ?? scope;
+    if (!scope.startsWith("grok_")) return providerLabel(scope, providers);
     return t("settings.egress.scopeWeb");
   }
 
@@ -247,7 +250,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
 
   return (
     <div className="space-y-8">
-      <EgressSources scopeLabel={scopeLabel} />
+      <EgressSources scopes={scopes} scopeLabel={scopeLabel} />
 
       <section className="space-y-3">
         <div className="flex min-h-8 items-center px-1">
@@ -262,14 +265,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
                   <Input className="h-8 pl-9 text-xs" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); setSelected(new Map()); }} placeholder={t("settings.egress.search")} aria-label={t("settings.egress.search")} />
                 </div>
                 <DataTableFilters filters={[
-                  { id: "scope", label: t("settings.egress.scope"), value: scopeFilter, onChange: (value) => { setScopeFilter(value); setPage(1); setSelected(new Map()); }, options: [
-                    { value: "grok_build", label: scopeLabel("grok_build") },
-                    { value: "grok_web", label: scopeLabel("grok_web") },
-                    { value: "grok_console", label: scopeLabel("grok_console") },
-                    { value: "grok_web_asset", label: scopeLabel("grok_web_asset") },
-                    { value: "grok_console_asset", label: scopeLabel("grok_console_asset") },
-                    ...(channelsQuery.data ?? []).map((channel) => ({ value: channel.descriptor.id, label: channel.descriptor.name })),
-                  ] },
+                  { id: "scope", label: t("settings.egress.scope"), value: scopeFilter, onChange: (value) => { setScopeFilter(value); setPage(1); setSelected(new Map()); }, options: scopes.map((scope) => ({ value: scope, label: scopeLabel(scope) })) },
                   { id: "enabled", label: t("settings.egress.enabled"), value: enabledFilter, onChange: (value) => { setEnabledFilter(value); setPage(1); setSelected(new Map()); }, options: [
                     { value: "enabled", label: t("common.enable") },
                     { value: "disabled", label: t("common.disable") },
@@ -351,7 +347,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
         </DataTableShell>
       </section>
 
-      <EgressAutomation scopeLabel={scopeLabel} />
+      <EgressAutomation scopes={scopes} scopeLabel={scopeLabel} />
 
       <AlertDialog open={batchDeleteOpen} onOpenChange={setBatchDeleteOpen}>
         <AlertDialogContent>
@@ -424,14 +420,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
             <Field label={t("settings.egress.scope")} controlId="egress-scope">
               <Select value={form.scope} onValueChange={(value) => changeScope(value as EgressScope)}>
                 <SelectTrigger id="egress-scope"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="grok_build">{t("settings.egress.scopeBuild")}</SelectItem>
-                  <SelectItem value="grok_web">{t("settings.egress.scopeWeb")}</SelectItem>
-                  <SelectItem value="grok_console">{t("console.name")}</SelectItem>
-                  <SelectItem value="grok_web_asset">{t("settings.egress.scopeWebAsset")}</SelectItem>
-                  <SelectItem value="grok_console_asset">{t("settings.egress.scopeConsoleAsset")}</SelectItem>
-                  {channelsQuery.data?.map((channel) => <SelectItem key={channel.descriptor.id} value={channel.descriptor.id}>{channel.descriptor.name}</SelectItem>)}
-                </SelectContent>
+                <SelectContent>{scopes.map((scope) => <SelectItem key={scope} value={scope}>{scopeLabel(scope)}</SelectItem>)}</SelectContent>
               </Select>
             </Field>
             {!noBrowserIdentity(form.scope) && form.scope !== "grok_console_asset" ? (
@@ -495,14 +484,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
               <Field label={t("settings.egress.scope")} controlId="egress-import-scope">
                 <Select value={importForm.scope} onValueChange={(value) => setImportForm({ ...importForm, scope: value as EgressScope })}>
                   <SelectTrigger id="egress-import-scope"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="grok_build">{t("settings.egress.scopeBuild")}</SelectItem>
-                    <SelectItem value="grok_web">{t("settings.egress.scopeWeb")}</SelectItem>
-                    <SelectItem value="grok_console">{t("console.name")}</SelectItem>
-                    <SelectItem value="grok_web_asset">{t("settings.egress.scopeWebAsset")}</SelectItem>
-                    <SelectItem value="grok_console_asset">{t("settings.egress.scopeConsoleAsset")}</SelectItem>
-                    {channelsQuery.data?.map((channel) => <SelectItem key={channel.descriptor.id} value={channel.descriptor.id}>{channel.descriptor.name}</SelectItem>)}
-                  </SelectContent>
+                  <SelectContent>{scopes.map((scope) => <SelectItem key={scope} value={scope}>{scopeLabel(scope)}</SelectItem>)}</SelectContent>
                 </Select>
               </Field>
             </div>

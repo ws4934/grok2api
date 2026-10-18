@@ -70,7 +70,7 @@ export type EgressProxyProfileListDTO = {
 	total: number;
 };
 
-// A Grok scope (grok_build, grok_web, grok_console, grok_web_asset, grok_console_asset) or an extension channel ID such as "chatgpt".
+// A Grok scope (grok_build, grok_web, grok_console, grok_web_asset, grok_console_asset) or a scope declared by another catalog provider, such as "chatgpt".
 export type EgressScope = string;
 export type EgressFallbackMode = "none" | "direct" | "fixed";
 export type EgressFallbackConfigDTO = { mode: EgressFallbackMode; nodeId?: string };

@@ -8,7 +8,6 @@ const zhCN = {
   done: "操作已完成",
   failed: "操作失败",
   creativeLink: "参考图 / 蒙版编辑",
-  egressFallbackHelp: "{{name}} 没有可用主出口时使用的回退方式。",
   tabs: { accounts: "账户", models: "模型与价格", access: "密钥授权", jobs: "图片任务", settings: "设置" },
   status: {
     pending: "待检测",
@@ -175,7 +174,6 @@ const en: typeof zhCN = {
   done: "Operation completed",
   failed: "Operation failed",
   creativeLink: "Reference image / mask editing",
-  egressFallbackHelp: "Fallback used when no {{name}} primary egress is available.",
   tabs: { accounts: "Accounts", models: "Models & prices", access: "Key access", jobs: "Image jobs", settings: "Settings" },
   status: {
     pending: "Pending check",

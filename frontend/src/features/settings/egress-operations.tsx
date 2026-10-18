@@ -15,8 +15,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableActionCell, TableActionHead, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { channelsApi } from "@/features/channels/channels-api";
-import "@/features/channels/channels-i18n";
 import {
   createEgressSource,
   deleteEgressSource,
@@ -52,7 +50,6 @@ const emptySource: SourceForm = {
 // 15-second ceiling. Keeping a request to 32 nodes leaves enough headroom for
 // the admin HTTP timeout.
 const egressProbeBatchSize = 32;
-const fallbackScopes: EgressScope[] = ["grok_build", "grok_web", "grok_console", "grok_web_asset", "grok_console_asset"];
 const fallbackDescriptionKeys: Record<EgressScope, string> = {
   grok_build: "settings.egress.fallbackBuildHelp",
   grok_web: "settings.egress.fallbackWebHelp",
@@ -116,13 +113,12 @@ async function testAllEgressNodes() {
   return result;
 }
 
-export function EgressAutomation({ scopeLabel }: { scopeLabel: (scope: EgressScope) => string }) {
+export function EgressAutomation({ scopes, scopeLabel }: { scopes: EgressScope[]; scopeLabel: (scope: EgressScope) => string }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [operationsDraft, setOperationsDraft] = useState<Omit<EgressOperationsConfigDTO, "updatedAt"> | null>(null);
   const operationsQuery = useQuery({ queryKey: ["egress-operations"], queryFn: getEgressOperationsConfig });
   const nodesQuery = useQuery({ queryKey: ["egress-nodes", "fallback-options"], queryFn: () => listAllEgressNodes() });
-  const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: channelsApi.list });
   const operationsForm = operationsDraft ?? operationsFormFrom(operationsQuery.data);
 
   const invalidate = () => {
@@ -204,7 +200,7 @@ export function EgressAutomation({ scopeLabel }: { scopeLabel: (scope: EgressSco
                 </Tooltip>
               </div>
               <div className="mt-3 space-y-2">
-                {[...fallbackScopes, ...(channelsQuery.data?.map((channel) => channel.descriptor.id) ?? [])].map((scope) => {
+                {scopes.map((scope) => {
                   const fallback: EgressFallbackConfigDTO = operationsForm.fallbacks[scope] ?? { mode: "none" };
                   const candidates = fallbackNodeCandidates(nodesQuery.data?.items ?? [], scope);
                   const selectedAvailable = candidates.some((node) => node.id === fallback.nodeId);
@@ -212,7 +208,7 @@ export function EgressAutomation({ scopeLabel }: { scopeLabel: (scope: EgressSco
                     <div className="grid min-w-0 gap-2.5 py-1 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] sm:items-center sm:gap-8" key={scope}>
                       <div className="min-w-0">
                         <div className="flex min-h-5 items-center"><Label className="text-xs font-medium">{scopeLabel(scope)}</Label></div>
-                        <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">{t(fallbackDescriptionKeys[scope] ?? "channels.egressFallbackHelp", { name: scopeLabel(scope) })}</p>
+                        <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">{t(fallbackDescriptionKeys[scope] ?? "settings.egress.fallbackProviderHelp", { name: scopeLabel(scope) })}</p>
                       </div>
                       <div className={fallback.mode === "fixed" ? "grid min-w-0 gap-2 sm:grid-cols-2" : "grid min-w-0"}>
                         <Select value={fallback.mode} onValueChange={(mode) => setFallbackMode(scope, mode as EgressFallbackMode)}>
@@ -246,7 +242,7 @@ export function EgressAutomation({ scopeLabel }: { scopeLabel: (scope: EgressSco
   );
 }
 
-export function EgressSources({ scopeLabel }: { scopeLabel: (scope: EgressScope) => string }) {
+export function EgressSources({ scopes, scopeLabel }: { scopes: EgressScope[]; scopeLabel: (scope: EgressScope) => string }) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const [sourceEditing, setSourceEditing] = useState<EgressSourceDTO | null | undefined>(undefined);
@@ -255,7 +251,6 @@ export function EgressSources({ scopeLabel }: { scopeLabel: (scope: EgressScope)
   const [pageSize, setPageSize] = useState(20);
   const [search, setSearch] = useState("");
   const [scopeFilter, setScopeFilter] = useState("");
-  const channelsQuery = useQuery({ queryKey: ["channels"], queryFn: channelsApi.list });
   const sourcesQuery = useQuery({ queryKey: ["egress-sources"], queryFn: () => listEgressSources() });
 
   const invalidate = () => {
@@ -325,14 +320,7 @@ export function EgressSources({ scopeLabel }: { scopeLabel: (scope: EgressScope)
                 <Input className="h-8 pl-9 text-xs" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} placeholder={t("settings.egress.searchSubscriptions")} aria-label={t("settings.egress.searchSubscriptions")} />
               </div>
               <DataTableFilters filters={[{
-                id: "subscription-scope", label: t("settings.egress.scope"), value: scopeFilter, onChange: (value) => { setScopeFilter(value); setPage(1); }, options: [
-                  { value: "grok_build", label: scopeLabel("grok_build") },
-                  { value: "grok_web", label: scopeLabel("grok_web") },
-                  { value: "grok_console", label: scopeLabel("grok_console") },
-                  { value: "grok_web_asset", label: scopeLabel("grok_web_asset") },
-                  { value: "grok_console_asset", label: scopeLabel("grok_console_asset") },
-                  ...(channelsQuery.data ?? []).map((channel) => ({ value: channel.descriptor.id, label: scopeLabel(channel.descriptor.id) })),
-                ],
+                id: "subscription-scope", label: t("settings.egress.scope"), value: scopeFilter, onChange: (value) => { setScopeFilter(value); setPage(1); }, options: scopes.map((scope) => ({ value: scope, label: scopeLabel(scope) })),
               }]} />
             </div>
             <ActionTooltip label={t("settings.egress.addSourceHelp")}><Button type="button" size="sm" variant="secondary" onClick={() => openSource()}><Plus />{t("settings.egress.addSource")}</Button></ActionTooltip>
@@ -371,7 +359,7 @@ export function EgressSources({ scopeLabel }: { scopeLabel: (scope: EgressScope)
           <form className="space-y-3.5" onSubmit={(event) => { event.preventDefault(); event.stopPropagation(); saveSource.mutate(); }}>
             <ToggleControl label={t("settings.egress.enabled")} checked={sourceForm.enabled} onChange={(enabled) => setSourceForm({ ...sourceForm, enabled })} />
             <Control label={t("settings.egress.name")}><Input value={sourceForm.name} onChange={(event) => setSourceForm({ ...sourceForm, name: event.target.value })} /></Control>
-            <Control label={t("settings.egress.scope")}><ScopeSelect value={sourceForm.scope} onChange={(scope) => setSourceForm({ ...sourceForm, scope })} scopeLabel={scopeLabel} /></Control>
+            <Control label={t("settings.egress.scope")}><ScopeSelect value={sourceForm.scope} onChange={(scope) => setSourceForm({ ...sourceForm, scope })} scopes={scopes} scopeLabel={scopeLabel} /></Control>
             <Control label={t("settings.egress.subscriptionURL")}><Input type="password" autoComplete="new-password" placeholder={sourceEditing?.urlConfigured ? t("settings.egress.keepConfigured") : "https://..."} value={sourceForm.url} onChange={(event) => setSourceForm({ ...sourceForm, url: event.target.value })} /></Control>
             <ToggleControl label={t("settings.egress.subscriptionProxy")} checked={sourceForm.proxyEnabled} onChange={(proxyEnabled) => setSourceForm({ ...sourceForm, proxyEnabled })} />
             {sourceForm.proxyEnabled ? <Control label={t("settings.egress.subscriptionProxyURL")}><Input type="password" autoComplete="new-password" aria-invalid={sourceProxyInvalid} placeholder={sourceEditing?.proxyConfigured ? t("settings.egress.keepConfigured") : "http://proxy.example:8080"} value={sourceForm.proxyURL} onChange={(event) => setSourceForm({ ...sourceForm, proxyURL: event.target.value })} />{sourceProxyInvalid ? <p className="text-xs text-destructive">{t("settings.egress.invalidSubscriptionProxy")}</p> : null}</Control> : null}
@@ -401,9 +389,7 @@ function supportsFallbackScope(nodeScope: EgressScope, requestScope: EgressScope
   return requestScope === "grok_console_asset" && (nodeScope === "grok_console" || nodeScope === "grok_web");
 }
 
-function ScopeSelect({ value, onChange, scopeLabel }: { value: EgressScope; onChange: (value: EgressScope) => void; scopeLabel: (scope: EgressScope) => string }) {
-  const channels = useQuery({ queryKey: ["channels"], queryFn: channelsApi.list });
-  const scopes = [...fallbackScopes, ...(channels.data?.map((channel) => channel.descriptor.id) ?? [])];
+function ScopeSelect({ value, onChange, scopes, scopeLabel }: { value: EgressScope; onChange: (value: EgressScope) => void; scopes: EgressScope[]; scopeLabel: (scope: EgressScope) => string }) {
   return <Select value={value} onValueChange={(next) => onChange(next as EgressScope)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{scopes.map((scope) => <SelectItem key={scope} value={scope}>{scopeLabel(scope)}</SelectItem>)}</SelectContent></Select>;
 }
 
