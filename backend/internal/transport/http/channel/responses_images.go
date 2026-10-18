@@ -432,13 +432,12 @@ func imageResponseObject(job domain.ImageJob, results []app.ImageResult, usage a
 // image_generation_call while the job runs. There are no partial images.
 func (h *Handler) streamImageResponse(c *gin.Context, key uint64, job domain.ImageJob) {
 	ctx := c.Request.Context()
-	sequence := 0
+	sequence, out := 0, &sse{c: c}
 	send := func(name string, body gin.H) {
 		body["type"], body["sequence_number"] = name, sequence
 		sequence++
-		sseEvent(c, name, body)
+		_ = out.send(name, body)
 	}
-	startSSE(c)
 	head := imageResponseObject(job, nil, nil)
 	head["status"], head["output"] = "in_progress", []any{}
 	send("response.created", gin.H{"response": head})

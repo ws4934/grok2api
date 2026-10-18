@@ -2,8 +2,6 @@ package channelhttp
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"time"
 
 	domain "github.com/chenyme/grok2api/backend/internal/domain/channel"
@@ -12,22 +10,6 @@ import (
 
 // imageKeepAlive spaces the SSE comments sent while an image job runs.
 var imageKeepAlive = 15 * time.Second
-
-func startSSE(c *gin.Context) {
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("X-Accel-Buffering", "no")
-	c.Status(200)
-	c.Writer.Flush()
-}
-
-// sseEvent ignores write errors: a disconnect cancels the request context,
-// which the job watcher handles.
-func sseEvent(c *gin.Context, name string, v any) {
-	b, _ := json.Marshal(v)
-	_, _ = fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", name, b)
-	c.Writer.Flush()
-}
 
 // watchImageJob polls a job until it ends, calling progress after every poll
 // and writing keep-alive comments meanwhile. A client disconnect cancels the
@@ -92,7 +74,8 @@ func (h *Handler) streamImages(c *gin.Context, key uint64, job domain.ImageJob, 
 	if job.Request.Operation == "image_edit" {
 		event = "image_edit.completed"
 	}
-	startSSE(c)
+	out := &sse{c: c}
+	_ = out.write("") // headers first, so clients see the stream before the image
 	sent := map[string]bool{}
 	job, e := h.watchImageJob(c, key, job, func(job domain.ImageJob) error {
 		r := job.Request
@@ -112,7 +95,7 @@ func (h *Handler) streamImages(c *gin.Context, key uint64, job domain.ImageJob, 
 				} else {
 					body["b64_json"] = result.Base64
 				}
-				sseEvent(c, event, body)
+				_ = out.send(event, body)
 			}
 		}
 		return nil
@@ -124,5 +107,5 @@ func (h *Handler) streamImages(c *gin.Context, key uint64, job domain.ImageJob, 
 	if e != nil {
 		code, message = "result_unavailable", "Image result unavailable; inspect X-Image-Job-ID"
 	}
-	sseEvent(c, "error", gin.H{"type": "error", "error": gin.H{"type": "server_error", "code": code, "message": message, "param": nil}})
+	_ = out.send("error", gin.H{"type": "error", "error": gin.H{"type": "server_error", "code": code, "message": message, "param": nil}})
 }

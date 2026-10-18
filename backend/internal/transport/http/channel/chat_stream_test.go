@@ -138,7 +138,7 @@ func chatFixture(t *testing.T) chatEnv {
 	return chatEnv{s: s, r: r, script: script, account: imported[0].AccountID}
 }
 
-type sseEvent struct {
+type parsedSSE struct {
 	name string
 	data map[string]any
 	raw  string
@@ -150,10 +150,10 @@ func post(t *testing.T, r *gin.Engine, path, body string) (int, string) {
 	r.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader(body)))
 	return w.Code, w.Body.String()
 }
-func parseSSE(body string) []sseEvent {
-	var out []sseEvent
+func parseSSE(body string) []parsedSSE {
+	var out []parsedSSE
 	for _, frame := range strings.Split(body, "\n\n") {
-		var ev sseEvent
+		var ev parsedSSE
 		for _, line := range strings.Split(frame, "\n") {
 			if v, ok := strings.CutPrefix(line, "event: "); ok {
 				ev.name = v

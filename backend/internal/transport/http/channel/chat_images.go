@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	domain "github.com/chenyme/grok2api/backend/internal/domain/channel"
 	"github.com/gin-gonic/gin"
@@ -106,31 +105,20 @@ func (h *Handler) chatImage(c *gin.Context, data []byte, model string, chatMatch
 	c.Header("X-Image-Job-ID", job.ID)
 	c.Header("Location", "/v1/responses/"+job.ID)
 	w := newCompletion(c, in.Request.Model, in.IncludeUsage)
-	if in.Stream {
-		_ = w.chunk(gin.H{"content": ""}, nil)
-	}
-	type waited struct {
+	var result struct {
 		job domain.ImageJob
 		err error
 	}
-	done := make(chan waited, 1)
-	go func() {
-		j, e := h.service.WaitImageJob(ctx, key.ID, job.ID)
-		done <- waited{j, e}
-	}()
-	// Comments keep proxies from closing an idle stream while the image renders.
-	tick := time.NewTicker(15 * time.Second)
-	defer tick.Stop()
-	var result waited
-	for waiting := true; waiting; {
-		select {
-		case result = <-done:
-			waiting = false
-		case <-tick.C:
-			if in.Stream {
-				_ = w.out.write(": keep-alive\n\n")
-			}
-		}
+	if in.Stream {
+		// The role chunk opens the stream; keep-alive comments then hold it
+		// open through proxies while the image renders.
+		_ = w.chunk(gin.H{"content": ""}, nil)
+		result.job, result.err = h.watchImageJob(c, key.ID, job, func(domain.ImageJob) error { return nil })
+	} else {
+		result.job, result.err = h.service.WaitImageJob(ctx, key.ID, job.ID)
+	}
+	if ctx.Err() != nil {
+		return true
 	}
 	if result.err != nil {
 		w.fail(failure{503, "jobs_unavailable", "Image job lookup failed; inspect X-Image-Job-ID"})
