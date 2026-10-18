@@ -333,6 +333,7 @@ func parseJSONCalls(text string, available map[string]struct{}, result ParseResu
 		return result
 	}
 	decoder := json.NewDecoder(strings.NewReader(text[start:]))
+	decoder.UseNumber() // arguments are re-encoded below; keep big integers exact
 	var envelope struct {
 		ToolCalls []map[string]any `json:"tool_calls"`
 	}
@@ -370,12 +371,14 @@ func appendCall(calls *[]Call, name, arguments string, available map[string]stru
 	if _, ok := available[name]; !ok {
 		return
 	}
-	arguments = NormalizeArguments(html.UnescapeString(strings.TrimSpace(arguments)))
+	arguments = strings.TrimSpace(arguments)
 	if !json.Valid([]byte(arguments)) {
-		return
+		// Some models HTML-escape the whole JSON; valid JSON is kept as written.
+		arguments = html.UnescapeString(arguments)
 	}
-	var object map[string]any
-	if json.Unmarshal([]byte(arguments), &object) != nil {
+	// Compacted valid JSON starts with '{' only when it is an object.
+	arguments = NormalizeArguments(arguments)
+	if !strings.HasPrefix(arguments, "{") || !json.Valid([]byte(arguments)) {
 		return
 	}
 	*calls = append(*calls, Call{ID: newCallID(), Name: name, Arguments: arguments})
@@ -387,21 +390,18 @@ func newCallID() string {
 	return "call_" + hex.EncodeToString(value)
 }
 
-// NormalizeArguments compacts JSON arguments; other text is only trimmed.
+// NormalizeArguments compacts JSON arguments without re-encoding them, so
+// numbers, key order and escapes stay as written; other text is only trimmed.
 func NormalizeArguments(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return "{}"
 	}
-	var parsed any
-	if json.Unmarshal([]byte(value), &parsed) != nil {
+	var compact bytes.Buffer
+	if json.Compact(&compact, []byte(value)) != nil {
 		return value
 	}
-	encoded, err := json.Marshal(parsed)
-	if err != nil {
-		return value
-	}
-	return string(encoded)
+	return compact.String()
 }
 
 // Strip removes the parsed call markup from text.

@@ -82,6 +82,36 @@ func TestFormatCallsRoundTripsThroughParse(t *testing.T) {
 	}
 }
 
+func writeFileBlock(arguments string) string {
+	return "<tool_calls><tool_call><tool_name>write_file</tool_name><parameters>" + arguments + "</parameters></tool_call></tool_calls>"
+}
+
+// TestParseKeepsArgumentsExact: valid JSON is only compacted, never decoded
+// and re-encoded or HTML-unescaped; HTML-escaped JSON is still accepted.
+func TestParseKeepsArgumentsExact(t *testing.T) {
+	available := map[string]struct{}{"write_file": {}}
+	for _, c := range []struct{ in, want string }{
+		{`{"id": 1820000000000000123, "z": 1.50, "a": 2}`, `{"id":1820000000000000123,"z":1.50,"a":2}`},
+		{`{"content":"<p>a &lt; b &amp; c</p>"}`, `{"content":"<p>a &lt; b &amp; c</p>"}`},
+		{`{"content":"<a title=\"&quot;x&quot;\">"}`, `{"content":"<a title=\"&quot;x&quot;\">"}`},
+		{`{&quot;q&quot;:&quot;x&quot;}`, `{"q":"x"}`},
+	} {
+		if parsed := Parse(writeFileBlock(c.in), available); len(parsed.Calls) != 1 || parsed.Calls[0].Arguments != c.want {
+			t.Fatalf("%s: calls = %#v", c.in, parsed.Calls)
+		}
+	}
+	if got := NormalizeArguments(` {"n": 1820000000000000123, "s": "<b>"} `); got != `{"n":1820000000000000123,"s":"<b>"}` {
+		t.Fatalf("NormalizeArguments = %s", got)
+	}
+	if got := NormalizeArguments(` not json `); got != "not json" {
+		t.Fatalf("NormalizeArguments(text) = %s", got)
+	}
+	envelope := Parse(`{"tool_calls":[{"name":"write_file","arguments":{"id":1820000000000000123}}]}`, available)
+	if len(envelope.Calls) != 1 || envelope.Calls[0].Arguments != `{"id":1820000000000000123}` {
+		t.Fatalf("JSON calls = %#v", envelope.Calls)
+	}
+}
+
 func TestParseKeepsOnlyDeclaredFunctions(t *testing.T) {
 	parsed := Parse(`<tool_calls><tool_call><tool_name>rm</tool_name><parameters>{}</parameters></tool_call><tool_call><tool_name>lookup</tool_name><parameters>{"q":1}</parameters></tool_call></tool_calls>`, map[string]struct{}{"lookup": {}})
 	if len(parsed.Calls) != 1 || parsed.Calls[0].Name != "lookup" || !strings.HasPrefix(parsed.Calls[0].ID, "call_") {
