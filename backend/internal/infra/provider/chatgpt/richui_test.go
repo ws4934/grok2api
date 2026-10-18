@@ -37,3 +37,11 @@ func TestRichUIFilterKeepsCodeAndPlainText(t *testing.T) {
 		t.Fatalf("plain text was held back: %q", got)
 	}
 }
+
+func TestRichUIFilterUnwrapsHyphenatedContainers(t *testing.T) {
+	f := &richUIFilter{}
+	text := "<grid columns={2} gap={3}>\n  <grid-item>\n    <title size=\"lg\">24°C</title>\n  </grid-item>\n</grid>\nDone"
+	if got := f.Feed(text) + f.Flush(); got != "24°C\nDone" {
+		t.Fatalf("got %q", got)
+	}
+}

@@ -10,7 +10,7 @@ import (
 // clients get plain Markdown: containers are unwrapped, decorative
 // components are dropped and their content is dedented. Code blocks are kept.
 var (
-	richUIContainer   = `box|row|column|col|stack|grid|card|list|item`
+	richUIContainer   = `(?:box|row|column|col|stack|grid|card|list|item)(?:-[a-z]+)*`
 	richUIText        = `title|text|badge|chip|label|caption`
 	richUIOpenTag     = regexp.MustCompile(`<(` + richUIContainer + `)(\s[^<>]*)?>`)
 	richUICloseTag    = regexp.MustCompile(`</(` + richUIContainer + `)\s*>`)
