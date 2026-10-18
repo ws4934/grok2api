@@ -113,14 +113,14 @@ func TestChatGPTImageModelsNeverBecomeChatRoutes(t *testing.T) {
 		if err := repo.UpsertDiscovered(ctx, account.ProviderChatGPT, []string{"gpt-6", "gpt-image-2.5", "gpt-image-2.5-sunburst"}); err != nil {
 			t.Fatal(err)
 		}
-		var rows []modelRouteModel
-		if err := db.db.WithContext(ctx).Where("provider = ?", account.ProviderChatGPT).Find(&rows).Error; err != nil {
+		// PostgreSQL tests share one database, so only this test's models are checked.
+		var chatRoutes []modelRouteModel
+		if err := db.db.WithContext(ctx).Where("provider = ? AND capability = ? AND upstream_model IN ?", account.ProviderChatGPT, model.CapabilityResponses,
+			[]string{"gpt-6", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}).Find(&chatRoutes).Error; err != nil {
 			t.Fatal(err)
 		}
-		for _, row := range rows {
-			if row.Capability == string(model.CapabilityResponses) && row.UpstreamModel != "gpt-6" {
-				t.Fatalf("image model became a chat route: %+v", row)
-			}
+		if len(chatRoutes) != 1 || chatRoutes[0].UpstreamModel != "gpt-6" {
+			t.Fatalf("chat routes = %+v, want only gpt-6", chatRoutes)
 		}
 	})
 }
