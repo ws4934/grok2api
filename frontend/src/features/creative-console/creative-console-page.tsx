@@ -59,6 +59,7 @@ import {
   type VideoAction,
   type VideoHistoryRecord,
 } from "@/features/creative-console/creative-console-history";
+import { resolveVoice } from "@/features/creative-console/creative-console-voice";
 import { getClientKeySecret, listClientKeys, type ClientKeyDTO } from "@/features/client-keys/client-keys-api";
 import { importVideoInputFromURL, listMediaAssets, uploadMediaInput } from "@/features/media/media-api";
 import { mediaAssetPath } from "@/features/media/media-model";
@@ -1722,6 +1723,7 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
   const activeModel = filteredModels.some((item) => item.publicId === modelChoices[subMode])
     ? modelChoices[subMode]
     : filteredModels[0]?.publicId ?? "";
+  const activeProvider = filteredModels.find((item) => item.publicId === activeModel)?.provider ?? "";
 
   const voicesQuery = useQuery({
     queryKey: ["creative-console", "voices", apiKey, activeModel],
@@ -1730,13 +1732,12 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
     retry: false,
     staleTime: 60_000,
   });
-  const voices = useMemo(() => voicesQuery.data ?? [], [voicesQuery.data]);
-  const activeVoiceId = voices.some((voice) => voice.voiceId === voiceId)
-    ? voiceId
-    : voices[0]?.voiceId ?? voiceId;
+  // Validated against the active model's list, so a voice picked for another model is never sent.
+  const voice = resolveVoice(voicesQuery.data ?? [], voiceId, isGrokProvider(activeProvider));
+  const voicesLoading = subMode === "tts" && voicesQuery.isLoading;
 
   const ttsMutation = useMutation({
-    mutationFn: () => synthesizeSpeech({ apiKey, model: activeModel || "grok-voice-latest", text: prompt.trim(), voiceId: activeVoiceId, language, speed: Number(speed) }),
+    mutationFn: () => synthesizeSpeech({ apiKey, model: activeModel || "grok-voice-latest", text: prompt.trim(), voiceId: voice.voiceId, language, speed: Number(speed) }),
     onSuccess: (result) => {
       setTtsResult(result);
       setSttResult(null);
@@ -1757,7 +1758,7 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
     event.preventDefault();
     if (!apiKey || !activeModel) return;
     if (subMode === "tts") {
-      if (!prompt.trim() || ttsMutation.isPending) return;
+      if (!prompt.trim() || ttsMutation.isPending || voicesLoading) return;
       ttsMutation.reset();
       ttsMutation.mutate();
       return;
@@ -1793,6 +1794,7 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
             </div>
           </div>
         ) : null}
+        {subMode === "tts" && voicesQuery.isError ? <div className="px-2 text-[11px] text-destructive">{voicesQuery.error.message}</div> : null}
         {subMode === "tts" && ttsMutation.isError ? <div className="px-2 text-[11px] text-destructive">{ttsMutation.error.message}</div> : null}
         {subMode === "stt" && sttMutation.isError ? <div className="px-2 text-[11px] text-destructive">{sttMutation.error.message}</div> : null}
       </div>
@@ -1818,19 +1820,19 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
               <CompactSelect value={speed} options={speedOptions} onChange={setSpeed} ariaLabel={t("creativeConsole.voiceSpeed")} suffix="x" icon={<Clock3 />} />
             ) : null}
             {subMode === "tts" ? (
-              <Select value={activeVoiceId} onValueChange={setVoiceId} disabled={voices.length === 0 && voicesQuery.isPending}>
+              <Select value={voice.voiceId} onValueChange={setVoiceId} disabled={voicesLoading || voice.options.length === 0}>
                 <SelectTrigger className="h-8 w-auto max-w-40 gap-1 border-0 bg-transparent px-2 shadow-none hover:bg-secondary/70 focus:ring-0" aria-label={t("creativeConsole.voiceId")}>
                   <SelectValue placeholder={t("creativeConsole.voiceId")} />
                 </SelectTrigger>
                 <SelectContent>
-                  {(voices.length > 0 ? voices : [{ voiceId: "eve", name: "eve" } as VoiceInfo]).map((voice) => (
-                    <SelectItem key={voice.voiceId} value={voice.voiceId}>{voice.name || voice.voiceId}</SelectItem>
+                  {voice.options.map((item) => (
+                    <SelectItem key={item.voiceId} value={item.voiceId}>{item.name || item.voiceId}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             ) : null}
           </div>
-          <Button type="submit" size="icon" aria-label={subMode === "tts" ? t("creativeConsole.synthesize") : t("creativeConsole.transcribe")} disabled={!apiKey || !activeModel || busy || (subMode === "tts" ? !prompt.trim() : !audioFile)}>
+          <Button type="submit" size="icon" aria-label={subMode === "tts" ? t("creativeConsole.synthesize") : t("creativeConsole.transcribe")} disabled={!apiKey || !activeModel || busy || (subMode === "tts" ? !prompt.trim() || voicesLoading : !audioFile)}>
             {busy ? <Loader2 className="animate-spin" /> : <ArrowUp />}
           </Button>
         </div>
