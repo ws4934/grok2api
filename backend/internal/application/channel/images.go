@@ -296,22 +296,33 @@ func (s *Service) ImageResults(ctx context.Context, key uint64, id, format strin
 	}
 	out := []ImageResult{}
 	for _, item := range job.Items {
-		for _, asset := range item.AssetIDs {
-			if format == "url" {
-				out = append(out, ImageResult{URL: s.images.media.PublicImageURL(asset)})
-			} else {
-				_, r, e := s.images.media.OpenImage(ctx, asset)
-				if e != nil {
-					return nil, e
-				}
-				raw, e := io.ReadAll(io.LimitReader(r, 64<<20+1))
-				r.Close()
-				if e != nil || len(raw) > 64<<20 {
-					return nil, errors.New("result unavailable")
-				}
-				out = append(out, ImageResult{Base64: base64.StdEncoding.EncodeToString(raw)})
-			}
+		results, e := s.assetResults(ctx, item.AssetIDs, format)
+		if e != nil {
+			return nil, e
 		}
+		out = append(out, results...)
+	}
+	return out, nil
+}
+
+// assetResults renders stored image assets as public URLs or base64 data.
+func (s *Service) assetResults(ctx context.Context, assets []string, format string) ([]ImageResult, error) {
+	out := []ImageResult{}
+	for _, asset := range assets {
+		if format == "url" {
+			out = append(out, ImageResult{URL: s.images.media.PublicImageURL(asset)})
+			continue
+		}
+		_, r, e := s.images.media.OpenImage(ctx, asset)
+		if e != nil {
+			return nil, e
+		}
+		raw, e := io.ReadAll(io.LimitReader(r, 64<<20+1))
+		r.Close()
+		if e != nil || len(raw) > 64<<20 {
+			return nil, errors.New("result unavailable")
+		}
+		out = append(out, ImageResult{Base64: base64.StdEncoding.EncodeToString(raw)})
 	}
 	return out, nil
 }
