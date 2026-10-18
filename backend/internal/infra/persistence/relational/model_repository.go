@@ -589,7 +589,9 @@ func (r *ModelRepository) GetByPublicIDIncludingDisabled(ctx context.Context, pu
 
 func findModelRoutesByPublicID(db *gorm.DB, publicID string) ([]modelRouteModel, error) {
 	var catalog []account.Provider
-	if err := db.Session(&gorm.Session{}).Model(&modelRouteModel{}).Distinct("provider").Pluck("provider", &catalog).Error; err != nil {
+	// NewDB drops the caller's availability predicate (nested per-route EXISTS):
+	// the catalog only widens namespace parsing; the route queries below stay scoped.
+	if err := db.Session(&gorm.Session{NewDB: true}).Model(&modelRouteModel{}).Distinct("provider").Pluck("provider", &catalog).Error; err != nil {
 		return nil, err
 	}
 	providers := account.Providers()
