@@ -13,32 +13,21 @@ import { runtimeConfig } from "@/shared/config/runtime-config";
 import { CopyButton } from "@/shared/components/copy-button";
 import { cn } from "@/shared/lib/cn";
 
-type ExampleLanguage = "curl" | "python" | "javascript";
+import { availableVariants, createExamples, exampleLanguages, resolveExample, type EndpointDefinition, type ExampleLanguage, type ExampleVariant, type FieldDefinition, type Method } from "./api-docs-examples";
+
 type ExampleView = "request" | "response";
-type Method = "GET" | "POST";
-type Capability = ModelRouteDTO["capability"];
 
-type FieldDefinition = {
-  name: string;
-  required?: boolean;
-  descriptionKey: string;
-};
-
-type EndpointDefinition = {
-  key: string;
-  category: string;
-  title: string;
-  method: Method;
-  path: string;
-  descriptionKey: string;
-  capabilities: Capability[];
-  fields: FieldDefinition[];
-  noteKeys: string[];
-  request: (model: string) => Record<string, unknown> | undefined;
-  response: Record<string, unknown>;
-};
-
-const exampleLanguages: ExampleLanguage[] = ["curl", "python", "javascript"];
+const orderQuestion = "What is the status of order 1042?";
+const orderFunction = { name: "get_order_status", description: "Look up an order by its ID.", parameters: { type: "object", properties: { order_id: { type: "string" } }, required: ["order_id"] } };
+const orderArguments = JSON.stringify({ order_id: "1042" });
+const searchQuestion = "Where are the official Go release notes?";
+const searchQuery = "Go release notes";
+const searchSource = { url: "https://go.dev/doc/devel/release", title: "Release History" };
+const searchAnswer = "The release notes are published on the Go website ([go.dev](https://go.dev/doc/devel/release)).";
+const searchCitation = { type: "url_citation", start_index: 50, end_index: 94, ...searchSource };
+const chatgptSpeechText = "你好，欢迎使用语音合成。";
+const chatgptSpeech = (model: string) => ({ model, input: chatgptSpeechText, voice: "cove", response_format: "mp3" });
+const chatgptTranscription = { request: (model: string) => ({ model, file: "sample.wav" }), response: { text: chatgptSpeechText }, multipart: true, noteKeys: ["docs.reference.noteChatGPTSTT"] };
 
 const endpoints: Record<string, EndpointDefinition> = {
   "chat/completions": {
@@ -55,6 +44,17 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteChatImages", "docs.reference.noteChatTools"],
     request: (model) => ({ model, messages: [{ role: "system", content: "You are a concise assistant." }, { role: "user", content: "Explain HTTP streaming." }], stream: false }),
     response: { id: "chatcmpl_example", object: "chat.completion", model: "grok-chat-fast", choices: [{ index: 0, message: { role: "assistant", content: "HTTP streaming sends response data incrementally." }, finish_reason: "stop" }], usage: { prompt_tokens: 24, completion_tokens: 12, total_tokens: 36 } },
+    variants: {
+      tools: {
+        request: (model) => ({ model, messages: [{ role: "user", content: orderQuestion }], tools: [{ type: "function", function: orderFunction }], tool_choice: "auto" }),
+        response: { id: "chatcmpl_example", object: "chat.completion", model: "grok-chat-fast", choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [{ id: "call_example", type: "function", function: { name: orderFunction.name, arguments: orderArguments } }] }, finish_reason: "tool_calls" }], usage: { prompt_tokens: 96, completion_tokens: 18, total_tokens: 114 } },
+      },
+      search: {
+        request: (model) => ({ model, messages: [{ role: "user", content: searchQuestion }], web_search_options: {} }),
+        response: { id: "chatcmpl_example", object: "chat.completion", model: "grok-chat-fast", choices: [{ index: 0, message: { role: "assistant", content: searchAnswer, annotations: [searchCitation] }, finish_reason: "stop" }], usage: { prompt_tokens: 20, completion_tokens: 28, total_tokens: 48 } },
+      },
+    },
+    chatgpt: { noteKeys: ["docs.reference.noteChatGPTChat", "docs.reference.noteChatGPTTools", "docs.reference.noteChatGPTSearchChat"] },
   },
   "chat/responses": {
     key: "chat/responses", category: "Chat", title: "Responses", method: "POST", path: "/responses",
@@ -71,6 +71,17 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteResponsesState", "docs.reference.noteResponsesCompact"],
     request: (model) => ({ model, input: "Explain HTTP streaming.", store: false, stream: false }),
     response: { id: "resp_example", object: "response", status: "completed", model: "grok-chat-fast", output: [{ type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "HTTP streaming sends response data incrementally." }] }], usage: { input_tokens: 18, output_tokens: 12, total_tokens: 30 } },
+    variants: {
+      tools: {
+        request: (model) => ({ model, input: orderQuestion, tools: [{ type: "function", ...orderFunction }], tool_choice: "auto", store: false }),
+        response: { id: "resp_example", object: "response", status: "completed", model: "grok-chat-fast", output: [{ id: "fc_example", type: "function_call", status: "completed", call_id: "call_example", name: orderFunction.name, arguments: orderArguments }], usage: { input_tokens: 90, output_tokens: 18, total_tokens: 108 } },
+      },
+      search: {
+        request: (model) => ({ model, input: searchQuestion, tools: [{ type: "web_search" }], store: false }),
+        response: { id: "resp_example", object: "response", status: "completed", model: "grok-chat-fast", output: [{ id: "ws_example", type: "web_search_call", status: "completed", action: { type: "search", query: searchQuery, sources: [{ type: "url", ...searchSource }] } }, { type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: searchAnswer, annotations: [searchCitation] }] }], usage: { input_tokens: 16, output_tokens: 28, total_tokens: 44 } },
+      },
+    },
+    chatgpt: { noteKeys: ["docs.reference.noteChatGPTChat", "docs.reference.noteChatGPTTools", "docs.reference.noteChatGPTSearchResponses"] },
   },
   "chat/messages": {
     key: "chat/messages", category: "Chat", title: "Messages", method: "POST", path: "/messages",
@@ -87,6 +98,17 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteMessagesEvents", "docs.reference.noteMessagesLimits"],
     request: (model) => ({ model, max_tokens: 1024, system: "You are a concise assistant.", messages: [{ role: "user", content: "Explain HTTP streaming." }], stream: false }),
     response: { id: "msg_example", type: "message", role: "assistant", model: "grok-chat-fast", content: [{ type: "text", text: "HTTP streaming sends response data incrementally." }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 18, output_tokens: 12 } },
+    variants: {
+      tools: {
+        request: (model) => ({ model, max_tokens: 1024, messages: [{ role: "user", content: orderQuestion }], tools: [{ name: orderFunction.name, description: orderFunction.description, input_schema: orderFunction.parameters }], tool_choice: { type: "auto" } }),
+        response: { id: "msg_example", type: "message", role: "assistant", model: "grok-chat-fast", content: [{ type: "tool_use", id: "toolu_example", name: orderFunction.name, input: { order_id: "1042" } }], stop_reason: "tool_use", stop_sequence: null, usage: { input_tokens: 92, output_tokens: 18 } },
+      },
+      search: {
+        request: (model) => ({ model, max_tokens: 1024, messages: [{ role: "user", content: searchQuestion }], tools: [{ type: "web_search_20250305", name: "web_search" }] }),
+        response: { id: "msg_example", type: "message", role: "assistant", model: "grok-chat-fast", content: [{ type: "server_tool_use", id: "srvtoolu_example", name: "web_search", input: { query: searchQuery } }, { type: "web_search_tool_result", tool_use_id: "srvtoolu_example", content: [{ type: "web_search_result", ...searchSource }] }, { type: "text", text: searchAnswer }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 18, output_tokens: 28, server_tool_use: { web_search_requests: 1 } } },
+      },
+    },
+    chatgpt: { noteKeys: ["docs.reference.noteChatGPTChat", "docs.reference.noteChatGPTTools", "docs.reference.noteChatGPTSearchMessages"] },
   },
   "image/generations": {
     key: "image/generations", category: "Image", title: "Image generations", method: "POST", path: "/images/generations",
@@ -104,6 +126,11 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteImageCount", "docs.reference.noteImageStorage"],
     request: (model) => ({ model, prompt: "A minimal red chair in a bright studio", n: 1, response_format: "url" }),
     response: { created: 1783860000, data: [{ url: "http://127.0.0.1:8000/v1/media/images/example" }] },
+    chatgpt: {
+      request: (model) => ({ model, prompt: "A minimal red chair in a bright studio", n: 1, size: "1024x1024", quality: "high", response_format: "url" }),
+      response: { created: 1783860000, size: "1024x1024", quality: "high", output_format: "png", background: "auto", data: [{ url: "http://127.0.0.1:8000/v1/media/images/example" }], usage: { input_tokens: 8, output_tokens: 4160, total_tokens: 4168 } },
+      noteKeys: ["docs.reference.noteChatGPTImageParams", "docs.reference.noteChatGPTImageFormat", "docs.reference.noteImageStorage"],
+    },
   },
   "image/edits": {
     key: "image/edits", category: "Image", title: "Image edits", method: "POST", path: "/images/edits",
@@ -119,6 +146,38 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteEditJSON", "docs.reference.noteEditSources", "docs.reference.noteImageStorage"],
     request: (model) => ({ model, prompt: "Change the chair to black", image: { url: "https://example.com/chair.png" }, n: 1, response_format: "url" }),
     response: { created: 1783860000, data: [{ url: "http://127.0.0.1:8000/v1/media/images/example" }] },
+    chatgpt: { noteKeys: ["docs.reference.noteChatGPTEditInputs", "docs.reference.noteChatGPTImageParams", "docs.reference.noteChatGPTImageFormat"] },
+  },
+  "image/responses": {
+    key: "image/responses", category: "Image", title: "Image responses", method: "POST", path: "/responses",
+    descriptionKey: "docs.endpointImageResponses", capabilities: ["image"], providers: ["chatgpt"],
+    fields: [
+      { name: "model", required: true, descriptionKey: "docs.reference.fieldModel" },
+      { name: "input", required: true, descriptionKey: "docs.reference.fieldImageResponseInput" },
+      { name: "tools", required: true, descriptionKey: "docs.reference.fieldImageTool" },
+      { name: "background", descriptionKey: "docs.reference.fieldImageBackground" },
+      { name: "stream", descriptionKey: "docs.reference.fieldImageResponseStream" },
+      { name: "Idempotency-Key", descriptionKey: "docs.reference.fieldIdempotencyKey" },
+    ],
+    noteKeys: ["docs.reference.noteImageResponsesProviders", "docs.reference.noteImageResponsesModes", "docs.reference.noteImageResponsesModel"],
+    request: (model) => ({ model, input: "A red fox in the snow", background: true, tools: [{ type: "image_generation", size: "1024x1024", quality: "high", output_format: "png" }] }),
+    response: { id: "resp_img_example", object: "response", created_at: 1783860000, status: "queued", background: true, error: null, model: "gpt-image-2", output: [], usage: null },
+  },
+  "image/responses-get": {
+    key: "image/responses-get", category: "Image", title: "Get image response", method: "GET", path: "/responses/{response_id}",
+    descriptionKey: "docs.endpointImageResponseGet", capabilities: ["image"], providers: ["chatgpt"],
+    fields: [{ name: "response_id", required: true, descriptionKey: "docs.reference.fieldResponseId" }],
+    noteKeys: ["docs.reference.noteImageResponseStatus", "docs.reference.noteImageResponseUncertain", "docs.reference.noteImageResponseStored"],
+    request: () => undefined,
+    response: { id: "resp_img_example", object: "response", created_at: 1783860000, status: "completed", background: true, error: null, model: "gpt-image-2", output: [{ id: "ig_example00", type: "image_generation_call", status: "completed", result: "iVBORw0KGgoAAAANSUhEUgAA...", output_format: "png", background: "auto", quality: "high", size: "1024x1024" }], usage: { input_tokens: 6, output_tokens: 4160, total_tokens: 4166 } },
+  },
+  "image/responses-cancel": {
+    key: "image/responses-cancel", category: "Image", title: "Cancel image response", method: "POST", path: "/responses/{response_id}/cancel",
+    descriptionKey: "docs.endpointImageResponseCancel", capabilities: ["image"], providers: ["chatgpt"],
+    fields: [{ name: "response_id", required: true, descriptionKey: "docs.reference.fieldResponseId" }],
+    noteKeys: ["docs.reference.noteImageResponseCancel"],
+    request: () => undefined,
+    response: { id: "resp_img_example", object: "response", created_at: 1783860000, status: "cancelled", background: true, error: null, model: "gpt-image-2", output: [], usage: null },
   },
   "video/generations": {
     key: "video/generations", category: "Video", title: "Video generations", method: "POST", path: "/videos/generations",
@@ -185,6 +244,11 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteTTSModels", "docs.reference.noteTTSBinary", "docs.reference.noteVoiceBilling"],
     request: (model) => ({ model, text: "Hello from Grok voice.", voice_id: "eve", language: "en", output_format: { codec: "mp3" } }),
     response: { content_type: "audio/mpeg", note: "Default responses return raw audio bytes. with_timestamps=true returns a JSON envelope." },
+    chatgpt: {
+      request: (model) => ({ model, text: chatgptSpeechText, voice_id: "cove", language: "zh" }),
+      response: { content_type: "audio/mpeg", note: "Returns raw audio bytes (mp3, aac, or opus)." },
+      noteKeys: ["docs.reference.noteChatGPTTTSLanguage", "docs.reference.noteChatGPTTTS", "docs.reference.noteChatGPTTTSVoices"],
+    },
   },
   "voice/audio-speech": {
     key: "voice/audio-speech", category: "Voice", title: "OpenAI speech", method: "POST", path: "/audio/speech",
@@ -200,6 +264,7 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteAudioSpeechCompat", "docs.reference.noteTTSModels", "docs.reference.noteTTSBinary", "docs.reference.noteVoiceBilling"],
     request: (model) => ({ model, input: "Hello from Grok voice.", voice: "alloy", response_format: "mp3", speed: 1.0, language: "en" }),
     response: { content_type: "audio/mpeg", note: "Returns raw audio bytes compatible with OpenAI speech clients." },
+    chatgpt: { request: chatgptSpeech, noteKeys: ["docs.reference.noteChatGPTTTS", "docs.reference.noteChatGPTTTSVoices"] },
   },
   "voice/audio-tasks": {
     key: "voice/audio-tasks", category: "Voice", title: "OpenAI audio tasks", method: "POST", path: "/audio/tasks",
@@ -215,6 +280,7 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteAudioTasksCompat", "docs.reference.noteTTSModels", "docs.reference.noteVoiceBilling"],
     request: (model) => ({ model, input: "Hello from Grok voice.", voice: "alloy", response_format: "mp3", language: "en" }),
     response: { content_type: "audio/mpeg", note: "Compatibility path that returns raw audio bytes by default." },
+    chatgpt: { request: chatgptSpeech, noteKeys: ["docs.reference.noteAudioTasksCompat", "docs.reference.noteChatGPTTTS", "docs.reference.noteChatGPTTTSVoices"] },
   },
   "voice/audio-transcriptions": {
     key: "voice/audio-transcriptions", category: "Voice", title: "OpenAI transcriptions", method: "POST", path: "/audio/transcriptions",
@@ -229,6 +295,7 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteAudioTranscriptionsCompat", "docs.reference.noteSTTInput", "docs.reference.noteSTTModels", "docs.reference.noteVoiceBilling"],
     request: (model) => ({ model, url: "https://example.com/sample.wav", language: "en" }),
     response: { text: "Hello from Grok voice." },
+    chatgpt: chatgptTranscription,
   },
   "voice/voices": {
     key: "voice/voices", category: "Voice", title: "List voices", method: "GET", path: "/tts/voices",
@@ -239,6 +306,7 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteTTSVoices"],
     request: () => undefined,
     response: { voices: [{ voice_id: "eve", name: "Eve", language: "en" }, { voice_id: "ara", name: "Ara", language: "en" }] },
+    chatgpt: { response: { voices: [{ voice_id: "glimmer", name: "Sol", language: "American English" }] }, noteKeys: ["docs.reference.noteChatGPTTTSVoices"] },
   },
   "voice/stt": {
     key: "voice/stt", category: "Voice", title: "Speech to text", method: "POST", path: "/stt",
@@ -255,6 +323,7 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteSTTInput", "docs.reference.noteSTTStream", "docs.reference.noteSTTModels", "docs.reference.noteVoiceBilling"],
     request: (model) => ({ model, url: "https://example.com/sample.wav", language: "en", format: true }),
     response: { text: "Hello from Grok voice.", language: "en", duration: 1.84, words: [{ text: "Hello", start: 0.0, end: 0.42 }] },
+    chatgpt: chatgptTranscription,
   },
   "voice/realtime": {
     key: "voice/realtime", category: "Voice", title: "Realtime websocket", method: "GET", path: "/realtime",
@@ -276,6 +345,7 @@ export function ApiDocsPage() {
   const [language, setLanguage] = useState<ExampleLanguage>("curl");
   const [exampleView, setExampleView] = useState<ExampleView>("request");
   const [selectedModel, setSelectedModel] = useState("");
+  const [variant, setVariant] = useState<ExampleVariant>("basic");
 
   const systemQuery = useQuery({ queryKey: ["system-info"], queryFn: getSystemInfo, staleTime: Number.POSITIVE_INFINITY, retry: 1 });
   const modelsQuery = useQuery({ queryKey: ["docs", "available-models"], queryFn: () => listModels({ page: 1, pageSize: 100 }), staleTime: 30_000 });
@@ -284,11 +354,14 @@ export function ApiDocsPage() {
 
   const publicApiBaseUrl = systemQuery.data?.publicApiBaseURL || runtimeConfig.publicApiBaseUrl;
   const baseUrl = `${publicApiBaseUrl.replace(/\/$/, "")}/v1`;
-  const availableModels = uniqueModelsByPublicID((modelsQuery.data?.items ?? []).filter((model) => model.enabled && model.available && definition.capabilities.includes(model.capability)));
+  const availableModels = uniqueModelsByPublicID((modelsQuery.data?.items ?? []).filter((model) => model.enabled && model.available && definition.capabilities.includes(model.capability) && (!definition.providers || definition.providers.includes(model.provider))));
   const selectedModelAvailable = availableModels.some((model) => model.publicId === selectedModel);
   const exampleModel = (selectedModelAvailable ? selectedModel : availableModels[0]?.publicId) || fallbackModel(definition.key);
-  const examples = createExamples(definition, baseUrl, exampleModel);
-  const responseExample = JSON.stringify(withExampleModel(definition.response, exampleModel), null, 2);
+  const variants = availableVariants(definition);
+  const exampleVariant = variants.includes(variant) ? variant : "basic";
+  const { example, noteKeys } = resolveExample(definition, exampleVariant, availableModels.find((model) => model.publicId === exampleModel)?.provider);
+  const examples = createExamples(definition, example, baseUrl, exampleModel);
+  const responseExample = JSON.stringify(withExampleModel(example.response, exampleModel), null, 2);
 
   return (
     <div className="w-full space-y-10">
@@ -309,7 +382,7 @@ export function ApiDocsPage() {
           </div>
         </DocsSection>
 
-        <DocsSection icon={<Braces />} title={definition.method === "GET" ? t("docs.reference.pathParameters") : t("docs.reference.requestBody")}>
+        <DocsSection icon={<Braces />} title={example.request(exampleModel) ? t("docs.reference.requestBody") : t("docs.reference.pathParameters")}>
           <div className="overflow-hidden rounded-md bg-card">
             <div className="hidden grid-cols-[minmax(120px,180px)_minmax(0,1fr)] gap-5 bg-secondary/35 px-4 py-2 text-xs text-muted-foreground sm:grid">
               <span>{t("docs.reference.parameter")}</span>
@@ -323,6 +396,9 @@ export function ApiDocsPage() {
           <ExamplePanel
             view={exampleView}
             onViewChange={setExampleView}
+            variants={variants}
+            variant={exampleVariant}
+            onVariantChange={setVariant}
             language={language}
             onLanguageChange={setLanguage}
             code={exampleView === "request" ? examples[language] : responseExample}
@@ -332,10 +408,10 @@ export function ApiDocsPage() {
           />
         </DocsSection>
 
-        {definition.noteKeys.length > 0 ? (
+        {noteKeys.length > 0 ? (
           <DocsSection icon={<Info />} title={t("docs.reference.notes")}>
             <ul className="space-y-2 rounded-md bg-secondary/35 px-4 py-3 text-xs leading-5 text-muted-foreground">
-              {definition.noteKeys.map((key) => <li key={key} className="relative pl-3 before:absolute before:left-0 before:top-[0.55rem] before:size-1 before:rounded-full before:bg-muted-foreground/55">{t(key)}</li>)}
+              {noteKeys.map((key) => <li key={key} className="relative pl-3 before:absolute before:left-0 before:top-[0.55rem] before:size-1 before:rounded-full before:bg-muted-foreground/55">{t(key)}</li>)}
             </ul>
           </DocsSection>
         ) : null}
@@ -358,6 +434,7 @@ function withExampleModel(response: Record<string, unknown>, model: string): Rec
 }
 
 function fallbackModel(key: string): string {
+  if (key.startsWith("image/responses")) return "gpt-image-2";
   if (key.startsWith("image/")) return key === "image/edits" ? "grok-imagine-image-edit" : "grok-imagine-image-lite";
   if (key.startsWith("video/")) return "grok-imagine-video";
   if (key.startsWith("voice/")) {
@@ -365,41 +442,6 @@ function fallbackModel(key: string): string {
     return "grok-voice-latest";
   }
   return "your-enabled-model";
-}
-
-function createExamples(definition: EndpointDefinition, baseUrl: string, model: string): Record<ExampleLanguage, string> {
-  const request = definition.request(model);
-  const path = definition.path
-    .replace("{request_id}", "video_example");
-  const url = definition.key === "voice/realtime"
-    ? `${baseUrl}${path}?model=${encodeURIComponent(model)}`
-    : definition.key === "voice/voices"
-      ? `${baseUrl}${path}?model=${encodeURIComponent(model)}`
-      : `${baseUrl}${path}`;
-  const messageHeaders = definition.key === "chat/messages";
-  const curlHeaders = messageHeaders
-    ? [
-        '  -H "x-api-key: $GROK2API_API_KEY"',
-        '  -H "anthropic-version: 2023-06-01"',
-        '  -H "Content-Type: application/json"',
-      ].join(" \\\n")
-    : [
-        '  -H "Authorization: Bearer $GROK2API_API_KEY"',
-        '  -H "Content-Type: application/json"',
-      ].join(" \\\n");
-  const curlBody = request ? ` \\\n  -d '${JSON.stringify(request, null, 2)}'` : "";
-  const headers = messageHeaders
-    ? { "x-api-key": "g2a_your_api_key", "anthropic-version": "2023-06-01", "Content-Type": "application/json" }
-    : { Authorization: "Bearer g2a_your_api_key", "Content-Type": "application/json" };
-  const pythonImports = request ? "import json\nimport requests" : "import requests";
-  const pythonPayload = request ? `\n\npayload = json.loads(r'''${JSON.stringify(request, null, 2)}''')` : "";
-  const pythonBody = request ? ",\n    json=payload" : "";
-  const javascriptBody = request ? `,\n  body: JSON.stringify(${JSON.stringify(request, null, 2)})` : "";
-  return {
-    curl: `export GROK2API_API_KEY="g2a_your_api_key"\n\ncurl -X ${definition.method} "${url}" \\\n${curlHeaders}${curlBody}`,
-    python: `${pythonImports}${pythonPayload}\n\nresponse = requests.${definition.method.toLowerCase()}(\n    "${url}",\n    headers=${JSON.stringify(headers, null, 2)}${pythonBody}\n)\nresponse.raise_for_status()\nprint(response.json())`,
-    javascript: `const response = await fetch("${url}", {\n  method: "${definition.method}",\n  headers: ${JSON.stringify(headers, null, 2)}${javascriptBody}\n});\n\nif (!response.ok) throw new Error(await response.text());\nconsole.log(await response.json());`,
-  };
 }
 
 function MethodLabel({ method }: { method: Method }) {
@@ -455,6 +497,9 @@ function ParameterItem({ field, muted }: { field: FieldDefinition; muted: boolea
 function ExamplePanel({
   view,
   onViewChange,
+  variants,
+  variant,
+  onVariantChange,
   language,
   onLanguageChange,
   code,
@@ -464,6 +509,9 @@ function ExamplePanel({
 }: {
   view: ExampleView;
   onViewChange: (view: ExampleView) => void;
+  variants: ExampleVariant[];
+  variant: ExampleVariant;
+  onVariantChange: (variant: ExampleVariant) => void;
   language: ExampleLanguage;
   onLanguageChange: (language: ExampleLanguage) => void;
   code: string;
@@ -483,6 +531,14 @@ function ExamplePanel({
         </Tabs>
 
         <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">
+          {variants.length > 1 ? (
+            <Select value={variant} onValueChange={(value) => onVariantChange(value as ExampleVariant)}>
+              <SelectTrigger className="h-8 w-36 bg-background text-xs" aria-label={t("docs.reference.exampleVariant")}><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {variants.map((item) => <SelectItem key={item} value={item}>{t(`docs.reference.exampleVariants.${item}`)}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          ) : null}
           {view === "request" ? (
             <Select value={language} onValueChange={(value) => onLanguageChange(value as ExampleLanguage)}>
               <SelectTrigger className="h-8 w-28 bg-background text-xs" aria-label={t("docs.exampleLanguage")}><SelectValue /></SelectTrigger>

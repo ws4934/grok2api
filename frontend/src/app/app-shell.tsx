@@ -48,6 +48,9 @@ const documentation = [
     items: [
       { href: "/docs/image/generations", label: "Image Generations", method: "POST" },
       { href: "/docs/image/edits", label: "Image Edits", method: "POST" },
+      { href: "/docs/image/responses", label: "Image Responses", method: "POST" },
+      { href: "/docs/image/responses-get", label: "Get Image Response", method: "GET" },
+      { href: "/docs/image/responses-cancel", label: "Cancel Image Response", method: "POST" },
     ],
   },
   {
