@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"io"
 	"regexp"
 	"strings"
 )
@@ -26,7 +25,7 @@ var (
 	syntaxPattern       = regexp.MustCompile(`(?i)<tool_calls|<tool_call|<function_call|<invoke\s|"tool_calls"\s*:`)
 	rootOpenPattern     = regexp.MustCompile(`(?i)<tool_calls\s*>`)
 	tagPattern          = regexp.MustCompile(`(?i)<(/?)(tool_calls|tool_call|tool_name|parameters)\s*>`)
-	nameEndPattern      = regexp.MustCompile(`(?i)</tool_name\s*>`)
+	nameClosePattern    = regexp.MustCompile(`(?i)^</tool_name\s*>`)
 	paramsEndPattern    = regexp.MustCompile(`(?i)</parameters\s*>`)
 	paramsClosePattern  = regexp.MustCompile(`(?i)^\s*</parameters\s*>`)
 	functionCallPattern = regexp.MustCompile(`(?is)<function_call\s*>(.*?)</function_call\s*>`)
@@ -293,9 +292,10 @@ func Parse(text string, available map[string]struct{}) ParseResult {
 		return result
 	}
 	if open := rootOpenPattern.FindStringIndex(text); open != nil {
-		if calls, end := scanRoot(text, open[1], true); end >= 0 {
+		root := rootScan{pos: open[1]}
+		if end := root.scan(text, true); end >= 0 {
 			result.Start, result.End = unfence(text, open[0], end)
-			for _, call := range calls {
+			for _, call := range root.calls {
 				appendCall(&result.Calls, html.UnescapeString(strings.TrimSpace(call.name)), call.arguments, available)
 			}
 			return result
@@ -324,66 +324,112 @@ func Parse(text string, available map[string]struct{}) ParseResult {
 
 type rawCall struct{ name, arguments string }
 
-// scanRoot reads the content of a <tool_calls> element from pos, right after
-// its opening tag, and returns its calls and the end of its closing tag, or -1
-// when text ends first. Arguments are read as JSON, so tags inside JSON
-// strings stay arguments; unless final, JSON cut off by the end of text
-// also returns -1, as more text may close it.
-func scanRoot(text string, pos int, final bool) ([]rawCall, int) {
-	var calls []rawCall
-	var call *rawCall
+// rootScan reads the content of a <tool_calls> element from pos, right after
+// its opening tag. Arguments are read as JSON, so tags inside JSON strings
+// stay arguments. It keeps its place, so a Sieve resumes it as the block
+// grows and reads a long block once.
+type rootScan struct {
+	pos   int
+	calls []rawCall
+	call  *rawCall
+	// args reads the <parameters> of call.
+	args *argScan
+}
+
+// scan returns the end of the closing tag, or -1 when text ends first; unless
+// final, content cut off by the end of text also returns -1, as more text may
+// complete it. Each call passes text that extends the text of the last one.
+func (r *rootScan) scan(text string, final bool) int {
 	for {
-		loc := tagPattern.FindStringSubmatchIndex(text[pos:])
-		if loc == nil {
-			return calls, -1
+		if r.args != nil {
+			arguments, end := r.args.scan(text, final)
+			if end < 0 {
+				return -1
+			}
+			r.call.arguments, r.pos, r.args = arguments, end, nil
 		}
-		closing, tag := loc[3] > loc[2], strings.ToLower(text[pos+loc[4]:pos+loc[5]])
-		pos += loc[1]
+		loc := tagPattern.FindStringSubmatchIndex(text[r.pos:])
+		if loc == nil {
+			return -1
+		}
+		closing, tag := loc[3] > loc[2], strings.ToLower(text[r.pos+loc[4]:r.pos+loc[5]])
+		pos := r.pos + loc[1]
 		switch {
 		case closing && tag == "tool_calls":
-			return calls, pos
+			return pos
 		case tag == "tool_call":
-			if closing && call != nil {
-				calls = append(calls, *call)
+			if closing && r.call != nil {
+				r.calls = append(r.calls, *r.call)
 			}
-			call = nil
+			r.call = nil
 			if !closing {
-				call = &rawCall{arguments: "{}"}
+				r.call = &rawCall{arguments: "{}"}
 			}
-		case call == nil || closing:
+		case r.call == nil || closing:
 		case tag == "tool_name":
-			if end := nameEndPattern.FindStringIndex(text[pos:]); end != nil {
-				call.name = text[pos : pos+end[0]]
-				pos += end[1]
+			// The name runs to the next tag, which must close it; that tag
+			// ends at the first '>' after its '<'.
+			next := strings.IndexByte(text[pos:], '<')
+			if !final && (next < 0 || strings.IndexByte(text[pos+next:], '>') < 0) {
+				return -1
+			}
+			if next >= 0 {
+				if end := nameClosePattern.FindStringIndex(text[pos+next:]); end != nil {
+					r.call.name = text[pos : pos+next]
+					pos += next + end[1]
+				}
 			}
 		case tag == "parameters":
-			arguments, end := scanArguments(text, pos, final)
-			if end < 0 {
-				return calls, -1
-			}
-			call.arguments, pos = arguments, end
+			r.args = &argScan{start: pos, end: jsonOpen, value: jsonScan{off: pos}}
 		}
+		r.pos = pos
 	}
 }
 
-// scanArguments reads <parameters> content from pos: one JSON value and the
+// argScan reads <parameters> content from start: one JSON value and the
 // closing tag. Other content (HTML-escaped JSON, say) runs to the first
-// </parameters>. It returns the arguments and the end of the closing tag, or
-// -1 as scanRoot does.
-func scanArguments(text string, pos int, final bool) (string, int) {
-	decoder := json.NewDecoder(strings.NewReader(text[pos:]))
-	var value json.RawMessage
-	switch err := decoder.Decode(&value); {
-	case err == nil:
-		end := pos + int(decoder.InputOffset())
-		if closing := paramsClosePattern.FindStringIndex(text[end:]); closing != nil {
-			return text[pos:end], end + closing[1]
+// </parameters>.
+type argScan struct {
+	start int
+	value jsonScan
+	// end is where the JSON value ends, or jsonOpen or jsonBad.
+	end int
+	// plain is set once the content is not a JSON value and its closing tag;
+	// seek is where the search for the closing tag goes on.
+	plain bool
+	seek  int
+}
+
+// scan returns the arguments and the end of the closing tag, or -1 as
+// rootScan.scan does.
+func (a *argScan) scan(text string, final bool) (string, int) {
+	if !a.plain && a.end == jsonOpen {
+		if a.end = a.value.scan(text, final); a.end == jsonOpen && !final {
+			return "", -1
 		}
-	case !final && errors.Is(err, io.ErrUnexpectedEOF):
-		return "", -1
+		a.seek = a.end
 	}
-	if closing := paramsEndPattern.FindStringIndex(text[pos:]); closing != nil {
-		return text[pos : pos+closing[0]], pos + closing[1]
+	if !a.plain && a.end >= 0 {
+		// A closing tag right after the value ends at the next '>'.
+		if !final && strings.IndexByte(text[a.seek:], '>') < 0 {
+			a.seek = len(text)
+			return "", -1
+		}
+		if closing := paramsClosePattern.FindStringIndex(text[a.end:]); closing != nil {
+			return text[a.start:a.end], a.end + closing[1]
+		}
+	}
+	if !a.plain {
+		a.plain, a.seek = true, a.start
+	}
+	if closing := paramsEndPattern.FindStringIndex(text[a.seek:]); closing != nil {
+		return text[a.start : a.seek+closing[0]], a.seek + closing[1]
+	}
+	// More text can complete only a tag that starts at the last '<'.
+	if last := strings.LastIndexByte(text[a.seek:], '<'); last >= 0 {
+		a.seek += last
+	} else {
+		a.seek = len(text)
 	}
 	return "", -1
 }
@@ -494,6 +540,8 @@ type Sieve struct {
 	block         strings.Builder
 	capturing     bool
 	open, scanned int
+	// root reads the block's <tool_calls> element as it grows.
+	root rootScan
 	// unfence drops the closing fence after a fenced block that became calls.
 	unfence bool
 }
@@ -546,6 +594,7 @@ func (s *Sieve) Feed(chunk string) StreamResult {
 			calls := Parse(raw[:end], s.available).Calls
 			s.buffer, s.capturing, s.unfence = strings.Clone(raw[end:]), false, s.open > 0 && len(calls) > 0
 			s.block.Reset()
+			s.root = rootScan{}
 			return StreamResult{SafeText: safe, Calls: calls, Complete: true, Raw: raw[:end]}
 		}
 	}
@@ -555,12 +604,14 @@ func (s *Sieve) Feed(chunk string) StreamResult {
 // its root outside JSON arguments, or at candidate when it does not open with
 // a plain <tool_calls>; -1 while the root is still open.
 func (s *Sieve) blockEnd(raw string, candidate int) int {
-	open := rootOpenPattern.FindStringIndex(raw[s.open:])
-	if open == nil || open[0] != 0 {
-		return candidate
+	if s.root.pos == 0 {
+		open := rootOpenPattern.FindStringIndex(raw[s.open:])
+		if open == nil || open[0] != 0 {
+			return candidate
+		}
+		s.root.pos = s.open + open[1]
 	}
-	_, end := scanRoot(raw, s.open+open[1], false)
-	return end
+	return s.root.scan(raw, false)
 }
 
 // Flush ends the stream. Complete blocks are taken as Feed takes them (the
@@ -633,8 +684,9 @@ func unfence(text string, start, end int) (int, int) {
 
 // fenceTail finds a Markdown fence opener (``` and a language name) that ends
 // text, trailing whitespace aside. It returns where the opener starts, or -1;
-// partial reports backticks that may still become one. A bare ``` does not
-// count: it may close an earlier code block.
+// partial reports backticks at the end of text: more text may make them an
+// opener, or a longer run that is none. A bare ``` does not count: it may
+// close an earlier code block.
 func fenceTail(text string) (int, bool) {
 	limit := max(len(text)-maxFence, 0)
 	end := len(text)
@@ -653,7 +705,7 @@ func fenceTail(text string) (int, bool) {
 	case j > 0 && text[j-1] == '`':
 	case run == 3 && end > i:
 		return j, false
-	case run > 0 && run <= 3 && i == len(text):
+	case run > 0 && i == len(text):
 		return j, true
 	}
 	return -1, false
