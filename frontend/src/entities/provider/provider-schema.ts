@@ -8,7 +8,8 @@ const providerSchema = z.object({
   order: z.number(),
   capabilities: z.array(z.enum(["responses", "chat", "image", "image_edit", "video", "tts", "stt", "realtime"])),
   conversation: z.object({ responses: z.boolean(), chatCompletions: z.boolean(), messages: z.boolean() }),
-  media: z.object({ imageGeneration: z.boolean(), imageEdit: z.boolean(), videoGeneration: z.boolean(), tts: z.boolean(), stt: z.boolean(), realtime: z.boolean() }),
+  // asyncImages: images run as durable jobs (Responses image_generation with background).
+  media: z.object({ imageGeneration: z.boolean(), imageEdit: z.boolean(), videoGeneration: z.boolean(), tts: z.boolean(), stt: z.boolean(), realtime: z.boolean(), asyncImages: z.boolean().default(false) }),
   quota: z.enum(["billing", "remote_window", "local_window"]),
   usage: z.enum(["upstream", "estimated"]),
   // false: the provider ignores client-key tier restrictions.

@@ -43,6 +43,16 @@ describe("image history", () => {
     assert.deepEqual(records[1]?.error, { message: "上游服务暂不可用", code: "upstream_unavailable", requestId: "req_1" });
   });
 
+  it("keeps polling generations that run as durable jobs", () => {
+    const storage = memoryStorage();
+    storage.setItem(historyStorageKey("image", "k"), JSON.stringify([
+      { id: "job", createdAt: 1, prompt: "fox", model: "gpt-image-2.5", basicProtocol: true, params: { count: 2 }, status: "generating", images: [], jobIds: ["resp_img_a", "", 7, "resp_img_b"] },
+    ]));
+    const [record] = loadImageHistory("k", storage);
+    assert.equal(record?.status, "generating");
+    assert.deepEqual(record?.jobIds, ["resp_img_a", "resp_img_b"]);
+  });
+
   it("reads corrupt or foreign storage as empty", () => {
     const storage = memoryStorage();
     storage.setItem(historyStorageKey("image", "k"), "{not json");

@@ -14,6 +14,8 @@ export type ImageHistoryRecord = {
   status: "generating" | "completed" | "failed" | "interrupted";
   images: ImageResult[];
   error?: ApiErrorDetail;
+  // jobIds are durable image jobs (async providers); their results can be fetched after a reload.
+  jobIds?: string[];
 };
 
 export type VideoHistoryRecord = {
@@ -94,12 +96,14 @@ export function persistVideoHistory(scope: string, records: VideoHistoryRecord[]
   persistStoredList(historyStorageKey("video", scope), records, mediaHistoryMaxEntries, mediaHistoryMaxBytes, storage);
 }
 
-// A request still "generating" when the page loads can no longer deliver its result here.
+// A sync request still "generating" when the page loads can no longer deliver its result here;
+// records with durable job IDs keep polling.
 export function parseImageRecord(value: unknown): ImageHistoryRecord[] {
   if (!isLocalRecord(value) || typeof value.id !== "string" || typeof value.prompt !== "string" || typeof value.model !== "string") return [];
   const createdAt = finiteTimestamp(value.createdAt);
   const params: Record<string, unknown> = isLocalRecord(value.params) ? value.params : {};
   const count = params.count;
+  const jobIds = Array.isArray(value.jobIds) ? value.jobIds.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
   if (createdAt === null || !oneOf(value.status, imageStatuses) || typeof count !== "number" || !Number.isInteger(count) || count < 1) return [];
   return [{
     id: value.id,
@@ -108,9 +112,10 @@ export function parseImageRecord(value: unknown): ImageHistoryRecord[] {
     model: value.model,
     basicProtocol: value.basicProtocol === true,
     params: { count, size: optionalString(params.size), quality: optionalString(params.quality), aspectRatio: optionalString(params.aspectRatio), resolution: optionalString(params.resolution) },
-    status: value.status === "generating" ? "interrupted" : value.status,
+    status: value.status === "generating" && jobIds.length === 0 ? "interrupted" : value.status,
     images: Array.isArray(value.images) ? value.images.flatMap(parseStoredImage) : [],
     error: parseErrorDetail(value.error),
+    ...(jobIds.length > 0 ? { jobIds } : {}),
   }];
 }
 

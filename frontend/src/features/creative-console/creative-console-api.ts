@@ -118,6 +118,39 @@ export async function generateImage(input: {
   return images.map((image) => ({ ...image, url: resolveMediaURL(image.url) }));
 }
 
+// submitImageJob starts one image as a durable job through the Responses
+// image_generation tool in background mode, so it survives leaving the page.
+export async function submitImageJob(input: { apiKey: string; model: string; prompt: string; params: ImageParams; requestId?: string }): Promise<string> {
+  const tool = { type: "image_generation", size: input.params.size || "auto", quality: input.params.quality || "auto" };
+  const payload = await publicApiRequest(input.apiKey, "/responses", { method: "POST", body: { model: input.model, input: input.prompt, background: true, tools: [tool] }, requestId: input.requestId });
+  const id = isRecord(payload) && typeof payload.id === "string" ? payload.id : "";
+  if (!id) throw new CreativeApiError(200, "The image job response did not contain an id", "invalid_response");
+  return id;
+}
+
+export type ImageJobState = { done: boolean; succeeded: boolean; error?: ApiErrorDetail };
+
+export async function getImageJob(input: { apiKey: string; id: string; signal?: AbortSignal }): Promise<ImageJobState> {
+  try {
+    const payload = await publicApiRequest(input.apiKey, `/responses/${encodeURIComponent(input.id)}`, { signal: input.signal });
+    return imageJobState(payload, input.id);
+  } catch (error) {
+    // A job that no longer exists (deleted or expired) ends the wait instead of polling forever.
+    if (error instanceof CreativeApiError && error.status === 404) return { done: true, succeeded: false, error: { message: error.message, code: error.code, requestId: input.id } };
+    throw error;
+  }
+}
+
+export function imageJobState(payload: unknown, id: string): ImageJobState {
+  const status = isRecord(payload) && typeof payload.status === "string" ? payload.status : "";
+  if (status === "completed") return { done: true, succeeded: true };
+  if (status === "failed" || status === "cancelled" || status === "incomplete") {
+    const error = isRecord(payload) && isRecord(payload.error) ? payload.error : {};
+    return { done: true, succeeded: false, error: { message: typeof error.message === "string" && error.message ? error.message : status, code: typeof error.code === "string" ? error.code : undefined, requestId: id } };
+  }
+  return { done: false, succeeded: false };
+}
+
 export function imageGenerationBody({ basicProtocol, model, prompt, params }: { basicProtocol: boolean; model: string; prompt: string; params: ImageParams }): Record<string, unknown> {
   const options = basicProtocol
     ? { size: params.size || "auto", quality: params.quality || "auto", output_format: "png" }

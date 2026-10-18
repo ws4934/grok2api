@@ -104,6 +104,7 @@ export type GalleryFilter = {
   operation?: string;
   clientKeyId?: string;
   accountId?: string;
+  jobId?: string;
   // Local calendar days (YYYY-MM-DD) from <input type="date">; both ends inclusive.
   from?: string;
   to?: string;
@@ -113,7 +114,7 @@ export function galleryQuery(filter: GalleryFilter): string {
   const query = new URLSearchParams({ page: String(filter.page), pageSize: String(filter.pageSize), kind: filter.kind });
   const optional: Array<[string, string | undefined]> = [
     ["search", filter.search], ["provider", filter.provider], ["model", filter.model], ["operation", filter.operation],
-    ["clientKeyId", filter.clientKeyId], ["accountId", filter.accountId],
+    ["clientKeyId", filter.clientKeyId], ["accountId", filter.accountId], ["jobId", filter.jobId],
     // The server takes RFC3339 with an inclusive start and an exclusive end, so the end day becomes the next midnight.
     ["from", localDayStart(filter.from, 0)], ["to", localDayStart(filter.to, 1)],
   ];

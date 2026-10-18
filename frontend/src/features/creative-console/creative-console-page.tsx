@@ -27,7 +27,9 @@ import {
   editVideo,
   extendVideo,
   generateImage,
+  getImageJob,
   getVideo,
+  submitImageJob,
   listVoices,
   synthesizeSpeech,
   transcribeSpeech,
@@ -36,6 +38,7 @@ import {
   type ChatStreamSnapshot,
   type ChatToolActivity,
   type ImageParams,
+  type ImageResult,
   type ReasoningEffort,
   type STTResult,
   type TTSResult,
@@ -57,7 +60,9 @@ import {
   type VideoHistoryRecord,
 } from "@/features/creative-console/creative-console-history";
 import { getClientKeySecret, listClientKeys, type ClientKeyDTO } from "@/features/client-keys/client-keys-api";
-import { importVideoInputFromURL, uploadMediaInput } from "@/features/media/media-api";
+import { importVideoInputFromURL, listMediaAssets, uploadMediaInput } from "@/features/media/media-api";
+import { mediaAssetPath } from "@/features/media/media-model";
+import { useProviders } from "@/entities/provider/provider-api";
 import { PageHeader } from "@/shared/components/page-header";
 import { cn } from "@/shared/lib/cn";
 
@@ -907,6 +912,15 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const selectedModelRoute = modelOptions.find((option) => option.publicId === model);
   const basicProtocol = !usesGrokDialect(selectedModelRoute);
   const supportsQuality = !basicProtocol && model.toLowerCase().endsWith("grok-imagine-image-2.0");
+  const providers = useProviders().data;
+  const [submittingJobs, setSubmittingJobs] = useState(false);
+
+  // Providers with durable image jobs (ChatGPT) generate in the background, so
+  // leaving or reloading the page does not cancel them.
+  function usesImageJobs(modelId: string): boolean {
+    const route = modelOptions.find((option) => option.publicId === modelId);
+    return Boolean(route && providers?.find((item) => item.id === route.provider)?.media.asyncImages);
+  }
 
   const mutation = useMutation({
     mutationFn: ({ record, key }: { record: ImageHistoryRecord; key: string }) => generateImage({ apiKey: key, basicProtocol: record.basicProtocol, model: record.model, prompt: record.prompt, params: record.params, requestId: record.id }),
@@ -917,6 +931,8 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       patchRecord(record.id, { status: "failed", error: { ...detail, requestId: detail.requestId ?? record.id } });
     },
   });
+
+  const busy = mutation.isPending || submittingJobs;
 
   function updateRecords(update: (current: ImageHistoryRecord[]) => ImageHistoryRecord[]): void {
     setRecords((current) => {
@@ -930,19 +946,35 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
     updateRecords((current) => current.map((record) => record.id === id ? { ...record, ...patch } : record));
   }
 
+  async function startImageJobs(record: ImageHistoryRecord, key: string): Promise<void> {
+    setSubmittingJobs(true);
+    const jobIds: string[] = [];
+    let failure: ApiErrorDetail | undefined;
+    try {
+      for (let index = 0; index < record.params.count; index += 1) {
+        const requestId = index === 0 ? record.id : `${record.id}-${index}`;
+        try {
+          jobIds.push(await submitImageJob({ apiKey: key, model: record.model, prompt: record.prompt, params: record.params, requestId }));
+        } catch (error) {
+          const detail = describeError(error);
+          failure = { ...detail, requestId: detail.requestId ?? requestId };
+          break;
+        }
+      }
+    } finally {
+      setSubmittingJobs(false);
+    }
+    patchRecord(record.id, jobIds.length > 0 ? { jobIds, ...(failure ? { error: failure } : {}) } : { status: "failed", error: failure });
+  }
+
   function generate(request: Pick<ImageHistoryRecord, "prompt" | "model" | "basicProtocol" | "params">): void {
-    if (!apiKey || !request.model || !request.prompt || mutation.isPending) return;
-    const record: ImageHistoryRecord = {
-      id: createCreativeMessageId(),
-      createdAt: Date.now(),
-      prompt: request.prompt,
-      model: request.model,
-      basicProtocol: request.basicProtocol,
-      params: request.params,
-      status: "generating",
-      images: [],
-    };
+    if (!apiKey || !request.model || !request.prompt || busy) return;
+    const record = newImageRecord(request);
     updateRecords((current) => [record, ...current]);
+    if (usesImageJobs(request.model)) {
+      void startImageJobs(record, apiKey);
+      return;
+    }
     mutation.reset();
     mutation.mutate({ record, key: apiKey });
   }
@@ -972,7 +1004,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      {toolbarElement ? createPortal(<ClearHistoryButton disabled={records.length === 0 || mutation.isPending} onConfirm={() => updateRecords(() => [])} />, toolbarElement) : null}
+      {toolbarElement ? createPortal(<ClearHistoryButton disabled={records.length === 0 || busy} onConfirm={() => updateRecords(() => [])} />, toolbarElement) : null}
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller className="min-h-0 flex-1">
           <MessageScrollerViewport aria-label={t("creativeConsole.history")}>
@@ -980,6 +1012,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
               {records.length === 0 ? <WelcomeState title={t("creativeConsole.welcomeImage")} /> : null}
               {timeline.map((record) => (
                 <MessageScrollerItem key={record.id} messageId={record.id} scrollAnchor>
+                  {record.status === "generating" && record.jobIds?.length ? <ImageJobPoller record={record} apiKey={apiKey} onSettle={(patch) => patchRecord(record.id, patch)} /> : null}
                   <HistoryRecordItem
                     prompt={record.prompt}
                     meta={[record.model, imageParamsLabel(record.params), formatChatSessionTime(record.createdAt, i18n.language)].join(" · ")}
@@ -987,7 +1020,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                     error={record.error}
                     actions={<>
                       <HistoryAction label={t("creativeConsole.reusePrompt")} icon={<CornerDownLeft />} onClick={() => reuse(record)} />
-                      <HistoryAction label={t("creativeConsole.regenerate")} icon={<RefreshCw />} onClick={() => generate(record)} disabled={!apiKey || mutation.isPending} />
+                      <HistoryAction label={t("creativeConsole.regenerate")} icon={<RefreshCw />} onClick={() => generate(record)} disabled={!apiKey || busy} />
                       {record.status !== "generating" ? <HistoryAction label={t("creativeConsole.deleteRecord")} icon={<Trash2 />} destructive onClick={() => updateRecords((current) => current.filter((item) => item.id !== record.id))} /> : null}
                     </>}
                   >
@@ -1029,12 +1062,53 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
               <CompactSelect key="resolution" value={resolution} options={imageResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} /></>}
               {supportsQuality ? <CompactSelect value={quality} options={["low", "medium"]} onChange={(value) => setQuality(value as "low" | "medium")} ariaLabel={t("creativeConsole.quality")} /> : null}
             </div>
-            <Button type="submit" size="icon" aria-label={t("creativeConsole.generateImage")} disabled={!apiKey || !model || !prompt.trim() || mutation.isPending}>{mutation.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />}</Button>
+            <Button type="submit" size="icon" aria-label={t("creativeConsole.generateImage")} disabled={!apiKey || !model || !prompt.trim() || busy}>{busy ? <Loader2 className="animate-spin" /> : <ArrowUp />}</Button>
           </div>
         </div>
       </form>
     </div>
   );
+}
+
+function newImageRecord(request: Pick<ImageHistoryRecord, "prompt" | "model" | "basicProtocol" | "params">): ImageHistoryRecord {
+  return { id: createCreativeMessageId(), createdAt: Date.now(), prompt: request.prompt, model: request.model, basicProtocol: request.basicProtocol, params: request.params, status: "generating", images: [] };
+}
+
+// ImageJobPoller follows a record's durable image jobs until all of them end,
+// then loads the finished images from the gallery by job ID.
+function ImageJobPoller({ record, apiKey, onSettle }: { record: ImageHistoryRecord; apiKey: string; onSettle: (patch: Partial<ImageHistoryRecord>) => void }) {
+  const { t } = useTranslation();
+  const jobIds = useMemo(() => record.jobIds ?? [], [record.jobIds]);
+  const settled = useRef(false);
+  const query = useQuery({
+    queryKey: ["creative-console", "image-jobs", ...jobIds],
+    queryFn: ({ signal }) => Promise.all(jobIds.map((id) => getImageJob({ apiKey, id, signal }))),
+    enabled: Boolean(apiKey) && jobIds.length > 0,
+    refetchInterval: (current) => current.state.data?.every((state) => state.done) ? false : 4000,
+  });
+  const states = query.data;
+  const noResult = t("creativeConsole.imageJobNoResult");
+  useEffect(() => {
+    if (!states || settled.current || !states.every((state) => state.done)) return;
+    settled.current = true;
+    void (async () => {
+      const images: ImageResult[] = [];
+      for (const [index, state] of states.entries()) {
+        if (!state.succeeded) continue;
+        try {
+          const page = await listMediaAssets({ page: 1, pageSize: 20, kind: "image", jobId: jobIds[index] });
+          images.push(...page.items.map((asset) => ({ url: mediaAssetPath("image", asset.id) })));
+        } catch {
+          // The image stays reachable in the gallery; the record reports what could be loaded.
+        }
+      }
+      const failure = states.find((state) => !state.succeeded)?.error;
+      onSettle(images.length > 0
+        ? { status: "completed", images, ...(failure ? { error: failure } : {}) }
+        : { status: "failed", error: failure ?? { message: noResult } });
+    })();
+  }, [jobIds, noResult, onSettle, states]);
+  return null;
 }
 
 function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & HistoryPanelProps) {

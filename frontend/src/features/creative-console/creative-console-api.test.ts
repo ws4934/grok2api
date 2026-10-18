@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { apiErrorFromResponse, describeError, imageGenerationBody } from "./creative-console-api.ts";
+import { apiErrorFromResponse, describeError, imageGenerationBody, imageJobState } from "./creative-console-api.ts";
 
 describe("image generation body", () => {
   it("sends size and quality on basic routes, defaulting both to auto", () => {
@@ -43,5 +43,15 @@ describe("api errors", () => {
   it("describes non-API failures by message only", () => {
     assert.deepEqual(describeError(new Error("Failed to fetch")), { message: "Failed to fetch" });
     assert.deepEqual(describeError("boom"), { message: "boom" });
+  });
+});
+
+describe("image job state", () => {
+  it("maps Responses statuses to settled outcomes", () => {
+    assert.deepEqual(imageJobState({ status: "queued" }, "resp_img_1"), { done: false, succeeded: false });
+    assert.deepEqual(imageJobState({ status: "in_progress" }, "resp_img_1"), { done: false, succeeded: false });
+    assert.deepEqual(imageJobState({ status: "completed" }, "resp_img_1"), { done: true, succeeded: true });
+    assert.deepEqual(imageJobState({ status: "failed", error: { code: "result_uncertain", message: "maybe drawn" } }, "resp_img_1"), { done: true, succeeded: false, error: { message: "maybe drawn", code: "result_uncertain", requestId: "resp_img_1" } });
+    assert.deepEqual(imageJobState({ status: "cancelled" }, "resp_img_2"), { done: true, succeeded: false, error: { message: "cancelled", code: undefined, requestId: "resp_img_2" } });
   });
 });

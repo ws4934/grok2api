@@ -181,6 +181,7 @@ const resources = {
         settings: "设置",
       },
       creativeConsole: {
+        imageJobNoResult: "任务已结束，但没有找到生成的图片。",
         title: "创作控制台",
         description: "使用已创建的客户端密钥直接测试聊天、图片、视频和语音。",
         promotion: "想要更完整的 AI 创作体验？试试我开发的另一个项目 {{product}}：开箱即用的轻量 Web Chat，支持多模型对话与图片生成，静态运行时仅约 34 MB。",
@@ -1535,6 +1536,7 @@ const resources = {
       nav: {
         dashboard: "Dashboard", accounts: "Accounts", models: "Models", clientKeys: "Client keys", creativeConsole: "Creative console", gallery: "Gallery", mediaJobs: "Media jobs", audits: "Request audits", qualityGuard: "Quality guard", docs: "Documentation", settings: "Settings" },
       creativeConsole: {
+        imageJobNoResult: "The job finished but no generated image was found.",
         title: "Creative console",
         description: "Use an existing client key to test chat, image, video, and voice directly.",
         promotion: "Looking for a more complete AI creation experience? Try another project I built, {{product}}: a lightweight, ready-to-deploy Web Chat for multi-model conversations and image generation with a static runtime footprint of about 34 MB.",
