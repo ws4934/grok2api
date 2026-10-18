@@ -1781,7 +1781,7 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 rounded-2xl bg-secondary/40 p-4">
             <audio controls src={ttsResult.url} className="w-full" />
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-              <span>{ttsResult.contentType}{typeof ttsResult.duration === "number" ? ` · ${ttsResult.duration.toFixed(2)}s` : ""}</span>
+              <span>{ttsResult.contentType}{ttsResult.duration && ttsResult.duration > 0 ? ` · ${ttsResult.duration.toFixed(2)}s` : ""}</span>
               <Button variant="secondary" size="sm" asChild><a href={ttsResult.url} download="speech.mp3"><ExternalLink />{t("creativeConsole.open")}</a></Button>
             </div>
           </div>
@@ -1790,7 +1790,7 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
           <div className="mx-auto w-full max-w-3xl space-y-3 rounded-2xl bg-secondary/40 p-4">
             <p className="whitespace-pre-wrap text-sm leading-6">{sttResult.text}</p>
             <div className="text-xs text-muted-foreground">
-              {[sttResult.language, typeof sttResult.duration === "number" ? `${sttResult.duration.toFixed(2)}s` : ""].filter(Boolean).join(" · ")}
+              {[sttResult.language, sttResult.duration && sttResult.duration > 0 ? `${sttResult.duration.toFixed(2)}s` : ""].filter(Boolean).join(" · ")}
             </div>
           </div>
         ) : null}

@@ -323,7 +323,7 @@ const endpoints: Record<string, EndpointDefinition> = {
     noteKeys: ["docs.reference.noteSTTInput", "docs.reference.noteSTTStream", "docs.reference.noteSTTModels", "docs.reference.noteVoiceBilling"],
     request: (model) => ({ model, url: "https://example.com/sample.wav", language: "en", format: true }),
     response: { text: "Hello from Grok voice.", language: "en", duration: 1.84, words: [{ text: "Hello", start: 0.0, end: 0.42 }] },
-    chatgpt: chatgptTranscription,
+    chatgpt: { ...chatgptTranscription, response: { text: chatgptSpeechText, language: "", duration: 0 } },
   },
   "voice/realtime": {
     key: "voice/realtime", category: "Voice", title: "Realtime websocket", method: "GET", path: "/realtime",
