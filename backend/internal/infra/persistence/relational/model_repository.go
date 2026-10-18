@@ -839,8 +839,13 @@ func discoveredRouteDefaults(provider account.Provider, upstreamModel string) (s
 		// The image routes come from the ChatGPT catalog; discovery only sees
 		// their upstream IDs (gpt-image-2, gpt-image-2.5*) through the account
 		// capability overlay and must never turn them into chat routes.
-		if strings.HasPrefix(upstreamModel, "gpt-image-") {
+		switch {
+		case strings.HasPrefix(upstreamModel, "gpt-image-"):
 			return upstreamModel, model.CapabilityImage
+		case upstreamModel == "chatgpt-tts":
+			return upstreamModel, model.CapabilityTTS
+		case upstreamModel == "chatgpt-transcribe":
+			return upstreamModel, model.CapabilitySTT
 		}
 		return upstreamModel, model.CapabilityResponses
 	case account.ProviderConsole:

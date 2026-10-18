@@ -62,6 +62,8 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 | `POST /v1/images/generations`、`POST /v1/images/edits` | 同步出图；编辑支持 JSON 或 multipart、多参考图、PNG 蒙版 |
 | `POST /v1/responses`（带 `image_generation` 工具） | 同步、`background: true` 异步或 `stream: true` 流式 |
 | `GET /v1/responses/{id}`、`POST /v1/responses/{id}/cancel` | 查询或取消异步图片响应（id 以 `resp_img_` 开头） |
+| `POST /v1/audio/speech`、`POST /v1/tts`、`GET /v1/tts/voices` | 语音合成（`chatgpt-tts`）和账号音色列表 |
+| `POST /v1/audio/transcriptions`、`POST /v1/stt` | 语音识别（`chatgpt-transcribe`） |
 
 ### 聊天
 
@@ -126,6 +128,20 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
 - **幂等**：支持 `Idempotency-Key` 请求头。同一密钥、同一内容返回同一任务；内容不同返回 409。
 - **取消**：只对尚未提交到上游的任务有效，已提交的返回 `409 response_not_cancellable`。
 - **结果不确定**：`error.code = result_uncertain` 表示上游可能已经出图但无法确认。系统不会自动重试；管理员可以在"媒体任务"页手动重试，可能再次消耗上游额度。
+
+### 语音
+
+两个模型由 ChatGPT 目录注册，模型同步后出现在所有 ChatGPT 账号上。
+
+| 模型 | 上游 | 额度 | 说明 |
+|---|---|---|---|
+| `chatgpt-transcribe` | 输入框听写 `POST /backend-api/transcribe` | 不占对话额度 | 只返回文字，没有时间戳、逐词结果和语种；只接受上传文件（≤ 25 MB），不接受 URL |
+| `chatgpt-tts` | 朗读 `GET /backend-api/synthesize` | 每次 1 次 `reason` | 输出 `mp3` / `aac` / `opus`；`wav` / `flac` / `pcm` 返回 400；`speed`、`language` 被忽略；`input` ≤ 4096 字符 |
+
+- **音色**：`voice` 按账号音色的 ID 或显示名匹配，如 `glimmer` 或 `Sol`；`/v1/tts/voices` 列出账号可用的音色。OpenAI 音色名（`alloy` 等）和未知名称使用账号当前选中的音色。
+- **合成流程**：朗读只能播放已保存对话里的消息，临时对话会返回 `404 conversation_inaccessible`。网关新建一个保留历史的对话，把要朗读的文字作为一条 assistant 消息写进去；上游回显这条消息后断开流，按消息 ID 合成，再把对话从历史中隐藏（`is_visible: false`）。文字会以对话形式保存在上游账号里，隐藏失败时日志记录 `chatgpt_speech_conversation_hide_failed`。
+- **实测**（免费账号）：识别约 0.9 秒；合成约 9.5 秒，得到 6.3 秒的 mp3，再识别回来与原文一致。
+- **实时语音**：网页端的 GPT-Live 走 WebRTC（向 `/realtime/vp` 提交 SDP），不在模型列表里，网关未接入。
 
 ## 媒体任务与图库
 

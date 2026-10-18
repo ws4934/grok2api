@@ -1,6 +1,8 @@
 package chatgpt
 
 import (
+	"slices"
+
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
@@ -36,31 +38,41 @@ func (a *Adapter) Definition() provider.Definition {
 			modeldomain.CapabilityResponses,
 			modeldomain.CapabilityImage,
 			modeldomain.CapabilityImageEdit,
+			modeldomain.CapabilityTTS,
+			modeldomain.CapabilitySTT,
 		},
 		Quota: provider.QuotaRemoteWindow,
 		Credential: provider.CredentialSurface{
 			AuthType: account.AuthTypeOAuth, Import: true, Refresh: true, RedirectOAuth: true,
 		},
 		Conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true},
-		Media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true},
+		Media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, TTS: true, STT: true},
 		Inference:    provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true},
 	}
 }
 
-// Routes returns the image routes. Chat routes come from account model sync.
+// Routes returns the image and voice routes. Chat routes come from account model sync.
 func Routes() []modeldomain.Route {
 	values := []modeldomain.Route{}
-	for _, item := range imageModels {
-		publicID, _ := modeldomain.NormalizePublicID(account.ProviderChatGPT, item.id)
-		for _, capability := range []modeldomain.Capability{modeldomain.CapabilityImage, modeldomain.CapabilityImageEdit} {
-			values = append(values, modeldomain.Route{PublicID: publicID, Provider: account.ProviderChatGPT, UpstreamModel: item.id, Capability: capability, Origin: modeldomain.OriginCatalog, Enabled: true})
-		}
+	add := func(id string, capability modeldomain.Capability) {
+		publicID, _ := modeldomain.NormalizePublicID(account.ProviderChatGPT, id)
+		values = append(values, modeldomain.Route{PublicID: publicID, Provider: account.ProviderChatGPT, UpstreamModel: id, Capability: capability, Origin: modeldomain.OriginCatalog, Enabled: true})
 	}
+	for _, item := range imageModels {
+		add(item.id, modeldomain.CapabilityImage)
+		add(item.id, modeldomain.CapabilityImageEdit)
+	}
+	add(TTSModel, modeldomain.CapabilityTTS)
+	add(STTModel, modeldomain.CapabilitySTT)
 	return values
 }
 
-// QuotaMode follows the Web limits: every chat consumes "reason", every image "image_gen".
+// QuotaMode follows the Web limits: every chat and speech conversation
+// consumes "reason", every image "image_gen"; dictation has no limit.
 func (a *Adapter) QuotaMode(upstreamModel string) string {
+	if upstreamModel == STTModel {
+		return ""
+	}
 	if len(a.imageCandidates(upstreamModel)) > 0 {
 		return quotaModeImage
 	}
@@ -69,12 +81,13 @@ func (a *Adapter) QuotaMode(upstreamModel string) string {
 
 func (a *Adapter) TierOrder(string) []account.WebTier { return nil }
 
-// NormalizeAccountModelCapabilities makes each image route schedulable on
-// accounts whose catalog has one of its conversation models with the image
-// tool enabled (image_gen_tool_enabled in /backend-api/models).
+// NormalizeAccountModelCapabilities makes the voice routes schedulable on
+// every account and each image route on accounts whose catalog has one of
+// its conversation models with the image tool enabled
+// (image_gen_tool_enabled in /backend-api/models).
 func (a *Adapter) NormalizeAccountModelCapabilities(models []string, _ *account.Billing, credential account.Credential) []string {
 	capable := a.imageCapableFromCache(credential.ID, models)
-	result := models
+	result := append(slices.Clip(models), TTSModel, STTModel)
 	for _, item := range imageModels {
 		if pickImageModel(a.imageCandidates(item.id), capable) != "" {
 			result = append(result, item.id)

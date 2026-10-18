@@ -560,10 +560,10 @@ func TestAccountIdentityModelsAndQuotaWindows(t *testing.T) {
 	if err != nil || strings.Join(models, ",") != "gpt-5,gpt-5-thinking" {
 		t.Fatalf("models = %v, %v", models, err)
 	}
-	if got := a.NormalizeAccountModelCapabilities(models, nil, credential); strings.Join(got[len(models):], ",") != "gpt-image-2,gpt-image-2.5,gpt-image-2.5-flare,gpt-image-2.5-sunburst" {
+	if got := a.NormalizeAccountModelCapabilities(models, nil, credential); strings.Join(got[len(models):], ",") != "chatgpt-tts,chatgpt-transcribe,gpt-image-2,gpt-image-2.5,gpt-image-2.5-flare,gpt-image-2.5-sunburst" {
 		t.Fatalf("image routes not added: %v", got)
 	}
-	if got := a.NormalizeAccountModelCapabilities([]string{"gpt-4o"}, nil, credential); len(got) != 1 {
+	if got := a.NormalizeAccountModelCapabilities([]string{"gpt-4o"}, nil, credential); strings.Join(got, ",") != "gpt-4o,chatgpt-tts,chatgpt-transcribe" {
 		t.Fatalf("image route added without the conversation model: %v", got)
 	}
 	if a.QuotaMode("gpt-5") != quotaModeReason || a.QuotaMode("gpt-image-2") != quotaModeImage {
@@ -776,7 +776,7 @@ func TestImageRoutesFollowTheImageToolOfEachAccount(t *testing.T) {
 	// A free catalog: every model has the image tool, but there is no gpt-5-3.
 	a.rememberImageCatalog(1, map[string]bool{"auto": true, "gpt-6": true, "gpt-5-3-mini": true})
 	got := a.NormalizeAccountModelCapabilities([]string{"auto", "gpt-6", "gpt-5-3-mini"}, nil, account.Credential{ID: 1})
-	if strings.Join(got, ",") != "auto,gpt-6,gpt-5-3-mini,gpt-image-2.5,gpt-image-2.5-flare,gpt-image-2.5-sunburst" {
+	if strings.Join(got, ",") != "auto,gpt-6,gpt-5-3-mini,chatgpt-tts,chatgpt-transcribe,gpt-image-2.5,gpt-image-2.5-flare,gpt-image-2.5-sunburst" {
 		t.Fatalf("free catalog image routes = %v", got)
 	}
 	// gpt-5-3 without the image tool does not open gpt-image-2.
@@ -798,7 +798,7 @@ func TestImageRoutesFollowTheImageToolOfEachAccount(t *testing.T) {
 	if got := a.imageCandidates("gpt-image-2.5"); len(got) != 1 || got[0] != "gpt-5-6" || a.QuotaMode("gpt-image-2.5-flare") != quotaModeImage {
 		t.Fatalf("configured override = %v", got)
 	}
-	if len(Routes()) != 8 {
+	if len(Routes()) != 10 {
 		t.Fatalf("routes = %d", len(Routes()))
 	}
 }
