@@ -21,6 +21,9 @@ var grokTestAdapters = map[account.Provider]provider.DefinitionAdapter{
 // grokTestRegistry holds all production Grok adapters for routing hooks.
 var grokTestRegistry = grokRegistry(account.ProviderBuild, account.ProviderWeb, account.ProviderConsole)
 
+// grokPolicyService answers provider-policy questions with the production Grok adapters.
+var grokPolicyService = &Service{providers: grokTestRegistry}
+
 // grokRoutingHooks gives selector test doubles the production routing hooks
 // next to their own tier orders.
 type grokRoutingHooks struct{}

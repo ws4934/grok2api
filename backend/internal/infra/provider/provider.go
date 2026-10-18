@@ -26,6 +26,10 @@ var (
 	ErrCredentialLimit      = errors.New("credential count exceeds limit")
 	ErrUnauthorized         = errors.New("upstream credential unauthorized")
 	ErrBirthDateAlreadySet  = errors.New("upstream birth date is already set")
+	// ErrVideoParameterInvalid and ErrVideoOperationUnsupported are wrapped by
+	// VideoRequestValidator rejections.
+	ErrVideoParameterInvalid     = errors.New("视频请求参数无效")
+	ErrVideoOperationUnsupported = errors.New("视频编辑/延长仅支持路由到 Console grok-imagine-video")
 )
 
 // HTTPStatusError preserves the upstream status when a streaming or asynchronous Provider cannot return a Response.
@@ -558,6 +562,46 @@ const (
 	ConsoleVideoMaxReferenceImages          = 7
 	ConsoleVideoMaxReferenceDurationSeconds = 10
 )
+
+// VideoRequestOptions are the video parameters a route must accept before a job is queued.
+type VideoRequestOptions struct {
+	Operation       VideoOperation
+	UpstreamModel   string
+	Resolution      string
+	HasImage        bool
+	ReferenceImages int
+	Duration        int
+}
+
+// VideoRequestValidator rejects video requests a route cannot serve, so an
+// asynchronous job never queues a request the upstream must fail. Errors wrap
+// ErrVideoParameterInvalid or ErrVideoOperationUnsupported. Providers without
+// it accept every generation and no edit or extension.
+type VideoRequestValidator interface {
+	Adapter
+	ValidateVideoRequest(options VideoRequestOptions) error
+}
+
+// VideoQuotaModeAdapter refines a video route's quota mode by the requested resolution.
+type VideoQuotaModeAdapter interface {
+	Adapter
+	VideoQuotaMode(quotaMode, resolution string) string
+}
+
+// ValidateGrokVideoResolution enforces the Grok Imagine resolution tiers: only
+// grok-imagine-video-1.5 renders 1080p, and reference images cap it at 720p.
+func ValidateGrokVideoResolution(options VideoRequestOptions) error {
+	if !strings.EqualFold(strings.TrimSpace(options.Resolution), "1080p") {
+		return nil
+	}
+	if strings.TrimSpace(options.UpstreamModel) != "grok-imagine-video-1.5" {
+		return fmt.Errorf("%w: %s 不支持 1080p", ErrVideoOperationUnsupported, options.UpstreamModel)
+	}
+	if options.ReferenceImages > 0 {
+		return fmt.Errorf("%w: reference_images 模式最高支持 720p", ErrVideoOperationUnsupported)
+	}
+	return nil
+}
 
 type VideoRequest struct {
 	Credential account.Credential
@@ -1544,6 +1588,26 @@ func (r *Registry) AsyncImages(value account.Provider) (AsyncImageAdapter, bool)
 	}
 	result, ok := adapter.(AsyncImageAdapter)
 	return result, ok
+}
+
+// ValidateVideoRequest applies the provider's video validation; providers
+// without a validator accept generation only.
+func (r *Registry) ValidateVideoRequest(value account.Provider, options VideoRequestOptions) error {
+	if validator, ok := adapterAs[VideoRequestValidator](r, value); ok {
+		return validator.ValidateVideoRequest(options)
+	}
+	if options.Operation != VideoOperationGenerate {
+		return ErrVideoOperationUnsupported
+	}
+	return nil
+}
+
+// VideoQuotaMode refines a video route's quota mode by resolution.
+func (r *Registry) VideoQuotaMode(value account.Provider, quotaMode, resolution string) string {
+	if adapter, ok := adapterAs[VideoQuotaModeAdapter](r, value); ok {
+		return adapter.VideoQuotaMode(quotaMode, resolution)
+	}
+	return quotaMode
 }
 
 func (r *Registry) Videos(value account.Provider) (VideoAdapter, bool) {

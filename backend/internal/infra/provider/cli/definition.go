@@ -48,6 +48,14 @@ func (a *Adapter) AccountTier(candidate account.RoutingCandidate) clientkey.Acco
 	return clientkey.AccountTierUnknown
 }
 
+// ValidateVideoRequest: Build generates videos only, within the Imagine resolution tiers.
+func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
+	if options.Operation != provider.VideoOperationGenerate {
+		return provider.ErrVideoOperationUnsupported
+	}
+	return provider.ValidateGrokVideoResolution(options)
+}
+
 // SchedulingRisk reports accounts whose access token carries an xAI bot flag.
 func (a *Adapter) SchedulingRisk(credential account.Credential) bool {
 	return credential.BuildBotFlagSource == 1 || credential.BuildBotFlagSource == 2

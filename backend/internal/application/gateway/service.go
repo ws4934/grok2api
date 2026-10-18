@@ -46,8 +46,8 @@ var (
 	ErrConversationUnsupported    = errors.New("目标模型不支持当前对话协议")
 	ErrVideoInputTooLarge         = errors.New("视频参考图片编码后总输入超过 32 MiB")
 	ErrVideoInputUnavailable      = errors.New("视频临时输入不存在或已过期")
-	ErrVideoParameterInvalid      = errors.New("视频请求参数无效")
-	ErrVideoOperationUnsupported  = errors.New("视频编辑/延长仅支持路由到 Console grok-imagine-video")
+	ErrVideoParameterInvalid      = provider.ErrVideoParameterInvalid
+	ErrVideoOperationUnsupported  = provider.ErrVideoOperationUnsupported
 	ErrLedgerUnavailable          = errors.New("计费账本暂不可用")
 )
 

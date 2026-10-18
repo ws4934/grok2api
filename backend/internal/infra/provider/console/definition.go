@@ -1,6 +1,7 @@
 package console
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -46,6 +47,33 @@ func (a *Adapter) Definition() provider.Definition {
 		// cannot be fixed by another account or egress.
 		Failure: provider.FailurePolicy{TerminalAuthSchemeForbidden: true, SoftRateLimit: true},
 	}
+}
+
+// ValidateVideoRequest rejects requests the Console upstream fails only after
+// the asynchronous job was queued. Edit and extension exist for
+// grok-imagine-video only.
+func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
+	model := strings.TrimSpace(options.UpstreamModel)
+	if options.Operation != provider.VideoOperationGenerate {
+		if model == "grok-imagine-video" {
+			return nil
+		}
+		return provider.ErrVideoOperationUnsupported
+	}
+	if model == "grok-imagine-video" || model == "grok-imagine-video-1.5" {
+		// 实测：8 张 reference_images 上游回 400
+		// "Too many reference images: 8. Maximum allowed is 7."（两个视频模型一致）。
+		if options.ReferenceImages > provider.ConsoleVideoMaxReferenceImages {
+			return fmt.Errorf("%w: Console reference_images 最多 %d 张，当前为 %d 张", provider.ErrVideoParameterInvalid, provider.ConsoleVideoMaxReferenceImages, options.ReferenceImages)
+		}
+		// 实测：grok-imagine-video 的 reference-to-video 上游回 400
+		// "Duration 15s exceeds the maximum allowed for reference-to-video, which is 10s."；
+		// 走 image 字段的 image-to-video 与 grok-imagine-video-1.5 都保持 15s。
+		if model == "grok-imagine-video" && options.ReferenceImages > 0 && options.Duration > provider.ConsoleVideoMaxReferenceDurationSeconds {
+			return fmt.Errorf("%w: Console %s 的参考图生视频最长 %d 秒，当前为 %d 秒", provider.ErrVideoParameterInvalid, model, provider.ConsoleVideoMaxReferenceDurationSeconds, options.Duration)
+		}
+	}
+	return provider.ValidateGrokVideoResolution(options)
 }
 
 // StaticModel: every Console account serves the static catalog, and every

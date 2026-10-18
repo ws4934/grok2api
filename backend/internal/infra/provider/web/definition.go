@@ -1,6 +1,9 @@
 package web
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
@@ -58,6 +61,29 @@ func (a *Adapter) CandidateQuotaMode(candidate account.RoutingCandidate, quotaMo
 	default:
 		return account.QuotaModeWebImagePro
 	}
+}
+
+// ValidateVideoRequest: the Web protocol is captured for text-to-video only;
+// the removed media-post path must not come back for image or reference input.
+func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
+	if options.Operation != provider.VideoOperationGenerate {
+		return provider.ErrVideoOperationUnsupported
+	}
+	if options.HasImage || options.ReferenceImages > 0 {
+		return fmt.Errorf("%w: Grok Web 当前仅支持文本生视频；图片视频请使用 Build 或 Console Provider", provider.ErrVideoOperationUnsupported)
+	}
+	return provider.ValidateGrokVideoResolution(options)
+}
+
+// VideoQuotaMode spends default and 720p videos from the dedicated 720p product.
+func (a *Adapter) VideoQuotaMode(quotaMode, resolution string) string {
+	if quotaMode == account.QuotaModeWebVideo {
+		resolution = strings.ToLower(strings.TrimSpace(resolution))
+		if resolution == "" || resolution == "720p" {
+			return account.QuotaModeWebVideo720p
+		}
+	}
+	return quotaMode
 }
 
 // StaticModel: every Web account serves the Imagine products its tier allows.

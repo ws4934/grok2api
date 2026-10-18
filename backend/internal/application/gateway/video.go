@@ -129,7 +129,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err != nil {
 		return media.Job{}, ErrModelNotFound
 	}
-	routes, err = routesForVideoOperation(routes, operation)
+	routes, err = s.routesForVideoOperation(routes, operation)
 	if err != nil {
 		return media.Job{}, err
 	}
@@ -141,7 +141,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err != nil {
 		return media.Job{}, err
 	}
-	routes, err = routesForVideoParameters(routes, operation, input.Resolution, strings.TrimSpace(input.ImageURL) != "", len(input.ReferenceURLs), input.Duration)
+	routes, err = s.routesForVideoParameters(routes, operation, input.Resolution, strings.TrimSpace(input.ImageURL) != "", len(input.ReferenceURLs), input.Duration)
 	if err != nil {
 		return media.Job{}, err
 	}
@@ -167,7 +167,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		return existing, err
 	}
 	route, selection, err := s.selectSchedulableEligibleMediaRouteWithQuotaMode(ctx, routes, input.ClientKey, true, func(route model.Route) string {
-		return videoQuotaMode(route.Provider, s.providers.QuotaMode(route.Provider, route.UpstreamModel), input.Resolution)
+		return s.providers.VideoQuotaMode(route.Provider, s.providers.QuotaMode(route.Provider, route.UpstreamModel), input.Resolution)
 	})
 	if err != nil {
 		return media.Job{}, err
@@ -226,14 +226,14 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 // Callers must first apply capability, client-key, and Provider eligibility:
 // the same public model may aggregate Console, Build, and Web routes with
 // different input contracts.
-func routesForVideoParameters(routes []model.Route, operation provider.VideoOperation, resolution string, hasImage bool, referenceCount, duration int) ([]model.Route, error) {
+func (s *Service) routesForVideoParameters(routes []model.Route, operation provider.VideoOperation, resolution string, hasImage bool, referenceCount, duration int) ([]model.Route, error) {
 	if len(routes) == 0 {
 		return routes, nil
 	}
 	compatible := make([]model.Route, 0, len(routes))
 	var firstErr error
 	for _, candidate := range routes {
-		if err := validateVideoRouteParameters(candidate.Provider, operation, candidate.UpstreamModel, resolution, hasImage, referenceCount, duration); err != nil {
+		if err := s.validateVideoRouteParameters(candidate.Provider, operation, candidate.UpstreamModel, resolution, hasImage, referenceCount, duration); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -247,50 +247,25 @@ func routesForVideoParameters(routes []model.Route, operation provider.VideoOper
 	return compatible, nil
 }
 
-// Console 视频输入的上限与时长按「Provider + 入口字段 + 上游模型」分档。
-// /v1/videos/generations 是异步接口，只在 adapter 层拦截会产出必然失败的任务；
-// adapter 仍保留同一约束，作为最终出站边界的防御校验。
-func validateVideoRouteParameters(providerValue account.Provider, operation provider.VideoOperation, upstreamModel, resolution string, hasImage bool, referenceCount, duration int) error {
-	if operation != provider.VideoOperationGenerate {
-		return nil
-	}
-	trimmedModel := strings.TrimSpace(upstreamModel)
-	hasReferences := referenceCount > 0
-	if providerValue == account.ProviderWeb && (hasImage || hasReferences) {
-		return fmt.Errorf("%w: Grok Web 当前仅支持文本生视频；图片视频请使用 Build 或 Console Provider", ErrVideoOperationUnsupported)
-	}
-	if providerValue == account.ProviderConsole && (trimmedModel == "grok-imagine-video" || trimmedModel == "grok-imagine-video-1.5") {
-		// 实测：8 张 reference_images 上游回 400
-		// "Too many reference images: 8. Maximum allowed is 7."（两个视频模型一致）。
-		if referenceCount > provider.ConsoleVideoMaxReferenceImages {
-			return fmt.Errorf("%w: Console reference_images 最多 %d 张，当前为 %d 张", ErrVideoParameterInvalid, provider.ConsoleVideoMaxReferenceImages, referenceCount)
-		}
-		// 实测：grok-imagine-video 的 reference-to-video 上游回 400
-		// "Duration 15s exceeds the maximum allowed for reference-to-video, which is 10s."；
-		// 走 image 字段的 image-to-video 与 grok-imagine-video-1.5 都保持 15s。
-		if trimmedModel == "grok-imagine-video" && hasReferences && duration > provider.ConsoleVideoMaxReferenceDurationSeconds {
-			return fmt.Errorf("%w: Console %s 的参考图生视频最长 %d 秒，当前为 %d 秒", ErrVideoParameterInvalid, trimmedModel, provider.ConsoleVideoMaxReferenceDurationSeconds, duration)
-		}
-	}
-	if !strings.EqualFold(strings.TrimSpace(resolution), "1080p") {
-		return nil
-	}
-	if trimmedModel != "grok-imagine-video-1.5" {
-		return fmt.Errorf("%w: %s 不支持 1080p", ErrVideoOperationUnsupported, upstreamModel)
-	}
-	if hasReferences {
-		return fmt.Errorf("%w: reference_images 模式最高支持 720p", ErrVideoOperationUnsupported)
-	}
-	return nil
+// validateVideoRouteParameters asks the route's provider whether it can serve
+// the request. /v1/videos/generations is asynchronous, so a request the
+// upstream must fail is rejected here instead of as a failed job; the adapter
+// keeps the same checks at its outbound boundary.
+func (s *Service) validateVideoRouteParameters(providerValue account.Provider, operation provider.VideoOperation, upstreamModel, resolution string, hasImage bool, referenceCount, duration int) error {
+	return s.providers.ValidateVideoRequest(providerValue, provider.VideoRequestOptions{
+		Operation: operation, UpstreamModel: upstreamModel, Resolution: resolution,
+		HasImage: hasImage, ReferenceImages: referenceCount, Duration: duration,
+	})
 }
 
-func routesForVideoOperation(routes []model.Route, operation provider.VideoOperation) ([]model.Route, error) {
+// routesForVideoOperation keeps the routes whose provider serves an edit or extension.
+func (s *Service) routesForVideoOperation(routes []model.Route, operation provider.VideoOperation) ([]model.Route, error) {
 	if operation == provider.VideoOperationGenerate {
 		return routes, nil
 	}
 	compatible := make([]model.Route, 0, len(routes))
 	for _, candidate := range routes {
-		if candidate.Provider == account.ProviderConsole && strings.TrimSpace(candidate.UpstreamModel) == "grok-imagine-video" {
+		if s.providers.ValidateVideoRequest(candidate.Provider, provider.VideoRequestOptions{Operation: operation, UpstreamModel: candidate.UpstreamModel}) == nil {
 			compatible = append(compatible, candidate)
 		}
 	}
@@ -572,7 +547,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		aspectRatio, resolution = "", ""
 	}
 
-	quotaMode := videoQuotaMode(route.Provider, s.providers.QuotaMode(route.Provider, route.UpstreamModel), job.Quality)
+	quotaMode := s.providers.VideoQuotaMode(route.Provider, s.providers.QuotaMode(route.Provider, route.UpstreamModel), job.Quality)
 	quotaRefreshGroup := s.providers.QuotaRefreshGroup(route.Provider, route.UpstreamModel)
 	// The initial creation path (selectSchedulableEligibleMediaRouteWithQuotaMode,
 	// called from CreateVideoJob) always scopes account selection to the
@@ -848,16 +823,6 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	}
 	// 输入回收放在账号状态、计费和审计收尾之后，存储抖动不得延迟关键终态逻辑。
 	s.releaseVideoInputs(job)
-}
-
-func videoQuotaMode(providerValue account.Provider, catalogMode, resolution string) string {
-	if providerValue == account.ProviderWeb && catalogMode == account.QuotaModeWebVideo {
-		resolution = strings.ToLower(strings.TrimSpace(resolution))
-		if resolution == "" || resolution == "720p" {
-			return account.QuotaModeWebVideo720p
-		}
-	}
-	return catalogMode
 }
 
 func (s *Service) acquireVideoInputSlot(ctx context.Context, references []string) (func(), error) {
