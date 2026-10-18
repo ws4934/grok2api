@@ -1760,7 +1760,7 @@ func (s *Selector) clearHealthOverrides(provider account.Provider, accountID uin
 
 // ApplyInvalidation advances local layer generations before any remote publish.
 func (s *Selector) ApplyInvalidation(event repository.InvalidationEvent) {
-	if !event.Valid() {
+	if !event.Valid() || event.Layer() == repository.InvalidationLayerPrice {
 		return
 	}
 	if event.Kind == repository.InvalidationAccountHealthChanged {

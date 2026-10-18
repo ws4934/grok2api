@@ -106,6 +106,8 @@ const (
 	InvalidationAccountEgressLeaseChanged InvalidationKind = "account_egress_lease_changed"
 	InvalidationAccountModelQuotaChanged  InvalidationKind = "account_model_quota_changed"
 	InvalidationClientKeyChanged          InvalidationKind = "client_key_changed"
+	// InvalidationPriceChanged drops every cached administrator price.
+	InvalidationPriceChanged InvalidationKind = "price_changed"
 )
 
 type InvalidationLayer string
@@ -115,6 +117,7 @@ const (
 	InvalidationLayerBase      InvalidationLayer = "account_base"
 	InvalidationLayerOverlay   InvalidationLayer = "account_overlay"
 	InvalidationLayerClientKey InvalidationLayer = "client_key"
+	InvalidationLayerPrice     InvalidationLayer = "price"
 )
 
 type InvalidationEvent struct {
@@ -143,6 +146,8 @@ func (e InvalidationEvent) Layer() InvalidationLayer {
 		return InvalidationLayerBase
 	case InvalidationClientKeyChanged:
 		return InvalidationLayerClientKey
+	case InvalidationPriceChanged:
+		return InvalidationLayerPrice
 	default:
 		return ""
 	}
@@ -153,7 +158,7 @@ func (e InvalidationEvent) Valid() bool {
 	if layer == "" {
 		return false
 	}
-	if layer == InvalidationLayerClientKey {
+	if layer == InvalidationLayerClientKey || layer == InvalidationLayerPrice {
 		return e.Provider == "" && e.AccountID == 0 && e.UpstreamModel == ""
 	}
 	if e.Kind == InvalidationAccountHealthChanged {

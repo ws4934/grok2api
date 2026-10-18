@@ -629,6 +629,7 @@ type SummaryUsage struct {
 	UnpricedRequests        int64
 	PricedTokens            int64
 	UnpricedTokens          int64
+	CustomPricedRequests    int64
 }
 
 type SummaryResult struct {
@@ -678,6 +679,7 @@ func (s *Service) loadSummary(ctx context.Context, search string, filter ListFil
 		ReasoningTokens: aggregate.ReasoningTokens, TotalTokens: aggregate.TotalTokens,
 		EstimatedCostInUSDTicks: aggregate.EstimatedCostInUSDTicks, PricedRequests: aggregate.PricedRequests,
 		UnpricedRequests: aggregate.UnpricedRequests, PricedTokens: aggregate.PricedTokens, UnpricedTokens: aggregate.UnpricedTokens,
+		CustomPricedRequests: aggregate.CustomPricedRequests,
 	}
 	if aggregate.Requests > 0 {
 		usage.SuccessRate = float64(aggregate.SuccessfulRequests) / float64(aggregate.Requests) * 100

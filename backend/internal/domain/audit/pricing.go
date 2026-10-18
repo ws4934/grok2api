@@ -46,11 +46,27 @@ const (
 	OfficialPricingAsOf               = "2026-08-13"
 	officialImageEditInputTicks int64 = 100_000_000
 	officialLiteImageInputTicks int64 = 20_000_000
+	// CustomPricingVersion marks audits priced by an administrator price row;
+	// Record.PriceID names the exact row version.
+	CustomPricingVersion = "custom"
 )
 
 type PricingResult struct {
 	Model          string
 	CostInUSDTicks int64
+	// PriceID is the administrator price row used; 0 means official rates.
+	PriceID uint64
+}
+
+// Apply stores the estimate and the rate version it came from on an audit.
+func (p PricingResult) Apply(record *Record) {
+	record.EstimatedCostInUSDTicks = p.CostInUSDTicks
+	record.PricingModel = p.Model
+	record.PricingVersion = OfficialPricingAsOf
+	record.PriceID = p.PriceID
+	if p.PriceID != 0 {
+		record.PricingVersion = CustomPricingVersion
+	}
 }
 
 // PricingBreakdown describes the exact rate components used to reconstruct a stored estimate.
@@ -212,9 +228,14 @@ func EstimateOfficialTextReservation(model string, body []byte) (PricingResult, 
 	if _, ok := resolveOfficialTokenPrice(model); !ok {
 		return PricingResult{}, false
 	}
-	inputTokens := estimateRequestInputTokens(body)
-	outputTokens := estimateRequestOutputLimit(body)
+	inputTokens, outputTokens := EstimateReservationTokens(body)
 	return EstimateOfficialCost(model, inputTokens, 0, outputTokens, inputTokens)
+}
+
+// EstimateReservationTokens returns the conservative input and output token
+// counts a text reservation is priced at.
+func EstimateReservationTokens(body []byte) (int64, int64) {
+	return estimateRequestInputTokens(body), estimateRequestOutputLimit(body)
 }
 
 func estimateRequestOutputLimit(body []byte) int64 {
@@ -503,8 +524,8 @@ func reconstructLegacyImage20Cost(model string, outputCount, outputTicks int64) 
 	if outputCount <= 0 {
 		return PricingBreakdown{}, false
 	}
-	return newPricingBreakdown(model, PricingTierMedia,
-		newPricingComponent(PricingComponentOutputImage, PricingUnitImage, outputCount, outputTicks),
+	return NewPricingBreakdown(model, PricingTierMedia,
+		NewPricingComponent(PricingComponentOutputImage, PricingUnitImage, outputCount, outputTicks),
 	), true
 }
 
@@ -512,9 +533,9 @@ func reconstructLegacyImage20EditCost(model string, inputCount, outputCount int6
 	if inputCount <= 0 || outputCount <= 0 {
 		return PricingBreakdown{}, false
 	}
-	return newPricingBreakdown(model, PricingTierMedia,
-		newPricingComponent(PricingComponentOutputImage, PricingUnitImage, outputCount, 400_000_000),
-		newPricingComponent(PricingComponentInputImage, PricingUnitImage, inputCount, officialImageEditInputTicks),
+	return NewPricingBreakdown(model, PricingTierMedia,
+		NewPricingComponent(PricingComponentOutputImage, PricingUnitImage, outputCount, 400_000_000),
+		NewPricingComponent(PricingComponentInputImage, PricingUnitImage, inputCount, officialImageEditInputTicks),
 	), true
 }
 
@@ -534,10 +555,10 @@ func reconstructTextCost(model string, inputTokens, cachedInputTokens, outputTok
 		tier = PricingTierLongContext
 	}
 	cachedTokens := max(int64(0), min(cachedInputTokens, inputTokens))
-	return newPricingBreakdown(price.CanonicalModel, tier,
-		newPricingComponent(PricingComponentUncachedInput, PricingUnitToken, max(int64(0), inputTokens-cachedTokens), inputPrice),
-		newPricingComponent(PricingComponentOutput, PricingUnitToken, outputTokens, outputPrice),
-		newPricingComponent(PricingComponentCachedInput, PricingUnitToken, cachedTokens, cachedPrice),
+	return NewPricingBreakdown(price.CanonicalModel, tier,
+		NewPricingComponent(PricingComponentUncachedInput, PricingUnitToken, max(int64(0), inputTokens-cachedTokens), inputPrice),
+		NewPricingComponent(PricingComponentOutput, PricingUnitToken, outputTokens, outputPrice),
+		NewPricingComponent(PricingComponentCachedInput, PricingUnitToken, cachedTokens, cachedPrice),
 	), true
 }
 
@@ -549,8 +570,8 @@ func reconstructImageCost(model, resolution, quality string, count int64) (Prici
 	if !ok {
 		return PricingBreakdown{}, false
 	}
-	return newPricingBreakdown(result.Model, PricingTierMedia,
-		newPricingComponent(PricingComponentOutputImage, PricingUnitImage, count, result.CostInUSDTicks/count),
+	return NewPricingBreakdown(result.Model, PricingTierMedia,
+		NewPricingComponent(PricingComponentOutputImage, PricingUnitImage, count, result.CostInUSDTicks/count),
 	), true
 }
 
@@ -570,9 +591,9 @@ func reconstructImageEditCost(model, resolution, quality string, inputCount, out
 	if outputCost < 0 || outputCost%outputCount != 0 {
 		return PricingBreakdown{}, false
 	}
-	return newPricingBreakdown(result.Model, PricingTierMedia,
-		newPricingComponent(PricingComponentOutputImage, PricingUnitImage, outputCount, outputCost/outputCount),
-		newPricingComponent(PricingComponentInputImage, PricingUnitImage, inputCount, inputTicks),
+	return NewPricingBreakdown(result.Model, PricingTierMedia,
+		NewPricingComponent(PricingComponentOutputImage, PricingUnitImage, outputCount, outputCost/outputCount),
+		NewPricingComponent(PricingComponentInputImage, PricingUnitImage, inputCount, inputTicks),
 	), true
 }
 
@@ -592,13 +613,13 @@ func reconstructVideoCost(model, resolution string, inputImages, seconds int64) 
 	if outputCost < 0 || outputCost%seconds != 0 {
 		return PricingBreakdown{}, false
 	}
-	return newPricingBreakdown(result.Model, PricingTierMedia,
-		newPricingComponent(PricingComponentOutputSecond, PricingUnitSecond, seconds, outputCost/seconds),
-		newPricingComponent(PricingComponentInputImage, PricingUnitImage, inputImages, inputTicks),
+	return NewPricingBreakdown(result.Model, PricingTierMedia,
+		NewPricingComponent(PricingComponentOutputSecond, PricingUnitSecond, seconds, outputCost/seconds),
+		NewPricingComponent(PricingComponentInputImage, PricingUnitImage, inputImages, inputTicks),
 	), true
 }
 
-func newPricingComponent(kind PricingComponentKind, unit PricingUnit, quantity, unitPriceInUSDTicks int64) PricingComponent {
+func NewPricingComponent(kind PricingComponentKind, unit PricingUnit, quantity, unitPriceInUSDTicks int64) PricingComponent {
 	quantity = max(int64(0), quantity)
 	unitPriceInUSDTicks = max(int64(0), unitPriceInUSDTicks)
 	return PricingComponent{
@@ -607,7 +628,7 @@ func newPricingComponent(kind PricingComponentKind, unit PricingUnit, quantity, 
 	}
 }
 
-func newPricingBreakdown(model string, tier PricingTier, components ...PricingComponent) PricingBreakdown {
+func NewPricingBreakdown(model string, tier PricingTier, components ...PricingComponent) PricingBreakdown {
 	result := PricingBreakdown{Model: model, Tier: tier, Components: components}
 	for _, component := range components {
 		result.CostInUSDTicks += component.CostInUSDTicks

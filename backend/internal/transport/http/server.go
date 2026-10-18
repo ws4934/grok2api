@@ -19,6 +19,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
 	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	modelapp "github.com/chenyme/grok2api/backend/internal/application/model"
+	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	settingsapp "github.com/chenyme/grok2api/backend/internal/application/settings"
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
 	accounthttp "github.com/chenyme/grok2api/backend/internal/transport/http/account"
@@ -31,6 +32,7 @@ import (
 	mediahttp "github.com/chenyme/grok2api/backend/internal/transport/http/media"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	modelhttp "github.com/chenyme/grok2api/backend/internal/transport/http/model"
+	pricinghttp "github.com/chenyme/grok2api/backend/internal/transport/http/pricing"
 	settingshttp "github.com/chenyme/grok2api/backend/internal/transport/http/settings"
 	systemhttp "github.com/chenyme/grok2api/backend/internal/transport/http/system"
 	"github.com/gin-gonic/gin"
@@ -57,6 +59,7 @@ type Dependencies struct {
 	Accounts               *accountapp.Service
 	AccountSync            *accountsyncapp.Service
 	Models                 *modelapp.Service
+	Pricing                *pricingapp.Service
 	ClientKeys             *clientkeyapp.Service
 	Audits                 *auditapp.Service
 	Dashboard              *dashboardapp.Service
@@ -156,9 +159,12 @@ func New(deps Dependencies) *gin.Engine {
 		providercataloghttp.NewHandler(deps.Providers).Register(adminProtected)
 	}
 	accounthttp.NewHandler(deps.Accounts, deps.AccountSync).Register(adminProtected)
-	modelhttp.NewHandler(deps.Models).Register(adminProtected)
+	modelhttp.NewHandler(deps.Models).WithPrices(deps.Pricing).Register(adminProtected)
+	if deps.Pricing != nil {
+		pricinghttp.NewHandler(deps.Pricing).Register(adminProtected)
+	}
 	clientkeyhttp.NewHandler(deps.ClientKeys).Register(adminProtected)
-	auditHandler := audithttp.NewHandler(deps.Audits)
+	auditHandler := audithttp.NewHandler(deps.Audits).WithPrices(deps.Pricing)
 	auditHandler.Register(adminProtected)
 	dashboardhttp.NewHandler(deps.Dashboard).Register(adminProtected)
 	mediaHandler.RegisterAdmin(adminProtected)

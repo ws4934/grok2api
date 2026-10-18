@@ -87,8 +87,13 @@ type voiceExecutionResult struct {
 }
 
 func (s *Service) SynthesizeSpeech(ctx context.Context, input TTSInput) (*Result, error) {
-	reservation, _ := audit.EstimateOfficialTTSCost(input.Text)
-	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, true, reservation, input.Method, input.Path, input.Headers, func(providerValue accountdomain.Provider) bool {
+	// The price depends on the selected route's provider, so it is quoted
+	// after route selection; reservation and settlement use the same quote.
+	quote := func(providerValue accountdomain.Provider, upstream string) audit.PricingResult {
+		pricing, _ := s.pricing.QuoteTTS(providerValue, s.providers.PricingModel(providerValue, upstream), input.Text)
+		return pricing
+	}
+	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, true, quote, input.Method, input.Path, input.Headers, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.TTS(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, upstream string) (voiceExecutionResult, error) {
@@ -117,7 +122,7 @@ func (s *Service) SynthesizeSpeech(ctx context.Context, input TTSInput) (*Result
 				}
 				payload["audio_timestamps"] = map[string]any{"graph_chars": result.Timestamps.GraphChars, "graph_times": times}
 			}
-			return voiceExecutionResult{response: jsonVoiceResponse(http.StatusOK, payload), pricing: reservation}, nil
+			return voiceExecutionResult{response: jsonVoiceResponse(http.StatusOK, payload), pricing: quote(providerValue, upstream)}, nil
 		}
 		header := http.Header{}
 		header.Set("Content-Type", firstNonEmpty(result.ContentType, "audio/mpeg"))
@@ -128,12 +133,12 @@ func (s *Service) SynthesizeSpeech(ctx context.Context, input TTSInput) (*Result
 			Header:     header,
 			Body:       io.NopCloser(bytes.NewReader(result.Audio)),
 			QuotaUnits: 1,
-		}, pricing: reservation}, nil
+		}, pricing: quote(providerValue, upstream)}, nil
 	})
 }
 
 func (s *Service) ListTTSVoices(ctx context.Context, input VoiceListInput) (*Result, error) {
-	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, audit.PricingResult{}, "", "", nil, func(providerValue accountdomain.Provider) bool {
+	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, nil, "", "", nil, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.TTS(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, _ string) (voiceExecutionResult, error) {
@@ -162,7 +167,7 @@ func (s *Service) ListTTSVoices(ctx context.Context, input VoiceListInput) (*Res
 }
 
 func (s *Service) GetTTSVoice(ctx context.Context, input VoiceIDInput) (*Result, error) {
-	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, audit.PricingResult{}, "", "", nil, func(providerValue accountdomain.Provider) bool {
+	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, nil, "", "", nil, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.TTS(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, _ string) (voiceExecutionResult, error) {
@@ -187,7 +192,7 @@ func (s *Service) GetTTSVoice(ctx context.Context, input VoiceIDInput) (*Result,
 }
 
 func (s *Service) TranscribeSpeech(ctx context.Context, input STTInput) (*Result, error) {
-	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationSTT, modeldomain.CapabilitySTT, true, audit.PricingResult{}, input.Method, input.Path, input.Headers, func(providerValue accountdomain.Provider) bool {
+	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, input.Method, input.Path, input.Headers, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.STT(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, upstream string) (voiceExecutionResult, error) {
@@ -204,7 +209,7 @@ func (s *Service) TranscribeSpeech(ctx context.Context, input STTInput) (*Result
 		if err != nil {
 			return voiceExecutionResult{}, err
 		}
-		pricing, _ := audit.EstimateOfficialSTTCost(result.Duration, false)
+		pricing, _ := s.pricing.QuoteSTT(providerValue, s.providers.PricingModel(providerValue, upstream), result.Duration, false)
 		return voiceExecutionResult{response: formatSTTResponse(result, input.ResponseFormat), pricing: pricing}, nil
 	})
 }
@@ -282,7 +287,7 @@ func (s *Service) executeVoice(
 	operation audit.Operation,
 	capability modeldomain.Capability,
 	consumesQuota bool,
-	reservation audit.PricingResult,
+	quote func(accountdomain.Provider, string) audit.PricingResult,
 	method string,
 	path string,
 	headers map[string][]string,
@@ -316,6 +321,10 @@ func (s *Service) executeVoice(
 	}
 	if err := s.checkLedgerReady(); err != nil {
 		return nil, err
+	}
+	var reservation audit.PricingResult
+	if quote != nil {
+		reservation = quote(route.Provider, route.UpstreamModel)
 	}
 	if reservation.CostInUSDTicks > 0 {
 		if _, err := s.clientKeys.ReserveBilling(ctx, key, eventID, reservation.CostInUSDTicks, mediaBillingReservationTTL); err != nil {
@@ -479,9 +488,7 @@ func (s *Service) executeVoice(
 			record.DurationMS, record.CreatedAt = time.Since(startedAt).Milliseconds(), time.Now().UTC()
 			applyAuditEgress(&record, egressTrace, route.Provider)
 			if successful && completedPricing.CostInUSDTicks > 0 {
-				record.EstimatedCostInUSDTicks = completedPricing.CostInUSDTicks
-				record.PricingModel = completedPricing.Model
-				record.PricingVersion = audit.OfficialPricingAsOf
+				completedPricing.Apply(&record)
 			}
 			if successful && response.QuotaUnits > 0 && quotaMode != "" && quotaMode != "weekly" {
 				units := response.QuotaUnits

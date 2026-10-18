@@ -164,7 +164,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err := s.checkLedgerReady(); err != nil {
 		return media.Job{}, err
 	}
-	pricing, priced := resolveVideoPricing(operation, route.UpstreamModel, input.Resolution, input.Duration, len(allRefs))
+	pricing, priced := s.resolveVideoPricing(operation, route.Provider, route.UpstreamModel, input.Resolution, input.Duration, len(allRefs))
 	externalModel := model.ExternalPublicID(route.Provider, route.PublicID)
 	lease, err := selection.Acquire(ctx, nil, false)
 	if err != nil {
@@ -283,9 +283,9 @@ func routesForVideoOperation(routes []model.Route, operation provider.VideoOpera
 	return compatible, nil
 }
 
-func resolveVideoPricing(operation provider.VideoOperation, upstreamModel, resolution string, duration, inputImages int) (audit.PricingResult, bool) {
+func (s *Service) resolveVideoPricing(operation provider.VideoOperation, providerValue account.Provider, upstreamModel, resolution string, duration, inputImages int) (audit.PricingResult, bool) {
 	if operation == provider.VideoOperationGenerate {
-		return audit.EstimateOfficialVideoCost(upstreamModel, resolution, duration, inputImages)
+		return s.pricing.QuoteVideo(providerValue, upstreamModel, resolution, duration, inputImages)
 	}
 	return audit.PricingResult{}, false
 }
@@ -1026,10 +1026,10 @@ func (s *Service) recordVideoAudit(ctx context.Context, job media.Job, durationM
 	if operation == "" {
 		operation = provider.VideoOperationGenerate
 	}
-	if pricing, ok := audit.EstimateOfficialVideoCost(job.UpstreamModel, job.Quality, job.Seconds, job.InputImageCount); ok && job.Status == media.StatusCompleted && operation == provider.VideoOperationGenerate {
-		record.EstimatedCostInUSDTicks = pricing.CostInUSDTicks
-		record.PricingModel = pricing.Model
-		record.PricingVersion = audit.OfficialPricingAsOf
+	// ponytail: settles at the price active on completion, not the one
+	// reserved at submission; snapshot it on the job if edits mid-job matter.
+	if pricing, ok := s.pricing.QuoteVideo(account.Provider(job.Provider), job.UpstreamModel, job.Quality, job.Seconds, job.InputImageCount); ok && job.Status == media.StatusCompleted && operation == provider.VideoOperationGenerate {
+		pricing.Apply(&record)
 	}
 	if durable, ok := s.audits.(interface {
 		CreateDurable(context.Context, audit.Record) error

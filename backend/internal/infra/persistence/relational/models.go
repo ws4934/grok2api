@@ -347,6 +347,7 @@ type requestAuditModel struct {
 	EstimatedCostInUSDTicks int64     `gorm:"not null;default:0"`
 	PricingModel            string    `gorm:"size:100;check:chk_request_audits_pricing_model,length(pricing_model) <= 100"`
 	PricingVersion          string    `gorm:"size:20;check:chk_request_audits_pricing_version,length(pricing_version) <= 20"`
+	PriceID                 uint64    `gorm:"not null;default:0"`
 	EstimationJSON          string    `gorm:"type:text;not null;default:''"`
 	NumSourcesUsed          int64     `gorm:"not null;default:0"`
 	NumServerSideToolsUsed  int64     `gorm:"not null;default:0"`

@@ -164,14 +164,14 @@ func TestVideoEditRouteUsesResolvedUpstreamInsteadOfPublicName(t *testing.T) {
 }
 
 func TestVideoPricingLeavesUnmeasurableOperationsUnpriced(t *testing.T) {
-	pricing, priced := resolveVideoPricing(provider.VideoOperationGenerate, "Console/grok-imagine-video", "720p", 6, 1)
+	pricing, priced := (&Service{}).resolveVideoPricing(provider.VideoOperationGenerate, account.ProviderConsole, "Console/grok-imagine-video", "720p", 6, 1)
 	if !priced || pricing.CostInUSDTicks <= 0 {
 		t.Fatalf("priced generation = %#v, priced=%v", pricing, priced)
 	}
-	if pricing, priced := resolveVideoPricing(provider.VideoOperationGenerate, "Console/grok-imagine-video", "", 6, 0); priced || pricing.CostInUSDTicks != 0 {
+	if pricing, priced := (&Service{}).resolveVideoPricing(provider.VideoOperationGenerate, account.ProviderConsole, "Console/grok-imagine-video", "", 6, 0); priced || pricing.CostInUSDTicks != 0 {
 		t.Fatalf("generation without resolution = %#v, priced=%v", pricing, priced)
 	}
-	if pricing, priced := resolveVideoPricing(provider.VideoOperationExtend, "Console/grok-imagine-video", "", 6, 0); priced || pricing.CostInUSDTicks != 0 {
+	if pricing, priced := (&Service{}).resolveVideoPricing(provider.VideoOperationExtend, account.ProviderConsole, "Console/grok-imagine-video", "", 6, 0); priced || pricing.CostInUSDTicks != 0 {
 		t.Fatalf("extension without measurable input duration = %#v, priced=%v", pricing, priced)
 	}
 }

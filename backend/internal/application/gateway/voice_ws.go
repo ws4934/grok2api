@@ -269,10 +269,8 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 				// disconnecting afterward (successful == false) must not
 				// erase already-confirmed usage.
 				if operation == audit.OperationSTT && outcome.AudioDurationSeconds > 0 {
-					if pricing, priced := audit.EstimateOfficialSTTCost(outcome.AudioDurationSeconds, true); priced {
-						record.EstimatedCostInUSDTicks = pricing.CostInUSDTicks
-						record.PricingModel = pricing.Model
-						record.PricingVersion = audit.OfficialPricingAsOf
+					if pricing, priced := s.pricing.QuoteSTT(route.Provider, s.providers.PricingModel(route.Provider, route.UpstreamModel), outcome.AudioDurationSeconds, true); priced {
+						pricing.Apply(&record)
 					}
 				}
 				if auditErr := budget.run("audit", finalizationAuditBudget, func(stageCtx context.Context) error {

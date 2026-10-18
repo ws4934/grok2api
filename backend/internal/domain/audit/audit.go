@@ -104,20 +104,23 @@ type Record struct {
 	EstimatedCostInUSDTicks int64
 	PricingModel            string
 	PricingVersion          string
-	Estimation              *EstimationDetails
-	NumSourcesUsed          int64
-	NumServerSideToolsUsed  int64
-	ContextInputTokens      int64
-	ContextOutputTokens     int64
-	FirstTokenMS            *int64
-	DurationMS              int64
-	ErrorCode               string
-	RequestMethod           string
-	RequestPath             string
-	RequestHeaders          map[string][]string
-	AttemptCount            int
-	Attempts                []Attempt
-	CreatedAt               time.Time
+	// PriceID is the administrator price row used for the estimate; 0 for
+	// official rates or unpriced requests.
+	PriceID                uint64
+	Estimation             *EstimationDetails
+	NumSourcesUsed         int64
+	NumServerSideToolsUsed int64
+	ContextInputTokens     int64
+	ContextOutputTokens    int64
+	FirstTokenMS           *int64
+	DurationMS             int64
+	ErrorCode              string
+	RequestMethod          string
+	RequestPath            string
+	RequestHeaders         map[string][]string
+	AttemptCount           int
+	Attempts               []Attempt
+	CreatedAt              time.Time
 }
 
 // EstimationDetails records the gateway rule used at acceptance, independently
@@ -150,4 +153,6 @@ type Summary struct {
 	UnpricedRequests        int64
 	PricedTokens            int64
 	UnpricedTokens          int64
+	// CustomPricedRequests counts priced requests that used an administrator price.
+	CustomPricedRequests int64
 }

@@ -1,15 +1,19 @@
 package audit
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 	"unicode/utf8"
 
 	auditapp "github.com/chenyme/grok2api/backend/internal/application/audit"
+	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	auditdomain "github.com/chenyme/grok2api/backend/internal/domain/audit"
+	pricingdomain "github.com/chenyme/grok2api/backend/internal/domain/pricing"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
 	"github.com/gin-gonic/gin"
@@ -17,10 +21,36 @@ import (
 
 type Handler struct {
 	service                 *auditapp.Service
+	prices                  *pricingapp.Service
 	qualityGuardClientKeyID uint64
 }
 
 func NewHandler(service *auditapp.Service) *Handler { return &Handler{service: service} }
+
+// WithPrices lets the billing breakdown reconstruct custom-priced audits.
+func (h *Handler) WithPrices(prices *pricingapp.Service) *Handler {
+	h.prices = prices
+	return h
+}
+
+// lookupPrices loads the price rows referenced by audits; a failure only
+// drops the reconstructed formula.
+func (h *Handler) lookupPrices(ctx context.Context, values []auditdomain.Record) map[uint64]pricingdomain.Price {
+	ids := make([]uint64, 0)
+	for _, value := range values {
+		if value.PriceID != 0 {
+			ids = append(ids, value.PriceID)
+		}
+	}
+	if h.prices == nil || len(ids) == 0 {
+		return nil
+	}
+	prices, err := h.prices.Lookup(ctx, ids)
+	if err != nil {
+		slog.Warn("audit_price_lookup_failed", "error", err)
+	}
+	return prices
+}
 
 func NewQualityGuardHandler(service *auditapp.Service, clientKeyID uint64) *Handler {
 	return &Handler{service: service, qualityGuardClientKeyID: clientKeyID}
@@ -117,6 +147,7 @@ type auditResponse struct {
 	EstimatedCostInUSDTicks int64                     `json:"estimatedCostInUsdTicks"`
 	PricingModel            string                    `json:"pricingModel,omitempty"`
 	PricingVersion          string                    `json:"pricingVersion,omitempty"`
+	PriceID                 uint64                    `json:"priceId,string,omitempty"`
 	Billing                 *billingBreakdownResponse `json:"billing,omitempty"`
 	NumSourcesUsed          int64                     `json:"numSourcesUsed"`
 	NumServerSideToolsUsed  int64                     `json:"numServerSideToolsUsed"`
@@ -198,9 +229,10 @@ func (h *Handler) list(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "auditListFailed", "读取审计记录失败")
 		return
 	}
+	prices := h.lookupPrices(c.Request.Context(), values)
 	items := make([]auditResponse, 0, len(values))
 	for _, value := range values {
-		items = append(items, newAuditResponse(value))
+		items = append(items, newAuditResponse(value, prices))
 	}
 	response.Success(c, http.StatusOK, gin.H{"items": items, "page": page, "pageSize": pageSize, "total": total})
 }
@@ -225,9 +257,10 @@ func (h *Handler) listCursor(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "auditListFailed", "读取审计记录失败")
 		return
 	}
+	prices := h.lookupPrices(c.Request.Context(), result.Items)
 	items := make([]auditResponse, 0, len(result.Items))
 	for _, value := range result.Items {
-		items = append(items, newAuditResponse(value))
+		items = append(items, newAuditResponse(value, prices))
 	}
 	response.Success(c, http.StatusOK, gin.H{"items": items, "pageSize": pageSize, "nextCursor": result.NextCursor, "hasMore": result.HasMore})
 }
@@ -269,7 +302,7 @@ func (h *Handler) get(c *gin.Context) {
 			TransportError:        attempt.TransportError, ErrorChain: errorChain,
 		})
 	}
-	response.Success(c, http.StatusOK, auditDetailResponse{Audit: newAuditResponse(value), Attempts: attempts})
+	response.Success(c, http.StatusOK, auditDetailResponse{Audit: newAuditResponse(value, h.lookupPrices(c.Request.Context(), []auditdomain.Record{value})), Attempts: attempts})
 }
 
 type summaryResponse struct {
@@ -306,6 +339,9 @@ type pricingResponse struct {
 	UnpricedRequests int64  `json:"unpricedRequests"`
 	PricedTokens     int64  `json:"pricedTokens"`
 	UnpricedTokens   int64  `json:"unpricedTokens"`
+	// CustomPricedRequests counts priced requests billed by an administrator
+	// price instead of the official source above.
+	CustomPricedRequests int64 `json:"customPricedRequests"`
 }
 
 func (h *Handler) summary(c *gin.Context) {
@@ -338,6 +374,7 @@ func (h *Handler) summary(c *gin.Context) {
 			Source: auditdomain.OfficialPricingSource, AsOf: auditdomain.OfficialPricingAsOf,
 			PricedRequests: result.Usage.PricedRequests, UnpricedRequests: result.Usage.UnpricedRequests,
 			PricedTokens: result.Usage.PricedTokens, UnpricedTokens: result.Usage.UnpricedTokens,
+			CustomPricedRequests: result.Usage.CustomPricedRequests,
 		},
 	})
 }
@@ -479,7 +516,7 @@ func newListFilter(c *gin.Context) auditapp.ListFilter {
 	}
 }
 
-func newAuditResponse(value auditdomain.Record) auditResponse {
+func newAuditResponse(value auditdomain.Record, prices map[uint64]pricingdomain.Price) auditResponse {
 	result := auditResponse{
 		ID: value.ID, RequestID: value.RequestID, ClientKeyID: value.ClientKeyID, ClientKeyName: value.ClientKeyName, ClientIP: value.ClientIP,
 		Estimation:   value.Estimation,
@@ -493,7 +530,7 @@ func newAuditResponse(value auditdomain.Record) auditResponse {
 		InputTokens: value.InputTokens, CachedInputTokens: value.CachedInputTokens, OutputTokens: value.OutputTokens,
 		ReasoningTokens: value.ReasoningTokens, TotalTokens: value.TotalTokens, CostInUSDTicks: value.CostInUSDTicks,
 		EstimatedCostInUSDTicks: value.EstimatedCostInUSDTicks, PricingModel: value.PricingModel, PricingVersion: value.PricingVersion,
-		Billing:        newBillingBreakdown(value),
+		PriceID: value.PriceID, Billing: newBillingBreakdown(value, prices),
 		NumSourcesUsed: value.NumSourcesUsed, NumServerSideToolsUsed: value.NumServerSideToolsUsed,
 		ContextInputTokens: value.ContextInputTokens, ContextOutputTokens: value.ContextOutputTokens,
 		FirstTokenMS: value.FirstTokenMS, OutputTokensPerSecond: auditOutputTokensPerSecond(value), DurationMS: value.DurationMS,
@@ -504,7 +541,7 @@ func newAuditResponse(value auditdomain.Record) auditResponse {
 	return result
 }
 
-func newBillingBreakdown(value auditdomain.Record) *billingBreakdownResponse {
+func newBillingBreakdown(value auditdomain.Record, prices map[uint64]pricingdomain.Price) *billingBreakdownResponse {
 	if value.CostInUSDTicks > 0 {
 		return &billingBreakdownResponse{
 			Source: "upstream", Method: "upstream_reported", Components: []billingComponentResponse{}, TotalInUSDTicks: value.CostInUSDTicks,
@@ -521,23 +558,32 @@ func newBillingBreakdown(value auditdomain.Record) *billingBreakdownResponse {
 		breakdown.Source = "channel"
 		return breakdown
 	}
-	if value.PricingVersion != auditdomain.OfficialPricingAsOf {
-		return breakdown
+	var pricing auditdomain.PricingBreakdown
+	var ok bool
+	if value.PriceID != 0 {
+		// Custom rows reconstruct from the exact stored price version.
+		breakdown.Source = "custom"
+		if price, found := prices[value.PriceID]; found {
+			pricing, ok = price.Breakdown(value.InputTokens, value.CachedInputTokens, value.OutputTokens, value.MediaInputImages, value.MediaOutputImages, value.MediaOutputSeconds)
+		}
+		breakdown.Method = "custom_rates"
+	} else if value.PricingVersion == auditdomain.OfficialPricingAsOf {
+		pricing, ok = auditdomain.ReconstructOfficialCost(
+			value.PricingModel,
+			value.InputTokens,
+			value.CachedInputTokens,
+			value.OutputTokens,
+			value.ContextInputTokens,
+			value.MediaInputImages,
+			value.MediaOutputImages,
+			value.MediaOutputSeconds,
+		)
+		breakdown.Method = "official_rates"
 	}
-	pricing, ok := auditdomain.ReconstructOfficialCost(
-		value.PricingModel,
-		value.InputTokens,
-		value.CachedInputTokens,
-		value.OutputTokens,
-		value.ContextInputTokens,
-		value.MediaInputImages,
-		value.MediaOutputImages,
-		value.MediaOutputSeconds,
-	)
 	if !ok || pricing.CostInUSDTicks != value.EstimatedCostInUSDTicks {
+		breakdown.Method = "stored_estimate"
 		return breakdown
 	}
-	breakdown.Method = "official_rates"
 	breakdown.Model = pricing.Model
 	breakdown.Tier = string(pricing.Tier)
 	breakdown.Components = make([]billingComponentResponse, 0, len(pricing.Components))

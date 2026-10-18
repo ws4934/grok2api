@@ -277,7 +277,7 @@ func toAuditDomain(value requestAuditModel) audit.Record {
 		MediaInputImages: value.MediaInputImages, MediaOutputImages: value.MediaOutputImages, MediaOutputSeconds: value.MediaOutputSeconds,
 		InputTokens: value.InputTokens, CachedInputTokens: value.CachedInputTokens, OutputTokens: value.OutputTokens,
 		ReasoningTokens: value.ReasoningTokens, TotalTokens: value.TotalTokens, CostInUSDTicks: value.CostInUSDTicks,
-		EstimatedCostInUSDTicks: value.EstimatedCostInUSDTicks, PricingModel: value.PricingModel, PricingVersion: value.PricingVersion,
+		EstimatedCostInUSDTicks: value.EstimatedCostInUSDTicks, PricingModel: value.PricingModel, PricingVersion: value.PricingVersion, PriceID: value.PriceID,
 		NumSourcesUsed: value.NumSourcesUsed, NumServerSideToolsUsed: value.NumServerSideToolsUsed,
 		ContextInputTokens: value.ContextInputTokens, ContextOutputTokens: value.ContextOutputTokens, FirstTokenMS: value.FirstTokenMS, DurationMS: value.DurationMS,
 		ErrorCode: value.ErrorCode, RequestMethod: value.RequestMethod, RequestPath: value.RequestPath, RequestHeaders: requestHeaders, AttemptCount: value.AttemptCount, CreatedAt: value.CreatedAt,

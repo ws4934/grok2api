@@ -222,9 +222,9 @@ func (s *Service) executeImage(
 	var priced bool
 	switch operation {
 	case audit.OperationImage:
-		reservation, priced = audit.EstimateOfficialImageCost(pricingModel, pricingResolution, pricingQuality, requestedCount)
+		reservation, priced = s.pricing.QuoteImage(route.Provider, pricingModel, pricingResolution, pricingQuality, requestedCount)
 	case audit.OperationImageEdit:
-		reservation, priced = audit.EstimateOfficialImageEditCost(pricingModel, pricingResolution, pricingQuality, requestedCount, inputImageCount)
+		reservation, priced = s.pricing.QuoteImageEdit(route.Provider, pricingModel, pricingResolution, pricingQuality, requestedCount, inputImageCount)
 	}
 	reserved := false
 	if priced {
@@ -384,14 +384,12 @@ func (s *Service) executeImage(
 				var priced bool
 				switch operation {
 				case audit.OperationImage:
-					pricing, priced = audit.EstimateOfficialImageCost(pricingModel, pricingResolution, pricingQuality, requestedCount)
+					pricing, priced = s.pricing.QuoteImage(route.Provider, pricingModel, pricingResolution, pricingQuality, requestedCount)
 				case audit.OperationImageEdit:
-					pricing, priced = audit.EstimateOfficialImageEditCost(pricingModel, pricingResolution, pricingQuality, requestedCount, inputImageCount)
+					pricing, priced = s.pricing.QuoteImageEdit(route.Provider, pricingModel, pricingResolution, pricingQuality, requestedCount, inputImageCount)
 				}
 				if priced {
-					record.EstimatedCostInUSDTicks = pricing.CostInUSDTicks
-					record.PricingModel = pricing.Model
-					record.PricingVersion = audit.OfficialPricingAsOf
+					pricing.Apply(&record)
 				}
 			}
 			quotaKind, _ := s.providers.QuotaKind(route.Provider)

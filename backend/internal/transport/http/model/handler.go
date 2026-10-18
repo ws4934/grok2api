@@ -12,14 +12,19 @@ import (
 	"time"
 
 	modelapp "github.com/chenyme/grok2api/backend/internal/application/model"
+	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	pricinghttp "github.com/chenyme/grok2api/backend/internal/transport/http/pricing"
 	"github.com/gin-gonic/gin"
 )
 
-type Handler struct{ service *modelapp.Service }
+type Handler struct {
+	service *modelapp.Service
+	prices  *pricingapp.Service
+}
 
 const (
 	modelSyncHeartbeatInterval = 15 * time.Second
@@ -27,6 +32,19 @@ const (
 )
 
 func NewHandler(service *modelapp.Service) *Handler { return &Handler{service: service} }
+
+// WithPrices attaches each listed route's effective price.
+func (h *Handler) WithPrices(prices *pricingapp.Service) *Handler {
+	h.prices = prices
+	return h
+}
+
+func (h *Handler) routePrice(value modeldomain.Route) *pricinghttp.RoutePriceResponse {
+	if h.prices == nil {
+		return nil
+	}
+	return pricinghttp.NewRoutePriceResponse(h.prices.RoutePrice(value))
+}
 
 func (h *Handler) Register(router *gin.RouterGroup) {
 	router.GET("/models", h.list)
@@ -80,6 +98,8 @@ type modelResponse struct {
 	CapabilityKnown   bool       `json:"capabilityKnown"`
 	Available         bool       `json:"available"`
 	LastSyncedAt      *time.Time `json:"lastSyncedAt,omitempty"`
+	// Price is the effective billing price: custom, official or none.
+	Price *pricinghttp.RoutePriceResponse `json:"price,omitempty"`
 }
 
 type modelGroupResponse struct {
@@ -111,7 +131,9 @@ func (h *Handler) list(c *gin.Context) {
 	}
 	items := make([]modelResponse, 0, len(values))
 	for _, value := range values {
-		items = append(items, newModelResponse(value))
+		item := newModelResponse(value)
+		item.Price = h.routePrice(value)
+		items = append(items, item)
 	}
 	response.Success(c, http.StatusOK, gin.H{"items": items, "page": page, "pageSize": pageSize, "total": total})
 }
@@ -132,7 +154,11 @@ func (h *Handler) listGroups(c *gin.Context) {
 	}
 	items := make([]modelGroupResponse, 0, len(values))
 	for _, value := range values {
-		items = append(items, newModelGroupResponse(value))
+		item := newModelGroupResponse(value)
+		for index, route := range value.Routes {
+			item.Routes[index].Price = h.routePrice(route)
+		}
+		items = append(items, item)
 	}
 	response.Success(c, http.StatusOK, gin.H{"items": items, "page": page, "pageSize": pageSize, "total": total})
 }

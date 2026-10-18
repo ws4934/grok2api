@@ -237,6 +237,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	if err := d.dropModelPublicIDUniqueIndex(ctx); err != nil {
 		return fmt.Errorf("迁移模型路由名称唯一约束: %w", err)
 	}
+	if err := d.ensureModelPriceSchema(ctx); err != nil {
+		return fmt.Errorf("初始化模型价格表: %w", err)
+	}
 	for _, statement := range schemaIndexes {
 		if err := db.Exec(statement).Error; err != nil {
 			return fmt.Errorf("初始化数据库索引: %w", err)

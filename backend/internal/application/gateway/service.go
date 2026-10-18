@@ -22,6 +22,7 @@ import (
 
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
+	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
@@ -228,6 +229,7 @@ type Service struct {
 	modelSyncing                map[uint64]struct{}
 	markBuildChatDeniedAsReauth atomic.Bool
 	qualityRetry                atomic.Pointer[QualityRetryRuntime]
+	pricing                     *pricingapp.Service
 }
 
 type teamModelRateLimit struct {
@@ -465,6 +467,9 @@ func (s *Service) markTeamModelRateLimit(credential accountdomain.Credential, up
 	s.rateLimitMu.Unlock()
 	return value
 }
+
+// SetPricing enables administrator prices; without it official rates apply.
+func (s *Service) SetPricing(pricing *pricingapp.Service) { s.pricing = pricing }
 
 func (s *Service) SetLogger(logger *slog.Logger) {
 	if logger != nil {
@@ -1014,7 +1019,7 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	if err := s.checkLedgerReady(); err != nil {
 		return nil, err
 	}
-	if reservation, priced := audit.EstimateOfficialTextReservation(pricingModel, input.Body); priced {
+	if reservation, priced := s.pricing.QuoteTextReservation(route.Provider, pricingModel, input.Body); priced {
 		if _, err := s.clientKeys.ReserveBilling(ctx, input.ClientKey, eventID, reservation.CostInUSDTicks, s.textBillingReservationTTL()); err != nil {
 			return nil, err
 		}
@@ -1084,19 +1089,15 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 				record.ReasoningTokens = usage.ReasoningTokens
 				record.TotalTokens = usage.TotalTokens
 				record.CostInUSDTicks = usage.CostInUSDTicks
-				imagePricing, imagePriced := audit.EstimateOfficialImageCost(pricingModel, "", "", response.QuotaUnits)
+				imagePricing, imagePriced := s.pricing.QuoteImage(route.Provider, pricingModel, "", "", response.QuotaUnits)
 				if imagePriced {
 					record.MediaOutputImages = int64(max(0, response.QuotaUnits))
 				}
-				tokenPricing, tokenPriced := audit.EstimateOfficialCost(pricingModel, usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.ContextInputTokens)
+				tokenPricing, tokenPriced := s.pricing.QuoteText(route.Provider, pricingModel, usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.ContextInputTokens)
 				if successful && imagePriced {
-					record.EstimatedCostInUSDTicks = imagePricing.CostInUSDTicks
-					record.PricingModel = imagePricing.Model
-					record.PricingVersion = audit.OfficialPricingAsOf
+					imagePricing.Apply(&record)
 				} else if tokenPriced {
-					record.EstimatedCostInUSDTicks = tokenPricing.CostInUSDTicks
-					record.PricingModel = tokenPricing.Model
-					record.PricingVersion = audit.OfficialPricingAsOf
+					tokenPricing.Apply(&record)
 				}
 				record.NumSourcesUsed = usage.NumSourcesUsed
 				record.NumServerSideToolsUsed = usage.NumServerSideToolsUsed
