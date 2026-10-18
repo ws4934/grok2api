@@ -25,6 +25,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/searchresult"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/toolemu"
 )
 
 const webResponseTTL = 30 * 24 * time.Hour
@@ -154,7 +155,7 @@ type parsedChat struct {
 	WebSearchTools         int64
 	XSearchTools           int64
 	InputTokens            int64
-	ToolCalls              []parsedToolCall
+	ToolCalls              []toolemu.Call
 	Tools                  []any
 	ToolChoice             any
 	ParallelTools          bool
@@ -441,7 +442,7 @@ func (a *Adapter) handleResponseResource(ctx context.Context, request provider.R
 	return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: jsonHeaders(), Body: io.NopCloser(strings.NewReader(state.ResponseJSON))}, nil
 }
 
-func (a *Adapter) streamOpenAIResponse(ctx context.Context, source io.ReadCloser, lease *infraegress.Lease, credential account.Credential, responseID, model, operation, prompt string, previous *inferencedomain.WebResponseState, tools toolConfiguration, parallelTools bool, options conversation.ResponseOptions) io.ReadCloser {
+func (a *Adapter) streamOpenAIResponse(ctx context.Context, source io.ReadCloser, lease *infraegress.Lease, credential account.Credential, responseID, model, operation, prompt string, previous *inferencedomain.WebResponseState, tools toolemu.Config, parallelTools bool, options conversation.ResponseOptions) io.ReadCloser {
 	reader, writer := io.Pipe()
 	go func() {
 		defer source.Close()
@@ -456,9 +457,9 @@ func (a *Adapter) streamOpenAIResponse(ctx context.Context, source io.ReadCloser
 		}
 		var clientText strings.Builder
 		archivedImages := make(map[string]struct{})
-		var sieve *toolStreamSieve
+		var sieve *toolemu.Sieve
 		if len(tools.Functions) > 0 && tools.Choice != "none" {
-			sieve = newToolStreamSieve(tools.available)
+			sieve = toolemu.NewSieve(tools.Available)
 		}
 		messagesStream := newWebMessagesStream(writer, responseID, model, parsed.InputTokens, options)
 		visiblePhase := webVisibleStreamPhase{}
@@ -477,7 +478,7 @@ func (a *Adapter) streamOpenAIResponse(ctx context.Context, source io.ReadCloser
 			}
 			return writeWebStreamDelta(writer, messagesStream, operation, responseID, model, kind, delta)
 		}
-		writeToolCalls := func(calls []parsedToolCall) error {
+		writeToolCalls := func(calls []toolemu.Call) error {
 			if responsesStream != nil {
 				return responsesStream.ToolCalls(calls)
 			}
@@ -687,18 +688,16 @@ func normalizeOpenAIInput(input openAIRequest, operation string) (normalizedChat
 	for _, message := range messages {
 		typeName := strings.ToLower(strings.TrimSpace(message.Type))
 		if typeName == "function_call" {
-			if !toolNamePattern.MatchString(strings.TrimSpace(message.Name)) {
+			if !toolemu.ValidName(strings.TrimSpace(message.Name)) {
 				return normalizedChatInput{}, errors.New("function_call.name 无效")
 			}
-			arguments := normalizeToolArguments(message.Arguments)
+			arguments := toolemu.NormalizeArguments(message.Arguments)
 			if !json.Valid([]byte(arguments)) {
 				return normalizedChatInput{}, errors.New("function_call.arguments 必须是有效 JSON")
 			}
-			builder.WriteString("[assistant]\n<tool_calls>\n  <tool_call>\n    <tool_name>")
-			builder.WriteString(message.Name)
-			builder.WriteString("</tool_name>\n    <parameters>")
-			builder.WriteString(arguments)
-			builder.WriteString("</parameters>\n  </tool_call>\n</tool_calls>\n\n")
+			builder.WriteString("[assistant]\n")
+			builder.WriteString(toolemu.FormatCalls([]toolemu.Call{{Name: message.Name, Arguments: arguments}}))
+			builder.WriteString("\n\n")
 			continue
 		}
 		if typeName == "function_call_output" {
@@ -1341,15 +1340,15 @@ func webServerToolName(response map[string]any) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
-func applyParsedToolCalls(parsed *parsedChat, configuration toolConfiguration) {
+func applyParsedToolCalls(parsed *parsedChat, configuration toolemu.Config) {
 	if len(configuration.Functions) == 0 || configuration.Choice == "none" {
 		return
 	}
-	result := parseToolCalls(parsed.Text.String(), configuration.available)
+	result := toolemu.Parse(parsed.Text.String(), configuration.Available)
 	if len(result.Calls) == 0 {
 		return
 	}
-	cleaned := removeToolSyntax(parsed.Text.String(), result)
+	cleaned := toolemu.Strip(parsed.Text.String(), result)
 	parsed.resetText(cleaned)
 	parsed.ToolCalls = result.Calls
 }
@@ -1990,7 +1989,7 @@ func webMessagesSearchRequests(parsed parsedChat) int64 {
 	return 1
 }
 
-func chatToolCalls(calls []parsedToolCall) []any {
+func chatToolCalls(calls []toolemu.Call) []any {
 	values := make([]any, 0, len(calls))
 	for _, call := range calls {
 		values = append(values, map[string]any{
@@ -2117,7 +2116,7 @@ func finalizeXAIAnnotations(parsed *parsedChat) {
 	}
 }
 
-func estimateToolCallTokens(calls []parsedToolCall) int64 {
+func estimateToolCallTokens(calls []toolemu.Call) int64 {
 	var total int64
 	for _, call := range calls {
 		total += estimateTokens(call.Name) + estimateTokens(call.Arguments)
@@ -2264,7 +2263,7 @@ func (s *webMessagesStream) writeTextDelta(delta string) error {
 	})
 }
 
-func (s *webMessagesStream) Tools(calls []parsedToolCall) error {
+func (s *webMessagesStream) Tools(calls []toolemu.Call) error {
 	if err := s.Start(); err != nil {
 		return err
 	}
@@ -2423,7 +2422,7 @@ func writeWebStreamDelta(writer io.Writer, stream *webMessagesStream, operation,
 	return writeStreamDelta(writer, operation, responseID, model, kind, delta)
 }
 
-func writeWebStreamToolCalls(writer io.Writer, stream *webMessagesStream, operation, responseID, model string, calls []parsedToolCall) error {
+func writeWebStreamToolCalls(writer io.Writer, stream *webMessagesStream, operation, responseID, model string, calls []toolemu.Call) error {
 	if operation == conversation.OperationMessages {
 		return stream.Tools(calls)
 	}
@@ -2551,7 +2550,7 @@ func writeStreamDelta(writer io.Writer, operation, responseID, model, kind, delt
 	return errors.New("Responses 流式 delta 必须通过统一 output 状态机发送")
 }
 
-func writeStreamToolCalls(writer io.Writer, operation, responseID, model string, calls []parsedToolCall) error {
+func writeStreamToolCalls(writer io.Writer, operation, responseID, model string, calls []toolemu.Call) error {
 	if operation == "chat" {
 		for index, call := range calls {
 			chunk := map[string]any{

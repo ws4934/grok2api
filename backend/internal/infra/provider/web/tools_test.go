@@ -10,62 +10,13 @@ import (
 
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/searchresult"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/toolemu"
 )
 
-func TestParseToolConfigurationSupportsChatAndResponsesSchemas(t *testing.T) {
-	chatTools := json.RawMessage(`[{"type":"function","function":{"name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}}]`)
-	chatChoice := json.RawMessage(`{"type":"function","function":{"name":"get_weather"}}`)
-	chat, err := parseToolConfiguration(chatTools, chatChoice)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(chat.Functions) != 1 || chat.Functions[0].Name != "get_weather" || chat.ForcedName != "get_weather" || chat.Choice != "required" {
-		t.Fatalf("chat tool config = %#v", chat)
-	}
-
-	responsesTools := json.RawMessage(`[{"type":"function","name":"lookup","parameters":{"type":"object"}},{"type":"web_search_preview"}]`)
-	responses, err := parseToolConfiguration(responsesTools, json.RawMessage(`"auto"`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(responses.Functions) != 1 || responses.Functions[0].Name != "lookup" || len(responses.ResponseTools) != 2 {
-		t.Fatalf("responses tool config = %#v", responses)
-	}
-}
-
-func TestParseToolConfigurationAllowsRequiredHostedWebSearch(t *testing.T) {
-	configuration, err := parseToolConfiguration(
-		json.RawMessage(`[{"type":"web_search","max_uses":8}]`),
-		json.RawMessage(`"required"`),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if configuration.Choice != "required" || len(configuration.Functions) != 0 || len(configuration.ResponseTools) != 1 {
-		t.Fatalf("configuration = %#v", configuration)
-	}
-}
-
-func TestInjectToolPromptDoesNotForceClientFunctionWhenHostedSearchIsRequired(t *testing.T) {
-	configuration, err := parseToolConfiguration(
-		json.RawMessage(`[
-			{"type":"web_search"},
-			{"type":"function","name":"lookup","description":"Look up local data","parameters":{"type":"object"}}
-		]`),
-		json.RawMessage(`"required"`),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	prompt := injectToolPrompt("find the latest release", configuration)
-	if !strings.Contains(prompt, "Tool: lookup") {
-		t.Fatalf("client function definition missing from prompt: %s", prompt)
-	}
-	if strings.Contains(prompt, "You MUST call at least one available tool") {
-		t.Fatalf("hosted-search required incorrectly forced a client function: %s", prompt)
-	}
-	if !strings.Contains(prompt, "Call a tool when it is clearly needed") {
-		t.Fatalf("mixed hosted/client tool guidance is not optional: %s", prompt)
+func TestParseToolConfigurationRejectsToolsGrokWebCannotRun(t *testing.T) {
+	_, err := parseToolConfiguration(json.RawMessage(`[{"type":"code_interpreter"}]`), nil)
+	if err == nil || !strings.Contains(err.Error(), "Grok Web 暂不支持 tools.type") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -128,7 +79,7 @@ func TestNormalizeOpenAIInputReconstructsToolHistory(t *testing.T) {
 
 func TestParseToolCallsBuildsStandardResults(t *testing.T) {
 	available := map[string]struct{}{"lookup": {}}
-	parsedResult := parseToolCalls(`prefix<tool_calls><tool_call><tool_name>lookup</tool_name><parameters>{"query":"Grok"}</parameters></tool_call></tool_calls>`, available)
+	parsedResult := toolemu.Parse(`prefix<tool_calls><tool_call><tool_name>lookup</tool_name><parameters>{"query":"Grok"}</parameters></tool_call></tool_calls>`, available)
 	if len(parsedResult.Calls) != 1 || parsedResult.Calls[0].Name != "lookup" || parsedResult.Calls[0].Arguments != `{"query":"Grok"}` {
 		t.Fatalf("tool parse = %#v", parsedResult)
 	}
@@ -406,26 +357,6 @@ func webSearchResponseOptions(t *testing.T) conversation.ResponseOptions {
 		t.Fatal(err)
 	}
 	return options
-}
-
-func TestToolStreamSieveHandlesSplitXML(t *testing.T) {
-	sieve := newToolStreamSieve(map[string]struct{}{"lookup": {}})
-	first := sieve.Feed("before <tool_ca")
-	if first.SafeText != "before " || first.Complete {
-		t.Fatalf("first = %#v", first)
-	}
-	second := sieve.Feed(`lls><tool_call><tool_name>lookup</tool_name><parameters>{"q":"x"}</parameters></tool_call></tool_calls>`)
-	if !second.Complete || len(second.Calls) != 1 || second.Calls[0].Arguments != `{"q":"x"}` || strings.Contains(second.SafeText, "tool_calls") {
-		t.Fatalf("second = %#v", second)
-	}
-}
-
-func TestToolStreamSievePreservesInvalidSyntaxAndTrailingText(t *testing.T) {
-	sieve := newToolStreamSieve(map[string]struct{}{"lookup": {}})
-	result := sieve.Feed(`<tool_calls><tool_call><tool_name>unknown</tool_name><parameters>{}</parameters></tool_call></tool_calls> trailing`)
-	if !result.Complete || len(result.Calls) != 0 || !strings.HasSuffix(result.Raw, " trailing") {
-		t.Fatalf("result = %#v", result)
-	}
 }
 
 func TestSearchSourcesAndServerToolsAreDeduplicated(t *testing.T) {

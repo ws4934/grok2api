@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/toolemu"
 )
 
 type responsesReasoningStreamItem struct {
@@ -255,7 +257,7 @@ func (s *webResponsesStream) HostedSearch(call hostedSearchCall) error {
 	return s.completeOutput(index, completed)
 }
 
-func (s *webResponsesStream) ToolCalls(calls []parsedToolCall) error {
+func (s *webResponsesStream) ToolCalls(calls []toolemu.Call) error {
 	if err := s.closeReasoning(); err != nil {
 		return err
 	}

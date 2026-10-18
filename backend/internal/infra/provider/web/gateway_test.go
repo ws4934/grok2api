@@ -10,6 +10,7 @@ import (
 	inferencedomain "github.com/chenyme/grok2api/backend/internal/domain/inference"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/toolemu"
 )
 
 func TestGatewayEndpointAndHeadersMatchBrowserProtocol(t *testing.T) {
@@ -459,11 +460,11 @@ func TestResponsesStreamUsesOneStableOutputSequence(t *testing.T) {
 	if err := stream.Delta("text", "hello"); err != nil {
 		t.Fatal(err)
 	}
-	call := parsedToolCall{ID: "call_1", Name: "lookup", Arguments: `{}`}
-	if err := stream.ToolCalls([]parsedToolCall{call}); err != nil {
+	call := toolemu.Call{ID: "call_1", Name: "lookup", Arguments: `{}`}
+	if err := stream.ToolCalls([]toolemu.Call{call}); err != nil {
 		t.Fatal(err)
 	}
-	parsed := parsedChat{ToolCalls: []parsedToolCall{call}}
+	parsed := parsedChat{ToolCalls: []toolemu.Call{call}}
 	parsed.Reasoning.WriteString("thinking")
 	parsed.Text.WriteString("hello")
 	if err := stream.Finish(&parsed); err != nil {
