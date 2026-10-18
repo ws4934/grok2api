@@ -125,6 +125,11 @@ data: [DONE]
 
 // chatUpstream serves replyStream and records each conversation payload.
 func chatUpstream(t *testing.T, payloads chan<- map[string]any) *httptest.Server {
+	return answerUpstream(t, payloads, replyStream)
+}
+
+// answerUpstream serves stream as every conversation reply.
+func answerUpstream(t *testing.T, payloads chan<- map[string]any, stream string) *httptest.Server {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if serveWebBasics(w, r) {
 			return
@@ -140,7 +145,7 @@ func chatUpstream(t *testing.T, payloads chan<- map[string]any) *httptest.Server
 			payloads <- payload
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte(replyStream))
+		_, _ = w.Write([]byte(stream))
 	}))
 	t.Cleanup(server.Close)
 	return server
@@ -304,11 +309,11 @@ func TestOutputLimitAndInputEstimate(t *testing.T) {
 	}
 }
 
-func TestToolsDegradeToTextWithNotice(t *testing.T) {
+func TestToolsThatCannotRunDegradeToTextWithNotice(t *testing.T) {
 	payloads := make(chan map[string]any, 1)
 	a, _ := newTestAdapter(t, chatUpstream(t, payloads))
 	credential := testCredential(t, a, credentials{AccessToken: "AT"})
-	body := `{"model":"gpt-5","tools":[{"type":"function","name":"lookup"}],"input":[
+	body := `{"model":"gpt-5","tools":[{"type":"code_interpreter","container":{"type":"auto"}}],"input":[
 		{"role":"user","content":"find it"},
 		{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"},
 		{"type":"function_call_output","call_id":"c1","output":"found"},

@@ -15,12 +15,14 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/toolemu"
 	"github.com/google/uuid"
 	"github.com/tiktoken-go/tokenizer"
 )
 
-// toolsUnavailable is prepended when a client declares tools: they cannot run
-// on ChatGPT Web, so the model must answer in plain text.
+// toolsUnavailable is prepended when the client declares tools the model
+// cannot call (non-function tools, or functions with tool_choice none), so it
+// answers in plain text.
 const toolsUnavailable = "Tools are unavailable in this session: you cannot call functions, run commands or read files. Answer directly in plain text and never claim to have used a tool."
 
 const defaultOutputTokenLimit = 16384
@@ -35,11 +37,17 @@ type turnRequest struct {
 	Tools             []json.RawMessage
 	ToolChoice        json.RawMessage
 	ParallelToolCalls bool
+	// Emulated holds the function tools, called through the toolemu prompt.
+	Emulated toolemu.Config
+	// Search asks ChatGPT to search: the client forces its web_search tool.
+	Search bool
 }
 
 type turnMessage struct {
 	Role  string
 	Parts []turnPart
+	// calls is earlier function calls, rendered in the toolemu convention.
+	calls []toolemu.Call
 }
 
 // turnPart is text, or an image given as a data URI or https URL.
@@ -72,6 +80,8 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	if err != nil {
 		return errorResponse(operation, http.StatusBadRequest, "invalid_request", err.Error()), nil
 	}
+	// Messages maps tool_choice web_search to "required" even beside functions.
+	in.Search = in.Search || options.AnthropicWebSearchRequired
 	if request.NormalizedMetadata != nil {
 		request.NormalizedMetadata.ReasoningEffort = in.ReasoningEffort
 	}
@@ -171,8 +181,9 @@ func (b *streamBody) Close() error {
 	return b.PipeReader.Close()
 }
 
-// converse runs the reply on the account's egress and feeds the visible text
-// and reasoning summary to the turn under the output limit.
+// converse runs the reply on the account's egress and feeds the reasoning
+// summary, the visible text and the emulated tool calls to the turn under
+// the output limit.
 func (a *Adapter) converse(ctx context.Context, credential account.Credential, c credentials, model string, in turnRequest, t *turn, m *meter) error {
 	_, err := a.attempt(ctx, credential, nil, func(ctx context.Context) error {
 		w, err := wire(ctx, c)
@@ -183,21 +194,40 @@ func (a *Adapter) converse(ctx context.Context, credential account.Credential, c
 		if err != nil {
 			return err
 		}
-		// Each attempt rewrites the Web UI markup of its own answer.
-		ui := &richUIFilter{}
+		// Each attempt filters its own answer: tool calls are sifted out first,
+		// so their arguments keep any markup, then Web UI markup is rewritten
+		// and citation markers become Markdown links.
+		var sieve *toolemu.Sieve
+		if in.Emulated.Enabled() {
+			sieve = toolemu.NewSieve(in.Emulated.Available)
+		}
+		ui, cites := &richUIFilter{}, &citer{}
 		err = NewOpenAIChat(a.image).Stream(ctx, w, request, func(event OpenAIChatEvent) error {
 			reasoning, err := m.take(event.Thinking, &m.reasoning)
 			if err != nil {
 				return err
 			}
-			visible := ui.Feed(event.Text)
-			if event.Done {
-				visible += ui.Flush()
-			}
-			text, err := m.take(visible, &m.text)
+			// The limit and usage count everything ChatGPT wrote, tool markup included.
+			text, err := m.take(event.Text, &m.text)
 			if err != nil {
 				return err
 			}
+			// A cut reply drops what the filters hold instead of leaking partial markup.
+			flush := event.Done && !m.truncated
+			if sieve != nil {
+				var calls []toolemu.Call
+				text, calls = sift(sieve, text, flush)
+				t.calls = append(t.calls, calls...)
+			}
+			text = ui.Feed(text)
+			if flush {
+				text += ui.Flush()
+			}
+			text, cited := cites.Feed(text, event.Search)
+			if flush {
+				text += cites.Flush()
+			}
+			t.search, t.cited = event.Search, append(t.cited, cited...)
 			if err := t.add(true, reasoning); err != nil {
 				return err
 			}
@@ -217,10 +247,33 @@ func (a *Adapter) converse(ctx context.Context, credential account.Credential, c
 	return err
 }
 
+// sift moves complete tool call blocks out of text. Blocks with no declared
+// function stay as text, like any other answer text.
+func sift(sieve *toolemu.Sieve, text string, flush bool) (string, []toolemu.Call) {
+	var out strings.Builder
+	var calls []toolemu.Call
+	for result := sieve.Feed(text); ; result = sieve.Feed("") {
+		out.WriteString(result.SafeText)
+		calls = append(calls, result.Calls...)
+		if !result.Complete {
+			break
+		}
+		if len(result.Calls) == 0 {
+			out.WriteString(result.Raw)
+		}
+	}
+	if flush {
+		result := sieve.Flush()
+		out.WriteString(result.SafeText)
+		calls = append(calls, result.Calls...)
+	}
+	return out.String(), calls
+}
+
 // wire maps the turn to the Web conversation request; images are loaded here
 // because a URL input is fetched through the request's egress.
 func (in turnRequest) wire(model string, load func(string) (OpenAIImageInput, error)) (wireChatRequest, []OpenAIChatImage, error) {
-	request := wireChatRequest{Model: model, ReasoningEffort: in.ReasoningEffort}
+	request := wireChatRequest{Model: model, ReasoningEffort: in.ReasoningEffort, Search: in.Search}
 	var images []OpenAIChatImage
 	for mi, message := range in.Messages {
 		parts := []any{}
@@ -269,8 +322,13 @@ func parseTurn(body []byte) (turnRequest, error) {
 	if set("parallel_tool_calls") && json.Unmarshal(raw["parallel_tool_calls"], &in.ParallelToolCalls) != nil {
 		return in, errors.New("parallel_tool_calls must be boolean")
 	}
-	if len(in.Tools) > 0 {
-		in.Messages = append(in.Messages, textMessage("system", toolsUnavailable))
+	if in.Emulated, err = toolemu.ParseConfig(raw["tools"], raw["tool_choice"]); err != nil {
+		return in, err
+	}
+	tools := in.Emulated
+	in.Search = tools.ForcedWebSearch || (tools.HostedWebSearch && tools.Choice == "required" && len(tools.Functions) == 0)
+	if notice := toolNotice(tools, in.ParallelToolCalls); notice != "" {
+		in.Messages = append(in.Messages, textMessage("system", notice))
 	}
 	if set("instructions") {
 		var instructions string
@@ -292,7 +350,7 @@ func parseTurn(body []byte) (turnRequest, error) {
 	}
 	images := 0
 	for _, item := range items {
-		message, ok, err := decodeItem(item)
+		message, ok, err := decodeItem(item, tools.Enabled())
 		if err != nil {
 			return in, err
 		}
@@ -302,6 +360,14 @@ func parseTurn(body []byte) (turnRequest, error) {
 					images++
 				}
 			}
+			// Calls of one turn share a <tool_calls> block, as the model writes them.
+			if last := len(in.Messages) - 1; message.calls != nil && last >= 0 && in.Messages[last].calls != nil {
+				message.calls = append(in.Messages[last].calls, message.calls...)
+				in.Messages = in.Messages[:last]
+			}
+			if message.calls != nil {
+				message.Parts = []turnPart{{Text: toolemu.FormatCalls(message.calls)}}
+			}
 			in.Messages = append(in.Messages, message)
 		}
 	}
@@ -309,6 +375,26 @@ func parseTurn(body []byte) (turnRequest, error) {
 		return in, errors.New("invalid message or image count")
 	}
 	return in, nil
+}
+
+// toolNotice is the system text for the declared tools: the toolemu call
+// convention when functions may be called, toolsUnavailable when a declared
+// tool cannot run, nothing for web search alone (ChatGPT runs it).
+func toolNotice(tools toolemu.Config, parallel bool) string {
+	if !tools.Enabled() {
+		if len(tools.Functions) > 0 || len(tools.Unsupported) > 0 {
+			return toolsUnavailable
+		}
+		return ""
+	}
+	prompt := toolemu.Prompt(tools)
+	if !parallel {
+		prompt += "\nCall at most one tool per reply."
+	}
+	if len(tools.Unsupported) > 0 {
+		prompt += "\nOnly the tools listed above can be called; any other tool is unavailable in this session."
+	}
+	return prompt
 }
 
 // reasoningEffort reads thinking_effort, then reasoning_effort, then
@@ -345,9 +431,10 @@ func reasoningEffort(raw map[string]json.RawMessage) (string, error) {
 	return "", fmt.Errorf("unsupported reasoning effort: %s", s)
 }
 
-// decodeItem converts one Responses input item. Tool history is flattened to
-// text because tools never run here; other non-message items are dropped.
-func decodeItem(raw json.RawMessage) (turnMessage, bool, error) {
+// decodeItem converts one Responses input item. Function calls stay calls
+// when emulate is set; other tool history is flattened to text and other
+// non-message items are dropped.
+func decodeItem(raw json.RawMessage, emulate bool) (turnMessage, bool, error) {
 	var v struct {
 		Type      string          `json:"type"`
 		Role      string          `json:"role"`
@@ -363,6 +450,9 @@ func decodeItem(raw json.RawMessage) (turnMessage, bool, error) {
 	}
 	switch v.Type {
 	case "function_call", "custom_tool_call":
+		if emulate && v.Type == "function_call" {
+			return turnMessage{Role: "assistant", calls: []toolemu.Call{{ID: v.CallID, Name: v.Name, Arguments: v.Arguments}}}, true, nil
+		}
 		return textMessage("assistant", fmt.Sprintf("Tool call %s (%s): %s", v.Name, v.CallID, v.Arguments+v.Input)), true, nil
 	case "function_call_output", "custom_tool_call_output":
 		parts, err := decodeContent(v.Output)
@@ -552,6 +642,12 @@ type turn struct {
 	held      string
 	output    []any
 	status    string
+	// calls are the emulated function calls, emitted after the text.
+	calls []toolemu.Call
+	// search and cited come from ChatGPT's own web search.
+	search    *chatSearch
+	cited     []citation
+	webSearch map[string]any
 }
 
 // block is one output item: a reasoning summary or an assistant message.
@@ -632,7 +728,12 @@ func (t *turn) open(reasoning bool) error {
 	if err := t.begin(); err != nil {
 		return err
 	}
-	b := &block{index: len(t.blocks), reasoning: reasoning}
+	if !reasoning {
+		if err := t.searched(); err != nil {
+			return err
+		}
+	}
+	b := &block{index: len(t.output), reasoning: reasoning}
 	t.blocks = append(t.blocks, b)
 	t.current = b
 	if reasoning {
@@ -670,9 +771,15 @@ func (t *turn) closeCurrent() error {
 		}
 		return t.emit("response.output_item.done", map[string]any{"output_index": b.index, "item": item})
 	}
-	part := map[string]any{"type": "output_text", "text": b.text, "annotations": []any{}}
+	annotations := annotate(b.text, t.cited)
+	part := map[string]any{"type": "output_text", "text": b.text, "annotations": annotations}
 	item := map[string]any{"id": b.id, "type": "message", "status": status, "role": "assistant", "content": []any{part}}
 	t.output = append(t.output, item)
+	for i, annotation := range annotations {
+		if err := t.emit("response.output_text.annotation.added", map[string]any{"item_id": b.id, "output_index": b.index, "content_index": 0, "annotation_index": i, "annotation": annotation}); err != nil {
+			return err
+		}
+	}
 	if err := t.emit("response.output_text.done", map[string]any{"item_id": b.id, "output_index": b.index, "content_index": 0, "text": b.text, "logprobs": []any{}}); err != nil {
 		return err
 	}
@@ -682,8 +789,50 @@ func (t *turn) closeCurrent() error {
 	return t.emit("response.output_item.done", map[string]any{"output_index": b.index, "item": item})
 }
 
+// searched emits ChatGPT's web search once as a completed web_search_call:
+// before the answer when the search is known by then, else after it.
+func (t *turn) searched() error {
+	if t.webSearch != nil || !t.search.used() {
+		return nil
+	}
+	if err := t.begin(); err != nil {
+		return err
+	}
+	id, index := "ws_"+strings.ReplaceAll(uuid.NewString(), "-", ""), len(t.output)
+	t.webSearch = map[string]any{"id": id, "type": "web_search_call", "status": "completed", "action": t.search.action()}
+	t.output = append(t.output, t.webSearch)
+	// The added item already carries the action so Messages clients see the query.
+	if err := t.emit("response.output_item.added", map[string]any{"output_index": index, "item": map[string]any{"id": id, "type": "web_search_call", "status": "in_progress", "action": t.search.action()}}); err != nil {
+		return err
+	}
+	for _, stage := range []string{"in_progress", "searching", "completed"} {
+		if err := t.emit("response.web_search_call."+stage, map[string]any{"item_id": id, "output_index": index}); err != nil {
+			return err
+		}
+	}
+	return t.emit("response.output_item.done", map[string]any{"output_index": index, "item": t.webSearch})
+}
+
+// call emits one emulated function call as a completed function_call item.
+func (t *turn) call(call toolemu.Call) error {
+	id, index := "fc_"+strings.ReplaceAll(uuid.NewString(), "-", ""), len(t.output)
+	item := map[string]any{"id": id, "type": "function_call", "status": "completed", "call_id": call.ID, "name": call.Name, "arguments": call.Arguments}
+	t.output = append(t.output, item)
+	if err := t.emit("response.output_item.added", map[string]any{"output_index": index, "item": map[string]any{"id": id, "type": "function_call", "status": "in_progress", "call_id": call.ID, "name": call.Name, "arguments": ""}}); err != nil {
+		return err
+	}
+	if err := t.emit("response.function_call_arguments.delta", map[string]any{"item_id": id, "output_index": index, "delta": call.Arguments}); err != nil {
+		return err
+	}
+	if err := t.emit("response.function_call_arguments.done", map[string]any{"item_id": id, "output_index": index, "arguments": call.Arguments}); err != nil {
+		return err
+	}
+	return t.emit("response.output_item.done", map[string]any{"output_index": index, "item": item})
+}
+
 // finish closes the open item, emits held reasoning, makes sure the output
-// has a message (even an empty one) and returns the final object.
+// has a message (even an empty one) unless it calls functions, emits the
+// search and the calls and returns the final object.
 func (t *turn) finish(usage map[string]any, truncated bool) (map[string]any, error) {
 	t.status = "completed"
 	if truncated {
@@ -705,13 +854,29 @@ func (t *turn) finish(usage map[string]any, truncated bool) (map[string]any, err
 		if err := t.add(true, held); err != nil {
 			return nil, err
 		}
-	} else if !hasText {
+	} else if !hasText && len(t.calls) == 0 {
 		if err := t.open(false); err != nil {
 			return nil, err
 		}
 	}
 	if err := t.closeCurrent(); err != nil {
 		return nil, err
+	}
+	if err := t.searched(); err != nil {
+		return nil, err
+	}
+	if t.webSearch != nil {
+		// The final object carries every source seen, also those after the item.
+		t.webSearch["action"] = t.search.action()
+	}
+	calls := t.calls
+	if !t.request.ParallelToolCalls && len(calls) > 1 {
+		calls = calls[:1]
+	}
+	for _, call := range calls {
+		if err := t.call(call); err != nil {
+			return nil, err
+		}
 	}
 	final := t.object(t.status)
 	if truncated {

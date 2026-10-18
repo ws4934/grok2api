@@ -26,6 +26,8 @@ type OpenAIChatEvent struct {
 	Text     string
 	Thinking string
 	Done     bool
+	// Search is the web search seen so far; valid during the callback only.
+	Search *chatSearch
 }
 
 // OpenAIChatImage binds decoded client image bytes to their original message
@@ -78,8 +80,12 @@ func (c *OpenAIChat) Stream(ctx context.Context, account wireAccount, request wi
 	return scanOpenAIChat(response.Body, onEvent, func(v any) { notifyUpstreamModel(ctx, v) })
 }
 
-func scanOpenAIChat(reader io.Reader, onEvent func(OpenAIChatEvent) error, observers ...func(any)) error {
+func scanOpenAIChat(reader io.Reader, emit func(OpenAIChatEvent) error, observers ...func(any)) error {
 	state := openAIChatState{}
+	onEvent := func(event OpenAIChatEvent) error {
+		event.Search = &state.search
+		return emit(event)
+	}
 	ended, hasText := false, false
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), 8<<20)
@@ -149,6 +155,7 @@ func openAIChatPayloadWithImages(request wireChatRequest, images []OpenAIChatIma
 	}
 	payload := openAIChatPayload(request)
 	messages := make([]any, 0, len(request.Messages))
+	var lastMetadata map[string]any
 	for messageIndex, message := range request.Messages {
 		parts := []any{}
 		attachments := []any{}
@@ -192,6 +199,10 @@ func openAIChatPayloadWithImages(request wireChatRequest, images []OpenAIChatIma
 			role = "system"
 		}
 		messages = append(messages, map[string]any{"id": firstUUID(), "author": map[string]any{"role": role}, "create_time": float64(time.Now().UnixNano()) / 1e9, "content": map[string]any{"content_type": contentType, "parts": parts}, "metadata": metadata})
+		lastMetadata = metadata
+	}
+	if request.Search && lastMetadata != nil {
+		lastMetadata["system_hints"] = []any{"search"}
 	}
 	payload["messages"] = messages
 	return payload, nil
@@ -207,6 +218,7 @@ type openAIChatState struct {
 	// message is streamed.
 	fragments     map[string]string
 	fragmentOrder []string
+	search        chatSearch
 }
 
 // displayableAssistantMessage reports whether a message is the user-visible
@@ -301,6 +313,18 @@ func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
 				Body:    stringValue(rawError["message"]),
 			}
 		}
+		switch stringValue(object["type"]) {
+		case "server_ste_metadata":
+			metadata, _ := object["metadata"].(map[string]any)
+			if count, _ := metadata["search_tool_call_count"].(float64); count > 0 {
+				s.search.count = int(count)
+			}
+		case "url_moderation":
+			result, _ := object["url_moderation_result"].(map[string]any)
+			if safe, ok := result["is_safe"].(bool); ok && !safe {
+				s.search.block(stringValue(result["full_url"]))
+			}
+		}
 		if path, ok := object["p"].(string); ok {
 			s.path = path
 		}
@@ -331,6 +355,7 @@ func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
 			}
 			s.rememberFragment(message)
 			s.hidden = !displayableAssistantMessage(message)
+			s.search.note(message, !s.hidden)
 			if message["status"] == "finished_successfully" && !s.hidden {
 				event.Done = true
 			}
@@ -392,6 +417,11 @@ func openAIChatPayload(request wireChatRequest) map[string]any {
 	}
 	if request.ReasoningEffort != "" && request.ReasoningEffort != "none" {
 		payload["thinking_effort"] = request.ReasoningEffort
+	}
+	// The Web composer's search tool sends the "search" hint, as its image
+	// tool sends "picture_v2" (see OpenAIImage).
+	if request.Search {
+		payload["system_hints"] = []any{"search"}
 	}
 	return payload
 }

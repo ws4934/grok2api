@@ -30,6 +30,8 @@ type wireChatRequest struct {
 	Model           string
 	Messages        []wireMessage
 	ReasoningEffort string
+	// Search asks ChatGPT to search the web for this reply.
+	Search bool
 }
 type upstreamError struct {
 	// URL is scheme, host and path of the failed request, without the query.
