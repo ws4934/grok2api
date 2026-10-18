@@ -130,7 +130,7 @@ export function GalleryPage() {
         description={t("media.images.description")}
         actions={(
           <>
-            <Tabs value={kind} onValueChange={(value) => { setKind(value === "video" ? "video" : "image"); setPage(1); }}>
+            <Tabs value={kind} onValueChange={(value) => { setKind(value === "video" ? "video" : "image"); setPage(1); setSelected(new Set()); }}>
               <TabsList aria-label={t("media.kindLabel")}>
                 <TabsTrigger value="image" className="font-normal">{t("media.kind.image")}</TabsTrigger>
                 <TabsTrigger value="video" className="font-normal">{t("media.kind.video")}</TabsTrigger>
