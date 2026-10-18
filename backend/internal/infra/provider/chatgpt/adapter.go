@@ -277,12 +277,12 @@ func (a *Adapter) Classify(err error) channel.Failure {
 	}
 	var t *transportError
 	if errors.As(err, &t) {
-		return channel.Failure{Kind: channel.FailureNetwork, Code: "transport", Message: t.Error()}
+		return channel.Failure{Kind: channel.FailureNetwork, Code: channel.FailureCodeTransport, Message: t.Error()}
 	}
 	var u *upstreamError
 	if errors.As(err, &u) {
 		if u.Challenge {
-			return channel.Failure{Kind: channel.FailureNetwork, Code: "cloudflare_challenge", Message: "Cloudflare challenge on the selected egress", Unsent: true}
+			return channel.Failure{Kind: channel.FailureNetwork, Code: channel.FailureCodeChallenge, Message: "Cloudflare challenge on the selected egress", Unsent: true}
 		}
 		kind := channel.FailureNetwork
 		if u.Status == 401 {

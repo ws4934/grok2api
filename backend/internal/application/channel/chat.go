@@ -245,12 +245,6 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 	if e != nil {
 		return result, e
 	}
-	ctx, releaseEnvironment, e := s.withEnvironment(ctx, route.Provider, selected.ID)
-	if e != nil {
-		return result, e
-	}
-	defer releaseEnvironment()
-	ctx = domain.WithQuotaObserver(ctx, func(feature string) error { return s.images.jobs.MarkChannelQuotaSent(ctx, event, feature) })
 	started := time.Now()
 	// Deltas are counted on their own, so a long stream costs O(n) tokenization.
 	// Per-delta counts never undercount the joined text, which keeps the local
@@ -273,7 +267,7 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 		used += n
 		return part, e
 	}
-	runErr := adapter.Chat(ctx, credentials, r, func(ev domain.ChatEvent) error {
+	onEvent := func(ev domain.ChatEvent) error {
 		if ev.Done && ev.Text == "" && ev.Reasoning == "" {
 			return nil
 		}
@@ -296,9 +290,33 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 			return errOutputLimit
 		}
 		return nil
-	})
-	if errors.Is(runErr, errOutputLimit) {
-		runErr = nil
+	}
+	// An egress failure before anything reached upstream (no quota marked as
+	// sent, no output) is retried once; the failed node is cooling by then.
+	var env domain.Environment
+	var runErr error
+	for attempt := 1; ; attempt++ {
+		callCtx, releaseEnvironment, e := s.withEnvironment(ctx, route.Provider, selected.ID)
+		if e != nil {
+			return result, e
+		}
+		env = domain.EnvironmentFrom(callCtx)
+		sent := false
+		observed := callCtx
+		callCtx = domain.WithQuotaObserver(callCtx, func(feature string) error {
+			sent = true
+			return s.images.jobs.MarkChannelQuotaSent(observed, event, feature)
+		})
+		runErr = adapter.Chat(callCtx, credentials, r, onEvent)
+		if errors.Is(runErr, errOutputLimit) {
+			runErr = nil
+		}
+		egressFailed := egressOutcome(callCtx, m, runErr)
+		releaseEnvironment()
+		if attempt == 1 && egressFailed && !sent && result.Text == "" && result.Reasoning == "" && ctx.Err() == nil {
+			continue
+		}
+		break
 	}
 	textTokens, e := s.count(result.Text)
 	if e != nil {
@@ -319,7 +337,6 @@ func (s *Service) Chat(ctx context.Context, key clientkey.Key, route model.Route
 	}
 	id := selected.ID
 	record := auditdomain.Record{EventID: event, RequestID: event, ClientKeyID: key.ID, ClientKeyName: key.Name, ModelRouteID: route.ID, ModelPublicID: route.PublicID, ModelUpstreamModel: route.UpstreamModel, Provider: string(route.Provider), Operation: auditdomain.Operation(route.Capability), UsageSource: auditdomain.UsageSourceEstimated, AccountID: &id, AccountName: selected.Name, StatusCode: status, Streaming: stream, InputTokens: result.InputTokens, OutputTokens: result.OutputTokens, TotalTokens: result.InputTokens + result.OutputTokens, EstimatedCostInUSDTicks: amount, PricingModel: route.UpstreamModel, PricingVersion: fmt.Sprintf("c%d:o2m1", price.Version), DurationMS: time.Since(started).Milliseconds(), CreatedAt: time.Now().UTC()}
-	env := domain.EnvironmentFrom(ctx)
 	record.EgressScope = string(route.Provider)
 	record.EgressMode = auditdomain.EgressMode("direct")
 	if env.ProxyURL != "" {

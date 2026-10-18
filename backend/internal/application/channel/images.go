@@ -476,15 +476,42 @@ func (s *Service) runImageItem(parent context.Context, job domain.ImageJob, item
 		_ = complete(nil, "failed", "account credential unavailable", nil)
 		return
 	}
-	ctx, releaseEnvironment, e := s.withEnvironment(ctx, job.Provider, item.AccountID)
-	if e != nil {
+	base := ctx
+	releaseEnvironment := func() {}
+	defer func() { releaseEnvironment() }()
+	// Quota marks since the last egress switch. An upload is reusable only once
+	// its file reference is in the checkpoint; any other mark means the request
+	// may have reached upstream and must not be repeated.
+	sent, uploadsMarked, uploadsKept := false, 0, len(item.Checkpoint.Uploads)
+	enter := func() error {
+		releaseEnvironment()
+		envCtx, release, e := s.withEnvironment(base, job.Provider, item.AccountID)
+		if e != nil {
+			releaseEnvironment = func() {}
+			return e
+		}
+		releaseEnvironment = release
+		sent, uploadsMarked, uploadsKept = false, 0, len(item.Checkpoint.Uploads)
+		ctx = domain.WithQuotaObserver(envCtx, func(feature string) error {
+			if feature == "file_upload" {
+				uploadsMarked++
+			} else {
+				sent = true
+			}
+			return s.images.jobs.MarkChannelQuotaSent(envCtx, item.ID, feature)
+		})
+		ctx = domain.WithStageObserver(ctx, func(stage string) error {
+			return s.images.jobs.SaveImageCheckpoint(envCtx, item, item.Checkpoint, stage)
+		})
+		return nil
+	}
+	if enter() != nil {
 		return
 	}
-	defer releaseEnvironment()
-	ctx = domain.WithQuotaObserver(ctx, func(feature string) error { return s.images.jobs.MarkChannelQuotaSent(ctx, item.ID, feature) })
-	ctx = domain.WithStageObserver(ctx, func(stage string) error { return s.images.jobs.SaveImageCheckpoint(ctx, item, item.Checkpoint, stage) })
 	cp := item.Checkpoint
-	if !item.Submitted {
+	// One immediate retry on another egress when the failure belongs to the egress
+	// and generation was not submitted; stored uploads are reused, not resent.
+	for attempt := 1; !item.Submitted; attempt++ {
 		if policy, ok := m.(domain.QuotaPolicy); ok {
 			if e := s.images.jobs.ReserveChannelQuota(ctx, item.AccountID, item.ID, policy.ImageQuota(job.Request)); e != nil {
 				_ = complete(nil, "failed", "capability quota unavailable", nil)
@@ -513,6 +540,14 @@ func (s *Service) runImageItem(parent context.Context, job domain.ImageJob, item
 			item.Checkpoint = checkpoint
 			return nil
 		})
+		egressFailed := egressOutcome(ctx, m, e)
+		reusable := !sent && uploadsMarked == len(item.Checkpoint.Uploads)-uploadsKept
+		if e != nil && attempt == 1 && egressFailed && !item.Submitted && reusable && base.Err() == nil {
+			if enter() != nil {
+				return
+			}
+			continue
+		}
 		if e != nil {
 			if item.Submitted && item.Checkpoint.ConversationID == "" {
 				if classifier, ok := m.(domain.FailureClassifier); ok && classifier.Classify(e).Unsent {
@@ -528,15 +563,18 @@ func (s *Service) runImageItem(parent context.Context, job domain.ImageJob, item
 			}
 			return
 		}
+		break
 	}
 	cp, e = adapter.PollImage(ctx, credentials, cp)
 	if e != nil {
+		egressOutcome(ctx, m, e)
 		return
 	}
 	if e = s.images.jobs.SaveImageCheckpoint(ctx, item, cp, "downloading"); e != nil {
 		return
 	}
 	blobs, e := adapter.FetchImage(ctx, credentials, cp)
+	egressOutcome(ctx, m, e)
 	if e != nil {
 		return
 	}

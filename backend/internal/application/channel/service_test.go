@@ -116,7 +116,9 @@ type fixture struct {
 	account domain.Account
 }
 
-func newFixture(t *testing.T) fixture {
+// newFixture builds a service around fixtureModule; wrap lets a test register a
+// module that decorates it (for example with a FailureClassifier).
+func newFixture(t *testing.T, wrap ...func(*fixtureModule) domain.Module) fixture {
 	t.Helper()
 	ctx := context.Background()
 	db, e := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "channel.db"))
@@ -132,7 +134,11 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal(e)
 	}
 	m := &fixtureModule{chatText: "你好 world"}
-	registry, e := domain.NewRegistry(m)
+	var module domain.Module = m
+	if len(wrap) > 0 {
+		module = wrap[0](m)
+	}
+	registry, e := domain.NewRegistry(module)
 	if e != nil {
 		t.Fatal(e)
 	}

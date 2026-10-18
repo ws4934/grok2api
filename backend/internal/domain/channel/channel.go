@@ -218,6 +218,13 @@ const (
 	FailureUncertain FailureKind = "uncertain"
 )
 
+// Failure codes that describe the egress rather than the account or request.
+// The gateway retries them on another egress before anything reached upstream.
+const (
+	FailureCodeTransport = "transport"
+	FailureCodeChallenge = "cloudflare_challenge"
+)
+
 type Failure struct {
 	Kind    FailureKind
 	Code    string

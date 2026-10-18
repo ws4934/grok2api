@@ -459,7 +459,14 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		if e != nil {
 			return ctx, nil, e
 		}
-		return channeldomain.WithEnvironment(ctx, channeldomain.Environment{ProxyURL: lease.ProxyURL, NodeID: lease.NodeID, NodeName: lease.NodeName}), lease.Release, nil
+		scope := egressdomain.Scope(p)
+		return channeldomain.WithEnvironment(ctx, channeldomain.Environment{
+			ProxyURL: lease.ProxyURL, NodeID: lease.NodeID, NodeName: lease.NodeName,
+			Report: func(status int, err error) {
+				egressManager.FeedbackForScope(context.WithoutCancel(ctx), scope, lease.NodeID, status, err)
+			},
+			InvalidateClearance: lease.InvalidateClearance,
+		}), lease.Release, nil
 	})
 	channelService.SetImages(relational.NewChannelRepository(database), mediaService)
 	channelService.SetRequestTimeout(cfg.Server.RequestTimeout.Value())
