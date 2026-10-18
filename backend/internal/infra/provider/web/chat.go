@@ -1340,17 +1340,25 @@ func webServerToolName(response map[string]any) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
+// applyParsedToolCalls takes the call blocks out of a whole reply with the
+// Sieve that streaming uses, so every block is read as it would be streamed.
 func applyParsedToolCalls(parsed *parsedChat, configuration toolemu.Config) {
 	if len(configuration.Functions) == 0 || configuration.Choice == "none" {
 		return
 	}
-	result := toolemu.Parse(parsed.Text.String(), configuration.Available)
-	if len(result.Calls) == 0 {
+	sieve := toolemu.NewSieve(configuration.Available)
+	first := sieve.Feed(parsed.Text.String())
+	rest := sieve.Flush() // takes the remaining blocks too
+	calls := append(first.Calls, rest.Calls...)
+	if len(calls) == 0 {
 		return
 	}
-	cleaned := toolemu.Strip(parsed.Text.String(), result)
-	parsed.resetText(cleaned)
-	parsed.ToolCalls = result.Calls
+	text := first.SafeText
+	if first.Complete && len(first.Calls) == 0 {
+		text += first.Raw
+	}
+	parsed.resetText(strings.TrimSpace(text + rest.SafeText))
+	parsed.ToolCalls = calls
 }
 
 func (a *Adapter) archiveChatImages(ctx context.Context, credential account.Credential, parsed *parsedChat) error {
