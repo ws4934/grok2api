@@ -17,11 +17,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { channelsApi } from "@/features/channels/channels-api";
-import "@/features/channels/channels-i18n";
 import { listModels } from "@/entities/model/model-api";
 import type { ModelRouteDTO } from "@/entities/model/types";
-import { useProviders } from "@/entities/provider/provider-api";
 import { isGrokProvider } from "@/entities/provider/provider-presentation";
 import {
   createChatResponse,
@@ -128,25 +125,7 @@ export function CreativeConsolePage() {
     enabled: Boolean(selectedKey),
     staleTime: 30_000,
   });
-  const extensionModelsQuery = useQuery({
-    queryKey: ["channels", "creative-models", effectiveKeyId],
-    enabled: Boolean(effectiveKeyId),
-    queryFn: async (): Promise<ModelRouteDTO[]> => {
-      const channels = await channelsApi.list();
-      const groups = await Promise.all(channels.filter(c => c.settings.enabled).map(async c => {
-        const routes = await channelsApi.clientModels(c.descriptor.id, effectiveKeyId);
-        return routes.map(r => ({ id: String(r.ID), publicId: r.PublicID, provider: c.descriptor.id, upstreamModel: r.UpstreamModel, capability: r.Capability as ModelRouteDTO["capability"], origin: "manual" as const, enabled: r.Enabled, accountIds: [], bindingMode: false, supportedAccounts: 0, syncedAccounts: 0, totalAccounts: 0, capabilityKnown: true, available: true }));
-      }));
-      return groups.flat();
-    },
-  });
-  const availableModels = useMemo(() => {
-    const nativeModels = modelsQuery.data ?? [];
-    // Native routes win; extension routes only fill in providers the native catalog does not serve yet.
-    const nativeProviders = new Set(nativeModels.map((model) => model.provider));
-    const extensionModels = (extensionModelsQuery.data ?? []).filter((model) => !nativeProviders.has(model.provider));
-    return [...nativeModels, ...extensionModels].filter((model) => model.enabled && model.available);
-  }, [modelsQuery.data, extensionModelsQuery.data]);
+  const availableModels = useMemo(() => (modelsQuery.data ?? []).filter((model) => model.enabled && model.available), [modelsQuery.data]);
   const permittedModels = useMemo(() => {
     if (!selectedKey || selectedKey.allowedModelIds.length === 0) return availableModels;
     const allowedModelIds = new Set(selectedKey.allowedModelIds);
@@ -900,8 +879,6 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
   const [images, setImages] = useState<ImageResult[]>([]);
   const selectedModelRoute = modelOptions.find((option) => option.publicId === model);
   const basicProtocol = !usesGrokDialect(selectedModelRoute);
-  const providers = useProviders().data;
-  const supportsImageEdit = Boolean(selectedModelRoute && providers?.find((provider) => provider.id === selectedModelRoute.provider)?.media.imageEdit);
   const supportsQuality = model.toLowerCase().endsWith("grok-imagine-image-2.0");
 
   const mutation = useMutation({
@@ -947,7 +924,6 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
               <CompactSelect value={count} options={["1", "2", "3", "4"]} onChange={setCount} ariaLabel={t("creativeConsole.count")} suffix="×" icon={<Images />} />
               {!basicProtocol && <><CompactSelect value={aspectRatio} options={imageAspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
               <CompactSelect value={resolution} options={imageResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} /></>}
-              {basicProtocol && supportsImageEdit && <a className="px-2 text-xs text-primary underline" href="/channels">{t("channels.creativeLink")}</a>}
               {supportsQuality ? <CompactSelect value={quality} options={["low", "medium"]} onChange={(value) => setQuality(value as "low" | "medium")} ariaLabel={t("creativeConsole.quality")} /> : null}
             </div>
             <Button type="submit" size="icon" aria-label={t("creativeConsole.generateImage")} disabled={!apiKey || !model || !prompt.trim() || mutation.isPending}>{mutation.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />}</Button>
