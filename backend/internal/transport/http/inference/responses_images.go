@@ -171,6 +171,7 @@ func (h *Handler) handleImageResponse(c *gin.Context, body []byte, key clientkey
 			Type  string `json:"type"`
 			Model string `json:"model"`
 		} `json:"tools"`
+		ToolChoice json.RawMessage `json:"tool_choice"`
 	}
 	if json.Unmarshal(body, &head) != nil {
 		return false
@@ -185,11 +186,20 @@ func (h *Handler) handleImageResponse(c *gin.Context, body []byte, key clientkey
 		return false
 	}
 	ctx := c.Request.Context()
-	model := h.gateway.ImageToolModel(ctx, toolModel, strings.TrimSpace(head.Model))
+	topModel := strings.TrimSpace(head.Model)
+	model := h.gateway.ImageToolModel(ctx, toolModel, topModel)
 	if model == "" {
 		return false
 	}
 	request, in, err := decodeImageResponse(body)
+	// A text model that merely offers the tool (next to other tools, in a
+	// conversation, with store=false...) stays on the conversation path. An
+	// image model or a forced image tool takes the image path, whose strict
+	// validation then answers 400.
+	if !h.gateway.IsImageJobModel(ctx, topModel) && !forcesImageTool(head.ToolChoice, len(head.Tools)) &&
+		(err != nil || (request.Store != nil && !*request.Store)) {
+		return false
+	}
 	if err != nil {
 		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", err.Error())
 		return true
@@ -230,6 +240,19 @@ func (h *Handler) handleImageResponse(c *gin.Context, body []byte, key clientkey
 		h.writeImageResponse(c, job)
 	}
 	return true
+}
+
+// forcesImageTool reports a tool_choice that leaves the model no option but
+// the image_generation tool.
+func forcesImageTool(choice json.RawMessage, tools int) bool {
+	var name string
+	if json.Unmarshal(choice, &name) == nil {
+		return name == "required" && tools == 1
+	}
+	var forced struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(choice, &forced) == nil && forced.Type == "image_generation"
 }
 
 func requestClientKey(c *gin.Context) (clientkeydomain.Key, bool) {

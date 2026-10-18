@@ -174,6 +174,12 @@ func (s *Service) ImageToolModel(ctx context.Context, toolModel, topModel string
 	return fallback
 }
 
+// IsImageJobModel reports whether name is an image route of a provider that
+// draws images as jobs.
+func (s *Service) IsImageJobModel(ctx context.Context, name string) bool {
+	return s.hasAsyncImageRoute(ctx, name, true)
+}
+
 // hasAsyncImageRoute reports whether name has a route of a provider with
 // resumable images, limited to image routes when imageOnly is set.
 func (s *Service) hasAsyncImageRoute(ctx context.Context, name string, imageOnly bool) bool {
