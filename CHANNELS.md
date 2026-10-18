@@ -48,15 +48,35 @@
 
 ## 对外接口
 
+接口格式与 OpenAI 官方 API 保持一致；`/v1/messages` 与 Anthropic Messages API 一致。只有当模型名命中扩展渠道的路由时才由渠道处理，其他请求原样交给原有 Grok 处理器。
+
 | 接口 | 说明 |
 |---|---|
 | `GET /v1/models` | 返回已授权、已启用、已定价的扩展模型 |
-| `POST /v1/chat/completions` | 文本、多轮历史、图片输入，流式和非流式 |
-| `POST /v1/responses` | 基础会话（不带工具）；带 `image_generation` 工具时生成图片，见下文 |
-| `POST /v1/images/generations` | 同步生图，`n` 为 1–10，`response_format` 支持 `url`、`b64_json` |
-| `POST /v1/images/edits` | 同步编辑，JSON 或 multipart，支持多参考图和 PNG 蒙版 |
+| `POST /v1/chat/completions` | 文本、多轮历史、图片输入，流式和非流式；模型是生图路由时直接生图，回复 Markdown 图片链接 |
+| `POST /v1/responses` | 会话（官方流式事件序列）；带 `image_generation` 工具时生成图片，见下文 |
+| `POST /v1/messages` | Messages API：文本、图片输入、system、多轮历史，流式和非流式 |
+| `POST /v1/images/generations` | 生图，`n` 为 1–10，默认返回 `b64_json`，支持 `stream: true` |
+| `POST /v1/images/edits` | 编辑，JSON 或 multipart，多参考图和 PNG 蒙版，支持 `stream: true` |
 | `GET /v1/responses/{id}` | 查询图片响应 |
 | `POST /v1/responses/{id}/cancel` | 取消尚未提交到上游的图片响应 |
+
+### 聊天与 Responses
+
+- **兼容参数**：`temperature`、`top_p`、`frequency_penalty`、`presence_penalty`、`seed`、`stop`、`user`、`metadata`、`include`、`truncation`、`prompt_cache_key`、`service_tier`、`safety_identifier`、`n: 1`、`logprobs: false` 会被接受并忽略，因为上游不提供这些控制。
+- **输出上限**：`max_tokens`、`max_completion_tokens`、`max_output_tokens` 取它和渠道输出上限中较小的一个；达到上限时 `finish_reason` 为 `length`（Responses 为 `incomplete`）。
+- **推理强度**：`reasoning_effort`、`reasoning.effort` 或 `thinking_effort` 可取 `low`、`medium`、`high`；`xhigh` 视为 `extended`；`none`、`minimal` 表示关闭。可见的推理摘要通过 `reasoning_content` 或 Responses 的 reasoning 项返回。
+- **工具**：声明 function 工具时请求可以通过，但网关会提示模型直接回答，不会返回 `tool_calls`。历史里的工具调用和工具结果会转成文本保留。
+- **流式**：Chat Completions 的首个 chunk 带 `role`；只有 `stream_options.include_usage` 为真时，才在结尾单独发送 usage chunk。Responses 按官方事件序列输出，带 `sequence_number`，失败时发送 `response.failed`。
+- **用量**：均为本地估算，包含 `cached_tokens: 0` 和 `reasoning_tokens`。
+- **错误类型按状态码区分**：没有可用账号返回 503 `no_available_account`；额度或费用不足返回 429 `insufficient_quota`；上游限流返回 429；超时返回 504。
+
+### 图片接口
+
+- **编辑输入**：`image`、`images`、`image_url` 字段接受 data URI、https URL、裸 base64、`{"image_url": ...}`、`{"url": ...}`、`{"b64_json": ...}` 及其数组。multipart 接受 `image`、`image[]`、`images`、`images[]` 文件和 `image_url` 文本字段。`file_id` 引用会被明确拒绝。
+- **响应内容**：默认返回 `b64_json`（与 OpenAI gpt-image 一致），需要链接时传 `response_format: "url"`。响应带 `usage`、`size`、`quality`、`output_format`、`background`，以及扩展字段 `job_id`。
+- **宽松参数**：`user`、`style`、`moderation`、`output_compression`（0–100，会被忽略）、`partial_images`（0–3）可以传。
+- **流式**：`stream: true` 时每张图完成后发送 `image_generation.completed`（编辑为 `image_edit.completed`）事件；等待期间每 15 秒发送一次 keep-alive。上游不提供中间帧。
 
 ### 异步生图（OpenAI Responses 官方格式）
 
@@ -75,18 +95,19 @@ curl https://<host>/v1/responses/resp_… -H "Authorization: Bearer $KEY"
 # output[0]: {"type": "image_generation_call", "status": "completed", "result": "<base64>", "size": "1024x1024"}
 ```
 
-- 不带 `background` 时请求会等待生成完成后返回同样的响应对象。
-- 编辑：在 `input` 的消息里加入 `{"type": "input_image", "image_url": "<data URI 或 https URL>"}`；蒙版写在工具的 `input_image_mask.image_url`，只能配合一张原图。
-- 路由优先用工具里的 `model`，没有时用顶层 `model`。
-- 每个响应生成一张图，与官方工具一致。需要多张时并发提交多个请求，或使用同步 Images API 的 `n`。
+- 不带 `background` 时，请求会等生成完成后返回同样的响应对象。传 `stream: true`（不能与 `background` 同时使用）时，按官方事件序列推送进度和结果。
+- 编辑：在 `input` 的消息里加入 `{"type": "input_image", "image_url": "<data URI 或 https URL>"}`。蒙版写在工具的 `input_image_mask.image_url`，只能配合一张原图。
+- 路由优先用工具里的 `model`。没有时用顶层 `model`；顶层是聊天模型时，使用渠道设置的“默认图片路由”。
+- 每个响应生成一张图，与官方工具一致。需要多张时可以并发提交多个请求，或使用 Images API 的 `n`。
 - 支持 `Idempotency-Key` 请求头：同一密钥、同一请求内容返回原响应，内容不同返回 `409`。
-- 取消只对尚未提交到上游的任务生效；已提交的生成无法撤回，返回 `409 response_not_cancellable`。对已结束的响应调用取消会直接返回最终对象。
-- 状态为 `failed` 且 `error.code` 为 `result_uncertain` 表示上游可能已经出图但无法确认，系统不会自动重试，管理员可在“图片任务”中手动重新执行（可能再次消耗上游额度）。
+- 取消只对尚未提交到上游的任务生效。已提交的生成无法撤回，返回 `409 response_not_cancellable`。对已结束的响应调用取消，直接返回最终对象。
+- `status` 为 `failed` 且 `error.code` 为 `result_uncertain`，表示上游可能已经出图但无法确认。系统不会自动重试；管理员可以在“图片任务”里手动重新执行，这可能再次消耗上游额度。
 
-### 不支持的参数（明确返回 400，不会静默忽略）
+### 仍然不支持的参数（返回 400）
 
-- 聊天：工具调用、`previous_response_id`、`store: true`、采样参数、上游输出长度参数。
-- 图片响应：`stream: true`、除 `image_generation` 外的工具、`output_compression`、`input_fidelity`、`moderation: low`、`file_id` 引用、助手消息作为输入。`partial_images` 可以传 0–3，但不会产生中间帧（上游不提供）。
+- 聊天：`n` 大于 1、`logprobs: true`、`previous_response_id`、`store: true`、强制调用某个函数的 `tool_choice`、`web_search` 等非 function 工具、`input_file`。
+- 图片响应：`background` 与 `stream` 同时使用、`output_compression`、`input_fidelity`、`moderation: low`、`file_id` 引用、助手消息作为输入。
+- 联网搜索、`/v1/search`、PPT/PSD 文件任务需要上游会话支持，暂不提供。
 - `DELETE /v1/responses/{id}` 不处理图片响应，记录按保留策略清理。
 
 ## 计费与估算
