@@ -15,6 +15,11 @@
 5. **建路由**：创建对外模型名到上游模型的路由。
 6. **授权密钥**：给客户端密钥单独授权。原有密钥的 `all` 只覆盖 Grok，**不会自动获得 ChatGPT 权限**。
 
+## 出口代理与 FlareSolverr
+
+- **出口代理**：复用原项目的出口管理。在“设置 → 出口节点”新建节点或订阅源时，作用域选择渠道（如 ChatGPT）。同一账号按亲和性固定使用同一节点（支持 `{account}` 粘性代理模板，账号标识为 `chatgpt_<账号ID>`），聊天、上传下载和 OAuth 续期都走该节点。没有该渠道的节点时直连，不会借用 Grok 节点。扩展作用域不支持回退节点配置。
+- **FlareSolverr**：未使用。原项目的 FlareSolverr 只处理 Grok Web 的 Cloudflare clearance；ChatGPT 渠道与参考项目主路径一致，依赖 TLS 浏览器指纹和每账号 Cookie。真实测试若遇到 Cloudflare 挑战，再评估是否接入。
+
 ## 账号导入格式
 
 支持单个 JSON 对象、JSON 数组、`{"accounts": [...]}`、JSONL，以及每行一个 AT 的纯文本。每条记录单独处理，结果逐条返回（导入、重复、失败及原因）。
@@ -122,6 +127,7 @@ curl https://<host>/v1/responses/resp_… -H "Authorization: Bearer $KEY"
 | `backend/internal/infra/persistence/relational/models.go`、`schema.go`、`schema_channels.go` | 去掉 Provider/出口作用域/认证类型的枚举 `CHECK`，并阻止旧迁移重建 |
 | `backend/internal/infra/persistence/relational/{audit_repository,mapping,model_repository,media_repository,egress_repository,account_links}.go` | 审计估算字段、动态 Provider 路由、渠道资产保护、保留出口作用域 `all` |
 | `backend/internal/domain/audit/audit.go`、`transport/http/audit/handler.go` | 审计记录估算规则 |
+| `backend/internal/application/egress/{service,operations}.go`、`backend/internal/infra/egress/manager.go` | 出口节点、订阅源和节点缓存接受已注册的扩展作用域（`backend/internal/domain/egress/extension.go`） |
 | 前端 `app-shell`、`router`、`deferred-pages`、`i18n`（1 个导航词条）、模型/审计页 Provider 类型、创作控制台 | 渠道中心入口，Provider 类型放宽为字符串 |
 
 ### 合并演练
