@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -40,10 +39,44 @@ const speechModel = "gpt-5-3-mini"
 // speechFormats are the read aloud formats; OpenAI's wav, flac and pcm have no equivalent.
 var speechFormats = map[string]bool{"mp3": true, "aac": true, "opus": true}
 
-// audioExtensions name an unnamed upload after its type, so dictation can tell the format.
+// audioExtensions name an upload after its declared or sniffed type: dictation
+// answers HTTP 500 for a file name without an audio extension (live: "blob").
 var audioExtensions = map[string]string{
 	"audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/mp4": ".m4a",
 	"audio/x-m4a": ".m4a", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/flac": ".flac", "audio/aac": ".aac",
+	// http.DetectContentType results
+	"video/webm": ".webm", "application/ogg": ".ogg", "video/mp4": ".mp4", "audio/wave": ".wav",
+}
+
+// voiceListTTL bounds how long an account's voice list is reused.
+const voiceListTTL = 10 * time.Minute
+
+type voiceList struct {
+	voices    []provider.VoiceInfo
+	selected  string
+	fetchedAt time.Time
+}
+
+// voiceFailure is a dictation or read aloud backend error. Those services
+// are shared by every account, so another account would fail the same way.
+type voiceFailure struct{ upstream *upstreamError }
+
+func (e *voiceFailure) Error() string              { return e.upstream.Error() }
+func (e *voiceFailure) Unwrap() error              { return e.upstream }
+func (e *voiceFailure) HTTPStatusCode() int        { return http.StatusBadGateway }
+func (e *voiceFailure) RequestScopedFailure() bool { return true }
+func (e *voiceFailure) PublicErrorMessage() string {
+	return fmt.Sprintf("ChatGPT %s failed: HTTP %d %s", e.upstream.Endpoint, e.upstream.Status, e.upstream.Message)
+}
+
+// voiceError keeps a backend (5xx) failure of a voice endpoint on the
+// request; a Cloudflare challenge stays an egress problem.
+func voiceError(err error) error {
+	var upstream *upstreamError
+	if errors.As(err, &upstream) && upstream.Status >= http.StatusInternalServerError && !upstream.Challenge {
+		return &voiceFailure{upstream: upstream}
+	}
+	return err
 }
 
 var conversationIDPattern = regexp.MustCompile(`"conversation_id":\s*"([0-9a-f-]{36})"`)
@@ -81,26 +114,28 @@ func (a *Adapter) SynthesizeSpeech(ctx context.Context, request provider.TTSRequ
 	}
 	var result provider.TTSResult
 	err = a.call(ctx, request.Credential, c, func(ctx context.Context, w wireAccount) error {
-		voice, err := a.speechVoice(ctx, w, request.VoiceID)
+		voice, err := a.speechVoice(ctx, w, request.Credential.ID, request.VoiceID)
 		if err != nil {
 			return err
 		}
 		conversation, message, err := a.speechConversation(ctx, w, model, text)
+		if conversation != "" {
+			defer a.hideConversation(ctx, w, conversation)
+		}
 		if err != nil {
 			return err
 		}
-		defer a.hideConversation(ctx, w, conversation)
 		query := url.Values{"message_id": {message}, "conversation_id": {conversation}, "format": {format}}
 		if voice != "" {
 			query.Set("voice", voice)
 		}
 		response, err := a.image.do(ctx, http.MethodGet, "/backend-api/synthesize?"+query.Encode(), w, nil, map[string]string{"Accept": "*/*"}, false)
 		if err != nil {
-			return err
+			return voiceError(err)
 		}
 		defer response.Body.Close()
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			return readOpenAIHTTPError(response, "/backend-api/synthesize")
+			return voiceError(readOpenAIHTTPError(response, "/backend-api/synthesize"))
 		}
 		audio, err := io.ReadAll(io.LimitReader(response.Body, maxSpeechAudio+1))
 		if err != nil {
@@ -117,7 +152,8 @@ func (a *Adapter) SynthesizeSpeech(ctx context.Context, request provider.TTSRequ
 
 // speechConversation opens a kept conversation holding text as an assistant
 // message and returns its ID and the message ID. The stream is dropped once
-// ChatGPT echoes the message: the closing reply is not needed.
+// ChatGPT echoes the message (or ends): the closing reply is not needed. The
+// conversation ID comes back with an error too, so the caller can hide it.
 func (a *Adapter) speechConversation(ctx context.Context, w wireAccount, model, text string) (string, string, error) {
 	payload := openAIChatPayload(wireChatRequest{Model: model, Messages: []wireMessage{
 		{Role: "user", Content: "Read the next message aloud."},
@@ -144,9 +180,12 @@ func (a *Adapter) speechConversation(ctx context.Context, w wireAccount, model, 
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", "", err
+		return conversation, "", err
 	}
-	return "", "", errors.New("ChatGPT did not store the speech message")
+	if conversation != "" {
+		return conversation, message, nil
+	}
+	return "", "", errors.New("ChatGPT did not open a speech conversation")
 }
 
 // hideConversation removes a speech conversation from the history; a failure
@@ -162,21 +201,26 @@ func (a *Adapter) hideConversation(ctx context.Context, w wireAccount, id string
 		}
 	}
 	if err != nil {
-		slog.Warn("chatgpt_speech_conversation_hide_failed", "conversation_id", id, "error", err)
+		a.log().Warn("chatgpt_speech_conversation_hide_failed", "conversation_id", id, "error", err)
 	}
 }
 
-// speechVoice resolves a voice by ID or display name. Other names, such as
-// OpenAI's alloy, use the voice selected on the account.
-func (a *Adapter) speechVoice(ctx context.Context, w wireAccount, requested string) (string, error) {
-	voices, selected, err := a.voices(ctx, w)
-	if err != nil {
-		return "", err
+// speechVoice resolves a voice by ID or display name from the account's
+// cached list. Other names, such as OpenAI's alloy, use the selected voice.
+func (a *Adapter) speechVoice(ctx context.Context, w wireAccount, accountID uint64, requested string) (string, error) {
+	a.catalogMu.Lock()
+	cached, ok := a.voiceLists[accountID]
+	a.catalogMu.Unlock()
+	if !ok || time.Since(cached.fetchedAt) > voiceListTTL {
+		var err error
+		if cached, err = a.voices(ctx, w, accountID); err != nil {
+			return "", err
+		}
 	}
-	if voice, ok := findVoice(voices, requested); ok {
+	if voice, ok := findVoice(cached.voices, requested); ok {
 		return voice.VoiceID, nil
 	}
-	return selected, nil
+	return cached.selected, nil
 }
 
 func findVoice(voices []provider.VoiceInfo, requested string) (provider.VoiceInfo, bool) {
@@ -189,20 +233,26 @@ func findVoice(voices []provider.VoiceInfo, requested string) (provider.VoiceInf
 	return provider.VoiceInfo{}, false
 }
 
-// voices lists the account's read aloud voices and the selected one.
-func (a *Adapter) voices(ctx context.Context, w wireAccount) ([]provider.VoiceInfo, string, error) {
+// voices fetches the account's read aloud voices and the selected one and caches them.
+func (a *Adapter) voices(ctx context.Context, w wireAccount, accountID uint64) (voiceList, error) {
 	body, err := a.getJSON(ctx, w, http.MethodGet, "/backend-api/settings/voices", nil)
 	if err != nil {
-		return nil, "", err
+		return voiceList{}, err
 	}
-	var voices []provider.VoiceInfo
+	list := voiceList{selected: stringValue(body["selected"]), fetchedAt: time.Now()}
 	for _, raw := range toAnyList(body["voices"]) {
 		item, _ := raw.(map[string]any)
 		if id := stringValue(item["voice"]); id != "" {
-			voices = append(voices, provider.VoiceInfo{VoiceID: id, Name: stringValue(item["name"]), Language: stringValue(item["accent"])})
+			list.voices = append(list.voices, provider.VoiceInfo{VoiceID: id, Name: stringValue(item["name"]), Language: stringValue(item["accent"])})
 		}
 	}
-	return voices, stringValue(body["selected"]), nil
+	a.catalogMu.Lock()
+	defer a.catalogMu.Unlock()
+	if a.voiceLists == nil {
+		a.voiceLists = map[uint64]voiceList{}
+	}
+	a.voiceLists[accountID] = list
+	return list, nil
 }
 
 func (a *Adapter) ListTTSVoices(ctx context.Context, credential account.Credential) ([]provider.VoiceInfo, error) {
@@ -210,12 +260,12 @@ func (a *Adapter) ListTTSVoices(ctx context.Context, credential account.Credenti
 	if err != nil {
 		return nil, err
 	}
-	var voices []provider.VoiceInfo
+	var list voiceList
 	err = a.call(ctx, credential, c, func(ctx context.Context, w wireAccount) error {
-		voices, _, err = a.voices(ctx, w)
+		list, err = a.voices(ctx, w, credential.ID)
 		return err
 	})
-	return voices, err
+	return list.voices, err
 }
 
 func (a *Adapter) GetTTSVoice(ctx context.Context, credential account.Credential, voiceID string) (provider.VoiceInfo, error) {
@@ -226,7 +276,7 @@ func (a *Adapter) GetTTSVoice(ctx context.Context, credential account.Credential
 	if voice, ok := findVoice(voices, voiceID); ok {
 		return voice, nil
 	}
-	return provider.VoiceInfo{}, &upstreamError{Status: http.StatusNotFound, Message: "Unknown ChatGPT voice " + voiceID, Body: "unknown voice"}
+	return provider.VoiceInfo{}, &requestError{message: "unknown ChatGPT voice " + voiceID, status: http.StatusNotFound}
 }
 
 // TranscribeSpeech sends an uploaded audio file and the optional language
@@ -241,8 +291,14 @@ func (a *Adapter) TranscribeSpeech(ctx context.Context, request provider.STTRequ
 	}
 	name := path.Base(strings.TrimSpace(request.FileName))
 	if name == "." || name == "/" {
+		name = "audio"
+	}
+	if !knownAudioExtension(path.Ext(name)) {
 		mediaType, _, _ := mime.ParseMediaType(request.FileMIME)
-		name = "audio" + audioExtensions[mediaType]
+		if _, ok := audioExtensions[mediaType]; !ok {
+			mediaType, _, _ = mime.ParseMediaType(http.DetectContentType(request.FileData))
+		}
+		name += audioExtensions[mediaType]
 	}
 	var body bytes.Buffer
 	form := multipart.NewWriter(&body)
@@ -251,8 +307,9 @@ func (a *Adapter) TranscribeSpeech(ctx context.Context, request provider.STTRequ
 		return provider.STTResult{}, err
 	}
 	_, _ = part.Write(request.FileData)
-	// Dictation takes an ISO 639-1 hint, so "zh-CN" is sent as "zh".
-	if language, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(request.Language)), "-"); language != "" {
+	// Dictation takes an ISO 639-1 hint, so "zh-CN" and "zh_CN" are sent as "zh".
+	language, _, _ := strings.Cut(strings.ReplaceAll(strings.ToLower(strings.TrimSpace(request.Language)), "_", "-"), "-")
+	if language != "" {
 		_ = form.WriteField("language", language)
 	}
 	if err := form.Close(); err != nil {
@@ -267,16 +324,27 @@ func (a *Adapter) TranscribeSpeech(ctx context.Context, request provider.STTRequ
 		headers := map[string]string{"Content-Type": form.FormDataContentType(), "Accept": "application/json"}
 		response, err := a.image.doRequest(ctx, http.MethodPost, a.image.BaseURL+"/backend-api/transcribe", "/backend-api/transcribe", w, bytes.NewReader(body.Bytes()), headers, false, true)
 		if err != nil {
-			return err
+			return voiceError(err)
 		}
 		var out struct {
 			Text string `json:"text"`
 		}
 		if err := decodeOpenAIJSON(response, &out, "/backend-api/transcribe"); err != nil {
-			return err
+			return voiceError(err)
 		}
 		result = provider.STTResult{Text: out.Text}
 		return nil
 	})
 	return result, err
+}
+
+// knownAudioExtension reports a file extension dictation accepts.
+func knownAudioExtension(extension string) bool {
+	extension = strings.ToLower(extension)
+	for _, known := range audioExtensions {
+		if extension == known {
+			return true
+		}
+	}
+	return extension == ".mpeg" || extension == ".mpga" || extension == ".oga"
 }

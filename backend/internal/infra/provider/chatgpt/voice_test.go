@@ -24,7 +24,12 @@ type voiceUpstream struct {
 	models                     []string
 	payload                    map[string]any
 	synthesize, hidden, upload string
-	calls                      int
+	calls, voiceLists          int
+	// stream shapes the conversation reply: "" echoes the speech message,
+	// "no-echo" ends without it, "cut" drops the connection after the ID.
+	stream string
+	// fail makes synthesize and transcribe answer like a failing ASR/TTS backend.
+	fail bool
 }
 
 func (v *voiceUpstream) serve(t *testing.T) *httptest.Server {
@@ -43,15 +48,29 @@ func (v *voiceUpstream) serve(t *testing.T) *httptest.Server {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"models": models})
 		case r.URL.Path == "/backend-api/settings/voices":
+			v.voiceLists++
 			_, _ = w.Write([]byte(voicesBody))
 		case r.URL.Path == "/backend-api/conversation":
 			_ = json.NewDecoder(r.Body).Decode(&v.payload)
 			id := v.payload["messages"].([]any)[1].(map[string]any)["id"].(string)
 			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte(`data: {"type":"resume_conversation_token","conversation_id":"11111111-2222-3333-4444-555555555555"}` + "\n\n" +
-				`data: {"type":"input_message","input_message":{"id":"` + id + `","author":{"role":"assistant"}}}` + "\n\n"))
+			head := `data: {"type":"resume_conversation_token","conversation_id":"11111111-2222-3333-4444-555555555555"}` + "\n\n"
+			switch v.stream {
+			case "cut":
+				w.Header().Set("Content-Length", "100000")
+				_, _ = w.Write([]byte(head))
+			case "no-echo":
+				_, _ = w.Write([]byte(head + "data: [DONE]\n\n"))
+			default:
+				_, _ = w.Write([]byte(head + `data: {"type":"input_message","input_message":{"id":"` + id + `","author":{"role":"assistant"}}}` + "\n\n"))
+			}
 		case r.URL.Path == "/backend-api/synthesize":
 			v.synthesize = r.URL.RawQuery
+			if v.fail {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"detail":"Error in TTS API"}`))
+				return
+			}
 			w.Header().Set("Content-Type", "audio/aac")
 			_, _ = w.Write([]byte("AAC"))
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/backend-api/conversation/"):
@@ -66,6 +85,11 @@ func (v *voiceUpstream) serve(t *testing.T) *httptest.Server {
 			}
 			data, _ := io.ReadAll(file)
 			v.upload = header.Filename + ":" + string(data) + ":" + r.FormValue("language")
+			if v.fail {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"detail":"Error in ASR API"}`))
+				return
+			}
 			_, _ = w.Write([]byte(`{"text":"hello there","asset_format":"webm"}`))
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
@@ -138,8 +162,21 @@ func TestTranscriptionUsesDictation(t *testing.T) {
 		t.Fatalf("result = %+v, upload = %q, %v", result, upstream.upload, err)
 	}
 	// The language hint goes to dictation as its primary subtag.
-	if _, err := a.TranscribeSpeech(context.Background(), provider.STTRequest{Credential: credential, FileName: "a.mp3", FileData: []byte("MP3"), Language: " zh-CN "}); err != nil || upstream.upload != "a.mp3:MP3:zh" {
-		t.Fatalf("upload = %q, %v", upstream.upload, err)
+	for _, language := range []string{" zh-CN ", "zh_CN", "ZH"} {
+		if _, err := a.TranscribeSpeech(context.Background(), provider.STTRequest{Credential: credential, FileName: "a.mp3", FileData: []byte("MP3"), Language: language}); err != nil || upstream.upload != "a.mp3:MP3:zh" {
+			t.Fatalf("%q: upload = %q, %v", language, upstream.upload, err)
+		}
+	}
+	// Dictation fails on names without an audio extension (live: "blob" → HTTP 500).
+	for _, upload := range []struct{ name, mime, data, want string }{
+		{"blob", "audio/webm; codecs=opus", "OPUS", "blob.webm:OPUS:"},
+		{"blob", "application/octet-stream", "ID3\x03rest", "blob.mp3:ID3\x03rest:"},
+		{"voice.bin", "audio/mp4", "M4A", "voice.bin.m4a:M4A:"},
+		{"take.M4A", "", "M4A", "take.M4A:M4A:"},
+	} {
+		if _, err := a.TranscribeSpeech(context.Background(), provider.STTRequest{Credential: credential, FileName: upload.name, FileMIME: upload.mime, FileData: []byte(upload.data)}); err != nil || upstream.upload != upload.want {
+			t.Fatalf("%s %s: upload = %q, %v", upload.name, upload.mime, upstream.upload, err)
+		}
 	}
 	var scoped *requestError
 	if _, err := a.TranscribeSpeech(context.Background(), provider.STTRequest{Credential: credential, URL: "https://example.com/a.mp3"}); !errors.As(err, &scoped) {
@@ -150,8 +187,10 @@ func TestTranscriptionUsesDictation(t *testing.T) {
 	if err != nil || len(voices) != 2 || voices[1] != (provider.VoiceInfo{VoiceID: "glimmer", Name: "Sol", Language: "American English"}) {
 		t.Fatalf("voices = %+v, %v", voices, err)
 	}
-	if _, err := a.GetTTSVoice(context.Background(), credential, "alloy"); provider.ErrorHTTPStatusOrZero(err) != http.StatusNotFound {
+	if _, err := a.GetTTSVoice(context.Background(), credential, "alloy"); provider.ErrorHTTPStatusOrZero(err) != http.StatusNotFound || !provider.IsRequestScopedError(err) {
 		t.Fatalf("unknown voice: %v", err)
+	} else if message, ok := provider.ErrorPublicMessage(err); !ok || !strings.Contains(message, "alloy") {
+		t.Fatalf("unknown voice message = %q", message)
 	}
 }
 
@@ -172,5 +211,52 @@ func TestVoiceRoutesAndQuota(t *testing.T) {
 	}
 	if _, ok := any(a).(provider.STTAdapter); !ok {
 		t.Fatal("not an STT adapter")
+	}
+}
+
+func TestSpeechConversationIsHiddenWhateverHappens(t *testing.T) {
+	for _, stream := range []string{"no-echo", "cut"} {
+		upstream := &voiceUpstream{models: []string{"gpt-5-3-mini"}, stream: stream}
+		a, _ := newTestAdapter(t, upstream.serve(t))
+		_, err := a.SynthesizeSpeech(context.Background(), provider.TTSRequest{Credential: testCredential(t, a, credentials{AccessToken: "AT"}), Text: "hi"})
+		// A finished stream stored the message; a cut one may not have.
+		if (stream == "no-echo") != (err == nil) || !strings.HasPrefix(upstream.hidden, "11111111-2222-3333-4444-555555555555 ") {
+			t.Fatalf("%s: err = %v, hidden = %q", stream, err, upstream.hidden)
+		}
+	}
+}
+
+func TestVoiceBackendFailuresStayOnTheRequest(t *testing.T) {
+	upstream := &voiceUpstream{models: []string{"gpt-5-3-mini"}, fail: true}
+	a, _ := newTestAdapter(t, upstream.serve(t))
+	credential := testCredential(t, a, credentials{AccessToken: "AT"})
+	_, ttsErr := a.SynthesizeSpeech(context.Background(), provider.TTSRequest{Credential: credential, Text: "hi"})
+	_, sttErr := a.TranscribeSpeech(context.Background(), provider.STTRequest{Credential: credential, FileName: "a.mp3", FileData: []byte("MP3")})
+	for name, err := range map[string]error{"tts": ttsErr, "stt": sttErr} {
+		message, _ := provider.ErrorPublicMessage(err)
+		if provider.ErrorHTTPStatusOrZero(err) != http.StatusBadGateway || !provider.IsRequestScopedError(err) || !strings.Contains(message, "API") {
+			t.Fatalf("%s: err = %v, message = %q", name, err, message)
+		}
+		var diagnostic provider.UpstreamDiagnosticError
+		if !errors.As(err, &diagnostic) {
+			t.Fatalf("%s lost the upstream diagnostic: %v", name, err)
+		}
+	}
+	if !strings.HasPrefix(upstream.hidden, "11111111-2222-3333-4444-555555555555 ") {
+		t.Fatalf("failed speech conversation left visible: %q", upstream.hidden)
+	}
+}
+
+func TestVoiceListIsCachedPerAccount(t *testing.T) {
+	upstream := &voiceUpstream{models: []string{"gpt-5-3-mini"}}
+	a, _ := newTestAdapter(t, upstream.serve(t))
+	credential := testCredential(t, a, credentials{AccessToken: "AT"})
+	for range 2 {
+		if _, err := a.SynthesizeSpeech(context.Background(), provider.TTSRequest{Credential: credential, Text: "hi", VoiceID: "Sol"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if upstream.voiceLists != 1 || !strings.HasSuffix(upstream.synthesize, "voice=glimmer") {
+		t.Fatalf("voice lists = %d, synthesize = %s", upstream.voiceLists, upstream.synthesize)
 	}
 }

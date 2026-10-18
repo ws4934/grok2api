@@ -44,6 +44,8 @@ type Adapter struct {
 	catalogMu sync.Mutex
 	// catalogs caches, per account, the conversation models whose image tool is enabled.
 	catalogs map[uint64]imageCatalog
+	// voiceLists caches, per account, the read aloud voices (guarded by catalogMu).
+	voiceLists map[uint64]voiceList
 }
 
 // SetLogger routes the adapter's diagnostic logs to the application logger.
@@ -157,12 +159,21 @@ func (a *Adapter) loadInput(ctx context.Context, s string) (OpenAIImageInput, er
 	return OpenAIImageInput{Name: "image", MIME: mime, Data: raw}, nil
 }
 
-// requestError is a client mistake that no account or egress can fix.
-type requestError struct{ message string }
+// requestError is a client mistake that no account or egress can fix; its
+// status is 400 unless set.
+type requestError struct {
+	message string
+	status  int
+}
 
-func invalidRequest(message string) error          { return &requestError{message: message} }
-func (e *requestError) Error() string              { return e.message }
-func (e *requestError) HTTPStatusCode() int        { return http.StatusBadRequest }
+func invalidRequest(message string) error { return &requestError{message: message} }
+func (e *requestError) Error() string     { return e.message }
+func (e *requestError) HTTPStatusCode() int {
+	if e.status != 0 {
+		return e.status
+	}
+	return http.StatusBadRequest
+}
 func (e *requestError) RequestScopedFailure() bool { return true }
 func (e *requestError) PublicErrorMessage() string { return e.message }
 func (e *upstreamError) HTTPStatusCode() int       { return e.Status }
