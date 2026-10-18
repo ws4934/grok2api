@@ -112,6 +112,53 @@ func TestParseKeepsArgumentsExact(t *testing.T) {
 	}
 }
 
+// sieveAll streams reply through a Sieve in chunks of size bytes.
+func sieveAll(available map[string]struct{}, reply string, size int) (string, []Call) {
+	sieve := NewSieve(available)
+	var text strings.Builder
+	var calls []Call
+	for i := 0; i < len(reply); i += size {
+		// As the ChatGPT adapter does: drain every complete block, show the
+		// raw markup of blocks without declared calls.
+		for result := sieve.Feed(reply[i:min(i+size, len(reply))]); ; result = sieve.Feed("") {
+			text.WriteString(result.SafeText)
+			calls = append(calls, result.Calls...)
+			if !result.Complete {
+				break
+			}
+			if len(result.Calls) == 0 {
+				text.WriteString(result.Raw)
+			}
+		}
+	}
+	result := sieve.Flush()
+	text.WriteString(result.SafeText)
+	return text.String(), append(calls, result.Calls...)
+}
+
+// TestClosingTagsInsideArguments: an agent writing HTML or XML puts the
+// convention's closing tags inside JSON strings; they stay arguments, also
+// while streaming.
+func TestClosingTagsInsideArguments(t *testing.T) {
+	available := map[string]struct{}{"write_file": {}}
+	arguments := `{"path":"a.xml","content":"</parameters></tool_call></tool_calls><tool_calls>"}`
+	reply := "before " + writeFileBlock(arguments) + " after"
+	parsed := Parse(reply, available)
+	if len(parsed.Calls) != 1 || parsed.Calls[0].Arguments != arguments || Strip(reply, parsed) != "before  after" {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+	for _, size := range []int{1, 7, len(reply)} {
+		if text, calls := sieveAll(available, reply, size); text != "before  after" || len(calls) != 1 || calls[0].Arguments != arguments {
+			t.Fatalf("size %d: text %q calls %#v", size, text, calls)
+		}
+	}
+	// JSON that never closes holds the block to the end, then shows it.
+	broken := writeFileBlock(`{"content":"x</tool_calls> y`) + " tail"
+	if text, calls := sieveAll(available, broken, 3); text != broken || len(calls) != 0 {
+		t.Fatalf("broken: text %q calls %#v", text, calls)
+	}
+}
+
 func TestParseKeepsOnlyDeclaredFunctions(t *testing.T) {
 	parsed := Parse(`<tool_calls><tool_call><tool_name>rm</tool_name><parameters>{}</parameters></tool_call><tool_call><tool_name>lookup</tool_name><parameters>{"q":1}</parameters></tool_call></tool_calls>`, map[string]struct{}{"lookup": {}})
 	if len(parsed.Calls) != 1 || parsed.Calls[0].Name != "lookup" || !strings.HasPrefix(parsed.Calls[0].ID, "call_") {

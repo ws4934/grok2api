@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"io"
 	"regexp"
 	"strings"
 )
@@ -21,16 +22,17 @@ const (
 )
 
 var (
-	namePattern          = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	syntaxPattern        = regexp.MustCompile(`(?i)<tool_calls|<tool_call|<function_call|<invoke\s|"tool_calls"\s*:`)
-	toolCallsRootPattern = regexp.MustCompile(`(?is)<tool_calls\s*>(.*?)</tool_calls\s*>`)
-	toolCallPattern      = regexp.MustCompile(`(?is)<tool_call\s*>(.*?)</tool_call\s*>`)
-	toolNameTagPattern   = regexp.MustCompile(`(?is)<tool_name\s*>(.*?)</tool_name\s*>`)
-	toolParamsTagPattern = regexp.MustCompile(`(?is)<parameters\s*>(.*?)</parameters\s*>`)
-	functionCallPattern  = regexp.MustCompile(`(?is)<function_call\s*>(.*?)</function_call\s*>`)
-	functionNamePattern  = regexp.MustCompile(`(?is)<name\s*>(.*?)</name\s*>`)
-	functionArgsPattern  = regexp.MustCompile(`(?is)<arguments\s*>(.*?)</arguments\s*>`)
-	invokePattern        = regexp.MustCompile(`(?is)<invoke\s+name=["']?([A-Za-z0-9_-]+)["']?\s*>(.*?)</invoke\s*>`)
+	namePattern         = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	syntaxPattern       = regexp.MustCompile(`(?i)<tool_calls|<tool_call|<function_call|<invoke\s|"tool_calls"\s*:`)
+	rootOpenPattern     = regexp.MustCompile(`(?i)<tool_calls\s*>`)
+	tagPattern          = regexp.MustCompile(`(?i)<(/?)(tool_calls|tool_call|tool_name|parameters)\s*>`)
+	nameEndPattern      = regexp.MustCompile(`(?i)</tool_name\s*>`)
+	paramsEndPattern    = regexp.MustCompile(`(?i)</parameters\s*>`)
+	paramsClosePattern  = regexp.MustCompile(`(?i)^\s*</parameters\s*>`)
+	functionCallPattern = regexp.MustCompile(`(?is)<function_call\s*>(.*?)</function_call\s*>`)
+	functionNamePattern = regexp.MustCompile(`(?is)<name\s*>(.*?)</name\s*>`)
+	functionArgsPattern = regexp.MustCompile(`(?is)<arguments\s*>(.*?)</arguments\s*>`)
+	invokePattern       = regexp.MustCompile(`(?is)<invoke\s+name=["']?([A-Za-z0-9_-]+)["']?\s*>(.*?)</invoke\s*>`)
 )
 
 // Function is one declared client function.
@@ -290,21 +292,14 @@ func Parse(text string, available map[string]struct{}) ParseResult {
 	if !result.SawSyntax {
 		return result
 	}
-	if match := toolCallsRootPattern.FindStringSubmatchIndex(text); match != nil {
-		result.Start, result.End = match[0], match[1]
-		root := text[match[2]:match[3]]
-		for _, raw := range toolCallPattern.FindAllStringSubmatch(root, -1) {
-			nameMatch := toolNameTagPattern.FindStringSubmatch(raw[1])
-			if len(nameMatch) == 0 {
-				continue
+	if open := rootOpenPattern.FindStringIndex(text); open != nil {
+		if calls, end := scanRoot(text, open[1], true); end >= 0 {
+			result.Start, result.End = open[0], end
+			for _, call := range calls {
+				appendCall(&result.Calls, html.UnescapeString(strings.TrimSpace(call.name)), call.arguments, available)
 			}
-			arguments := "{}"
-			if paramsMatch := toolParamsTagPattern.FindStringSubmatch(raw[1]); len(paramsMatch) > 0 {
-				arguments = paramsMatch[1]
-			}
-			appendCall(&result.Calls, html.UnescapeString(strings.TrimSpace(nameMatch[1])), arguments, available)
+			return result
 		}
-		return result
 	}
 	if match := functionCallPattern.FindStringSubmatchIndex(text); match != nil {
 		result.Start, result.End = match[0], match[1]
@@ -325,6 +320,72 @@ func Parse(text string, available map[string]struct{}) ParseResult {
 		return result
 	}
 	return parseJSONCalls(text, available, result)
+}
+
+type rawCall struct{ name, arguments string }
+
+// scanRoot reads the content of a <tool_calls> element from pos, right after
+// its opening tag, and returns its calls and the end of its closing tag, or -1
+// when text ends first. Arguments are read as JSON, so tags inside JSON
+// strings stay arguments; unless final, JSON cut off by the end of text
+// also returns -1, as more text may close it.
+func scanRoot(text string, pos int, final bool) ([]rawCall, int) {
+	var calls []rawCall
+	var call *rawCall
+	for {
+		loc := tagPattern.FindStringSubmatchIndex(text[pos:])
+		if loc == nil {
+			return calls, -1
+		}
+		closing, tag := loc[3] > loc[2], strings.ToLower(text[pos+loc[4]:pos+loc[5]])
+		pos += loc[1]
+		switch {
+		case closing && tag == "tool_calls":
+			return calls, pos
+		case tag == "tool_call":
+			if closing && call != nil {
+				calls = append(calls, *call)
+			}
+			call = nil
+			if !closing {
+				call = &rawCall{arguments: "{}"}
+			}
+		case call == nil || closing:
+		case tag == "tool_name":
+			if end := nameEndPattern.FindStringIndex(text[pos:]); end != nil {
+				call.name = text[pos : pos+end[0]]
+				pos += end[1]
+			}
+		case tag == "parameters":
+			arguments, end := scanArguments(text, pos, final)
+			if end < 0 {
+				return calls, -1
+			}
+			call.arguments, pos = arguments, end
+		}
+	}
+}
+
+// scanArguments reads <parameters> content from pos: one JSON value and the
+// closing tag. Other content (HTML-escaped JSON, say) runs to the first
+// </parameters>. It returns the arguments and the end of the closing tag, or
+// -1 as scanRoot does.
+func scanArguments(text string, pos int, final bool) (string, int) {
+	decoder := json.NewDecoder(strings.NewReader(text[pos:]))
+	var value json.RawMessage
+	switch err := decoder.Decode(&value); {
+	case err == nil:
+		end := pos + int(decoder.InputOffset())
+		if closing := paramsClosePattern.FindStringIndex(text[end:]); closing != nil {
+			return text[pos:end], end + closing[1]
+		}
+	case !final && errors.Is(err, io.ErrUnexpectedEOF):
+		return "", -1
+	}
+	if closing := paramsEndPattern.FindStringIndex(text[pos:]); closing != nil {
+		return text[pos : pos+closing[0]], pos + closing[1]
+	}
+	return "", -1
 }
 
 func parseJSONCalls(text string, available map[string]struct{}, result ParseResult) ParseResult {
@@ -412,13 +473,23 @@ func Strip(text string, parsed ParseResult) string {
 	return strings.TrimSpace(text[:parsed.Start] + text[parsed.End:])
 }
 
+const (
+	openTag  = "<tool_calls"
+	closeTag = "</tool_calls>"
+)
+
 // Sieve holds back tool markup in a text stream until its block is complete,
 // so clients never see it. Text after a block stays buffered and is scanned
 // with the next Feed (Feed("") drains it) or returned by Flush.
 type Sieve struct {
 	available map[string]struct{}
-	buffer    string
+	// buffer is held text that may still begin a block.
+	buffer string
+	// block is the block being captured and scanned how much of it was
+	// searched for closeTag, so a long block costs linear time.
+	block     strings.Builder
 	capturing bool
+	scanned   int
 }
 
 func NewSieve(available map[string]struct{}) *Sieve {
@@ -427,33 +498,58 @@ func NewSieve(available map[string]struct{}) *Sieve {
 
 // Feed 在流中发现工具 XML 后开始缓存，完整解析前不向客户端泄露内部标记。
 func (s *Sieve) Feed(chunk string) StreamResult {
-	text := s.buffer + chunk
-	s.buffer = ""
 	safe := ""
-	if !s.capturing {
-		index := strings.Index(lowerASCII(text), "<tool_calls")
+	if s.capturing {
+		s.block.WriteString(chunk)
+	} else {
+		text := s.buffer + chunk
+		index := indexFold(text, openTag)
 		if index < 0 {
-			safe, s.buffer = splitPrefix(text)
+			hold := holdFrom(text)
+			s.buffer = text[hold:]
+			return StreamResult{SafeText: text[:hold]}
+		}
+		safe, s.buffer = text[:index], ""
+		s.block.WriteString(text[index:])
+		s.capturing, s.scanned = true, 0
+	}
+	raw := s.block.String()
+	for {
+		at := indexFold(raw[s.scanned:], closeTag)
+		if at < 0 {
+			s.scanned = max(s.scanned, len(raw)-len(closeTag)+1)
 			return StreamResult{SafeText: safe}
 		}
-		safe, text = text[:index], text[index:]
-		s.capturing = true
+		s.scanned += at + len(closeTag)
+		// A </tool_calls> inside a JSON argument does not end the block.
+		if end := blockEnd(raw, s.scanned); end >= 0 {
+			s.buffer, s.capturing = strings.Clone(raw[end:]), false
+			s.block.Reset()
+			return StreamResult{SafeText: safe, Calls: Parse(raw[:end], s.available).Calls, Complete: true, Raw: raw[:end]}
+		}
 	}
-	end := strings.Index(lowerASCII(text), "</tool_calls>")
-	if end < 0 {
-		s.buffer = text
-		return StreamResult{SafeText: safe}
+}
+
+// blockEnd is where a captured block ends: after the </tool_calls> that closes
+// its root outside JSON arguments, or at candidate when it does not open with
+// a plain <tool_calls>; -1 while the root is still open.
+func blockEnd(raw string, candidate int) int {
+	open := rootOpenPattern.FindStringIndex(raw)
+	if open == nil || open[0] != 0 {
+		return candidate
 	}
-	end += len("</tool_calls>")
-	raw := text[:end]
-	s.buffer, s.capturing = text[end:], false
-	return StreamResult{SafeText: safe, Calls: Parse(raw, s.available).Calls, Complete: true, Raw: raw}
+	_, end := scanRoot(raw, open[1], false)
+	return end
 }
 
 // Flush ends the stream: held text is parsed once more or released.
 func (s *Sieve) Flush() StreamResult {
 	raw := s.buffer
+	if s.capturing {
+		raw = s.block.String()
+	}
 	s.buffer, s.capturing = "", false
+	s.block.Reset()
 	if raw == "" {
 		return StreamResult{}
 	}
@@ -464,25 +560,43 @@ func (s *Sieve) Flush() StreamResult {
 	return StreamResult{SafeText: raw, Complete: parsed.SawSyntax, Raw: raw}
 }
 
-func splitPrefix(value string) (string, string) {
-	prefix := "<tool_calls"
-	lower := lowerASCII(value)
-	for size := min(len(prefix)-1, len(lower)); size > 0; size-- {
-		if strings.HasSuffix(lower, prefix[:size]) {
-			return value[:len(value)-size], value[len(value)-size:]
+// holdFrom is where a block may begin at the end of text: a partial <tool_calls.
+func holdFrom(text string) int {
+	for size := min(len(openTag)-1, len(text)); size > 0; size-- {
+		if hasFoldPrefix(text[len(text)-size:], openTag[:size]) {
+			return len(text) - size
 		}
 	}
-	return value, ""
+	return len(text)
 }
 
-// lowerASCII lowercases ASCII letters only, so byte offsets stay valid for
-// the original text (strings.ToLower may change UTF-8 lengths).
-func lowerASCII(value string) string {
-	lower := []byte(value)
-	for index, char := range lower {
-		if 'A' <= char && char <= 'Z' {
-			lower[index] = char + 'a' - 'A'
+// indexFold is strings.Index on text with ASCII letters lowercased, without
+// copying text; sub is lowercase and starts with '<'.
+func indexFold(text, sub string) int {
+	for i := 0; ; i++ {
+		next := strings.IndexByte(text[i:], '<')
+		if next < 0 {
+			return -1
+		}
+		if i += next; hasFoldPrefix(text[i:], sub) {
+			return i
 		}
 	}
-	return string(lower)
+}
+
+// hasFoldPrefix is strings.HasPrefix ignoring ASCII case; prefix is lowercase.
+func hasFoldPrefix(text, prefix string) bool {
+	if len(text) < len(prefix) {
+		return false
+	}
+	for i := range len(prefix) {
+		c := text[i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != prefix[i] {
+			return false
+		}
+	}
+	return true
 }
