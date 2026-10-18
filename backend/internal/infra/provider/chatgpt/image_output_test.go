@@ -61,7 +61,7 @@ func TestImageOutputChecksPixelsAndPreservesPNG(t *testing.T) {
 			}
 			raw, mime, err := (ImageOutputOptions{Background: tc.background, OutputFormat: "png"}).apply(original.Bytes(), "image/png")
 			if tc.wantError {
-				if !IsImageOutputError(err) || raw != nil || openAIImageProxyFailure(err) {
+				if !IsImageOutputError(err) || raw != nil {
 					t.Fatalf("incorrect output failure: %v", err)
 				}
 				return

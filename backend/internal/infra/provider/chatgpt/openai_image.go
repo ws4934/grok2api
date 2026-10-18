@@ -764,30 +764,6 @@ func (o *OpenAIImage) do(ctx context.Context, method, path string, account wireA
 	return o.doRequest(ctx, method, o.BaseURL+path, path, account, reader, extra, stream, true)
 }
 
-func openAIImageProxyFailure(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	var upstream *upstreamError
-	if errors.As(err, &upstream) {
-		return upstream.Status == http.StatusForbidden
-	}
-	message := strings.ToLower(err.Error())
-	for _, fragment := range []string{
-		"timeout", "deadline exceeded", "unexpected eof", "connection reset", "broken pipe",
-		"proxyconnect", "dial tcp", "tls handshake", "network is unreachable", "no route to host",
-		"connection refused", "connection closed", "server misbehaving",
-	} {
-		if strings.Contains(message, fragment) {
-			return true
-		}
-	}
-	return false
-}
-
 func decodeOpenAIJSON(response *http.Response, value any, target string) error {
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -817,7 +793,7 @@ func readOpenAIHTTPError(response *http.Response, target string, secrets ...stri
 	if response.Request != nil && response.Request.URL != nil {
 		endpoint = response.Request.URL.Path
 	}
-	return &upstreamError{Status: response.StatusCode, Message: message, Body: message, Endpoint: endpoint}
+	return &upstreamError{Status: response.StatusCode, Message: message, Body: message, Endpoint: endpoint, Challenge: isCloudflareChallenge(response.StatusCode, response.Header, string(raw))}
 }
 
 func scanOpenAISSE(reader io.Reader, onPayload func([]byte) bool) error {

@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -38,6 +37,8 @@ type upstreamError struct {
 	Status   int
 	Message  string
 	Body     string
+	// Challenge marks a Cloudflare interstitial: the request never reached chatgpt.com.
+	Challenge bool
 }
 
 func (e *upstreamError) Error() string { return fmt.Sprintf("ChatGPT upstream HTTP %d", e.Status) }
@@ -101,11 +102,14 @@ func (o *OpenAIImage) doRequest(ctx context.Context, method, endpoint, path stri
 	} else if authenticated {
 		resp, err = o.Client.Do(req)
 	} else {
-		client := publicTransferClient(proxy)
+		client, e := publicTransferClient(proxy)
+		if e != nil {
+			return nil, e
+		}
 		resp, err = client.Do(req)
 	}
 	if err != nil {
-		return nil, errors.New("upstream transport failed")
+		return nil, &transportError{cause: err}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		e := readOpenAIHTTPError(resp, path, a.Token)
@@ -116,7 +120,13 @@ func (o *OpenAIImage) doRequest(ctx context.Context, method, endpoint, path stri
 }
 
 // Resolve and pin public addresses at dial time, including redirect targets.
-func publicTransferClient(proxy string) *http.Client {
+// Through a proxy only the target host is checked (before the request and on
+// redirects); the proxy itself may be on a private network.
+func publicTransferClient(proxy string) (*http.Client, error) {
+	egress, err := parseEgressProxy(proxy)
+	if err != nil {
+		return nil, err
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DisableKeepAlives = true
@@ -136,9 +146,6 @@ func publicTransferClient(proxy string) *http.Client {
 		}
 		var last error
 		for _, ip := range ips {
-			if _, err := netip.ParseAddr(ip.String()); err != nil {
-				continue
-			}
 			c, e := (&net.Dialer{Timeout: 20 * time.Second}).DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
 			if e == nil {
 				return c, nil
@@ -150,13 +157,7 @@ func publicTransferClient(proxy string) *http.Client {
 		}
 		return nil, last
 	}
-	// Proxy endpoints are trusted deployment configuration; upstream URL hosts
-	// remain restricted before using proxy DNS resolution.
-	if proxy != "" {
-		if u, err := url.Parse(proxy); err == nil {
-			transport.Proxy = http.ProxyURL(u)
-		}
-	}
+	egress.apply(transport)
 	return &http.Client{Transport: transport, Timeout: 60 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) > 3 || req.URL.Scheme != "https" || req.URL.User != nil {
 			return errors.New("invalid transfer redirect")
@@ -164,7 +165,7 @@ func publicTransferClient(proxy string) *http.Client {
 		req.Header.Del("Authorization")
 		req.Header.Del("Cookie")
 		return validatePublicHost(req.Context(), req.URL.Hostname())
-	}}
+	}}, nil
 }
 func validatePublicHost(ctx context.Context, host string) error {
 	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)

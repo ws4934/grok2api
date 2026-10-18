@@ -32,8 +32,14 @@ func newBrowserHTTP(origin, proxyURL string, timeout time.Duration, profile brow
 		tlsclient.WithNotFollowRedirects(),
 		tlsclient.WithCookieJar(jar),
 	}
-	if proxyURL != "" {
-		options = append(options, tlsclient.WithProxyUrl(proxyURL))
+	egress, err := parseEgressProxy(proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	if egress.dial != nil {
+		options = append(options, tlsclient.WithDialContext(egress.dial))
+	} else if egress.url != nil {
+		options = append(options, tlsclient.WithProxyUrl(egress.raw))
 	}
 	client, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(), options...)
 	if err != nil {

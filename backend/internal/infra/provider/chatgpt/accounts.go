@@ -300,18 +300,18 @@ func (a *Adapter) exchange(ctx context.Context, body map[string]string, old chan
 	r.Header.Set("Referer", "https://platform.openai.com/")
 	client := *a.oauth
 	if env := channel.EnvironmentFrom(ctx); env.ProxyURL != "" {
-		proxy, err := url.Parse(env.ProxyURL)
+		egress, err := parseEgressProxy(env.ProxyURL)
 		if err != nil {
 			return old, errors.New("invalid OAuth egress")
 		}
 		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.Proxy = http.ProxyURL(proxy)
+		egress.apply(transport)
 		defer transport.CloseIdleConnections()
 		client.Transport = transport
 	}
 	resp, e := client.Do(r)
 	if e != nil {
-		return old, errors.New("OAuth token exchange transport failed")
+		return old, &transportError{cause: e}
 	}
 	defer resp.Body.Close()
 	var v struct {
