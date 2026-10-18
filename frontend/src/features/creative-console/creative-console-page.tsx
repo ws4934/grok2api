@@ -1155,7 +1155,9 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const voicesQuery = useQuery({
     queryKey: ["creative-console", "video-voices", apiKey],
     queryFn: ({ signal }) => listVoices({ apiKey, model: "grok-voice-latest", signal }),
-    enabled: Boolean(apiKey && action === "generate"),
+    // Reference voices come from the TTS catalog; without a TTS route the request can only 404.
+    enabled: Boolean(apiKey && action === "generate") && modelOptions.some((item) => item.capability === "tts"),
+    retry: false,
     staleTime: 60_000,
   });
   const voices = useMemo(() => voicesQuery.data ?? [], [voicesQuery.data]);
@@ -1723,8 +1725,9 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
 
   const voicesQuery = useQuery({
     queryKey: ["creative-console", "voices", apiKey, activeModel],
-    queryFn: ({ signal }) => listVoices({ apiKey, model: activeModel || "grok-voice-latest", signal }),
-    enabled: Boolean(apiKey) && subMode === "tts",
+    queryFn: ({ signal }) => listVoices({ apiKey, model: activeModel, signal }),
+    enabled: Boolean(apiKey && activeModel) && subMode === "tts",
+    retry: false,
     staleTime: 60_000,
   });
   const voices = useMemo(() => voicesQuery.data ?? [], [voicesQuery.data]);

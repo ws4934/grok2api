@@ -97,3 +97,30 @@ func TestInitializeSchemaRetiresChannelTables(t *testing.T) {
 		}
 	})
 }
+
+func TestChatGPTImageModelsNeverBecomeChatRoutes(t *testing.T) {
+	dialectDatabases(t, func(t *testing.T, db *Database) {
+		ctx := context.Background()
+		// A route created by an earlier release that classified only gpt-image-2.
+		legacy := modelRouteModel{PublicID: "chatgpt/gpt-image-2.5-flare", Provider: string(account.ProviderChatGPT), UpstreamModel: "gpt-image-2.5-flare", Capability: string(model.CapabilityResponses), Origin: string(model.OriginDiscovered), Enabled: true}
+		if err := db.db.WithContext(ctx).Create(&legacy).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.InitializeSchema(ctx); err != nil {
+			t.Fatal(err)
+		}
+		repo := NewModelRepository(db)
+		if err := repo.UpsertDiscovered(ctx, account.ProviderChatGPT, []string{"gpt-6", "gpt-image-2.5", "gpt-image-2.5-sunburst"}); err != nil {
+			t.Fatal(err)
+		}
+		var rows []modelRouteModel
+		if err := db.db.WithContext(ctx).Where("provider = ?", account.ProviderChatGPT).Find(&rows).Error; err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range rows {
+			if row.Capability == string(model.CapabilityResponses) && row.UpstreamModel != "gpt-6" {
+				t.Fatalf("image model became a chat route: %+v", row)
+			}
+		}
+	})
+}

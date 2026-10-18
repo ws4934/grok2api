@@ -106,6 +106,15 @@ func AccessLog(logger *slog.Logger) gin.HandlerFunc {
 		startedAt := time.Now()
 		c.Next()
 		requestID, _ := c.Get(RequestIDKey)
-		logger.Info("http_request", "request_id", requestID, "method", c.Request.Method, "path", c.FullPath(), "status", c.Writer.Status(), "duration_ms", time.Since(startedAt).Milliseconds())
+		// Matched routes log their template so IDs and tokens stay out of the log;
+		// unmatched requests (static files, SPA pages) log the bounded raw path.
+		path := c.FullPath()
+		if path == "" {
+			path = c.Request.URL.Path
+			if len(path) > 200 {
+				path = path[:200]
+			}
+		}
+		logger.Info("http_request", "request_id", requestID, "method", c.Request.Method, "path", path, "status", c.Writer.Status(), "duration_ms", time.Since(startedAt).Milliseconds())
 	}
 }
