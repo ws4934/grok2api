@@ -23,4 +23,9 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "error",
     },
   },
+  {
+    // Provider account modules export one UI descriptor object that holds their components.
+    files: ["src/features/accounts/providers/*.tsx"],
+    rules: { "react-refresh/only-export-components": "off" },
+  },
 );

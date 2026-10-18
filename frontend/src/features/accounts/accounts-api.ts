@@ -6,7 +6,7 @@ import { createAccountTaskProgressController, type AccountTaskProgressDTO, type 
 
 export type { AccountTaskProgressDTO } from "@/features/accounts/account-task-progress";
 
-// Catalog provider id; rows from providers this page does not manage yet (e.g. "chatgpt") must still decode.
+// Catalog provider id.
 export type AccountProvider = string;
 export type BuildRouteMode = "auto" | "build" | "xai";
 export type AccountCleanupStatus = "cooldown" | "disabled" | "reauthRequired";
@@ -77,6 +77,8 @@ export type AccountDTO = {
   email?: string;
   userId?: string;
   teamId?: string;
+  // Provider plan label such as "plus"; empty when unknown.
+  plan?: string;
   enabled: boolean;
   authStatus: "active" | "reauthRequired";
   expiresAt?: string;
@@ -146,17 +148,20 @@ export type AccountSummaryDTO = {
   issues: { disabled: number; reauthRequired: number };
 };
 
-export type DeviceSessionDTO = {
+// Interactive login: "device" polls complete at intervalSeconds; "redirect" completes with the pasted callback URL.
+export type AccountAuthSessionDTO = {
   sessionId: string;
-  userCode: string;
-  verificationUri: string;
-  verificationUriComplete?: string;
-  intervalSeconds: number;
+  kind: "device" | "redirect";
   expiresAt: string;
+  verificationUri?: string;
+  verificationUriComplete?: string;
+  userCode?: string;
+  intervalSeconds?: number;
+  authorizeUrl?: string;
 };
 
-export type DevicePollDTO = {
-  status: "pending" | "succeeded" | "syncFailed";
+export type AccountAuthResultDTO = {
+  status: "pending" | "completed";
   account?: AccountDTO;
   synced?: number;
   syncFailed?: number;
@@ -189,7 +194,7 @@ const quotaWindowValidator = hasShape({
 const linkedAccountValidator = hasShape({ id: isString, provider: isString, name: isString, email: isOptional(isString), userId: isOptional(isString) });
 const accountValidator = hasShape({
   id: isString, provider: isString, authType: isString, webTier: isOptional(isOneOf("auto", "basic", "super", "heavy")),
-  webTierSyncedAt: isOptional(isString), nsfwEnabledAt: isOptional(isString), termsAcceptedAt: isOptional(isString), name: isString, email: isOptional(isString), userId: isOptional(isString), teamId: isOptional(isString),
+  webTierSyncedAt: isOptional(isString), nsfwEnabledAt: isOptional(isString), termsAcceptedAt: isOptional(isString), name: isString, email: isOptional(isString), userId: isOptional(isString), teamId: isOptional(isString), plan: isOptional(isString),
   enabled: isBoolean, authStatus: isOneOf("active", "reauthRequired"), expiresAt: isOptional(isString), refreshable: isBoolean, cloudflareCookieConfigured: isBoolean,
   buildSuperEntitled: isBoolean, buildRouteMode: isOneOf("auto", "build", "xai"), buildBotFlagged: isBoolean, buildBotFlagSource: isOptional(isNumber), modelSyncFailed: isOptional(isBoolean), refreshDueAt: isOptional(isString), lastRefreshAt: isOptional(isString), refreshFailureCount: isNumber,
   egressNodeId: isOptional(isString), egressAssignmentMode: isOptional(isOneOf("manual", "auto")),
@@ -208,12 +213,12 @@ const decodeAccountSummary = createObjectDecoder<AccountSummaryDTO>("account sum
   recovery: hasShape({ cooldown: isNumber, waitingReset: isNumber, probing: isNumber }),
   issues: hasShape({ disabled: isNumber, reauthRequired: isNumber }),
 });
-const decodeDeviceSession = createObjectDecoder<DeviceSessionDTO>("device session", {
-  sessionId: isString, userCode: isString, verificationUri: isString, verificationUriComplete: isOptional(isString),
-  intervalSeconds: isNumber, expiresAt: isString,
+const decodeAuthSession = createObjectDecoder<AccountAuthSessionDTO>("account auth session", {
+  sessionId: isString, kind: isOneOf("device", "redirect"), expiresAt: isString, verificationUri: isOptional(isString), verificationUriComplete: isOptional(isString),
+  userCode: isOptional(isString), intervalSeconds: isOptional(isNumber), authorizeUrl: isOptional(isString),
 });
-const decodeDevicePoll = createObjectDecoder<DevicePollDTO>("device poll", {
-  status: isOneOf("pending", "succeeded", "syncFailed"), account: isOptional(accountValidator), synced: isOptional(isNumber), syncFailed: isOptional(isNumber),
+const decodeAuthResult = createObjectDecoder<AccountAuthResultDTO>("account auth result", {
+  status: isOneOf("pending", "completed"), account: isOptional(accountValidator), synced: isOptional(isNumber), syncFailed: isOptional(isNumber),
 });
 
 type ListAccountsInput = {
@@ -520,12 +525,12 @@ export function refreshAllAccountTokens(onProgress?: (value: AccountTaskProgress
   return runAccountTask("/api/admin/v1/accounts/refresh-tokens", undefined, ["succeeded", "failed", "skipped"], { onProgress, signal });
 }
 
-export function refreshAllWebAccountQuotas(onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<AccountBatchResultDTO> {
-  return runAccountTask("/api/admin/v1/accounts/web/refresh-quotas", undefined, ["succeeded", "failed"], { onProgress, signal });
+function providerAccountsPath(provider: AccountProvider, path: string): string {
+  return `/api/admin/v1/providers/${encodeURIComponent(provider)}/accounts/${path}`;
 }
 
-export function refreshAllConsoleAccountQuotas(onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<AccountBatchResultDTO> {
-  return runAccountTask("/api/admin/v1/accounts/console/refresh-quotas", undefined, ["succeeded", "failed"], { onProgress, signal });
+export function refreshProviderAccountQuotas(provider: AccountProvider, onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<AccountBatchResultDTO> {
+  return runAccountTask(providerAccountsPath(provider, "refresh-quotas"), undefined, ["succeeded", "failed"], { onProgress, signal });
 }
 
 export function convertWebAccountsToBuild(input: BuildConversionInput, onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<BuildConversionResultDTO> {
@@ -540,22 +545,10 @@ export function runWebAccountScripts(input: WebAccountScriptsInput, onProgress?:
   return runAccountTask("/api/admin/v1/accounts/web/run-scripts", input, ["succeeded", "failed"], { onProgress, signal });
 }
 
-export function importAccounts(files: readonly File[], onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<AccountImportResultDTO> {
+export function importProviderAccounts(provider: AccountProvider, files: readonly File[], onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<AccountImportResultDTO> {
   const body = new FormData();
   files.forEach((file) => body.append("files", file, file.name));
-  return runAccountTask("/api/admin/v1/accounts/import", body, ["created", "updated", "skipped", "failed", "synced", "syncFailed"], { onProgress, signal, phases: importSyncPhases });
-}
-
-export function importWebAccounts(files: readonly File[], onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<AccountImportResultDTO> {
-  const body = new FormData();
-  files.forEach((file) => body.append("files", file, file.name));
-  return runAccountTask("/api/admin/v1/accounts/web/import", body, ["created", "updated", "skipped", "failed", "synced", "syncFailed"], { onProgress, signal, phases: importSyncPhases });
-}
-
-export function importConsoleAccounts(files: readonly File[], onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<AccountImportResultDTO> {
-  const body = new FormData();
-  files.forEach((file) => body.append("files", file, file.name));
-  return runAccountTask("/api/admin/v1/accounts/console/import", body, ["created", "updated", "skipped", "failed", "synced", "syncFailed"], { onProgress, signal, phases: importSyncPhases });
+  return runAccountTask(providerAccountsPath(provider, "import"), body, ["created", "updated", "skipped", "failed", "synced", "syncFailed"], { onProgress, signal, phases: importSyncPhases });
 }
 
 export function refreshAccountQuota(id: string): Promise<AccountDTO> {
@@ -701,10 +694,11 @@ export function deleteAccounts(ids: string[], provider: AccountProvider, linkedD
   );
 }
 
-export function startDeviceAuthorization(): Promise<DeviceSessionDTO> {
-  return apiRequest("/api/admin/v1/accounts/device/start", { method: "POST" }, decodeDeviceSession);
+export function startAccountAuthorization(provider: AccountProvider): Promise<AccountAuthSessionDTO> {
+  return apiRequest(providerAccountsPath(provider, "auth/start"), { method: "POST" }, decodeAuthSession);
 }
 
-export function pollDeviceAuthorization(sessionId: string, signal: AbortSignal): Promise<DevicePollDTO> {
-  return apiRequest(`/api/admin/v1/accounts/device/${sessionId}/poll`, { method: "POST", signal }, decodeDevicePoll);
+// Device sessions answer 202 {status: "pending"} until approved; slow_down is a 429.
+export function completeAccountAuthorization(provider: AccountProvider, sessionId: string, callbackUrl?: string, signal?: AbortSignal): Promise<AccountAuthResultDTO> {
+  return apiRequest(providerAccountsPath(provider, `auth/${encodeURIComponent(sessionId)}/complete`), { method: "POST", body: callbackUrl ? { callbackUrl } : {}, signal }, decodeAuthResult);
 }
