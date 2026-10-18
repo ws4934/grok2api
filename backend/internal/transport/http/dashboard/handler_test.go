@@ -17,7 +17,7 @@ import (
 func TestHandlerReturnsDashboardContract(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	service := dashboardapp.NewService(&dashboardRepositoryStub{aggregate: dashboarddomain.Aggregate{
-		Resources:       dashboarddomain.Resources{ActiveAccounts: 2, TotalAccounts: 3, BuildAccounts: 1, WebAccounts: 1, ConsoleAccounts: 1, EnabledModels: 4, TotalModels: 5, ActiveClientKeys: 6, TotalClientKeys: 7},
+		Resources:       dashboarddomain.Resources{ActiveAccounts: 2, TotalAccounts: 3, AccountsByProvider: map[string]int64{"grok_build": 1, "grok_web": 1, "grok_console": 1}, EnabledModels: 4, TotalModels: 5, ActiveClientKeys: 6, TotalClientKeys: 7},
 		Usage:           dashboarddomain.Usage{Requests: 10, SuccessfulRequests: 9, FailedRequests: 1, Tokens: 1200, FirstTokenSamples: 4, FirstTokenTotalMS: 1000, ThroughputSamples: 3, ThroughputTokens: 400, GenerationTotalMS: 8000},
 		Buckets:         []dashboarddomain.Bucket{{Index: 0, Requests: 10, Tokens: 1200}},
 		ActivityBuckets: []dashboarddomain.ActivityBucket{{Index: 179, Requests: 10}},

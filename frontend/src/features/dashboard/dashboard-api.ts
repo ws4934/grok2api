@@ -28,11 +28,7 @@ export type DashboardDTO = {
   resources: {
     activeAccounts: number;
     totalAccounts: number;
-    buildAccounts: number;
-    webAccounts: number;
-    consoleAccounts: number;
-    // Account count per provider id; when absent only the three Grok counts above are known.
-    accountsByProvider?: Record<string, number>;
+    accountsByProvider: Record<string, number>;
     enabledModels: number;
     totalModels: number;
 	activeClientKeys: number;
@@ -64,7 +60,7 @@ const decodeDashboard = createObjectDecoder<DashboardDTO>("dashboard", {
   generatedAt: isString,
   range: hasShape({ start: isString, end: isString }),
   resources: hasShape({
-    activeAccounts: isNumber, totalAccounts: isNumber, buildAccounts: isNumber, webAccounts: isNumber, consoleAccounts: isNumber, accountsByProvider: isOptional(isRecordOf(isNumber)), enabledModels: isNumber, totalModels: isNumber,
+    activeAccounts: isNumber, totalAccounts: isNumber, accountsByProvider: isRecordOf(isNumber), enabledModels: isNumber, totalModels: isNumber,
 		activeClientKeys: isNumber, totalClientKeys: isNumber,
   }),
   usage: dashboardUsage,

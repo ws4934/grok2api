@@ -50,16 +50,24 @@ func (r *DashboardRepository) Snapshot(ctx context.Context, window repository.Da
 	result := dashboarddomain.Aggregate{}
 	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var accounts struct {
-			Total           int64
-			Active          int64
-			BuildAccounts   int64
-			WebAccounts     int64
-			ConsoleAccounts int64
+			Total  int64
+			Active int64
 		}
 		if err := tx.Model(&accountModel{}).
-			Select("COUNT(*) AS total, COALESCE(SUM(CASE WHEN enabled = ? AND auth_status = ? AND (cooldown_until IS NULL OR cooldown_until <= ?) AND NOT EXISTS (SELECT 1 FROM account_quota_recovery WHERE account_quota_recovery.account_id = provider_accounts.id AND account_quota_recovery.status IN ?) THEN 1 ELSE 0 END), 0) AS active, COALESCE(SUM(CASE WHEN provider = 'grok_build' THEN 1 ELSE 0 END), 0) AS build_accounts, COALESCE(SUM(CASE WHEN provider = 'grok_web' THEN 1 ELSE 0 END), 0) AS web_accounts, COALESCE(SUM(CASE WHEN provider = 'grok_console' THEN 1 ELSE 0 END), 0) AS console_accounts", true, "active", snapshotAt, []string{"exhausted", "probing"}).
+			Select("COUNT(*) AS total, COALESCE(SUM(CASE WHEN enabled = ? AND auth_status = ? AND (cooldown_until IS NULL OR cooldown_until <= ?) AND NOT EXISTS (SELECT 1 FROM account_quota_recovery WHERE account_quota_recovery.account_id = provider_accounts.id AND account_quota_recovery.status IN ?) THEN 1 ELSE 0 END), 0) AS active", true, "active", snapshotAt, []string{"exhausted", "probing"}).
 			Scan(&accounts).Error; err != nil {
 			return err
+		}
+		var providerCounts []struct {
+			Provider string
+			Total    int64
+		}
+		if err := tx.Model(&accountModel{}).Select("provider, COUNT(*) AS total").Group("provider").Scan(&providerCounts).Error; err != nil {
+			return err
+		}
+		result.Resources.AccountsByProvider = make(map[string]int64, len(providerCounts))
+		for _, item := range providerCounts {
+			result.Resources.AccountsByProvider[item.Provider] = item.Total
 		}
 
 		var models struct {
@@ -84,9 +92,6 @@ func (r *DashboardRepository) Snapshot(ctx context.Context, window repository.Da
 
 		result.Resources.ActiveAccounts = accounts.Active
 		result.Resources.TotalAccounts = accounts.Total
-		result.Resources.BuildAccounts = accounts.BuildAccounts
-		result.Resources.WebAccounts = accounts.WebAccounts
-		result.Resources.ConsoleAccounts = accounts.ConsoleAccounts
 		result.Resources.EnabledModels = models.Enabled
 		result.Resources.TotalModels = models.Total
 		result.Resources.ActiveClientKeys = clientKeys.Active

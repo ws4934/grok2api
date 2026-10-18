@@ -35,15 +35,13 @@ type rangeDTO struct {
 }
 
 type resourcesDTO struct {
-	ActiveAccounts   int64 `json:"activeAccounts"`
-	TotalAccounts    int64 `json:"totalAccounts"`
-	BuildAccounts    int64 `json:"buildAccounts"`
-	WebAccounts      int64 `json:"webAccounts"`
-	ConsoleAccounts  int64 `json:"consoleAccounts"`
-	EnabledModels    int64 `json:"enabledModels"`
-	TotalModels      int64 `json:"totalModels"`
-	ActiveClientKeys int64 `json:"activeClientKeys"`
-	TotalClientKeys  int64 `json:"totalClientKeys"`
+	ActiveAccounts     int64            `json:"activeAccounts"`
+	TotalAccounts      int64            `json:"totalAccounts"`
+	AccountsByProvider map[string]int64 `json:"accountsByProvider"`
+	EnabledModels      int64            `json:"enabledModels"`
+	TotalModels        int64            `json:"totalModels"`
+	ActiveClientKeys   int64            `json:"activeClientKeys"`
+	TotalClientKeys    int64            `json:"totalClientKeys"`
 }
 
 type usageDTO struct {
@@ -137,15 +135,13 @@ func (h *Handler) get(c *gin.Context) {
 		GeneratedAt: result.GeneratedAt,
 		Range:       rangeDTO{Start: result.Range.Start, End: result.Range.End},
 		Resources: resourcesDTO{
-			ActiveAccounts:   result.Resources.ActiveAccounts,
-			TotalAccounts:    result.Resources.TotalAccounts,
-			BuildAccounts:    result.Resources.BuildAccounts,
-			WebAccounts:      result.Resources.WebAccounts,
-			ConsoleAccounts:  result.Resources.ConsoleAccounts,
-			EnabledModels:    result.Resources.EnabledModels,
-			TotalModels:      result.Resources.TotalModels,
-			ActiveClientKeys: result.Resources.ActiveClientKeys,
-			TotalClientKeys:  result.Resources.TotalClientKeys,
+			ActiveAccounts:     result.Resources.ActiveAccounts,
+			TotalAccounts:      result.Resources.TotalAccounts,
+			AccountsByProvider: nonNilCounts(result.Resources.AccountsByProvider),
+			EnabledModels:      result.Resources.EnabledModels,
+			TotalModels:        result.Resources.TotalModels,
+			ActiveClientKeys:   result.Resources.ActiveClientKeys,
+			TotalClientKeys:    result.Resources.TotalClientKeys,
 		},
 		Usage:     toUsageDTO(result.Usage),
 		Series:    series,
@@ -190,4 +186,12 @@ func outputTokensPerSecond(usage dashboarddomain.Usage) float64 {
 		return 0
 	}
 	return float64(usage.ThroughputTokens) * 1000 / float64(usage.GenerationTotalMS)
+}
+
+// nonNilCounts keeps the JSON field an object even when no account exists.
+func nonNilCounts(values map[string]int64) map[string]int64 {
+	if values == nil {
+		return map[string]int64{}
+	}
+	return values
 }

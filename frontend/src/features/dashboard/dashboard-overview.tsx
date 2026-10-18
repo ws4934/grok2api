@@ -24,7 +24,7 @@ export function DashboardOverview({ dashboard, locale, loading }: DashboardDataP
   const providers = useProviders().data;
   const resources = dashboard?.resources;
   const usage = dashboard?.usage;
-  const accountCounts = resources?.accountsByProvider ?? { grok_build: resources?.buildAccounts ?? 0, grok_web: resources?.webAccounts ?? 0, grok_console: resources?.consoleAccounts ?? 0 };
+  const accountCounts = resources?.accountsByProvider ?? {};
   const accountDistribution = Object.keys(accountCounts)
     .sort((left, right) => providerRank(left, providers) - providerRank(right, providers))
     .map((id) => `${providerShortLabel(id, providers)} ${formatNumber(accountCounts[id], locale)}`)
