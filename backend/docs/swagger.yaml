@@ -134,6 +134,8 @@ definitions:
     type: object
   httpserver.SwaggerResponsesRequest:
     properties:
+      background:
+        type: boolean
       input: {}
       model:
         example: grok-chat-auto
@@ -148,6 +150,11 @@ definitions:
       stream:
         example: false
         type: boolean
+      tools:
+        description: Tools may carry one image_generation tool; Background then returns
+          immediately.
+        items: {}
+        type: array
     type: object
   httpserver.SwaggerVideoAudioInput:
     properties:
@@ -402,8 +409,14 @@ paths:
     post:
       consumes:
       - application/json
-      description: 支持 JSON 与 SSE；stream=true 时返回 text/event-stream。
+      description: |-
+        支持 JSON 与 SSE；stream=true 时返回 text/event-stream。
+        携带 image_generation 工具且图片路由支持可恢复图片任务（如 ChatGPT）时按图片任务执行：默认等待并返回含 image_generation_call 的 Response；background=true 立即返回 queued 对象，用 GET /v1/responses/{response_id} 查询、POST /v1/responses/{response_id}/cancel 取消。工具未指定 model 且顶层模型为该 Provider 的文本模型时使用运行时设置 providerChatGPT.defaultImageModel。
       parameters:
+      - description: 图片任务幂等键：相同请求返回同一任务，请求体不同返回 409
+        in: header
+        name: Idempotency-Key
+        type: string
       - description: 请求
         in: body
         name: request
@@ -460,6 +473,7 @@ paths:
       tags:
       - Responses
     get:
+      description: resp_img_ 前缀的 ID 为图片任务，返回其当前状态与已生成的图片。
       parameters:
       - description: Response ID
         in: path
@@ -482,6 +496,38 @@ paths:
       security:
       - BearerAuth: []
       summary: 查询 Response
+      tags:
+      - Responses
+  /v1/responses/{response_id}/cancel:
+    post:
+      description: 仅图片任务可取消，且其图片尚未提交上游；已结束的任务原样返回。
+      parameters:
+      - description: Response ID
+        in: path
+        name: response_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties: true
+            type: object
+        "409":
+          description: Conflict
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - BearerAuth: []
+      summary: 取消 Response
       tags:
       - Responses
   /v1/responses/compact:

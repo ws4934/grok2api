@@ -14,6 +14,9 @@ type SwaggerResponsesRequest struct {
 	Store              bool   `json:"store" example:"false"`
 	PreviousResponseID string `json:"previous_response_id,omitempty"`
 	PromptCacheKey     string `json:"prompt_cache_key,omitempty"`
+	// Tools may carry one image_generation tool; Background then returns immediately.
+	Tools      []any `json:"tools,omitempty"`
+	Background bool  `json:"background,omitempty"`
 }
 
 // SwaggerChatRequest 表示最小 Chat Completions 请求。
@@ -128,10 +131,12 @@ func swaggerModels() {}
 // swaggerResponses godoc
 // @Summary 创建 Response
 // @Description 支持 JSON 与 SSE；stream=true 时返回 text/event-stream。
+// @Description 携带 image_generation 工具且图片路由支持可恢复图片任务（如 ChatGPT）时按图片任务执行：默认等待并返回含 image_generation_call 的 Response；background=true 立即返回 queued 对象，用 GET /v1/responses/{response_id} 查询、POST /v1/responses/{response_id}/cancel 取消。工具未指定 model 且顶层模型为该 Provider 的文本模型时使用运行时设置 providerChatGPT.defaultImageModel。
 // @Tags Responses
 // @Security BearerAuth
 // @Accept json
 // @Produce json
+// @Param Idempotency-Key header string false "图片任务幂等键：相同请求返回同一任务，请求体不同返回 409"
 // @Param request body SwaggerResponsesRequest true "请求"
 // @Success 200 {object} map[string]any
 // @Failure 400 {object} map[string]any
@@ -152,6 +157,7 @@ func swaggerCompactResponse() {}
 
 // swaggerGetResponse godoc
 // @Summary 查询 Response
+// @Description resp_img_ 前缀的 ID 为图片任务，返回其当前状态与已生成的图片。
 // @Tags Responses
 // @Security BearerAuth
 // @Produce json
@@ -171,6 +177,19 @@ func swaggerGetResponse() {}
 // @Failure 404 {object} map[string]any
 // @Router /v1/responses/{response_id} [delete]
 func swaggerDeleteResponse() {}
+
+// swaggerCancelResponse godoc
+// @Summary 取消 Response
+// @Description 仅图片任务可取消，且其图片尚未提交上游；已结束的任务原样返回。
+// @Tags Responses
+// @Security BearerAuth
+// @Produce json
+// @Param response_id path string true "Response ID"
+// @Success 200 {object} map[string]any
+// @Failure 404 {object} map[string]any
+// @Failure 409 {object} map[string]any
+// @Router /v1/responses/{response_id}/cancel [post]
+func swaggerCancelResponse() {}
 
 // swaggerChat godoc
 // @Summary 创建 Chat Completion

@@ -332,7 +332,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "支持 JSON 与 SSE；stream=true 时返回 text/event-stream。",
+                "description": "支持 JSON 与 SSE；stream=true 时返回 text/event-stream。\n携带 image_generation 工具且图片路由支持可恢复图片任务（如 ChatGPT）时按图片任务执行：默认等待并返回含 image_generation_call 的 Response；background=true 立即返回 queued 对象，用 GET /v1/responses/{response_id} 查询、POST /v1/responses/{response_id}/cancel 取消。工具未指定 model 且顶层模型为该 Provider 的文本模型时使用运行时设置 providerChatGPT.defaultImageModel。",
                 "consumes": [
                     "application/json"
                 ],
@@ -344,6 +344,12 @@ const docTemplate = `{
                 ],
                 "summary": "创建 Response",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "图片任务幂等键：相同请求返回同一任务，请求体不同返回 409",
+                        "name": "Idempotency-Key",
+                        "in": "header"
+                    },
                     {
                         "description": "请求",
                         "name": "request",
@@ -425,6 +431,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
+                "description": "resp_img_ 前缀的 ID 为图片任务，返回其当前状态与已生成的图片。",
                 "produces": [
                     "application/json"
                 ],
@@ -490,6 +497,55 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/v1/responses/{response_id}/cancel": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "仅图片任务可取消，且其图片尚未提交上游；已结束的任务原样返回。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Responses"
+                ],
+                "summary": "取消 Response",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Response ID",
+                        "name": "response_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "object",
                             "additionalProperties": true
@@ -873,6 +929,9 @@ const docTemplate = `{
         "httpserver.SwaggerResponsesRequest": {
             "type": "object",
             "properties": {
+                "background": {
+                    "type": "boolean"
+                },
                 "input": {},
                 "model": {
                     "type": "string",
@@ -891,6 +950,11 @@ const docTemplate = `{
                 "stream": {
                     "type": "boolean",
                     "example": false
+                },
+                "tools": {
+                    "description": "Tools may carry one image_generation tool; Background then returns immediately.",
+                    "type": "array",
+                    "items": {}
                 }
             }
         },

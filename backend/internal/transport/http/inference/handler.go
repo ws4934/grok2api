@@ -109,6 +109,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/responses/compact", h.compactResponse)
 	router.GET("/responses/:responseId", h.getResponse)
 	router.DELETE("/responses/:responseId", h.deleteResponse)
+	router.POST("/responses/:responseId/cancel", h.cancelResponse)
 }
 
 type responsesRequest struct {
@@ -1098,6 +1099,9 @@ func (h *Handler) handleCreate(c *gin.Context, compact bool) {
 	}
 	requestID, _ := c.Get(middleware.RequestIDKey)
 	requestIDValue, _ := requestID.(string)
+	if !compact && h.handleImageResponse(c, body, clientKey, requestIDValue) {
+		return
+	}
 	input := gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
 		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
@@ -1144,6 +1148,11 @@ func decodeSingleJSON(reader io.Reader, target any, disallowUnknown bool) error 
 }
 
 func (h *Handler) getResponse(c *gin.Context) {
+	// Image jobs carry their own prefix and never reach the stored-response lookup.
+	if id := strings.TrimSpace(c.Param("responseId")); strings.HasPrefix(id, gateway.ImageJobIDPrefix) {
+		h.getImageResponse(c, id)
+		return
+	}
 	h.handleOwnedResource(c, false)
 }
 
@@ -2260,7 +2269,13 @@ func writeGatewayError(c *gin.Context, err error) {
 	case errors.Is(err, gateway.ErrResponseStateUnsupported), errors.Is(err, gateway.ErrConversationUnsupported):
 		status, code = http.StatusBadRequest, "unsupported_parameter"
 		message = err.Error()
-	case errors.Is(err, gateway.ErrVideoInputTooLarge), errors.Is(err, gateway.ErrVideoInputUnavailable), errors.Is(err, gateway.ErrVideoParameterInvalid):
+	case errors.Is(err, gateway.ErrIdempotencyConflict):
+		status, code = http.StatusConflict, "idempotency_conflict"
+		message = err.Error()
+	case errors.Is(err, gateway.ErrMediaJobNotCancellable):
+		status, code = http.StatusConflict, "response_not_cancellable"
+		message = "The image was already submitted upstream and can no longer be cancelled"
+	case errors.Is(err, gateway.ErrVideoInputTooLarge), errors.Is(err, gateway.ErrVideoInputUnavailable), errors.Is(err, gateway.ErrVideoParameterInvalid), errors.Is(err, gateway.ErrImageInputTooLarge):
 		status, code = http.StatusBadRequest, "invalid_request"
 		message = err.Error()
 	case errors.Is(err, gateway.ErrVideoOperationUnsupported):
