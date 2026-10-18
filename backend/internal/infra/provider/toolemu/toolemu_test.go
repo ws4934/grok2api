@@ -159,6 +159,53 @@ func TestClosingTagsInsideArguments(t *testing.T) {
 	}
 }
 
+func TestSieveEndOfStreamEdgeCases(t *testing.T) {
+	available := map[string]struct{}{"lookup": {}}
+	call := `<tool_call><tool_name>lookup</tool_name><parameters>{"q":1}</parameters></tool_call>`
+	block := "<tool_calls>" + call + "</tool_calls>"
+	// A reply that ends without </tool_calls> keeps its complete calls.
+	if text, calls := sieveAll(available, "Hi <tool_calls>"+call, 5); text != "Hi " || len(calls) != 1 || calls[0].Arguments != `{"q":1}` {
+		t.Fatalf("unclosed root: text %q calls %#v", text, calls)
+	}
+	// Grok Web feeds each delta once, so Flush finds text before a block.
+	sieve := NewSieve(available)
+	undeclared := strings.ReplaceAll(block, "lookup", "rm")
+	first := sieve.Feed(undeclared + " visible " + block)
+	if rest := sieve.Flush(); first.Raw != undeclared || len(first.Calls) != 0 || rest.SafeText != " visible " || len(rest.Calls) != 1 {
+		t.Fatalf("first %#v rest %#v", first, rest)
+	}
+	// One Markdown fence directly around a parsed block goes with it; other
+	// fences stay.
+	fenced := "Checking.\n```xml\n" + block + "\n```\nDone ```go\nx\n```"
+	want := "Checking.\n\nDone ```go\nx\n```"
+	if parsed := Parse(fenced, available); len(parsed.Calls) != 1 || Strip(fenced, parsed) != want {
+		t.Fatalf("parsed %#v strip %q", parsed, Strip(fenced, parsed))
+	}
+	for _, size := range []int{1, 4, len(fenced)} {
+		if text, calls := sieveAll(available, fenced, size); text != want || len(calls) != 1 {
+			t.Fatalf("fenced size %d: text %q calls %#v", size, text, calls)
+		}
+	}
+	if text, calls := sieveAll(available, "```xml\n<tool_calls>"+call+"\n```", 2); text != "" || len(calls) != 1 {
+		t.Fatalf("fenced unclosed root: text %q calls %#v", text, calls)
+	}
+	// A bare ``` before a block may close a code block: it stays.
+	code := "```go\nx\n```\n"
+	if parsed := Parse(code+block, available); len(parsed.Calls) != 1 || Strip(code+block, parsed) != strings.TrimSpace(code) {
+		t.Fatalf("code block: strip %q", Strip(code+block, parsed))
+	}
+	for _, size := range []int{1, len(code + block)} {
+		if text, calls := sieveAll(available, code+block, size); text != code || len(calls) != 1 {
+			t.Fatalf("code block size %d: text %q calls %#v", size, text, calls)
+		}
+	}
+	// Without declared calls a fenced block stays text as written.
+	shown := strings.ReplaceAll(fenced, "lookup", "rm")
+	if text, calls := sieveAll(available, shown, 3); text != shown || len(calls) != 0 {
+		t.Fatalf("undeclared fenced: text %q calls %#v", text, calls)
+	}
+}
+
 func TestParseKeepsOnlyDeclaredFunctions(t *testing.T) {
 	parsed := Parse(`<tool_calls><tool_call><tool_name>rm</tool_name><parameters>{}</parameters></tool_call><tool_call><tool_name>lookup</tool_name><parameters>{"q":1}</parameters></tool_call></tool_calls>`, map[string]struct{}{"lookup": {}})
 	if len(parsed.Calls) != 1 || parsed.Calls[0].Name != "lookup" || !strings.HasPrefix(parsed.Calls[0].ID, "call_") {

@@ -294,7 +294,7 @@ func Parse(text string, available map[string]struct{}) ParseResult {
 	}
 	if open := rootOpenPattern.FindStringIndex(text); open != nil {
 		if calls, end := scanRoot(text, open[1], true); end >= 0 {
-			result.Start, result.End = open[0], end
+			result.Start, result.End = unfence(text, open[0], end)
 			for _, call := range calls {
 				appendCall(&result.Calls, html.UnescapeString(strings.TrimSpace(call.name)), call.arguments, available)
 			}
@@ -476,6 +476,9 @@ func Strip(text string, parsed ParseResult) string {
 const (
 	openTag  = "<tool_calls"
 	closeTag = "</tool_calls>"
+	// maxFence bounds the whitespace and language name of a Markdown fence
+	// recognised around a block.
+	maxFence = 64
 )
 
 // Sieve holds back tool markup in a text stream until its block is complete,
@@ -485,11 +488,14 @@ type Sieve struct {
 	available map[string]struct{}
 	// buffer is held text that may still begin a block.
 	buffer string
-	// block is the block being captured and scanned how much of it was
-	// searched for closeTag, so a long block costs linear time.
-	block     strings.Builder
-	capturing bool
-	scanned   int
+	// block is the block being captured, from a Markdown fence opener before
+	// it if any (open is where <tool_calls starts), and scanned how much of it
+	// was searched for closeTag, so a long block costs linear time.
+	block         strings.Builder
+	capturing     bool
+	open, scanned int
+	// unfence drops the closing fence after a fenced block that became calls.
+	unfence bool
 }
 
 func NewSieve(available map[string]struct{}) *Sieve {
@@ -503,15 +509,29 @@ func (s *Sieve) Feed(chunk string) StreamResult {
 		s.block.WriteString(chunk)
 	} else {
 		text := s.buffer + chunk
+		if s.unfence {
+			n := fenceClose(text, false)
+			if n == -2 {
+				s.buffer = text
+				return StreamResult{}
+			}
+			if s.unfence = false; n > 0 {
+				text = text[n:]
+			}
+		}
 		index := indexFold(text, openTag)
 		if index < 0 {
 			hold := holdFrom(text)
 			s.buffer = text[hold:]
 			return StreamResult{SafeText: text[:hold]}
 		}
-		safe, s.buffer = text[:index], ""
-		s.block.WriteString(text[index:])
-		s.capturing, s.scanned = true, 0
+		start := index
+		if fence, partial := fenceTail(text[:index]); fence >= 0 && !partial {
+			start = fence
+		}
+		safe, s.buffer = text[:start], ""
+		s.block.WriteString(text[start:])
+		s.capturing, s.open, s.scanned = true, index-start, index-start
 	}
 	raw := s.block.String()
 	for {
@@ -522,10 +542,11 @@ func (s *Sieve) Feed(chunk string) StreamResult {
 		}
 		s.scanned += at + len(closeTag)
 		// A </tool_calls> inside a JSON argument does not end the block.
-		if end := blockEnd(raw, s.scanned); end >= 0 {
-			s.buffer, s.capturing = strings.Clone(raw[end:]), false
+		if end := s.blockEnd(raw, s.scanned); end >= 0 {
+			calls := Parse(raw[:end], s.available).Calls
+			s.buffer, s.capturing, s.unfence = strings.Clone(raw[end:]), false, s.open > 0 && len(calls) > 0
 			s.block.Reset()
-			return StreamResult{SafeText: safe, Calls: Parse(raw[:end], s.available).Calls, Complete: true, Raw: raw[:end]}
+			return StreamResult{SafeText: safe, Calls: calls, Complete: true, Raw: raw[:end]}
 		}
 	}
 }
@@ -533,41 +554,141 @@ func (s *Sieve) Feed(chunk string) StreamResult {
 // blockEnd is where a captured block ends: after the </tool_calls> that closes
 // its root outside JSON arguments, or at candidate when it does not open with
 // a plain <tool_calls>; -1 while the root is still open.
-func blockEnd(raw string, candidate int) int {
-	open := rootOpenPattern.FindStringIndex(raw)
+func (s *Sieve) blockEnd(raw string, candidate int) int {
+	open := rootOpenPattern.FindStringIndex(raw[s.open:])
 	if open == nil || open[0] != 0 {
 		return candidate
 	}
-	_, end := scanRoot(raw, open[1], false)
+	_, end := scanRoot(raw, s.open+open[1], false)
 	return end
 }
 
-// Flush ends the stream: held text is parsed once more or released.
+// Flush ends the stream. Complete blocks are taken as Feed takes them (the
+// markup of a block without declared calls becomes text), a block left open
+// is parsed as if its root were closed, and the rest is released.
 func (s *Sieve) Flush() StreamResult {
+	var text strings.Builder
+	var calls []Call
+	for result := s.Feed(""); ; result = s.Feed("") {
+		text.WriteString(result.SafeText)
+		calls = append(calls, result.Calls...)
+		if !result.Complete {
+			break
+		}
+		if len(result.Calls) == 0 {
+			text.WriteString(result.Raw)
+		}
+	}
 	raw := s.buffer
 	if s.capturing {
 		raw = s.block.String()
 	}
-	s.buffer, s.capturing = "", false
-	s.block.Reset()
-	if raw == "" {
-		return StreamResult{}
-	}
-	parsed := Parse(raw, s.available)
-	if len(parsed.Calls) > 0 {
-		return StreamResult{Calls: parsed.Calls, Complete: true, Raw: raw}
-	}
-	return StreamResult{SafeText: raw, Complete: parsed.SawSyntax, Raw: raw}
-}
-
-// holdFrom is where a block may begin at the end of text: a partial <tool_calls.
-func holdFrom(text string) int {
-	for size := min(len(openTag)-1, len(text)); size > 0; size-- {
-		if hasFoldPrefix(text[len(text)-size:], openTag[:size]) {
-			return len(text) - size
+	if s.unfence {
+		if n := fenceClose(raw, true); n >= 0 {
+			raw = raw[n:]
 		}
 	}
-	return len(text)
+	parsed := Parse(raw, s.available)
+	if s.capturing && parsed.End < 0 {
+		parsed = Parse(raw+closeTag, s.available)
+		parsed.End = min(parsed.End, len(raw))
+	}
+	*s = Sieve{available: s.available}
+	if len(parsed.Calls) > 0 {
+		text.WriteString(raw[:parsed.Start])
+		text.WriteString(raw[parsed.End:])
+		calls = append(calls, parsed.Calls...)
+	} else {
+		text.WriteString(raw)
+	}
+	return StreamResult{SafeText: text.String(), Calls: calls, Complete: len(calls) > 0 || parsed.SawSyntax, Raw: raw}
+}
+
+// holdFrom is where a block may begin at the end of text: a partial
+// <tool_calls, or a Markdown fence opener that may come before one.
+func holdFrom(text string) int {
+	hold := len(text)
+	for size := min(len(openTag)-1, len(text)); size > 0; size-- {
+		if hasFoldPrefix(text[len(text)-size:], openTag[:size]) {
+			hold = len(text) - size
+			break
+		}
+	}
+	if fence, _ := fenceTail(text[:hold]); fence >= 0 {
+		return fence
+	}
+	return hold
+}
+
+// unfence widens [start, end) of a parsed block over one Markdown fence that
+// directly wraps it; a fence left open ends with the text.
+func unfence(text string, start, end int) (int, int) {
+	if fence, partial := fenceTail(text[:start]); fence >= 0 && !partial {
+		if n := fenceClose(text[end:], true); n >= 0 {
+			return fence, end + n
+		}
+	}
+	return start, end
+}
+
+// fenceTail finds a Markdown fence opener (``` and a language name) that ends
+// text, trailing whitespace aside. It returns where the opener starts, or -1;
+// partial reports backticks that may still become one. A bare ``` does not
+// count: it may close an earlier code block.
+func fenceTail(text string) (int, bool) {
+	limit := max(len(text)-maxFence, 0)
+	end := len(text)
+	for end > limit && isSpace(text[end-1]) {
+		end--
+	}
+	i := end
+	for i > limit && isInfo(text[i-1]) {
+		i--
+	}
+	j := i
+	for j > limit && text[j-1] == '`' {
+		j--
+	}
+	switch run := i - j; {
+	case j > 0 && text[j-1] == '`':
+	case run == 3 && end > i:
+		return j, false
+	case run > 0 && run <= 3 && i == len(text):
+		return j, true
+	}
+	return -1, false
+}
+
+// fenceClose matches the line that closes a Markdown fence at the start of
+// text: whitespace, then ``` with no language name after it. It returns the
+// length to drop, or -1. At the end of the reply (final) whitespace alone
+// also closes the fence; before that, -2 asks for more text.
+func fenceClose(text string, final bool) int {
+	i := 0
+	for i < len(text) && i < maxFence && isSpace(text[i]) {
+		i++
+	}
+	switch rest := text[i:]; {
+	case len(rest) > 3 && strings.HasPrefix(rest, "```"):
+		if isInfo(rest[3]) || rest[3] == '`' {
+			return -1
+		}
+		return i + 3
+	case !final && i < maxFence && strings.HasPrefix("```", rest):
+		return -2
+	case rest == "```" || final && rest == "":
+		return len(text)
+	}
+	return -1
+}
+
+func isSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
+}
+
+// isInfo reports a byte of a fence's language name, such as xml or c++.
+func isInfo(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("_-+.#", c) >= 0
 }
 
 // indexFold is strings.Index on text with ASCII letters lowercased, without

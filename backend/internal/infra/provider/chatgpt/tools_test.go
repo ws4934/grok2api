@@ -220,6 +220,18 @@ func TestEmulatedToolHistoryRendersCallsAndResults(t *testing.T) {
 	}
 }
 
+// A block left open at the end of the reply, or wrapped in a Markdown fence,
+// still becomes a call and leaves no markup as text.
+func TestEmulatedCallUnclosedOrFenced(t *testing.T) {
+	unclosed := `<tool_calls><tool_call><tool_name>lookup</tool_name><parameters>{"q":"x"}</parameters></tool_call>`
+	for _, answer := range []string{unclosed, "```xml\n" + unclosed + "</tool_calls>\n```"} {
+		_, object := respondTo(t, "responses", answer, `{"model":"gpt-5","tools":`+lookupTool+`,"input":"find x"}`)
+		if calls := outputOf(object, "function_call"); len(calls) != 1 || calls[0]["arguments"] != `{"q":"x"}` || len(outputOf(object, "message")) != 0 {
+			t.Fatalf("%q: output %v", answer, object["output"])
+		}
+	}
+}
+
 func TestToolCallsOnlyForDeclaredFunctionsWhenAllowed(t *testing.T) {
 	plain := `<tool_calls><tool_call><tool_name>lookup</tool_name><parameters>{"q":"x"}</parameters></tool_call></tool_calls>`
 	payload, object := respondTo(t, "responses", plain, `{"model":"gpt-5","tools":`+lookupTool+`,"tool_choice":"none","input":"x"}`)
