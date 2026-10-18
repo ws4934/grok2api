@@ -147,7 +147,27 @@ type ProviderConfig struct {
 	Build   BuildProviderConfig   `yaml:"build"`
 	Web     WebProviderConfig     `yaml:"web"`
 	Console ConsoleProviderConfig `yaml:"console"`
+	ChatGPT ChatGPTProviderConfig `yaml:"chatgpt"`
 }
+
+// ChatGPTProviderConfig holds the ChatGPT web provider runtime settings.
+type ChatGPTProviderConfig struct {
+	// ImageConversationModel is the ChatGPT model slug that drives image
+	// generation; empty disables image routes until configured.
+	ImageConversationModel string `yaml:"imageConversationModel"`
+	OutputTokenLimit       int    `yaml:"outputTokenLimit"`
+	VisionTokens           int    `yaml:"visionTokens"`
+	// DefaultImageModel is the public image route used by a Responses
+	// image_generation tool that names no model.
+	DefaultImageModel string `yaml:"defaultImageModel"`
+	// CloudflareClearance solves challenges on demand through FlareSolverr.
+	CloudflareClearance bool `yaml:"cloudflareClearance"`
+}
+
+const (
+	DefaultChatGPTOutputTokenLimit = 16384
+	DefaultChatGPTVisionTokens     = 256
+)
 
 type BuildProviderConfig struct {
 	BaseURL               string   `yaml:"baseURL"`
@@ -656,6 +676,9 @@ func (c Config) Validate() error {
 	if err != nil || consoleURL.Scheme != "https" || consoleURL.Host == "" || consoleURL.User != nil {
 		return errors.New("provider.console.baseURL 必须是无凭据的 HTTPS URL")
 	}
+	if c.Provider.ChatGPT.OutputTokenLimit < 1 || c.Provider.ChatGPT.OutputTokenLimit > 131072 || c.Provider.ChatGPT.VisionTokens < 0 || c.Provider.ChatGPT.VisionTokens > 100000 {
+		return errors.New("provider.chatgpt.outputTokenLimit 必须在 1 到 131072 之间，visionTokens 必须在 0 到 100000 之间")
+	}
 	if c.Provider.Console.ChatTimeout.Value() < 5*time.Second || c.Provider.Console.ChatTimeout.Value() > 30*time.Minute {
 		return errors.New("provider.console.chatTimeout 必须在 5 秒到 30 分钟之间")
 	}
@@ -918,6 +941,7 @@ func defaultConfig() Config {
 				RecoveryBackoffMax: Duration(30 * time.Minute),
 			},
 			Console: ConsoleProviderConfig{BaseURL: "https://console.x.ai", ChatTimeout: Duration(5 * time.Minute), StreamIdleTimeout: Duration(settingsdomain.DefaultConsoleStreamIdleTimeout)},
+			ChatGPT: ChatGPTProviderConfig{OutputTokenLimit: DefaultChatGPTOutputTokenLimit, VisionTokens: DefaultChatGPTVisionTokens},
 		},
 		Batch: BatchConfig{
 			ImportConcurrency: 25, ConversionConcurrency: 25, SyncConcurrency: 25,

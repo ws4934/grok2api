@@ -110,13 +110,13 @@ type AccountSummary struct {
 }
 
 type ModelListFilter struct {
-	Provider    string
-	Providers   []string
-	Tiers       []string
+	Provider  string
+	Providers []string
+	Tiers     []string
 	// TierExemptProviders bypass the tier filter (no reliable free/paid classes).
 	TierExemptProviders []string
-	Enabled     *bool
-	ActiveScope bool
+	Enabled             *bool
+	ActiveScope         bool
 }
 
 type ModelListQuery struct {

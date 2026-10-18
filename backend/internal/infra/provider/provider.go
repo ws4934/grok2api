@@ -481,6 +481,11 @@ type CredentialSeed struct {
 	WebTermsAcceptedAt      *time.Time
 	WebTermsAcceptedVersion int
 	WebBirthDateSetAt       *time.Time
+	// Plan is the provider's subscription label (for example "plus"); empty when unknown.
+	Plan string
+	// State holds provider-owned credential material beyond the tokens (for
+	// example id_token or a browser profile). It is stored encrypted as JSON.
+	State map[string]string
 }
 
 type QuotaSnapshot struct {
@@ -512,6 +517,9 @@ type ImageGenerationRequest struct {
 	ResponseFormat string
 	Streaming      bool
 	PartialImages  int
+	// OutputFormat and Background follow the OpenAI Images API; empty means provider default.
+	OutputFormat string
+	Background   string
 }
 
 type ImageInput struct {
@@ -533,6 +541,10 @@ type ImageEditRequest struct {
 	ResponseFormat string
 	Streaming      bool
 	PartialImages  int
+	OutputFormat   string
+	Background     string
+	// MaskURL is a data URI or https URL of the edit mask; empty means no mask.
+	MaskURL string
 }
 
 // VideoOperation selects the official xAI video endpoint family.
@@ -678,7 +690,9 @@ type VoiceInfo struct {
 type RefreshedCredential struct {
 	EncryptedAccessToken  string
 	EncryptedRefreshToken string
-	ExpiresAt             time.Time
+	// EncryptedState replaces the stored provider state when non-empty.
+	EncryptedState string
+	ExpiresAt      time.Time
 	// RefreshTokenRotated reports that the OAuth response explicitly returned
 	// a different refresh token. It is diagnostic metadata only; token values
 	// must never be logged.
@@ -724,6 +738,37 @@ type DeviceOAuthAdapter interface {
 	PollDeviceAuthorization(ctx context.Context, deviceCode string) (CredentialSeed, error)
 }
 
+// AuthorizationKind distinguishes polled device flows from browser redirects.
+type AuthorizationKind string
+
+const (
+	AuthorizationDevice   AuthorizationKind = "device"
+	AuthorizationRedirect AuthorizationKind = "redirect"
+)
+
+// AuthorizationChallenge is what an administrator needs to finish an
+// interactive login. State is opaque adapter data (device code, PKCE
+// verifier); it is kept server side and never returned to clients.
+type AuthorizationChallenge struct {
+	Kind                    AuthorizationKind
+	State                   string
+	VerificationURI         string
+	VerificationURIComplete string
+	UserCode                string
+	AuthorizeURL            string
+	Interval                time.Duration
+	ExpiresIn               time.Duration
+}
+
+// InteractiveAuthAdapter adds accounts through an administrator-driven login.
+// Device flows complete with an empty input and return ErrAuthorizationPending
+// or ErrSlowDown until approved; redirect flows take the full callback URL.
+type InteractiveAuthAdapter interface {
+	Adapter
+	StartAuthorization(ctx context.Context) (AuthorizationChallenge, error)
+	CompleteAuthorization(ctx context.Context, challenge AuthorizationChallenge, input string) (CredentialSeed, error)
+}
+
 type CredentialCodecAdapter interface {
 	Adapter
 	ParseImportedCredentials(data []byte) ([]CredentialSeed, error)
@@ -760,6 +805,8 @@ type AccountIdentity struct {
 	Email  string
 	UserID string
 	TeamID string
+	// Plan is the subscription label reported by upstream; empty leaves the stored plan unchanged.
+	Plan string
 }
 
 type AccountIdentityAdapter interface {
@@ -1051,6 +1098,11 @@ func (r *Registry) Validate() error {
 				return fmt.Errorf("Provider %s 声明凭据刷新但未实现适配器", value)
 			}
 		}
+		if definition.Credential.RedirectOAuth {
+			if _, ok := adapter.(InteractiveAuthAdapter); !ok {
+				return fmt.Errorf("Provider %s 声明了跳转授权但未实现交互授权接口", value)
+			}
+		}
 		if definition.Credential.DeviceOAuth {
 			if _, ok := adapter.(DeviceOAuthAdapter); !ok {
 				return fmt.Errorf("Provider %s 声明 Device OAuth 但未实现适配器", value)
@@ -1173,6 +1225,15 @@ func (r *Registry) DeviceOAuth(value account.Provider) (DeviceOAuthAdapter, bool
 		return nil, false
 	}
 	result, ok := adapter.(DeviceOAuthAdapter)
+	return result, ok
+}
+
+func (r *Registry) InteractiveAuth(value account.Provider) (InteractiveAuthAdapter, bool) {
+	adapter, ok := r.Get(value)
+	if !ok {
+		return nil, false
+	}
+	result, ok := adapter.(InteractiveAuthAdapter)
 	return result, ok
 }
 

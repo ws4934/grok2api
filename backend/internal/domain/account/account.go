@@ -178,10 +178,14 @@ type Credential struct {
 	EncryptedAccessToken      string
 	EncryptedRefreshToken     string
 	EncryptedCloudflareCookie string
-	ExpiresAt                 time.Time
-	RefreshDueAt              *time.Time
-	LastRefreshAt             *time.Time
-	RefreshFailureCount       int
+	// EncryptedState is the provider-owned credential state (encrypted JSON); empty when unused.
+	EncryptedState string
+	// Plan is the provider subscription label shown to administrators; empty when unknown.
+	Plan                string
+	ExpiresAt           time.Time
+	RefreshDueAt        *time.Time
+	LastRefreshAt       *time.Time
+	RefreshFailureCount int
 	// RefreshUnclassifiedAuthCount counts consecutive OAuth 400/401 rejections
 	// that cannot be classified from a machine-readable error code.
 	RefreshUnclassifiedAuthCount int

@@ -67,6 +67,9 @@ type CredentialSurface struct {
 	Import      bool
 	Refresh     bool
 	DeviceOAuth bool
+	// RedirectOAuth providers log in through a browser redirect whose callback
+	// URL the administrator pastes back (OAuth authorization code + PKCE).
+	RedirectOAuth bool
 }
 
 // UsageKind 表示文本推理 usage 的权威性；媒体请求仍由独立计费路径记录。
@@ -94,6 +97,10 @@ type ProfileSurface struct {
 	// EgressScopes lists the egress scopes the provider uses. The first one is
 	// the primary scope and equals the provider ID.
 	EgressScopes []egressdomain.Scope
+	// DefaultMaxConcurrent is the per-account concurrency for new accounts; 0 keeps the shared default.
+	DefaultMaxConcurrent int
+	// QuotaModes lists the quota window modes shown for the provider's accounts.
+	QuotaModes []string
 }
 
 // Definition 是 Provider 注册表的权威静态描述；渠道专属协议仍由各 Adapter 实现。
@@ -120,6 +127,7 @@ type DefinitionAdapter interface {
 func (d Definition) Clone() Definition {
 	d.ModelCapabilities = append([]modeldomain.Capability(nil), d.ModelCapabilities...)
 	d.Profile.EgressScopes = append([]egressdomain.Scope(nil), d.Profile.EgressScopes...)
+	d.Profile.QuotaModes = append([]string(nil), d.Profile.QuotaModes...)
 	return d
 }
 
@@ -198,7 +206,7 @@ func (d Definition) Validate() error {
 	if (d.Conversation.Compact || d.Conversation.StoredResponses) && !d.Conversation.Responses {
 		return fmt.Errorf("Provider %s 的 Responses 扩展能力缺少 Responses 基础能力", d.Provider)
 	}
-	if d.Credential.AuthType != account.AuthTypeOAuth && (d.Credential.Refresh || d.Credential.DeviceOAuth) {
+	if d.Credential.AuthType != account.AuthTypeOAuth && (d.Credential.Refresh || d.Credential.DeviceOAuth || d.Credential.RedirectOAuth) {
 		return fmt.Errorf("Provider %s 的非 OAuth 凭据不能声明刷新或 Device OAuth", d.Provider)
 	}
 	mediaCapabilities := []struct {
