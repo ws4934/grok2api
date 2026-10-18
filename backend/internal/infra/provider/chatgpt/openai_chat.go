@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -55,28 +56,11 @@ func (c *OpenAIChat) Stream(ctx context.Context, account wireAccount, request wi
 	if err != nil {
 		return err
 	}
-	applyOpenAITimezone(ctx, payload)
-	scripts, build, err := c.Image.bootstrap(ctx, account)
-	if err != nil {
-		return err
-	}
-	requirements, err := c.Image.chatRequirements(ctx, account, scripts, build)
-	if err != nil {
-		return err
-	}
-	headers := c.Image.requirementHeaders(requirements)
-	headers["Accept"] = "text/event-stream"
-	if err := markSubmitted(ctx); err != nil {
-		return err
-	}
-	response, err := c.Image.do(ctx, "POST", "/backend-api/conversation", account, payload, headers, true)
+	response, err := c.Image.postConversation(ctx, account, payload)
 	if err != nil {
 		return err
 	}
 	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return readOpenAIHTTPError(response, "/backend-api/conversation")
-	}
 	// ChatGPT echoes the request's messages before the answer; their IDs
 	// keep an earlier assistant turn from being read as the reply.
 	sent := map[string]bool{}
@@ -85,6 +69,36 @@ func (c *OpenAIChat) Stream(ctx context.Context, account wireAccount, request wi
 		sent[stringValue(message["id"])] = true
 	}
 	return scanOpenAIChat(response.Body, sent, onEvent, func(v any) { notifyUpstreamModel(ctx, v) })
+}
+
+// postConversation submits a conversation payload with its Sentinel
+// requirements and returns the open event stream; the request counts as
+// submitted from here on.
+func (o *OpenAIImage) postConversation(ctx context.Context, account wireAccount, payload map[string]any) (*http.Response, error) {
+	ctx = o.withTimezone(ctx, account)
+	applyOpenAITimezone(ctx, payload)
+	scripts, build, err := o.bootstrap(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	requirements, err := o.chatRequirements(ctx, account, scripts, build)
+	if err != nil {
+		return nil, err
+	}
+	headers := o.requirementHeaders(requirements)
+	headers["Accept"] = "text/event-stream"
+	if err := markSubmitted(ctx); err != nil {
+		return nil, err
+	}
+	response, err := o.do(ctx, "POST", "/backend-api/conversation", account, payload, headers, true)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		defer response.Body.Close()
+		return nil, readOpenAIHTTPError(response, "/backend-api/conversation")
+	}
+	return response, nil
 }
 
 func scanOpenAIChat(reader io.Reader, inputs map[string]bool, emit func(OpenAIChatEvent) error, observers ...func(any)) error {
