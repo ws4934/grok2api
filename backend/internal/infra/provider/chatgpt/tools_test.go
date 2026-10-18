@@ -312,7 +312,7 @@ func TestWebSearchThroughChatAndMessages(t *testing.T) {
 	credential := testCredential(t, a, credentials{AccessToken: "AT"})
 	chat := decodeBody(t, forward(t, a, credential, "chat", `{"model":"gpt-5","web_search_options":{},"messages":[{"role":"user","content":"rust?"}]}`, false))
 	message := chat["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)
-	if annotations, _ := message["annotations"].([]any); message["content"] != citedText || len(annotations) != 1 || annotations[0].(map[string]any)["url"] != "https://blog.rust-lang.org/r" {
+	if annotations, _ := message["annotations"].([]any); message["content"] != citedText || len(annotations) != 1 || annotations[0].(map[string]any)["url_citation"].(map[string]any)["url"] != "https://blog.rust-lang.org/r" {
 		t.Fatalf("chat = %v", message)
 	}
 

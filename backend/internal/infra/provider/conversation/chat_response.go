@@ -30,7 +30,11 @@ func chatResponse(value parsedResponse, openAIUsage bool) map[string]any {
 		message["refusal"] = value.Refusal
 	}
 	if len(value.Annotations) > 0 {
-		message["annotations"] = value.Annotations
+		annotations := make([]any, 0, len(value.Annotations))
+		for _, annotation := range value.Annotations {
+			annotations = append(annotations, chatAnnotation(annotation))
+		}
+		message["annotations"] = annotations
 	}
 	id := strings.Replace(value.ID, "resp_", "chatcmpl_", 1)
 	return map[string]any{
@@ -38,6 +42,23 @@ func chatResponse(value parsedResponse, openAIUsage bool) map[string]any {
 		"choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finishReason}},
 		"usage":   chatUsage(value.Usage, openAIUsage),
 	}
+}
+
+// chatAnnotation nests a flat Responses url_citation the way Chat Completions
+// expects: {"type":"url_citation","url_citation":{url,title,start_index,end_index}}.
+// Already nested citations and other annotation types pass through unchanged.
+func chatAnnotation(value any) any {
+	annotation, ok := value.(map[string]any)
+	if !ok || annotation["type"] != "url_citation" || annotation["url_citation"] != nil {
+		return value
+	}
+	citation := make(map[string]any, 4)
+	for _, key := range []string{"url", "title", "start_index", "end_index"} {
+		if field, exists := annotation[key]; exists {
+			citation[key] = field
+		}
+	}
+	return map[string]any{"type": "url_citation", "url_citation": citation}
 }
 
 func chatUsage(value responseUsage, openAIUsage bool) map[string]any {

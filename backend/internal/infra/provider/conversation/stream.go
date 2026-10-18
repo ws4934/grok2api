@@ -332,7 +332,7 @@ func (c *streamConverter) handle(event string, data []byte) error {
 		if json.Unmarshal(root["annotation"], &annotation) != nil || annotation == nil {
 			return nil
 		}
-		return c.chatDelta(map[string]any{"annotations": []any{annotation}})
+		return c.chatDelta(map[string]any{"annotations": []any{chatAnnotation(annotation)}})
 	case "response.reasoning_summary_text.delta":
 		var itemID, delta string
 		_ = json.Unmarshal(root["item_id"], &itemID)

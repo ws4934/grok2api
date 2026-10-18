@@ -634,7 +634,7 @@ func TestConvertResponsesJSONToChatAndMessages(t *testing.T) {
 		"id":"resp_1","object":"response","created_at":123,"model":"grok-4.5","status":"completed",
 		"output":[
 			{"type":"reasoning","summary":[{"type":"summary_text","text":"reason"}]},
-			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[{"type":"url_citation","url":"https://example.com","title":"Example"}]}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[{"type":"url_citation","url":"https://example.com","title":"Example","start_index":0,"end_index":5}]}]},
 			{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"}
 		],
 		"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15,"input_tokens_details":{"cached_tokens":2},"output_tokens_details":{"reasoning_tokens":1},"cost_in_usd_ticks":158500,"num_sources_used":3,"num_server_side_tools_used":2,"context_details":{"input_tokens":9,"output_tokens":4}}
@@ -650,8 +650,12 @@ func TestConvertResponsesJSONToChatAndMessages(t *testing.T) {
 	if chat["object"] != "chat.completion" || choice["finish_reason"] != "tool_calls" || message["reasoning_content"] != "reason" {
 		t.Fatalf("chat = %#v", chat)
 	}
-	if annotations := message["annotations"].([]any); len(annotations) != 1 || annotations[0].(map[string]any)["url"] != "https://example.com" {
-		t.Fatalf("chat annotations = %#v", message)
+	// Chat Completions nests the citation fields under url_citation.
+	wantAnnotations := []any{map[string]any{"type": "url_citation", "url_citation": map[string]any{
+		"url": "https://example.com", "title": "Example", "start_index": float64(0), "end_index": float64(5),
+	}}}
+	if annotations := message["annotations"]; !reflect.DeepEqual(annotations, wantAnnotations) {
+		t.Fatalf("chat annotations = %#v", annotations)
 	}
 	chatUsage := chat["usage"].(map[string]any)
 	if chatUsage["cost_in_usd_ticks"] != float64(158500) || chatUsage["num_sources_used"] != float64(3) || chatUsage["context_details"].(map[string]any)["input_tokens"] != float64(9) {
@@ -1348,6 +1352,8 @@ func TestConvertResponsesStreamChatPreservesAnnotations(t *testing.T) {
 		`data: {"type":"response.created","response":{"id":"resp_1","model":"grok-4.5"}}`, "",
 		`event: response.output_text.annotation.added`,
 		`data: {"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","url":"https://example.com","title":"Example"}}`, "",
+		`event: response.output_text.annotation.added`,
+		`data: {"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","url_citation":{"url":"https://example.org","title":"Org"}}}`, "",
 		`event: response.completed`,
 		`data: {"type":"response.completed","response":{"status":"completed"}}`, "", "",
 	}, "\n")
@@ -1355,8 +1361,15 @@ func TestConvertResponsesStreamChatPreservesAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text := string(converted); !strings.Contains(text, `"annotations":[{"title":"Example","type":"url_citation","url":"https://example.com"}]`) {
-		t.Fatalf("chat annotation stream = %s", text)
+	// Flat Responses citations are nested; already nested ones are not wrapped twice.
+	text := string(converted)
+	for _, want := range []string{
+		`"annotations":[{"type":"url_citation","url_citation":{"title":"Example","url":"https://example.com"}}]`,
+		`"annotations":[{"type":"url_citation","url_citation":{"title":"Org","url":"https://example.org"}}]`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("chat annotation stream missing %s\n%s", want, text)
+		}
 	}
 }
 
