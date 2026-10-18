@@ -165,6 +165,7 @@ type Manager struct {
 	lastClientCleanup      time.Time
 	clearanceLoads         singleflight.Group
 	clearanceConfig        ClearanceConfig
+	extensionClearance     map[domain.Scope]string
 	clearanceVersion       uint64
 	clearances             map[string]clearanceState
 	lastClearanceCleanup   time.Time
@@ -812,8 +813,9 @@ func decodeProbeIP(body []byte) (string, error) {
 
 func (m *Manager) acquire(ctx context.Context, scope domain.Scope, affinity string, allowDirect bool, encryptedCredentialCookies string, boundNodeID uint64) (*Lease, bool, error) {
 	now := time.Now().UTC()
-	clearanceMode := m.clearanceMode()
-	managedClearance := isGrokWebScope(scope) && (clearanceMode == "flaresolverr" || clearanceMode == "on_demand")
+	m.clearanceMu.Lock()
+	_, managedClearance := m.clearanceForLocked(scope)
+	m.clearanceMu.Unlock()
 	configured := false
 	var available []domain.Node
 	if boundNodeID != 0 {
@@ -1137,7 +1139,7 @@ func (m *Manager) leaseForNodeWithOptions(ctx context.Context, scope domain.Scop
 	// Manual mode may prefer account-bound cookies. Managed mode always enters
 	// the FlareSolverr lifecycle so stale imported cookies cannot bypass refresh.
 	if managedClearance {
-		clearanceKey = clearanceCacheKey(selected.ID, proxyURL, sticky)
+		clearanceKey = scopedClearanceKey(scope, selected.ID, proxyURL, sticky)
 		cookies, userAgent, err = m.ensureClearance(ctx, selected, proxyURL, cookies, userAgent, clearanceKey, !sticky)
 		if err != nil {
 			return nil, false, err
@@ -1755,15 +1757,9 @@ func nodeIsHealthy(value domain.Node) bool {
 	return value.Health >= 1 && value.FailureCount == 0 && value.CooldownUntil == nil && value.LastError == ""
 }
 
-func (m *Manager) clearanceMode() string {
-	m.clearanceMu.Lock()
-	defer m.clearanceMu.Unlock()
-	return m.clearanceConfig.Mode
-}
-
 func (m *Manager) ensureClearance(ctx context.Context, node domain.Node, proxyURL, existingCookies, existingUserAgent, key string, persist bool) (string, string, error) {
 	m.clearanceMu.Lock()
-	cfg := m.clearanceConfig
+	cfg, _ := m.clearanceForLocked(node.Scope)
 	version := m.clearanceVersion
 	interval := clearanceRefreshInterval(cfg)
 	now := time.Now().UTC()
@@ -1771,7 +1767,7 @@ func (m *Manager) ensureClearance(ctx context.Context, node domain.Node, proxyUR
 	bindingFingerprint := clearanceBindingFingerprint(cfg, proxyURL)
 	m.cleanupClearanceCacheLocked(now, interval)
 	state, known := m.clearances[key]
-	if key == "direct" {
+	if strings.HasPrefix(key, "direct") {
 		if !known {
 			m.ensureClearanceCacheCapacityLocked()
 		}
@@ -1846,7 +1842,7 @@ func (m *Manager) ensureClearance(ctx context.Context, node domain.Node, proxyUR
 
 func (m *Manager) refreshNode(ctx context.Context, node domain.Node, proxyURL, key string, persist, force, waitForPeer bool, refreshAfter time.Time) (clearanceSolution, error) {
 	m.clearanceMu.Lock()
-	cfg := m.clearanceConfig
+	cfg, _ := m.clearanceForLocked(node.Scope)
 	solveVersion := m.clearanceVersion
 	solver := m.solver
 	lock := m.clearanceLock

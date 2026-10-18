@@ -33,7 +33,7 @@ func newAdapter(base, auth, token string, client *http.Client) *Adapter {
 	return &Adapter{image: &OpenAIImage{BaseURL: strings.TrimRight(base, "/"), Client: client, RequestTimeout: 10 * time.Minute, browsers: map[string]*browserHTTP{}, browserMu: sync.Mutex{}, pow: make(chan struct{}, 2)}, oauth: client, authURL: auth, tokenURL: token}
 }
 func (a *Adapter) Descriptor() channel.ChannelDescriptor {
-	return channel.ChannelDescriptor{ID: ID, Name: "ChatGPT", Version: 1, AuthMethods: []string{"access_token", "refresh_token", "oauth_pkce"}, Capabilities: channel.Capabilities{Chat: true, Responses: true, ImageGeneration: true, ImageEdit: true, Mask: true, Transparent: true, OAuth: true, Refresh: true}}
+	return channel.ChannelDescriptor{ID: ID, Name: "ChatGPT", Version: 1, AuthMethods: []string{"access_token", "refresh_token", "oauth_pkce"}, ClearanceURL: a.image.BaseURL, Capabilities: channel.Capabilities{Chat: true, Responses: true, ImageGeneration: true, ImageEdit: true, Mask: true, Transparent: true, OAuth: true, Refresh: true}}
 }
 func (a *Adapter) Close() error {
 	a.image.browserMu.Lock()
@@ -43,7 +43,7 @@ func (a *Adapter) Close() error {
 	}
 	return nil
 }
-func wire(c channel.Credentials) (wireAccount, error) {
+func wire(ctx context.Context, c channel.Credentials) (wireAccount, error) {
 	p := browserprofile.Default()
 	if c.BrowserProfile != "" {
 		found := false
@@ -60,10 +60,16 @@ func wire(c channel.Credentials) (wireAccount, error) {
 			}
 		}
 	}
-	return wireAccount{Token: c.AccessToken, Fields: map[string]any{"access_token": c.AccessToken, "browser_profile": p, "oai_device_id": c.DeviceID, "oai_session_id": c.SessionID}}, nil
+	fields := map[string]any{"access_token": c.AccessToken, "browser_profile": p, "oai_device_id": c.DeviceID, "oai_session_id": c.SessionID}
+	if env := channel.EnvironmentFrom(ctx); env.CFCookies != "" {
+		if solver, ok := browserprofile.ForUserAgent(p, env.UserAgent); ok {
+			fields["clearance_profile"], fields["clearance_cookies"] = solver, env.CFCookies
+		}
+	}
+	return wireAccount{Token: c.AccessToken, Fields: fields}, nil
 }
 func (a *Adapter) Chat(ctx context.Context, c channel.Credentials, r channel.ChatRequest, emit func(channel.ChatEvent) error) error {
-	w, e := wire(c)
+	w, e := wire(ctx, c)
 	if e != nil {
 		return e
 	}
@@ -166,7 +172,7 @@ func (a *Adapter) PrepareImage(ctx context.Context, c channel.Credentials, r cha
 type checkpointKey struct{}
 
 func (a *Adapter) SubmitImage(ctx context.Context, c channel.Credentials, p channel.PreparedImage, save func(channel.Checkpoint) error) (channel.Checkpoint, error) {
-	w, e := wire(c)
+	w, e := wire(ctx, c)
 	if e != nil {
 		return channel.Checkpoint{}, e
 	}
@@ -242,7 +248,7 @@ func (a *Adapter) SubmitImage(ctx context.Context, c channel.Credentials, p chan
 }
 
 func (a *Adapter) PollImage(ctx context.Context, c channel.Credentials, cp channel.Checkpoint) (channel.Checkpoint, error) {
-	w, e := wire(c)
+	w, e := wire(ctx, c)
 	if e != nil {
 		return cp, e
 	}
@@ -256,7 +262,7 @@ func (a *Adapter) PollImage(ctx context.Context, c channel.Credentials, cp chann
 	return cp, e
 }
 func (a *Adapter) FetchImage(ctx context.Context, c channel.Credentials, cp channel.Checkpoint) ([]channel.Blob, error) {
-	w, e := wire(c)
+	w, e := wire(ctx, c)
 	if e != nil {
 		return nil, e
 	}

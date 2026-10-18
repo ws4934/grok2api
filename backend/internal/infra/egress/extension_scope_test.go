@@ -2,6 +2,7 @@ package egress
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,5 +97,56 @@ func TestExtensionScopeFallsBackToItsFixedNode(t *testing.T) {
 		if lease.NodeID != 1 {
 			t.Fatalf("account %d used the reserved backup node", id)
 		}
+	}
+}
+
+type targetRecordingSolver struct{ targets []string }
+
+func (s *targetRecordingSolver) Solve(_ context.Context, cfg ClearanceConfig, _ string) (clearanceSolution, error) {
+	s.targets = append(s.targets, cfg.TargetURL)
+	return clearanceSolution{Cookies: "cf_clearance=solved", UserAgent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/142.0.0.0 Safari/537.36"}, nil
+}
+
+func TestExtensionClearanceSolvesOnlyAfterAChallenge(t *testing.T) {
+	domain.SetExtensionScopes([]domain.Scope{"chatgpt"})
+	t.Cleanup(func() { domain.SetExtensionScopes(nil) })
+	solver := &targetRecordingSolver{}
+	manager := NewManager(egressRepositoryTestStub{}, nil) // no nodes: direct egress
+	manager.solver = solver
+	// The Grok mode stays manual; the extension scope still solves on demand.
+	manager.UpdateClearanceConfig(ClearanceConfig{Mode: "manual", FlareSolverrURL: "http://solver", TargetURL: "https://grok.com", Timeout: time.Second, RefreshInterval: time.Hour})
+	acquire := func() *Lease {
+		t.Helper()
+		lease, err := manager.AcquireCredential(context.Background(), "chatgpt", accountdomain.Credential{ID: 7, Provider: "chatgpt"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease.Release()
+		return lease
+	}
+	if lease := acquire(); lease.CFCookies != "" || len(solver.targets) != 0 {
+		t.Fatal("clearance solved while the scope is not enabled")
+	}
+	manager.SetExtensionClearance("chatgpt", "https://chatgpt.com/")
+	first := acquire()
+	if first.CFCookies != "" || len(solver.targets) != 0 {
+		t.Fatal("on-demand clearance solved before any challenge")
+	}
+	first.InvalidateClearance() // the adapter saw a Cloudflare challenge
+	solved := acquire()
+	if len(solver.targets) != 1 || solver.targets[0] != "https://chatgpt.com" || solved.CFCookies != "cf_clearance=solved" || !strings.Contains(solved.UserAgent, "Linux") {
+		t.Fatalf("targets=%v lease cookies=%q ua=%q", solver.targets, solved.CFCookies, solved.UserAgent)
+	}
+	if acquire(); len(solver.targets) != 1 {
+		t.Fatal("a fresh clearance was solved again")
+	}
+	// A Grok Web direct lease never sees the ChatGPT clearance.
+	web, err := manager.Acquire(context.Background(), domain.ScopeWeb, "account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web.Release()
+	if web.CFCookies == "cf_clearance=solved" {
+		t.Fatal("ChatGPT clearance leaked into the Grok direct key")
 	}
 }

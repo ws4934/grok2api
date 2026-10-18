@@ -34,6 +34,27 @@ type Service struct {
 	models      repository.ModelRepository
 
 	requestTimeout time.Duration
+	settingsHooks  []func(domain.ChannelDescriptor, domain.Settings)
+}
+
+// OnSettings registers a hook that receives each channel's settings when they
+// are saved and on every maintenance pass, so peers converge within a minute.
+func (s *Service) OnSettings(fn func(domain.ChannelDescriptor, domain.Settings)) {
+	s.settingsHooks = append(s.settingsHooks, fn)
+}
+
+// ApplySettings pushes the stored settings of every channel to the hooks.
+func (s *Service) ApplySettings(ctx context.Context) error {
+	for _, d := range s.registry.Descriptors() {
+		cfg, e := s.repo.Settings(ctx, d.ID)
+		if e != nil {
+			return e
+		}
+		for _, hook := range s.settingsHooks {
+			hook(d, cfg)
+		}
+	}
+	return nil
 }
 
 func (s *Service) SetClientKeys(keys repository.ClientKeyRepository) { s.clientKeys = keys }
@@ -72,10 +93,20 @@ func (s *Service) Settings(ctx context.Context, p account.Provider) (domain.Sett
 	return s.repo.Settings(ctx, p)
 }
 func (s *Service) SaveSettings(ctx context.Context, p account.Provider, v domain.Settings) error {
-	if _, e := s.module(p); e != nil {
+	m, e := s.module(p)
+	if e != nil {
 		return e
 	}
-	return s.repo.SaveSettings(ctx, p, v)
+	if v.CloudflareClearance && m.Descriptor().ClearanceURL == "" {
+		return domain.ErrUnsupported
+	}
+	if e := s.repo.SaveSettings(ctx, p, v); e != nil {
+		return e
+	}
+	for _, hook := range s.settingsHooks {
+		hook(m.Descriptor(), v)
+	}
+	return nil
 }
 func (s *Service) Accounts(ctx context.Context, p account.Provider, offset, limit int) ([]domain.Account, int64, error) {
 	if _, e := s.module(p); e != nil {
@@ -557,6 +588,7 @@ func (s *Service) RunMaintenance(ctx context.Context) {
 			if s.images != nil {
 				_ = s.images.jobs.CleanupChannelData(ctx, time.Now().UTC())
 			}
+			_ = s.ApplySettings(ctx)
 			for _, d := range s.registry.Descriptors() {
 				cfg, e := s.repo.Settings(ctx, d.ID)
 				if e != nil || !cfg.Enabled {

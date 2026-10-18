@@ -460,16 +460,33 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 			return ctx, nil, e
 		}
 		scope := egressdomain.Scope(p)
-		return channeldomain.WithEnvironment(ctx, channeldomain.Environment{
+		env := channeldomain.Environment{
 			ProxyURL: lease.ProxyURL, NodeID: lease.NodeID, NodeName: lease.NodeName,
 			Report: func(status int, err error) {
 				egressManager.FeedbackForScope(context.WithoutCancel(ctx), scope, lease.NodeID, status, err)
 			},
-			InvalidateClearance: lease.InvalidateClearance,
-		}), lease.Release, nil
+		}
+		// Without managed clearance a challenge demotes the node instead.
+		if egressManager.ClearanceEnabled(scope) {
+			env.InvalidateClearance = lease.InvalidateClearance
+			if lease.CFCookies != "" {
+				env.UserAgent, env.CFCookies = lease.UserAgent, lease.CFCookies
+			}
+		}
+		return channeldomain.WithEnvironment(ctx, env), lease.Release, nil
 	})
 	channelService.SetImages(relational.NewChannelRepository(database), mediaService)
 	channelService.SetRequestTimeout(cfg.Server.RequestTimeout.Value())
+	channelService.OnSettings(func(d channeldomain.ChannelDescriptor, settings channeldomain.Settings) {
+		target := ""
+		if settings.CloudflareClearance {
+			target = d.ClearanceURL
+		}
+		egressManager.SetExtensionClearance(egressdomain.Scope(d.ID), target)
+	})
+	if err := channelService.ApplySettings(ctx); err != nil {
+		return nil, err
+	}
 	if err := channelService.SetExecution(clientKeyService, auditService); err != nil {
 		return nil, err
 	}

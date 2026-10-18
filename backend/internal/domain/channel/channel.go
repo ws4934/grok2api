@@ -39,6 +39,9 @@ type ChannelDescriptor struct {
 	Version      int              `json:"version"`
 	Capabilities Capabilities     `json:"capabilities"`
 	AuthMethods  []string         `json:"auth_methods"`
+	// ClearanceURL is the site FlareSolverr solves when Cloudflare clearance is
+	// enabled for the channel; empty means the channel cannot use clearance.
+	ClearanceURL string `json:"clearance_url,omitempty"`
 }
 
 // Settings carries operational policy. Protocol secrets are never configuration fields.
@@ -53,6 +56,9 @@ type Settings struct {
 	// DefaultImageModel is the public image route used when a Responses
 	// image_generation tool names no model and the top-level model is a chat model.
 	DefaultImageModel string `json:"default_image_model"`
+	// CloudflareClearance solves challenges on demand through the shared
+	// FlareSolverr endpoint; requests then present the solver's browser.
+	CloudflareClearance bool `json:"cloudflare_clearance"`
 }
 
 func DefaultSettings() Settings {

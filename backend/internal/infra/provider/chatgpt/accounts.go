@@ -121,7 +121,7 @@ func parseImportRecord(raw json.RawMessage) channel.ImportRecord {
 	if len(c.AccessToken) > 32000 || len(c.RefreshToken) > 16000 || len(c.IDToken) > 16000 {
 		return channel.ImportRecord{Error: "credential exceeds size limit"}
 	}
-	if _, err := wire(c); err != nil {
+	if _, err := wire(context.Background(), c); err != nil {
 		return channel.ImportRecord{Error: "unsupported browser profile"}
 	}
 	if c.DeviceID == "" {
@@ -170,7 +170,7 @@ func tokenExpiry(token string) *time.Time {
 }
 func (a *Adapter) Validate(ctx context.Context, c channel.Credentials) (channel.Snapshot, error) {
 	var out channel.Snapshot
-	w, e := wire(c)
+	w, e := wire(ctx, c)
 	if e != nil {
 		return out, e
 	}

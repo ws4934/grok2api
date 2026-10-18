@@ -36,7 +36,7 @@ func TestImportRecordsAreIndependent(t *testing.T) {
 	if e != nil || len(rows) != 1 || rows[0].Error != "" {
 		t.Fatalf("profile import: %v %+v", e, rows)
 	}
-	w, e := wire(rows[0].Credentials)
+	w, e := wire(context.Background(), rows[0].Credentials)
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -126,8 +126,11 @@ func (p Profile) Valid() bool {
 }
 
 func (p Profile) TLSClientProfile() profiles.ClientProfile {
-	// Keep the mapping explicit. If another tls-client profile is added later,
-	// it must be paired with matching UA/client-hint/Sentinel versions.
+	// Stored profiles are always chrome_131 (see Valid). Only ForUserAgent
+	// produces another version, together with matching UA and client hints.
+	if profile, ok := profiles.MappedTLSClients[p.TLSProfile]; ok && p.TLSProfile != "" {
+		return profile
+	}
 	return profiles.Chrome_131
 }
 

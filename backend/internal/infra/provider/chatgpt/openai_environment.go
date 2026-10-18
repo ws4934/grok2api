@@ -12,6 +12,11 @@ import (
 )
 
 func accountBrowserProfile(account map[string]any) (browserprofile.Profile, error) {
+	// A Cloudflare clearance binds the request to the solver's browser; it is
+	// runtime-only and never written back to the account.
+	if p, ok := account["clearance_profile"].(browserprofile.Profile); ok {
+		return p, nil
+	}
 	if value := account["browser_profile"]; value != nil {
 		if p, ok := browserprofile.Parse(value); ok {
 			return p, nil
@@ -89,7 +94,7 @@ func accountBrowser(cache map[string]*browserHTTP, origin, proxy, token string, 
 		b.lastUsed = time.Now()
 		return b, nil
 	}
-	b, err := newBrowserHTTP(origin, proxy, timeout, p, savedWebCookies(fields, token))
+	b, err := newBrowserHTTP(origin, proxy, timeout, p, append(savedWebCookies(fields, token), clearanceCookies(fields)...))
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +121,7 @@ func browserLanguage(p browserprofile.Profile) string {
 }
 
 func accountBrowserKey(origin, proxy, token string, p browserprofile.Profile, fields map[string]any) string {
-	state, _ := json.Marshal([]any{origin, proxy, token, p, savedWebCookies(fields, token), aiString(fields, "cookie_header"), aiString(fields, "cookie"), aiString(fields, "cookies"), aiString(fields, "user_id", "account_id", "email")})
+	state, _ := json.Marshal([]any{origin, proxy, token, p, savedWebCookies(fields, token), aiString(fields, "cookie_header"), aiString(fields, "clearance_cookies"), aiString(fields, "cookie"), aiString(fields, "cookies"), aiString(fields, "user_id", "account_id", "email")})
 	sum := sha256.Sum256(state)
 	return fmt.Sprintf("%x", sum)
 }
@@ -131,4 +136,17 @@ func savedWebCookies(fields map[string]any, token string) []browserprofile.Cooki
 		return nil
 	}
 	return browserprofile.ParseCookies(fields["web_cookies"])
+}
+
+// clearanceCookies turns the egress clearance ("name=value; ...") into jar
+// entries for the request origin, so Set-Cookie refreshes still apply.
+func clearanceCookies(fields map[string]any) []browserprofile.Cookie {
+	out := []browserprofile.Cookie{}
+	for _, part := range strings.Split(aiString(fields, "clearance_cookies"), ";") {
+		name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if ok && name != "" {
+			out = append(out, browserprofile.Cookie{Name: name, Value: value, Path: "/"})
+		}
+	}
+	return out
 }

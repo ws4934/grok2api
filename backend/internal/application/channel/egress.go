@@ -29,10 +29,11 @@ func egressOutcome(ctx context.Context, m domain.Module, err error) bool {
 		}
 		return true
 	case domain.FailureCodeChallenge:
+		// With managed clearance the next lease re-solves on the same node;
+		// otherwise the node is demoted so the account moves elsewhere.
 		if env.InvalidateClearance != nil {
 			env.InvalidateClearance()
-		}
-		if env.Report != nil {
+		} else if env.Report != nil {
 			env.Report(http.StatusForbidden, nil)
 		}
 		return true
