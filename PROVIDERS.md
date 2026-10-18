@@ -70,6 +70,7 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 - `reasoning.effort` / `reasoning_effort` 映射到上游的推理强度。
 - Responses 流式按官方事件序列输出，带 `sequence_number`；失败时发送 `response.failed`。
 - 用量为本地 `o200k_base` 估算，包含推理 token、工具定义、模型写出的调用标记和图片输入的固定 token，审计里标记为估算。
+- 每个请求最前面加一条系统指令，要求 ChatGPT 只输出纯 Markdown、不写网页端的 UI 组件（`<box>`、`<row>`、天气卡片等），`<Cite/>` 引用除外；客户端的 `instructions` / 系统消息排在它后面。仍漏出的 UI 标记由网关过滤。
 
 #### 函数工具（提示词模拟）
 

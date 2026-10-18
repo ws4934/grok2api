@@ -323,7 +323,7 @@ func TestToolsThatCannotRunDegradeToTextWithNotice(t *testing.T) {
 	parts := func(i int) []any {
 		return messages[i].(map[string]any)["content"].(map[string]any)["parts"].([]any)
 	}
-	if role := messages[0].(map[string]any)["author"].(map[string]any)["role"]; role != "system" || parts(0)[0] != toolsUnavailable {
+	if role := messages[0].(map[string]any)["author"].(map[string]any)["role"]; role != "system" || parts(0)[0] != plainMarkdown+"\n\n"+toolsUnavailable {
 		t.Fatalf("first message = %v", messages[0])
 	}
 	if len(messages) != 4 || !strings.Contains(parts(2)[0].(string), "Tool call lookup (c1): {}") || parts(3)[1] != "found" {

@@ -223,7 +223,7 @@ func TestEmulatedToolHistoryRendersCallsAndResults(t *testing.T) {
 func TestToolCallsOnlyForDeclaredFunctionsWhenAllowed(t *testing.T) {
 	plain := `<tool_calls><tool_call><tool_name>lookup</tool_name><parameters>{"q":"x"}</parameters></tool_call></tool_calls>`
 	payload, object := respondTo(t, "responses", plain, `{"model":"gpt-5","tools":`+lookupTool+`,"tool_choice":"none","input":"x"}`)
-	if payloadParts(payload, 0)[0] != toolsUnavailable || len(outputOf(object, "function_call")) != 0 || outputText(t, object) != plain {
+	if payloadParts(payload, 0)[0] != plainMarkdown+"\n\n"+toolsUnavailable || len(outputOf(object, "function_call")) != 0 || outputText(t, object) != plain {
 		t.Fatalf("tool_choice none: %v", object)
 	}
 
@@ -270,7 +270,7 @@ func TestWebSearchIsForcedAndReported(t *testing.T) {
 	payload := <-payloads
 	messages := payload["messages"].([]any)
 	hints := messages[len(messages)-1].(map[string]any)["metadata"].(map[string]any)["system_hints"]
-	if strings.Join(stringsOf(payload["system_hints"]), ",") != "search" || strings.Join(stringsOf(hints), ",") != "search" || len(messages) != 1 {
+	if strings.Join(stringsOf(payload["system_hints"]), ",") != "search" || strings.Join(stringsOf(hints), ",") != "search" || len(messages) != 2 || payloadParts(payload, 0)[0] != plainMarkdown {
 		t.Fatalf("payload = %v", payload)
 	}
 	output := object["output"].([]any)

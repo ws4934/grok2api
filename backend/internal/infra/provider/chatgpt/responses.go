@@ -33,6 +33,10 @@ const (
 	noBuiltinTools = "Do not search the web, browse, run code, or use any built-in tool or widget (weather, maps, images, canvas). When a listed tool can provide the information, call it instead of answering from your own knowledge."
 )
 
+// plainMarkdown overrides the Web app's generative UI, which tool results
+// request "unless otherwise specified": API clients cannot render it.
+const plainMarkdown = "Format every reply as plain Markdown for an API client that cannot render UI components. Do not write layout or widget tags such as <box>, <row>, <grid>, <card>, <title>, <text>, <badge>, <icon>, <divider> or <AsyncImage/>; present cards, widgets and tool results as Markdown text, lists or tables. <Cite/> citations remain allowed."
+
 const defaultOutputTokenLimit = 16384
 
 var errOutputLimit = errors.New("local output limit")
@@ -335,9 +339,11 @@ func parseTurn(body []byte) (turnRequest, error) {
 	}
 	tools := in.Emulated
 	in.Search = tools.ForcedWebSearch || (tools.HostedWebSearch && tools.Choice == "required" && len(tools.Functions) == 0)
-	if notice := toolNotice(tools, in.ParallelToolCalls); notice != "" {
-		in.Messages = append(in.Messages, textMessage("system", notice))
+	notice := plainMarkdown
+	if rules := toolNotice(tools, in.ParallelToolCalls); rules != "" {
+		notice += "\n\n" + rules
 	}
+	in.Messages = append(in.Messages, textMessage("system", notice))
 	if set("instructions") {
 		var instructions string
 		if json.Unmarshal(raw["instructions"], &instructions) != nil {
