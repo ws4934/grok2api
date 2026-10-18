@@ -229,8 +229,9 @@ func (a *Adapter) GetTTSVoice(ctx context.Context, credential account.Credential
 	return provider.VoiceInfo{}, &upstreamError{Status: http.StatusNotFound, Message: "Unknown ChatGPT voice " + voiceID, Body: "unknown voice"}
 }
 
-// TranscribeSpeech sends an uploaded audio file to the composer's dictation,
-// which returns the text only and does not use the conversation quota.
+// TranscribeSpeech sends an uploaded audio file and the optional language
+// hint to the composer's dictation, which returns the text only and does not
+// use the conversation quota.
 func (a *Adapter) TranscribeSpeech(ctx context.Context, request provider.STTRequest) (provider.STTResult, error) {
 	if len(request.FileData) == 0 {
 		return provider.STTResult{}, invalidRequest("ChatGPT transcription needs an uploaded audio file")
@@ -250,6 +251,10 @@ func (a *Adapter) TranscribeSpeech(ctx context.Context, request provider.STTRequ
 		return provider.STTResult{}, err
 	}
 	_, _ = part.Write(request.FileData)
+	// Dictation takes an ISO 639-1 hint, so "zh-CN" is sent as "zh".
+	if language, _, _ := strings.Cut(strings.ToLower(strings.TrimSpace(request.Language)), "-"); language != "" {
+		_ = form.WriteField("language", language)
+	}
 	if err := form.Close(); err != nil {
 		return provider.STTResult{}, err
 	}

@@ -65,7 +65,7 @@ func (v *voiceUpstream) serve(t *testing.T) *httptest.Server {
 				return
 			}
 			data, _ := io.ReadAll(file)
-			v.upload = header.Filename + ":" + string(data)
+			v.upload = header.Filename + ":" + string(data) + ":" + r.FormValue("language")
 			_, _ = w.Write([]byte(`{"text":"hello there","asset_format":"webm"}`))
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
@@ -134,8 +134,12 @@ func TestTranscriptionUsesDictation(t *testing.T) {
 	a, _ := newTestAdapter(t, upstream.serve(t))
 	credential := testCredential(t, a, credentials{AccessToken: "AT"})
 	result, err := a.TranscribeSpeech(context.Background(), provider.STTRequest{Credential: credential, Model: STTModel, FileMIME: "audio/webm", FileData: []byte("OPUS")})
-	if err != nil || result.Text != "hello there" || upstream.upload != "audio.webm:OPUS" {
+	if err != nil || result.Text != "hello there" || upstream.upload != "audio.webm:OPUS:" {
 		t.Fatalf("result = %+v, upload = %q, %v", result, upstream.upload, err)
+	}
+	// The language hint goes to dictation as its primary subtag.
+	if _, err := a.TranscribeSpeech(context.Background(), provider.STTRequest{Credential: credential, FileName: "a.mp3", FileData: []byte("MP3"), Language: " zh-CN "}); err != nil || upstream.upload != "a.mp3:MP3:zh" {
+		t.Fatalf("upload = %q, %v", upstream.upload, err)
 	}
 	var scoped *requestError
 	if _, err := a.TranscribeSpeech(context.Background(), provider.STTRequest{Credential: credential, URL: "https://example.com/a.mp3"}); !errors.As(err, &scoped) {

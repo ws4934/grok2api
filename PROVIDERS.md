@@ -135,7 +135,7 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
 
 | 模型 | 上游 | 额度 | 说明 |
 |---|---|---|---|
-| `chatgpt-transcribe` | 输入框听写 `POST /backend-api/transcribe` | 不占对话额度 | 只返回文字，没有时间戳、逐词结果和语种；只接受上传文件（≤ 25 MB），不接受 URL |
+| `chatgpt-transcribe` | 输入框听写 `POST /backend-api/transcribe` | 不占对话额度 | 只返回文字，没有时间戳、逐词结果和语种；只接受上传文件（≤ 25 MB），不接受 URL；`language` 取主语言代码（`zh-CN` → `zh`）作为识别提示转给上游，上游只当软提示，无效代码不报错 |
 | `chatgpt-tts` | 朗读 `GET /backend-api/synthesize` | 不占 `reason`（账号没有 `gpt-5-3-mini` 时占 1 次） | 输出 `mp3` / `aac` / `opus`；`wav` / `flac` / `pcm` 返回 400；`speed`、`language` 被忽略；`input` ≤ 4096 字符 |
 
 - **音色**：`voice` 按账号音色的 ID 或显示名匹配，如 `glimmer` 或 `Sol`；`/v1/tts/voices` 列出账号可用的音色。OpenAI 音色名（`alloy` 等）和未知名称使用账号当前选中的音色。
