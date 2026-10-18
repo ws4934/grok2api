@@ -1,6 +1,8 @@
 package providercatalog
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -41,5 +43,29 @@ func TestCatalogFollowsProviderOrderAndDefinitions(t *testing.T) {
 	}
 	if entries[2].Order != 2 || !New(registry).Has(account.ProviderBuild) || New(registry).Has("chatgpt") {
 		t.Fatal("catalog membership")
+	}
+}
+
+func TestCatalogPublishesCredentialAndQuotaSurface(t *testing.T) {
+	chat := definition("acme_chat", provider.ProfileSurface{DefaultMaxConcurrent: 1, QuotaModes: []string{"reason", "image_gen"}})
+	chat.Credential = provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true, RedirectOAuth: true}
+	registry := provider.NewRegistry(definedAdapter{chat}, definedAdapter{definition(account.ProviderBuild, provider.ProfileSurface{})})
+	entries := New(registry, Entry{ID: "extra"}).Entries()
+	data, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"quotaModes":null`) {
+		t.Fatalf("quotaModes must never be null: %s", data)
+	}
+	byID := map[string]Entry{}
+	for _, entry := range entries {
+		byID[entry.ID] = entry
+	}
+	if got := byID["acme_chat"]; !got.Credential.RedirectOAuth || got.DefaultMaxConcurrent != 1 || len(got.QuotaModes) != 2 || got.QuotaModes[0] != "reason" {
+		t.Fatalf("chat entry = %+v", got)
+	}
+	if got := byID["grok_build"]; got.Credential.RedirectOAuth || got.DefaultMaxConcurrent != account.DefaultMaxConcurrent || got.QuotaModes == nil {
+		t.Fatalf("build entry = %+v", got)
 	}
 }
