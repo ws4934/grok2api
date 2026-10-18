@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -657,3 +658,48 @@ func TestAuditRepositoryPurgeOlderThanBatchesAuditsAndAttempts(t *testing.T) {
 }
 
 func uint64Pointer(value uint64) *uint64 { return &value }
+
+func TestAuditRepositoryFiltersByProviderAndOperation(t *testing.T) {
+	ctx := context.Background()
+	database, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "audit-provider-filter.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repository := NewAuditRepository(database)
+	now := time.Now().UTC()
+	if err := repository.CreateBatch(ctx, []audit.Record{
+		{RequestID: "gpt-chat", ClientKeyID: 1, ModelRouteID: 1, ModelPublicID: "gpt-5", Provider: "chatgpt", Operation: "responses", StatusCode: 200, CreatedAt: now.Add(-time.Hour)},
+		{RequestID: "gpt-image", ClientKeyID: 1, ModelRouteID: 1, ModelPublicID: "gpt-image-2", Provider: "chatgpt", Operation: "image", StatusCode: 200, CreatedAt: now.Add(-2 * time.Hour)},
+		{RequestID: "grok-chat", ClientKeyID: 1, ModelRouteID: 1, ModelPublicID: "grok", Provider: "grok_build", Operation: "responses", StatusCode: 200, CreatedAt: now.Add(-3 * time.Hour)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		filter repositorypkg.AuditListFilter
+		want   []string
+	}{
+		{repositorypkg.AuditListFilter{Provider: "chatgpt"}, []string{"gpt-chat", "gpt-image"}},
+		{repositorypkg.AuditListFilter{Operation: "responses"}, []string{"gpt-chat", "grok-chat"}},
+		{repositorypkg.AuditListFilter{Provider: "chatgpt", Operation: "image"}, []string{"gpt-image"}},
+	} {
+		items, _, err := repository.ListCursor(ctx, repositorypkg.AuditCursorQuery{Limit: 50, Filter: tc.filter})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([]string, 0, len(items))
+		for _, item := range items {
+			got = append(got, item.RequestID)
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Fatalf("filter %#v = %v, want %v", tc.filter, got, tc.want)
+		}
+		summary, err := repository.Summarize(ctx, repositorypkg.AuditSummaryQuery{Start: now.Add(-24 * time.Hour), End: now, Filter: tc.filter})
+		if err != nil || summary.Requests != int64(len(tc.want)) {
+			t.Fatalf("summary %#v = %#v, err = %v", tc.filter, summary, err)
+		}
+	}
+}

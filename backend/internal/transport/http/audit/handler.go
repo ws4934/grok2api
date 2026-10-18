@@ -511,7 +511,7 @@ type degradeEventResponse struct {
 func newListFilter(c *gin.Context) auditapp.ListFilter {
 	return auditapp.ListFilter{
 		Model: c.Query("model"), Status: c.Query("status"), Mode: c.Query("mode"),
-		Key: c.Query("key"), Account: c.Query("account"),
+		Key: c.Query("key"), Account: c.Query("account"), Provider: c.Query("provider"), Operation: c.Query("operation"),
 		Sort: repository.SortQuery{Field: c.Query("sortBy"), Direction: repository.SortDirection(c.Query("sortOrder"))},
 	}
 }

@@ -1079,6 +1079,12 @@ func applyAuditQuery(query *gorm.DB, search string, start, end time.Time, filter
 		pattern := "%" + strings.ToLower(value) + "%"
 		query = query.Where("LOWER(account_name) LIKE ? OR CAST(account_id AS TEXT) LIKE ?", pattern, pattern)
 	}
+	if value := strings.TrimSpace(filter.Provider); value != "" {
+		query = query.Where("provider = ?", value)
+	}
+	if value := strings.TrimSpace(filter.Operation); value != "" {
+		query = query.Where("operation = ?", value)
+	}
 	switch filter.Status {
 	case "success", "2xx":
 		query = query.Where(auditSuccessPredicate)

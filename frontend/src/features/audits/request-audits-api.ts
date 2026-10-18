@@ -200,6 +200,8 @@ type AuditQuery = {
   mode?: string;
   key?: string;
   account?: string;
+  provider?: string;
+  operation?: string;
   period: AuditPeriod;
   sortBy?: string;
   sortOrder?: SortOrder;
@@ -214,6 +216,8 @@ export function getRequestAudits(input: AuditQuery, signal?: AbortSignal): Promi
   if (input.mode) query.set("mode", input.mode);
   if (input.key) query.set("key", input.key);
   if (input.account) query.set("account", input.account);
+  if (input.provider) query.set("provider", input.provider);
+  if (input.operation) query.set("operation", input.operation);
   if (input.sortBy && input.sortOrder) {
     query.set("sortBy", input.sortBy);
     query.set("sortOrder", input.sortOrder);
@@ -229,6 +233,8 @@ export function getRequestAuditSummary(input: Omit<AuditQuery, "cursor" | "pageS
   if (input.mode) query.set("mode", input.mode);
   if (input.key) query.set("key", input.key);
   if (input.account) query.set("account", input.account);
+  if (input.provider) query.set("provider", input.provider);
+  if (input.operation) query.set("operation", input.operation);
   if (refresh) query.set("refresh", "1");
   return apiRequest(`/api/admin/v1/request-audits/summary?${query}`, { signal }, decodeAuditSummary);
 }

@@ -40,6 +40,8 @@ const AUDIT_FILTER_MAX_HEIGHT = "max-h-56 overflow-y-auto py-0.5";
 
 type AuditCursorState = { scope: string; values: string[] };
 
+const auditOperations = ["responses", "chat", "messages", "compaction", "image", "image_edit", "video", "tts", "stt", "realtime", "voice"] as const;
+
 export function RequestAuditsPage() {
   const { t, i18n } = useTranslation();
   const [pageSize, setPageSize] = useState(20);
@@ -49,6 +51,8 @@ export function RequestAuditsPage() {
   const [modeFilter, setModeFilter] = useState("");
   const [keyFilter, setKeyFilter] = useState("");
   const [accountFilter, setAccountFilter] = useState("");
+  const [providerFilter, setProviderFilter] = useState("");
+  const [operationFilter, setOperationFilter] = useState("");
   const [periodDays, setPeriodDays] = useState<PeriodDays>(1);
   const [sort, setSort] = useState<TableSort>({ field: "createdAt", order: "desc" });
   const [manualRefreshing, setManualRefreshing] = useState(false);
@@ -60,9 +64,9 @@ export function RequestAuditsPage() {
   const providers = useProviders().data;
   const period: AuditPeriod = toPeriodValue(periodDays);
   const cursorScope = useMemo(() => JSON.stringify([
-    pageSize, debouncedSearch, modelFilter, statusFilter, modeFilter,
+    pageSize, debouncedSearch, modelFilter, statusFilter, modeFilter, providerFilter, operationFilter,
     debouncedKeyFilter, debouncedAccountFilter, period, sort.field, sort.order,
-  ]), [pageSize, debouncedSearch, modelFilter, statusFilter, modeFilter, debouncedKeyFilter, debouncedAccountFilter, period, sort.field, sort.order]);
+  ]), [pageSize, debouncedSearch, modelFilter, statusFilter, modeFilter, providerFilter, operationFilter, debouncedKeyFilter, debouncedAccountFilter, period, sort.field, sort.order]);
   const [cursorState, setCursorState] = useState<AuditCursorState>(() => ({ scope: cursorScope, values: [""] }));
   if (cursorState.scope !== cursorScope) {
     setCursorState({ scope: cursorScope, values: [""] });
@@ -79,14 +83,14 @@ export function RequestAuditsPage() {
 
   const auditsQuery = useQuery({
     queryKey: ["request-audits", "cursor", cursorScope, cursor],
-    queryFn: ({ signal }) => getRequestAudits({ cursor, pageSize, search: debouncedSearch, model: modelFilter, status: statusFilter, mode: modeFilter, key: debouncedKeyFilter, account: debouncedAccountFilter, period, sortBy: sort.field, sortOrder: sort.order }, signal),
+    queryFn: ({ signal }) => getRequestAudits({ cursor, pageSize, search: debouncedSearch, model: modelFilter, status: statusFilter, mode: modeFilter, provider: providerFilter, operation: operationFilter, key: debouncedKeyFilter, account: debouncedAccountFilter, period, sortBy: sort.field, sortOrder: sort.order }, signal),
     placeholderData: (previous, previousQuery) => previousQuery?.queryKey[2] === cursorScope ? previous : undefined,
     gcTime: AUDIT_PAGE_CACHE_TIME_MS,
     structuralSharing: false,
   });
   const summaryQuery = useQuery({
-    queryKey: ["request-audits", "summary", debouncedSearch, modelFilter, statusFilter, modeFilter, debouncedKeyFilter, debouncedAccountFilter, period],
-    queryFn: ({ signal }) => getRequestAuditSummary({ search: debouncedSearch, model: modelFilter, status: statusFilter, mode: modeFilter, key: debouncedKeyFilter, account: debouncedAccountFilter, period }, forceSummaryRefresh.current, signal),
+    queryKey: ["request-audits", "summary", debouncedSearch, modelFilter, statusFilter, modeFilter, providerFilter, operationFilter, debouncedKeyFilter, debouncedAccountFilter, period],
+    queryFn: ({ signal }) => getRequestAuditSummary({ search: debouncedSearch, model: modelFilter, status: statusFilter, mode: modeFilter, provider: providerFilter, operation: operationFilter, key: debouncedKeyFilter, account: debouncedAccountFilter, period }, forceSummaryRefresh.current, signal),
     placeholderData: (previous) => previous,
     gcTime: AUDIT_SUMMARY_CACHE_TIME_MS,
   });
@@ -242,6 +246,8 @@ export function RequestAuditsPage() {
                   { value: "stream", label: t("audits.stream") },
                   { value: "nonStream", label: t("audits.nonStream") },
                 ] },
+                { id: "provider", label: t("audits.providerFilter"), value: providerFilter, onChange: setProviderFilter, options: (providers ?? []).map((item) => ({ value: item.id, label: providerLabel(item.id, providers) })) },
+                { id: "operation", label: t("audits.operationFilter"), value: operationFilter, onChange: setOperationFilter, options: auditOperations.map((value) => ({ value, label: t(`audits.operations.${value}`) })) },
                 {
                   id: "key", label: t("audits.key"), value: keyFilter,
                   onChange: setKeyFilter, options: [

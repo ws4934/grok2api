@@ -136,11 +136,13 @@ type ClientKeyListQuery struct {
 }
 
 type AuditListFilter struct {
-	Model   string
-	Status  string
-	Mode    string
-	Key     string
-	Account string
+	Model     string
+	Status    string
+	Mode      string
+	Key       string
+	Account   string
+	Provider  string
+	Operation string
 }
 
 type AuditCursorQuery struct {
