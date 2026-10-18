@@ -578,16 +578,6 @@ func (r *ModelRepository) GetByPublicIDCandidates(ctx context.Context, publicID 
 	return mapModelRows(rows), nil
 }
 
-// Extensions evaluate their own capabilities (for example an image route uses
-// a distinct Web conversation model). Preserve Grok's availability query above.
-func (r *ModelRepository) GetConfiguredByPublicIDCandidates(ctx context.Context, publicID string) ([]model.Route, error) {
-	rows, err := findModelRoutesByPublicID(r.db.db.WithContext(ctx).Where("enabled = ?", true), publicID)
-	if err != nil {
-		return nil, mapError(err)
-	}
-	return mapModelRows(rows), nil
-}
-
 func (r *ModelRepository) GetByPublicIDIncludingDisabled(ctx context.Context, publicID string) (model.Route, error) {
 	db := r.db.db.WithContext(ctx)
 	rows, err := findModelRoutesByPublicID(db, publicID)

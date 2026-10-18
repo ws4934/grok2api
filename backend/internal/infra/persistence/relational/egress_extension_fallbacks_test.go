@@ -10,7 +10,7 @@ import (
 )
 
 func TestExtensionFallbacksPersistBesideGrokColumns(t *testing.T) {
-	channelDatabases(t, func(t *testing.T, db *Database) {
+	dialectDatabases(t, func(t *testing.T, db *Database) {
 		ctx := context.Background()
 		r := NewEgressRepository(db)
 		gpt, err := r.CreateEgressNode(ctx, egress.Node{Name: "gpt-backup", Scope: "chatgpt", Enabled: true, EncryptedProxyURL: testEncryptedToken})

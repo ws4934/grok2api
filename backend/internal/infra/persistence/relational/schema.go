@@ -22,9 +22,6 @@ const postgresSchemaMigrationLockID int64 = 0x47524f4b32415049
 const standaloneProxyProfileMigrationBatchSize = 100
 
 var schemaModels = []any{
-	&channelExecutionSlotModel{},
-	&channelImageJobModel{}, &channelImageItemModel{}, &channelAssetRefModel{}, &channelQuotaReservationModel{},
-	&channelSettingsModel{}, &channelAccountModel{}, &channelOAuthModel{}, &channelGrantModel{}, &channelPriceModel{},
 	&egressExtensionFallbackModel{},
 	&adminModel{},
 	&adminSessionModel{},
@@ -186,6 +183,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	}
 	if err := d.ensureConsoleConstraints(ctx); err != nil {
 		return fmt.Errorf("迁移 Console 数据库约束: %w", err)
+	}
+	if err := d.dropChannelTables(ctx); err != nil {
+		return fmt.Errorf("移除扩展渠道数据表: %w", err)
 	}
 	if err := d.ensureEgressAssetScopeConstraints(ctx); err != nil {
 		return fmt.Errorf("迁移资源出口数据库约束: %w", err)
@@ -547,9 +547,9 @@ type consoleConstraint struct {
 	name  string
 }
 
-// Open-ended business identifiers are validated by the registered channel catalog.
+// Open-ended business identifiers are validated by the provider registry.
 func (d *Database) ensureConsoleConstraints(ctx context.Context) error {
-	return d.dropChannelEnumConstraints(ctx)
+	return d.dropProviderEnumConstraints(ctx)
 }
 func (d *Database) ensureEgressAssetScopeConstraints(ctx context.Context) error { return nil }
 
