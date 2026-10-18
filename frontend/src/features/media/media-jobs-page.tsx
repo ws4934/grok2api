@@ -82,6 +82,8 @@ export function MediaJobsPage() {
   });
 
   const result = jobsQuery.data;
+  // Details follow the polled list so status and results stay current; the snapshot covers a job that left the page.
+  const viewedJob = viewing && (result?.items.find((job) => job.id === viewing.id) ?? viewing);
   const refreshing = jobsQuery.isFetching || statsQuery.isFetching;
   const pageIDs = result?.items.filter((job) => mediaJobActions(job).delete).map((job) => job.id) ?? [];
   const selectedOnPage = pageIDs.filter((id) => selected.has(id));
@@ -354,7 +356,7 @@ export function MediaJobsPage() {
             <DialogTitle>{t("media.jobs.details")}</DialogTitle>
             <DialogDescription className="min-w-0 truncate font-mono" title={viewing?.id}>{viewing?.id}</DialogDescription>
           </DialogHeader>
-          {viewing ? <JobDetails job={viewing} providers={providers} locale={i18n.language} /> : null}
+          {viewedJob ? <JobDetails job={viewedJob} providers={providers} locale={i18n.language} /> : null}
         </DialogContent>
       </Dialog>
     </div>
