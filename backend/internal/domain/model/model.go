@@ -1,6 +1,7 @@
 package model
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -235,7 +236,7 @@ func DisplayUpstreamModel(provider account.Provider, value string) string {
 
 func providersWith(value account.Provider) []account.Provider {
 	values := account.Providers()
-	if !value.IsLegacy() {
+	if !slices.Contains(values, value) {
 		values = append(values, value)
 	}
 	return values

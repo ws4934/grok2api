@@ -9,8 +9,6 @@ import (
 	"io"
 	"strings"
 	"time"
-
-	"github.com/chenyme/grok2api/backend/internal/domain/channel"
 )
 
 // OpenAIChat implements the authenticated ChatGPT Web conversation endpoint
@@ -66,9 +64,7 @@ func (c *OpenAIChat) Stream(ctx context.Context, account wireAccount, request wi
 	}
 	headers := c.Image.requirementHeaders(requirements)
 	headers["Accept"] = "text/event-stream"
-	if err := channel.ObserveQuotaSend(ctx, "reason"); err != nil {
-		return err
-	}
+	markSubmitted(ctx)
 	response, err := c.Image.do(ctx, "POST", "/backend-api/conversation", account, payload, headers, true)
 	if err != nil {
 		return err

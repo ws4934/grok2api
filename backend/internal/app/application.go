@@ -17,7 +17,6 @@ import (
 	accountsyncapp "github.com/chenyme/grok2api/backend/internal/application/accountsync"
 	"github.com/chenyme/grok2api/backend/internal/application/adminauth"
 	auditapp "github.com/chenyme/grok2api/backend/internal/application/audit"
-	channelapp "github.com/chenyme/grok2api/backend/internal/application/channel"
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
 	dashboardapp "github.com/chenyme/grok2api/backend/internal/application/dashboard"
 	egressapp "github.com/chenyme/grok2api/backend/internal/application/egress"
@@ -31,7 +30,6 @@ import (
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
 	"github.com/chenyme/grok2api/backend/internal/buildinfo"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
-	channeldomain "github.com/chenyme/grok2api/backend/internal/domain/channel"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
@@ -65,7 +63,6 @@ const (
 
 // Application 管理后端进程生命周期和本地后台任务。
 type Application struct {
-	channels        *channelapp.Service
 	chatgpt         *chatgpt.Adapter
 	logger          *slog.Logger
 	database        *relational.Database
@@ -232,7 +229,9 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	webAdapter := webprovider.NewAdapter(webProviderConfig(cfg), egressManager, cipher, responseRepo, mediaService)
 	webAdapter.SetLogger(logger)
 	consoleAdapter := consoleprovider.NewAdapter(consoleProviderConfig(cfg), egressManager, cipher, mediaService)
-	providers := provider.NewRegistry(cliAdapter, webAdapter, consoleAdapter)
+	chatgptAdapter := chatgpt.NewAdapter(chatgptProviderConfig(cfg), egressManager, cipher, mediaService)
+	egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(cfg))
+	providers := provider.NewRegistry(cliAdapter, webAdapter, consoleAdapter, chatgptAdapter)
 	if err := providers.Validate(); err != nil {
 		if runtimeStore != nil {
 			_ = runtimeStore.Close()
@@ -311,6 +310,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		}
 		database.Close()
 		return nil, fmt.Errorf("初始化 Grok Console 模型目录: %w", err)
+	}
+	if err := modelRepo.UpsertRoutes(ctx, chatgpt.Routes()); err != nil {
+		if runtimeStore != nil {
+			_ = runtimeStore.Close()
+		}
+		database.Close()
+		return nil, fmt.Errorf("初始化 ChatGPT 图片模型: %w", err)
 	}
 	accountSyncService := accountsyncapp.NewService(logger, accountService, accountService, accountService, modelService)
 	accountSyncService.SetBulkPool(importPool)
@@ -405,6 +411,8 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		webAdapter.UpdateConfig(webProviderConfig(next))
 		egressManager.UpdateClearanceConfig(clearanceConfig(next))
 		consoleAdapter.UpdateConfig(consoleProviderConfig(next))
+		chatgptAdapter.UpdateConfig(chatgptProviderConfig(next))
+		egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(next))
 		mediaService.UpdateConfig(mediaConfig(next))
 		quotaRecoveryService.UpdateConfig(next.Provider.Web.RecoveryBackoffBase.Value(), next.Provider.Web.RecoveryBackoffMax.Value())
 		accountSyncService.UpdateConcurrency(next.Batch.ImportConcurrency)
@@ -440,26 +448,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 			MaxOutputTokens: cfg.QualityGuard.MaxOutputTokens,
 		}
 	}
-	gptAdapter := chatgpt.NewAdapter()
-	channelRegistry, err := channeldomain.NewRegistry(gptAdapter)
-	if err != nil {
-		return nil, err
-	}
-	// Interim: ChatGPT is still served by the channel registry until it becomes a
-	// native adapter; the catalog already lists it beside the registry providers.
-	var interim []providercatalog.Entry
-	for _, d := range channelRegistry.Descriptors() {
-		interim = append(interim, providercatalog.Entry{
-			ID: string(d.ID), Name: d.Name, ShortName: d.Name,
-			Capabilities: []string{"chat", "responses", "image", "image_edit"},
-			Conversation: providercatalog.Conversation{Responses: true, ChatCompletions: true, Messages: true},
-			Media:        providercatalog.Media{ImageGeneration: d.Capabilities.ImageGeneration, ImageEdit: d.Capabilities.ImageEdit},
-			Quota:        string(provider.QuotaRemoteWindow), Usage: string(provider.UsageEstimated),
-			EgressScopes: []string{string(d.ID)},
-			Credential:   providercatalog.Credential{AuthType: string(account.AuthTypeOAuth), Import: true, Refresh: d.Capabilities.Refresh, RedirectOAuth: d.Capabilities.OAuth},
-		})
-	}
-	providerCatalog := providercatalog.New(providers, interim...)
+	providerCatalog := providercatalog.New(providers)
 	builtinScopes := map[egressdomain.Scope]bool{egressdomain.ScopeBuild: true, egressdomain.ScopeWeb: true, egressdomain.ScopeConsole: true, egressdomain.ScopeWebAsset: true, egressdomain.ScopeConsoleAsset: true}
 	extensionScopes := []egressdomain.Scope{}
 	for _, entry := range providerCatalog.Entries() {
@@ -470,51 +459,9 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		}
 	}
 	egressdomain.SetExtensionScopes(extensionScopes)
-	channelService := channelapp.NewService(channelRegistry, relational.NewChannelRepository(database), cipher, refreshLock, modelRepo)
-	channelService.SetClientKeys(clientKeyRepo)
-	channelService.SetEnvironment(func(ctx context.Context, p account.Provider, id uint64) (context.Context, func(), error) {
-		credential, e := accountRepo.Get(ctx, id)
-		if e != nil {
-			return ctx, nil, e
-		}
-		lease, e := egressManager.AcquireCredential(ctx, egressdomain.Scope(p), credential)
-		if e != nil {
-			return ctx, nil, e
-		}
-		scope := egressdomain.Scope(p)
-		env := channeldomain.Environment{
-			ProxyURL: lease.ProxyURL, NodeID: lease.NodeID, NodeName: lease.NodeName,
-			Report: func(status int, err error) {
-				egressManager.FeedbackForScope(context.WithoutCancel(ctx), scope, lease.NodeID, status, err)
-			},
-		}
-		// Without managed clearance a challenge demotes the node instead.
-		if egressManager.ClearanceEnabled(scope) {
-			env.InvalidateClearance = lease.InvalidateClearance
-			if lease.CFCookies != "" {
-				env.UserAgent, env.CFCookies = lease.UserAgent, lease.CFCookies
-			}
-		}
-		return channeldomain.WithEnvironment(ctx, env), lease.Release, nil
-	})
-	channelService.SetImages(relational.NewChannelRepository(database), mediaService)
-	channelService.SetRequestTimeout(cfg.Server.RequestTimeout.Value())
-	channelService.OnSettings(func(d channeldomain.ChannelDescriptor, settings channeldomain.Settings) {
-		target := ""
-		if settings.CloudflareClearance {
-			target = d.ClearanceURL
-		}
-		egressManager.SetExtensionClearance(egressdomain.Scope(d.ID), target)
-	})
-	if err := channelService.ApplySettings(ctx); err != nil {
-		return nil, err
-	}
-	if err := channelService.SetExecution(clientKeyService, auditService); err != nil {
-		return nil, err
-	}
-	router := httpserver.New(httpserver.Dependencies{Providers: providerCatalog, Channels: channelService, Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
+	router := httpserver.New(httpserver.Dependencies{Providers: providerCatalog, Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
 	server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
-	return &Application{channels: channelService, chatgpt: gptAdapter,
+	return &Application{chatgpt: chatgptAdapter,
 		logger: logger, database: database, server: server,
 		audits: auditService, responses: responseRepo, cleanupLock: refreshLock, runtime: runtimeStore,
 		settingsBus: settingsBus, invalidationBus: invalidationBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService, invalidations: invalidationService,
@@ -552,6 +499,20 @@ func clearanceConfig(cfg config.Config) infraegress.ClearanceConfig {
 		TargetURL: cfg.Provider.Web.BaseURL, Timeout: cfg.Provider.Web.ClearanceTimeout.Value(),
 		RefreshInterval: cfg.Provider.Web.ClearanceRefresh.Value(),
 	}
+}
+
+func chatgptProviderConfig(cfg config.Config) chatgpt.Config {
+	value := cfg.Provider.ChatGPT
+	return chatgpt.Config{ImageConversationModel: value.ImageConversationModel, OutputTokenLimit: value.OutputTokenLimit, VisionTokens: value.VisionTokens}
+}
+
+// chatgptClearanceTarget is the site FlareSolverr solves for ChatGPT egresses;
+// empty disables managed clearance.
+func chatgptClearanceTarget(cfg config.Config) string {
+	if cfg.Provider.ChatGPT.CloudflareClearance {
+		return "https://chatgpt.com"
+	}
+	return ""
 }
 
 func consoleProviderConfig(cfg config.Config) consoleprovider.Config {
@@ -638,10 +599,6 @@ func (a *Application) Run(ctx context.Context) error {
 			defer background.Done()
 			a.runSupervisedTask(runCtx, name, task)
 		}()
-	}
-	if a.channels != nil {
-		startBackground("channel_image_workers", func(ctx context.Context) error { a.channels.RunImages(ctx); return nil })
-		startBackground("channel_maintenance", func(ctx context.Context) error { a.channels.RunMaintenance(ctx); return nil })
 	}
 	if a.invalidationBus != nil {
 		startBackground("invalidation_publisher", a.invalidations.RunPublisher)

@@ -8,6 +8,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	chatgptprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt"
 	cliprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/cli"
 	consoleprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/console"
 	webprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/web"
@@ -26,6 +27,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 		cliprovider.NewAdapter(cliprovider.Config{}, nil),
 		webprovider.NewAdapter(webprovider.Config{}, nil, nil, nil, nil),
 		consoleprovider.NewAdapter(consoleprovider.Config{}, nil, nil, nil),
+		chatgptprovider.NewAdapter(chatgptprovider.Config{}, nil, nil, nil),
 	)
 	if err := registry.Validate(); err != nil {
 		t.Fatalf("production registry validation failed: %v", err)
@@ -67,6 +69,14 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true},
 			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, TTS: true, STT: true, Realtime: true},
 			inference:    provider.InferencePolicy{Usage: provider.UsageUpstream, RetryForbiddenAsEgress: true},
+		},
+		{
+			provider: account.ProviderChatGPT, catalog: provider.ModelCatalogRemote, quota: provider.QuotaRemoteWindow,
+			capabilities: []modeldomain.Capability{modeldomain.CapabilityChat, modeldomain.CapabilityResponses, modeldomain.CapabilityImage, modeldomain.CapabilityImageEdit},
+			credential:   provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true, RedirectOAuth: true},
+			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true},
+			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true},
+			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true},
 		},
 	}
 	for _, test := range tests {

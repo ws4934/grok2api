@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chenyme/grok2api/backend/internal/domain/channel"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt/browserprofile"
 )
 
@@ -22,21 +21,27 @@ func TestClearanceSwitchesTheWholeBrowserIdentity(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
-	a := newAdapter(server.URL, server.URL, server.URL, server.Client())
-	defer a.Close()
-	credentials := channel.Credentials{Version: 1, AccessToken: "AT"}
+	a, _ := newTestAdapter(t, server)
+	login := credentials{AccessToken: "AT"}
+	me := func(ctx context.Context) {
+		w, err := wire(ctx, login)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = a.getJSON(ctx, w, http.MethodGet, "/backend-api/me", nil)
+	}
 
-	_, _ = a.Validate(context.Background(), credentials)
+	me(context.Background())
 	if h := <-seen; !strings.Contains(h.Get("User-Agent"), "Macintosh") || h.Get("Sec-CH-UA-Platform") != `"macOS"` {
 		t.Fatalf("account profile not used without clearance: %v", h)
 	}
-	ctx := channel.WithEnvironment(context.Background(), channel.Environment{UserAgent: solverUA, CFCookies: "cf_clearance=solved; __cf_bm=bm"})
-	_, _ = a.Validate(ctx, credentials)
+	ctx := withEnvironment(context.Background(), environment{UserAgent: solverUA, CFCookies: "cf_clearance=solved; __cf_bm=bm"})
+	me(ctx)
 	if h := <-seen; h.Get("User-Agent") != solverUA || h.Get("Sec-CH-UA-Platform") != `"Linux"` || !strings.Contains(h.Get("Sec-CH-UA"), `v="144"`) {
 		t.Fatalf("clearance identity not applied: %v", h)
 	}
 
-	w, err := wire(ctx, credentials)
+	w, err := wire(ctx, login)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +61,7 @@ func TestClearanceSwitchesTheWholeBrowserIdentity(t *testing.T) {
 	if jar["cf_clearance"] != "solved" || jar["__cf_bm"] != "bm" {
 		t.Fatalf("clearance cookies missing from the jar: %v", jar)
 	}
-	plain, _ := wire(context.Background(), credentials)
+	plain, _ := wire(context.Background(), login)
 	if accountBrowserKey("https://chatgpt.com", "", "AT", profile, w.Fields) == accountBrowserKey("https://chatgpt.com", "", "AT", browserProfileOf(plain), plain.Fields) {
 		t.Fatal("a clearance must not reuse the cached account browser")
 	}

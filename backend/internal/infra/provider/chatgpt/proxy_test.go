@@ -1,6 +1,7 @@
 package chatgpt
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -54,8 +55,7 @@ func TestEgressProxySchemes(t *testing.T) {
 	}
 }
 
-func TestClassifySeparatesEgressFromAccountFailures(t *testing.T) {
-	a := &Adapter{}
+func TestFailureResponseSeparatesEgressFromAccountFailures(t *testing.T) {
 	challenge := func(header http.Header, body string) error {
 		r := &http.Response{StatusCode: 403, Header: header, Body: io.NopCloser(strings.NewReader(body))}
 		return readOpenAIHTTPError(r, "/backend-api/conversation")
@@ -64,14 +64,24 @@ func TestClassifySeparatesEgressFromAccountFailures(t *testing.T) {
 		err  error
 		code string
 	}{
-		"cf header":       {challenge(http.Header{"Cf-Mitigated": {"challenge"}}, ""), "cloudflare_challenge"},
-		"cf page":         {challenge(http.Header{}, "<title>Just a moment...</title>"), "cloudflare_challenge"},
-		"account 403":     {challenge(http.Header{}, `{"detail":"Unusual activity"}`), "upstream_403"},
-		"transport error": {&transportError{cause: errors.New("proxyconnect tcp: refused")}, "transport"},
+		"cf header":   {challenge(http.Header{"Cf-Mitigated": {"challenge"}}, ""), "cloudflare_challenge"},
+		"cf page":     {challenge(http.Header{}, "<title>Just a moment...</title>"), "cloudflare_challenge"},
+		"account 403": {challenge(http.Header{}, `{"detail":"Unusual activity"}`), "upstream_forbidden"},
 	} {
-		if got := a.Classify(tc.err); got.Code != tc.code {
-			t.Errorf("%s: got %+v", name, got)
+		response, err := failureResponse("responses", tc.err)
+		if err != nil || response.StatusCode != 403 {
+			t.Fatalf("%s: %+v, %v", name, response, err)
 		}
+		var body struct {
+			Error struct{ Code string } `json:"error"`
+		}
+		if json.NewDecoder(response.Body).Decode(&body) != nil || body.Error.Code != tc.code {
+			t.Errorf("%s: code %q", name, body.Error.Code)
+		}
+	}
+	transport := &transportError{cause: errors.New("proxyconnect tcp: refused")}
+	if response, err := failureResponse("responses", transport); response != nil || err != transport {
+		t.Fatalf("transport failure became a response: %+v", response)
 	}
 	if strings.Contains((&transportError{cause: errors.New("dial http://user:secret@proxy")}).Error(), "secret") {
 		t.Fatal("transport error leaked the proxy address")

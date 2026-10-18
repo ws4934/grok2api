@@ -604,7 +604,7 @@ func findModelRoutesByPublicID(db *gorm.DB, publicID string) ([]modelRouteModel,
 	}
 	providers := account.Providers()
 	for _, p := range catalog {
-		if !p.IsLegacy() && p.IsValid() {
+		if p.IsValid() && !slices.Contains(providers, p) {
 			providers = append(providers, p)
 		}
 	}
@@ -843,6 +843,13 @@ func discoveredRouteDefaults(provider account.Provider, upstreamModel string) (s
 	case account.ProviderBuild:
 		if upstreamModel == "grok-imagine-video-1.5" {
 			return upstreamModel, model.CapabilityVideo
+		}
+		return upstreamModel, model.CapabilityResponses
+	case account.ProviderChatGPT:
+		// The image routes come from the ChatGPT catalog; discovery only sees
+		// their upstream ID through the account capability overlay.
+		if upstreamModel == "gpt-image-2" {
+			return upstreamModel, model.CapabilityImage
 		}
 		return upstreamModel, model.CapabilityResponses
 	case account.ProviderConsole:

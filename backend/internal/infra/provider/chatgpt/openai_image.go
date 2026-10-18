@@ -25,8 +25,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chenyme/grok2api/backend/internal/domain/channel"
-
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt/browserprofile"
 	"golang.org/x/crypto/sha3"
 	_ "golang.org/x/image/webp"
@@ -333,17 +331,7 @@ func (o *OpenAIImage) start(ctx context.Context, account wireAccount, requiremen
 	headers["X-Conduit-Token"] = conduit
 	headers["Accept"] = "text/event-stream"
 	applyOpenAITimezone(ctx, payload)
-	if err := channel.ObserveQuotaSend(ctx, "reason"); err != nil {
-		return "", nil, err
-	}
-	if err := channel.ObserveQuotaSend(ctx, "image_gen"); err != nil {
-		return "", nil, err
-	}
-	if save, ok := ctx.Value(checkpointKey{}).(func(channel.Checkpoint) error); ok {
-		if err := save(channel.Checkpoint{Version: 1, Submitted: true}); err != nil {
-			return "", nil, err
-		}
-	}
+	markSubmitted(ctx)
 	response, err := o.do(ctx, http.MethodPost, "/backend-api/f/conversation", account, payload, headers, true)
 	if err != nil {
 		return "", nil, err
@@ -362,14 +350,6 @@ func (o *OpenAIImage) start(ctx context.Context, account wireAccount, requiremen
 			return true
 		}
 		collectOpenAIGeneratedImageRefs(value, &conversationID, &fileIDs)
-		if conversationID != "" {
-			if save, ok := ctx.Value(checkpointKey{}).(func(channel.Checkpoint) error); ok {
-				if e := save(channel.Checkpoint{Submitted: true, Version: 1, ConversationID: conversationID, FileIDs: uniqueStrings(fileIDs)}); e != nil {
-					terminalErr = e
-					return true
-				}
-			}
-		}
 		return false
 	})
 	if terminalErr != nil {
@@ -793,7 +773,7 @@ func readOpenAIHTTPError(response *http.Response, target string, secrets ...stri
 	if response.Request != nil && response.Request.URL != nil {
 		endpoint = response.Request.URL.Path
 	}
-	return &upstreamError{Status: response.StatusCode, Message: message, Body: message, Endpoint: endpoint, Challenge: isCloudflareChallenge(response.StatusCode, response.Header, string(raw))}
+	return &upstreamError{Status: response.StatusCode, Message: message, Body: message, Endpoint: endpoint, Challenge: isCloudflareChallenge(response.StatusCode, response.Header, string(raw)), RetryAfter: response.Header.Get("Retry-After")}
 }
 
 func scanOpenAISSE(reader io.Reader, onPayload func([]byte) bool) error {

@@ -3,7 +3,6 @@ package chatgpt
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,12 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenyme/grok2api/backend/internal/domain/channel"
 	"github.com/chenyme/grok2api/backend/internal/pkg/netguard"
 	"github.com/google/uuid"
 )
 
-// Maps below are private wire representations. They never cross the channel contract.
+// Maps below are private wire representations. They never leave this package.
 type wireAccount struct {
 	Token  string
 	Fields map[string]any
@@ -39,6 +37,8 @@ type upstreamError struct {
 	Body     string
 	// Challenge marks a Cloudflare interstitial: the request never reached chatgpt.com.
 	Challenge bool
+	// RetryAfter is the upstream Retry-After header, when sent.
+	RetryAfter string
 }
 
 func (e *upstreamError) Error() string { return fmt.Sprintf("ChatGPT upstream HTTP %d", e.Status) }
@@ -90,7 +90,7 @@ func (o *OpenAIImage) doRequest(ctx context.Context, method, endpoint, path stri
 		req.Header.Set("Accept", "text/event-stream")
 	}
 	var resp *http.Response
-	proxy := channel.EnvironmentFrom(ctx).ProxyURL
+	proxy := environmentFrom(ctx).ProxyURL
 	if authenticated && strings.HasPrefix(o.BaseURL, "https://chatgpt.com") {
 		o.browserMu.Lock()
 		b, e := accountBrowser(o.browsers, o.BaseURL, proxy, a.Token, a.Fields, o.RequestTimeout)
@@ -183,9 +183,6 @@ func validatePublicHost(ctx context.Context, host string) error {
 	return nil
 }
 func (o *OpenAIImage) prepareInputUpload(ctx context.Context, a wireAccount, payload map[string]any) (map[string]any, error) {
-	if e := channel.ObserveQuotaSend(ctx, "file_upload"); e != nil {
-		return nil, e
-	}
 	r, e := o.do(ctx, "POST", "/backend-api/files", a, payload, map[string]string{"Content-Type": "application/json"}, false)
 	if e != nil {
 		return nil, e
@@ -220,9 +217,6 @@ func setOpenAIHeaders(req *http.Request, path, token string, a map[string]any) {
 	for k, v := range map[string]string{"Authorization": "Bearer " + token, "Accept": "application/json", "Origin": "https://chatgpt.com", "Referer": "https://chatgpt.com/", "Cache-Control": "no-cache", "OAI-Device-Id": fp.DeviceID, "OAI-Session-Id": fp.SessionID, "OAI-Language": browserLanguage(fp.Profile), "OAI-Client-Version": openAIClientVersion, "OAI-Client-Build-Number": openAIClientBuild, "X-OpenAI-Target-Path": path, "X-OpenAI-Target-Route": path} {
 		req.Header.Set(k, v)
 	}
-}
-func decodeJSONLimited(r io.Reader, v any) error {
-	return json.NewDecoder(io.LimitReader(r, 8<<20)).Decode(v)
 }
 
 func numberValue(v any) (float64, bool) { n, ok := v.(float64); return n, ok }

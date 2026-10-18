@@ -14,6 +14,7 @@ const (
 	ProviderBuild   Provider = "grok_build"
 	ProviderWeb     Provider = "grok_web"
 	ProviderConsole Provider = "grok_console"
+	ProviderChatGPT Provider = "chatgpt"
 )
 
 // LinkedAccount 表示同一上游用户在另一 Provider 下的弱关联账号。
@@ -26,7 +27,7 @@ type LinkedAccount struct {
 	UserID   string
 }
 
-var providers = [...]Provider{ProviderBuild, ProviderWeb, ProviderConsole}
+var providers = [...]Provider{ProviderBuild, ProviderWeb, ProviderConsole, ProviderChatGPT}
 
 // Providers 返回按产品展示和后台维护顺序排列的稳定 Provider 集合。
 // The order is also the routing priority when providers share a public model name.
@@ -58,7 +59,7 @@ func (p Provider) IsValid() bool {
 	return true
 }
 
-// IsLegacy identifies the providers covered by the original client-key bitmask.
+// IsLegacy identifies the Grok providers covered by the original client-key bitmask.
 func (p Provider) IsLegacy() bool {
 	return p == ProviderBuild || p == ProviderWeb || p == ProviderConsole
 }

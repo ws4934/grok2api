@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1042,7 +1043,7 @@ func (r *Registry) Definition(value account.Provider) (Definition, bool) {
 	return definition.Clone(), ok
 }
 
-// Providers returns the legacy display order followed by sorted extension IDs.
+// Providers returns the built-in display order followed by sorted extension IDs.
 func (r *Registry) Providers() []account.Provider {
 	values := make([]account.Provider, 0, len(r.adapters))
 	for _, value := range account.Providers() {
@@ -1052,7 +1053,7 @@ func (r *Registry) Providers() []account.Provider {
 	}
 	var extensions []account.Provider
 	for value := range r.adapters {
-		if !value.IsLegacy() {
+		if !slices.Contains(account.Providers(), value) {
 			extensions = append(extensions, value)
 		}
 	}
