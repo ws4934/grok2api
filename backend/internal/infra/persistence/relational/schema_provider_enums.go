@@ -130,3 +130,14 @@ func (d *Database) rescheduleChatGPTCredentialRefresh(ctx context.Context) error
 	}
 	return nil
 }
+
+// resyncChatGPTQuotaWithoutResetTimes marks ChatGPT accounts unsynced when a
+// window has no reset time, which only windows stored before reset_after was
+// read lack. The quota catch-up then resyncs them once; an exhausted window
+// gets a reset time and with it a recovery event.
+func (d *Database) resyncChatGPTQuotaWithoutResetTimes(ctx context.Context) error {
+	legacy := d.db.Table("account_quota_windows AS quota").Select("quota.account_id").
+		Joins("JOIN provider_accounts AS account ON account.id = quota.account_id").
+		Where("account.provider = ? AND quota.reset_at IS NULL AND quota.synced_at IS NOT NULL", account.ProviderChatGPT)
+	return d.db.WithContext(ctx).Model(&quotaWindowModel{}).Where("account_id IN (?)", legacy).Update("synced_at", nil).Error
+}

@@ -254,6 +254,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	if err := d.rescheduleChatGPTCredentialRefresh(ctx); err != nil {
 		return fmt.Errorf("重排 ChatGPT 凭据续期时间: %w", err)
 	}
+	if err := d.resyncChatGPTQuotaWithoutResetTimes(ctx); err != nil {
+		return fmt.Errorf("标记缺少重置时间的 ChatGPT 额度: %w", err)
+	}
 	for _, statement := range schemaIndexes {
 		if err := db.Exec(statement).Error; err != nil {
 			return fmt.Errorf("初始化数据库索引: %w", err)
