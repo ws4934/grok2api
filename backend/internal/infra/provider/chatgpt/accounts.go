@@ -258,8 +258,9 @@ func (a *Adapter) MarshalCredentials(values []provider.CredentialSeed) ([]byte, 
 	return append(data, '\n'), nil
 }
 
-// PrepareImportedCredential exchanges refresh-token-only seeds and resolves
-// the upstream identity and plan of every seed.
+// PrepareImportedCredential exchanges the refresh token of seeds without a
+// usable access token (missing, expired or rejected) and resolves the
+// upstream identity and plan of every seed.
 func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.CredentialSeed) (provider.CredentialSeed, error) {
 	c := credentialsOf(seed.AccessToken, seed.RefreshToken, seed.State)
 	if !seed.ExpiresAt.IsZero() {
@@ -267,20 +268,33 @@ func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.C
 	}
 	pending := pendingCredential(ctx, seed.SourceKey)
 	refreshed := false
-	if c.AccessToken == "" {
-		if c.ClientProfile != oauthProfile {
-			return seed, errors.New("a refresh_token import requires client_profile " + oauthProfile)
-		}
+	refresh := func() error {
 		next, err := a.exchange(ctx, pending, map[string]string{"client_id": oauthClientID, "grant_type": "refresh_token", "refresh_token": c.RefreshToken}, c)
-		if err != nil {
+		if err == nil {
+			c, refreshed = next, true
+		}
+		return err
+	}
+	// Sending a refresh token to another OAuth client can revoke it.
+	canRefresh := c.RefreshToken != "" && c.ClientProfile == oauthProfile
+	if c.AccessToken == "" && !canRefresh {
+		return seed, errors.New("a refresh_token import requires client_profile " + oauthProfile)
+	}
+	if c.AccessToken == "" || (canRefresh && !c.ExpiresAt.IsZero() && !c.ExpiresAt.After(time.Now())) {
+		if err := refresh(); err != nil {
 			return seed, err
 		}
-		c, refreshed = next, true
 	}
 	identity, err := a.identity(ctx, pending, c)
 	var upstream *upstreamError
 	if err != nil && !refreshed && errors.As(err, &upstream) && upstream.Status == http.StatusUnauthorized {
-		return seed, errors.New("access token was rejected by ChatGPT")
+		if !canRefresh {
+			return seed, errors.New("access token was rejected by ChatGPT")
+		}
+		if err := refresh(); err != nil {
+			return seed, err
+		}
+		identity, _ = a.identity(ctx, pending, c)
 	}
 	// A refreshed token pair must be kept even when the identity lookup fails:
 	// the submitted refresh token may already be revoked.
