@@ -161,6 +161,7 @@ func TestValidateBoundAccountsSupportsAccountsFilteredByIDs(t *testing.T) {
 	}
 }
 
+
 func TestSyncAggregatesCapabilitiesFromAllAccounts(t *testing.T) {
 	ctx := context.Background()
 	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "model-sync.db"))
