@@ -426,11 +426,11 @@ func (s *Service) UpdateOperationsConfig(ctx context.Context, input OperationsCo
 
 func (s *Service) validateFallbacks(ctx context.Context, current domain.OperationsConfig, input map[domain.Scope]FallbackConfigInput) (map[domain.Scope]domain.FallbackConfig, error) {
 	result := make(map[domain.Scope]domain.FallbackConfig, len(allOperationScopes()))
-	for _, scope := range allOperationScopes() {
+	for _, scope := range append(allOperationScopes(), domain.ExtensionScopes()...) {
 		result[scope] = current.FallbackFor(scope)
 	}
 	for scope, fallback := range input {
-		if !validScope(scope) {
+		if !validScope(scope) && !domain.IsExtensionScope(scope) {
 			return nil, fmt.Errorf("%w: 回退作用域无效", ErrInvalidInput)
 		}
 		mode := fallback.Mode.Normalized()

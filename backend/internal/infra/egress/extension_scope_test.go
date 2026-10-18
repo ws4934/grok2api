@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"testing"
+	"time"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	domain "github.com/chenyme/grok2api/backend/internal/domain/egress"
@@ -42,5 +43,58 @@ func TestExtensionScopeLeasesItsOwnProxyNodes(t *testing.T) {
 	defer direct.Release()
 	if direct.ProxyURL != "" {
 		t.Fatalf("extension scope borrowed another scope's proxy: %q", direct.ProxyURL)
+	}
+}
+
+func TestExtensionScopeFallsBackToItsFixedNode(t *testing.T) {
+	domain.SetExtensionScopes([]domain.Scope{"chatgpt"})
+	t.Cleanup(func() { domain.SetExtensionScopes(nil) })
+	cipher, err := security.NewCipher("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, err := cipher.Encrypt("http://primary:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup, err := cipher.Encrypt("http://backup:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	until := time.Now().Add(time.Minute)
+	config := domain.DefaultOperationsConfig()
+	config.Fallbacks["chatgpt"] = domain.FallbackConfig{Mode: domain.FallbackModeFixed, NodeID: 2}
+	manager := NewManager(fallbackEgressRepository{
+		egressRepositoryTestStub: egressRepositoryTestStub{nodes: []domain.Node{
+			{ID: 1, Name: "cooling", Scope: "chatgpt", Enabled: true, Health: 1, CooldownUntil: &until, EncryptedProxyURL: primary},
+			{ID: 2, Name: "backup", Scope: "chatgpt", Enabled: true, Health: 1, EncryptedProxyURL: backup},
+		}},
+		config: config,
+	}, cipher)
+	lease, err := manager.AcquireCredential(context.Background(), "chatgpt", accountdomain.Credential{ID: 7, Provider: "chatgpt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	if lease.NodeID != 2 || lease.ProxyURL != "http://backup:8080" {
+		t.Fatalf("fallback lease node=%d proxy=%q", lease.NodeID, lease.ProxyURL)
+	}
+	// While the primary is healthy the reserved backup carries no traffic.
+	healthy := NewManager(fallbackEgressRepository{
+		egressRepositoryTestStub: egressRepositoryTestStub{nodes: []domain.Node{
+			{ID: 1, Name: "primary", Scope: "chatgpt", Enabled: true, Health: 1, EncryptedProxyURL: primary},
+			{ID: 2, Name: "backup", Scope: "chatgpt", Enabled: true, Health: 1, EncryptedProxyURL: backup},
+		}},
+		config: config,
+	}, cipher)
+	for id := uint64(1); id <= 8; id++ {
+		lease, err := healthy.AcquireCredential(context.Background(), "chatgpt", accountdomain.Credential{ID: id, Provider: "chatgpt"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease.Release()
+		if lease.NodeID != 1 {
+			t.Fatalf("account %d used the reserved backup node", id)
+		}
 	}
 }

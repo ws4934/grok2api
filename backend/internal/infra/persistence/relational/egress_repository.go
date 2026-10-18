@@ -220,6 +220,9 @@ func (r *EgressRepository) UpdateEgressNodesEnabled(ctx context.Context, ids []u
 		if configReferencesAnyFallbackNode(config, lockedIDs) {
 			return repository.ErrEgressFallbackInUse
 		}
+		if referenced, err := extensionFallbackReferencesAny(tx, lockedIDs); err != nil || referenced {
+			return errors.Join(err, repository.ErrEgressFallbackInUse)
+		}
 		result := tx.Model(&egressNodeModel{}).
 			Where("id IN ? AND enabled <> ?", lockedIDs, false).
 			Updates(map[string]any{"enabled": false, "updated_at": time.Now().UTC()})
@@ -511,7 +514,8 @@ func (r *EgressRepository) GetEgressOperationsConfig(ctx context.Context) (egres
 		}
 		return egress.OperationsConfig{}, mapError(err)
 	}
-	return toEgressOperationsConfigDomain(row), nil
+	config, err := withExtensionFallbacks(r.db.db.WithContext(ctx), toEgressOperationsConfigDomain(row))
+	return config, mapError(err)
 }
 
 func (r *EgressRepository) SaveEgressOperationsConfig(ctx context.Context, value egress.OperationsConfig) (egress.OperationsConfig, error) {
@@ -530,12 +534,16 @@ func (r *EgressRepository) SaveEgressOperationsConfig(ctx context.Context, value
 		if err := validateLockedEgressFallbackNodes(tx, row); err != nil {
 			return err
 		}
+		if err := saveExtensionFallbacks(tx, value); err != nil {
+			return err
+		}
 		return tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&row).Error
 	})
 	if err != nil {
 		return egress.OperationsConfig{}, mapError(err)
 	}
-	return toEgressOperationsConfigDomain(row), nil
+	config, err := withExtensionFallbacks(r.db.db.WithContext(ctx), toEgressOperationsConfigDomain(row))
+	return config, mapError(err)
 }
 
 func lockEgressOperationsConfig(tx *gorm.DB) (egressOperationsConfigModel, error) {
@@ -720,6 +728,9 @@ func clearEgressFallbackNodeReferences(tx *gorm.DB, ids []uint64) error {
 	if len(ids) == 0 {
 		return nil
 	}
+	if err := clearExtensionFallbackReferences(tx, ids); err != nil {
+		return err
+	}
 	for _, columns := range [][2]string{
 		{"build_fallback_mode", "build_fallback_node_id"},
 		{"web_fallback_mode", "web_fallback_node_id"},
@@ -737,6 +748,9 @@ func clearEgressFallbackNodeReferences(tx *gorm.DB, ids []uint64) error {
 }
 
 func clearInvalidEgressFallbackNodeReferences(tx *gorm.DB) error {
+	if err := clearInvalidExtensionFallbacks(tx); err != nil {
+		return err
+	}
 	var config egressOperationsConfigModel
 	if err := tx.First(&config, 1).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

@@ -25,6 +25,7 @@ var schemaModels = []any{
 	&channelExecutionSlotModel{},
 	&channelImageJobModel{}, &channelImageItemModel{}, &channelAssetRefModel{}, &channelQuotaReservationModel{},
 	&channelSettingsModel{}, &channelAccountModel{}, &channelOAuthModel{}, &channelGrantModel{}, &channelPriceModel{},
+	&egressExtensionFallbackModel{},
 	&adminModel{},
 	&adminSessionModel{},
 	&egressSubscriptionSourceModel{},
