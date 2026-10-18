@@ -165,6 +165,10 @@ func (c *streamConverter) toolStartMessages(item responseItem) error {
 	if err := c.closeTextMessages(); err != nil {
 		return err
 	}
+	if c.stopSequence != "" {
+		// Buffered text just hit a stop sequence; nothing after it is emitted.
+		return nil
+	}
 	tool := streamTool{Index: c.nextIndex, ID: anthropicToolUseID(item.CallID), Name: item.Name, Arguments: item.Arguments}
 	c.nextIndex++
 	c.tools[item.ID] = tool
@@ -174,9 +178,22 @@ func (c *streamConverter) toolStartMessages(item responseItem) error {
 	})
 }
 
-// closeTextMessages flushes text held by the stop filter and stops the open
-// text block. Text arriving later opens a new block with the next index.
+// closeTextMessages flushes held text and stops the open text block. Text
+// arriving later opens a new block with the next index. Hosted search seen
+// before the text keeps the JSON block order: server_tool_use →
+// web_search_tool_result → text, and only then any tool_use.
 func (c *streamConverter) closeTextMessages() error {
+	if c.deferSearchText {
+		if err := c.emitPendingWebSearchResults(); err != nil {
+			return err
+		}
+		if pending := c.pendingSearchText.String(); pending != "" {
+			c.pendingSearchText.Reset()
+			if err := c.textDeltaMessages(pending); err != nil {
+				return err
+			}
+		}
+	}
 	if c.stopSequence == "" {
 		if pending := c.stopFilter.Flush(); pending != "" {
 			if err := c.textDeltaWithoutFilter(pending); err != nil {
@@ -237,18 +254,6 @@ func (c *streamConverter) doneMessages(status string) error {
 	}
 	if c.options.AnthropicWebSearchRequired && len(c.webSearch) == 0 {
 		c.webSearch = []webSearchCall{unavailableWebSearchCall(c.options.AnthropicWebSearchQuery)}
-	}
-	if c.deferSearchText {
-		// Hosted search was observed before text, so preserve Anthropic's block order:
-		// server_tool_use → web_search_tool_result → text.
-		if err := c.emitPendingWebSearchResults(); err != nil {
-			return err
-		}
-		if pending := c.pendingSearchText.String(); pending != "" {
-			if err := c.textDeltaMessages(pending); err != nil {
-				return err
-			}
-		}
 	}
 	if err := c.closeTextMessages(); err != nil {
 		return err

@@ -859,6 +859,70 @@ func TestStreamFinalEnvelopeDoesNotOrphanEarlierWebSearchUse(t *testing.T) {
 	}
 }
 
+func TestStreamWebSearchWithFunctionCallMatchesJSONBlockOrder(t *testing.T) {
+	search := `{"id":"ws_1","type":"web_search_call","status":"completed","action":{"type":"search","query":"rust tutorials","sources":[{"url":"https://doc.rust-lang.org"}]}}`
+	call := `{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\"q\":\"x\"}"}`
+	envelope := `{"id":"resp_1","model":"grok-4.5","status":"completed","output":[` + search + `,{"type":"message","content":[{"type":"output_text","text":"Found it."}]},` + call + `],"usage":{"input_tokens":3,"output_tokens":2}}`
+	source := strings.Join([]string{
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item":{"id":"ws_1","type":"web_search_call","status":"in_progress","action":{"type":"search","query":"rust tutorials"}}}`, ``,
+		`event: response.output_item.done`,
+		`data: {"type":"response.output_item.done","item":` + search + `}`, ``,
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"Found it."}`, ``,
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":""}}`, ``,
+		`event: response.function_call_arguments.delta`,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"q\":\"x\"}"}`, ``,
+		`event: response.output_item.done`,
+		`data: {"type":"response.output_item.done","item":` + call + `}`, ``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":` + envelope + `}`, ``,
+	}, "\n")
+	options := ResponseOptions{AnthropicWebSearch: true}
+	raw, err := io.ReadAll(ConvertResponseStreamWithOptions(io.NopCloser(strings.NewReader(source)), OperationMessages, options))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	assertSequentialContentBlocks(t, text)
+	data, err := ConvertResponseJSONWithOptions([]byte(envelope), OperationMessages, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply struct {
+		Content []struct {
+			Type string `json:"type"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(data, &reply); err != nil {
+		t.Fatal(err)
+	}
+	var jsonOrder []string
+	for _, block := range reply.Content {
+		jsonOrder = append(jsonOrder, block.Type)
+	}
+	want := []string{"server_tool_use", "web_search_tool_result", "text", "tool_use"}
+	if got := contentBlockStartTypes(t, text); !reflect.DeepEqual(got, want) || !reflect.DeepEqual(jsonOrder, want) {
+		t.Fatalf("stream order = %v, json order = %v, want %v\n%s", got, jsonOrder, want, text)
+	}
+	if !strings.Contains(text, `"partial_json":"{\"q\":\"x\"}"`) || !strings.Contains(text, `"stop_reason":"tool_use"`) {
+		t.Fatalf("tool call lost\n%s", text)
+	}
+
+	// A stop sequence in the buffered text ends the turn before the call.
+	options.StopSequences = []string{"it."}
+	raw, err = io.ReadAll(ConvertResponseStreamWithOptions(io.NopCloser(strings.NewReader(source)), OperationMessages, options))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = string(raw)
+	assertSequentialContentBlocks(t, text)
+	if got := contentBlockStartTypes(t, text); !reflect.DeepEqual(got, want[:3]) || !strings.Contains(text, `"stop_reason":"stop_sequence"`) {
+		t.Fatalf("stop sequence stream = %v\n%s", got, text)
+	}
+}
+
 func contentBlockStartTypes(t *testing.T, stream string) []string {
 	t.Helper()
 	var types []string
