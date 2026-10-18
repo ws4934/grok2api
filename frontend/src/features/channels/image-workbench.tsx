@@ -5,27 +5,39 @@ import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { i18n } from "@/shared/i18n";
-import { channelsApi, jobSchema } from "./channels-api";
+import { channelsApi } from "./channels-api";
 import "./channels-i18n";
 
 const selectClass = "h-9 rounded-md border bg-background px-3 text-sm";
+const responseSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  error: z.object({ message: z.string() }).nullable(),
+  output: z.array(z.object({
+    id: z.string(),
+    type: z.string(),
+    status: z.string(),
+    result: z.string().nullable(),
+    output_format: z.string().optional(),
+  })),
+});
 
-async function publicRequest(key: string, path: string, body?: object, idempotency?: string): Promise<unknown> {
-  const response = await fetch(`/v1/images/jobs${path}`, {
-    method: body ? "POST" : "GET",
+async function publicRequest(key: string, path: string, init: { method?: string; body?: object; idempotency?: string } = {}) {
+  const response = await fetch(`/v1/responses${path}`, {
+    method: init.method ?? "GET",
     headers: {
       Authorization: `Bearer ${key}`,
-      ...(body ? { "Content-Type": "application/json" } : {}),
-      ...(idempotency ? { "Idempotency-Key": idempotency } : {}),
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...(init.idempotency ? { "Idempotency-Key": init.idempotency } : {}),
     },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    ...(init.body ? { body: JSON.stringify(init.body) } : {}),
   });
   const result: unknown = await response.json();
   if (!response.ok) {
     const error = z.object({ error: z.object({ message: z.string() }) }).safeParse(result);
     throw new Error(error.success ? error.data.error.message : `HTTP ${response.status}`);
   }
-  return result;
+  return responseSchema.parse(result);
 }
 
 async function readImage(file: File): Promise<{ name: string; data: string }> {
@@ -45,7 +57,6 @@ export function ImageWorkbench({ channel }: { channel: string }) {
   const [operation, setOperation] = useState("image");
   const [model, setModel] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [count, setCount] = useState(1);
   const [size, setSize] = useState("auto");
   const [quality, setQuality] = useState("auto");
   const [format, setFormat] = useState("png");
@@ -60,38 +71,36 @@ export function ImageWorkbench({ channel }: { channel: string }) {
 
   const submit = useMutation({
     mutationFn: async () => {
-      if (mask && inputs.length !== 1) throw new Error(t("channels.workbench.maskNeedsOneImage"));
+      const edit = operation === "image_edit";
+      if (edit && mask && inputs.length !== 1) throw new Error(t("channels.workbench.maskNeedsOneImage"));
       if (background === "transparent" && format === "jpeg") throw new Error(t("channels.workbench.jpegNoTransparency"));
-      return jobSchema.parse(await publicRequest(key, "", {
-        operation,
-        model: selected,
-        prompt,
-        n: count,
+      const input = edit
+        ? [{ role: "user", content: [{ type: "input_text", text: prompt }, ...inputs.map((v) => ({ type: "input_image", image_url: v.data }))] }]
+        : prompt;
+      const tool = {
+        type: "image_generation",
         size,
         quality,
-        output_format: format,
         background,
-        ...(operation === "image_edit" ? { images: inputs.map((v) => v.data), ...(mask ? { mask: mask.data } : {}) } : {}),
-      }, crypto.randomUUID()));
+        output_format: format,
+        ...(edit && mask ? { input_image_mask: { image_url: mask.data } } : {}),
+      };
+      return publicRequest(key, "", { method: "POST", body: { model: selected, background: true, input, tools: [tool] }, idempotency: crypto.randomUUID() });
     },
-    onSuccess: (job) => setActive({ id: job.id, key }),
+    onSuccess: (response) => setActive({ id: response.id, key }),
   });
   const job = useQuery({
-    queryKey: ["channel-workbench-job", active?.id],
-    queryFn: async () => jobSchema.parse(await publicRequest(active!.key, `/${active!.id}`)),
+    queryKey: ["channel-workbench-response", active?.id],
+    queryFn: () => publicRequest(active!.key, `/${active!.id}`),
     enabled: !!active,
-    refetchInterval: (q) => (!q.state.data || ["queued", "running"].includes(q.state.data.status) ? 2000 : false),
-  });
-  const results = useQuery({
-    queryKey: ["channel-workbench-result", active?.id],
-    queryFn: async () => z.object({ data: z.array(z.object({ url: z.string() })) }).parse(await publicRequest(active!.key, `/${active!.id}/result`)),
-    enabled: !!active && ["succeeded", "partially_succeeded"].includes(job.data?.status ?? ""),
+    refetchInterval: (q) => (!q.state.data || ["queued", "in_progress"].includes(q.state.data.status) ? 3000 : false),
   });
   const cancel = useMutation({
-    mutationFn: () => publicRequest(active!.key, `/${active!.id}/cancel`, {}),
+    mutationFn: () => publicRequest(active!.key, `/${active!.id}/cancel`, { method: "POST" }),
     onSuccess: () => job.refetch(),
   });
-  const error = inputError || submit.error?.message || job.error?.message || results.error?.message || cancel.error?.message;
+  const images = job.data?.output.filter((item) => item.result) ?? [];
+  const error = inputError || submit.error?.message || job.error?.message || job.data?.error?.message || cancel.error?.message;
 
   return (
     <section className="space-y-4 rounded-xl border bg-card p-5">
@@ -104,7 +113,7 @@ export function ImageWorkbench({ channel }: { channel: string }) {
           submit.mutate();
         }}
       >
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-3">
           <label className="grid gap-2 text-sm">
             {t("channels.workbench.apiKey")}
             <Input type="password" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)} required />
@@ -121,10 +130,6 @@ export function ImageWorkbench({ channel }: { channel: string }) {
             <select className={selectClass} value={selected} onChange={(event) => setModel(event.target.value)}>
               {options.map((m) => <option key={m.ID} value={m.PublicID}>{m.PublicID}</option>)}
             </select>
-          </label>
-          <label className="grid gap-2 text-sm">
-            {t("channels.workbench.count")}
-            <Input type="number" min={1} max={10} value={count} onChange={(event) => setCount(Number(event.target.value))} />
           </label>
         </div>
         <label className="grid gap-2 text-sm">
@@ -213,23 +218,27 @@ export function ImageWorkbench({ channel }: { channel: string }) {
         <div className="space-y-2 rounded-md border p-3 text-sm">
           <code>{active.id}</code>
           <p>{job.data ? statusLabel(job.data.status) : t("channels.workbench.loading")}</p>
-          {job.data?.items.map((item) => (
-            <p key={item.id}>#{item.index + 1} · {statusLabel(item.stage)} {item.error}</p>
+          {job.data?.output.map((item, i) => (
+            <p key={item.id}>#{i + 1} · {statusLabel(item.status)}</p>
           ))}
-          {["queued", "running"].includes(job.data?.status ?? "") && (
+          {["queued", "in_progress"].includes(job.data?.status ?? "") && (
             <Button variant="outline" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
               {t("channels.workbench.cancel")}
             </Button>
           )}
         </div>
       )}
-      {results.data && (
+      {images.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2">
-          {results.data.data.map((result, i) => (
-            <a key={result.url} href={result.url} target="_blank" rel="noreferrer">
-              <img src={result.url} alt={t("channels.workbench.result", { index: i + 1 })} className="w-full rounded border object-contain" />
-            </a>
-          ))}
+          {images.map((item, i) => {
+            const extension = item.output_format ?? "png";
+            const src = `data:image/${extension};base64,${item.result}`;
+            return (
+              <a key={item.id} href={src} download={`${item.id}.${extension}`}>
+                <img src={src} alt={t("channels.workbench.result", { index: i + 1 })} className="w-full rounded border object-contain" />
+              </a>
+            );
+          })}
         </div>
       )}
     </section>
