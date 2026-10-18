@@ -93,7 +93,14 @@ func scanOpenAIChat(reader io.Reader, onEvent func(OpenAIChatEvent) error, obser
 		}
 		if line == "[DONE]" {
 			if !hasText {
-				return fmt.Errorf("ChatGPT returned no assistant text")
+				// Fragments only: no merged answer message was streamed.
+				text := state.fragmentText()
+				if text == "" {
+					return fmt.Errorf("ChatGPT returned no assistant text")
+				}
+				if err := onEvent(OpenAIChatEvent{Text: text}); err != nil {
+					return err
+				}
 			}
 			return onEvent(OpenAIChatEvent{Done: true})
 		}
@@ -195,6 +202,82 @@ type openAIChatState struct {
 	summary string
 	path    string
 	hidden  bool
+	// fragments keeps the text of answer fragments (is_message_fragment) by
+	// message ID in arrival order; they are only used when no merged answer
+	// message is streamed.
+	fragments     map[string]string
+	fragmentOrder []string
+}
+
+// displayableAssistantMessage reports whether a message is the user-visible
+// answer. ChatGPT streams answer fragments (split around reasoning) beside a
+// merged message carrying the whole answer, plus hidden and non-text messages
+// (UI widgets, tool output); only the merged or plain text answer is shown.
+func displayableAssistantMessage(message map[string]any) bool {
+	author, _ := message["author"].(map[string]any)
+	if role := strings.ToLower(stringValue(author["role"])); role != "" && role != "assistant" {
+		return false
+	}
+	if channel := stringValue(message["channel"]); channel != "" && channel != "final" {
+		return false
+	}
+	metadata, _ := message["metadata"].(map[string]any)
+	if boolValue(metadata["is_message_fragment"]) || boolValue(metadata["is_visually_hidden_from_conversation"]) {
+		return false
+	}
+	content, _ := message["content"].(map[string]any)
+	switch stringValue(content["content_type"]) {
+	case "", "text", "multimodal_text":
+		return true
+	default:
+		return false
+	}
+}
+
+// messageText joins the string parts of a message (or its text field).
+func messageText(message map[string]any) string {
+	content, _ := message["content"].(map[string]any)
+	parts, _ := content["parts"].([]any)
+	var text strings.Builder
+	for _, part := range parts {
+		if value, ok := part.(string); ok {
+			text.WriteString(value)
+		}
+	}
+	if text.Len() == 0 {
+		if value, ok := content["text"].(string); ok {
+			text.WriteString(value)
+		}
+	}
+	return text.String()
+}
+
+// rememberFragment records the latest snapshot of an answer fragment.
+func (s *openAIChatState) rememberFragment(message map[string]any) {
+	metadata, _ := message["metadata"].(map[string]any)
+	if !boolValue(metadata["is_message_fragment"]) {
+		return
+	}
+	id, text := stringValue(message["id"]), messageText(message)
+	if id == "" || text == "" {
+		return
+	}
+	if s.fragments == nil {
+		s.fragments = map[string]string{}
+	}
+	if _, seen := s.fragments[id]; !seen {
+		s.fragmentOrder = append(s.fragmentOrder, id)
+	}
+	s.fragments[id] = text
+}
+
+// fragmentText joins the fragments for a stream that had no merged answer.
+func (s *openAIChatState) fragmentText() string {
+	var text strings.Builder
+	for _, id := range s.fragmentOrder {
+		text.WriteString(s.fragments[id])
+	}
+	return text.String()
 }
 
 func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
@@ -228,7 +311,7 @@ func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
 				continue
 			}
 			author, _ := message["author"].(map[string]any)
-			role, channel := stringValue(author["role"]), stringValue(message["channel"])
+			role := stringValue(author["role"])
 			// Only explicit display summaries are exposed. Raw analysis/thought
 			// content is neither emitted nor counted as client output.
 			content, _ := message["content"].(map[string]any)
@@ -246,7 +329,8 @@ func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
 				}
 				event.Thinking = appendDelta(&s.summary, summary.String())
 			}
-			s.hidden = (role != "" && role != "assistant") || (channel != "" && channel != "final")
+			s.rememberFragment(message)
+			s.hidden = !displayableAssistantMessage(message)
 			if message["status"] == "finished_successfully" && !s.hidden {
 				event.Done = true
 			}
@@ -340,31 +424,11 @@ func openAIAssistantText(value map[string]any) string {
 			continue
 		}
 		message, ok := object["message"].(map[string]any)
-		if !ok {
+		if !ok || !displayableAssistantMessage(message) {
 			continue
 		}
-		author, _ := message["author"].(map[string]any)
-		if role := strings.ToLower(stringValue(author["role"])); role != "" && role != "assistant" {
-			continue
-		}
-		if channel := stringValue(message["channel"]); channel != "" && channel != "final" {
-			continue
-		}
-		content, _ := message["content"].(map[string]any)
-		parts, _ := content["parts"].([]any)
-		var text strings.Builder
-		for _, part := range parts {
-			if value, ok := part.(string); ok {
-				text.WriteString(value)
-			}
-		}
-		if text.Len() == 0 {
-			if value, ok := content["text"].(string); ok {
-				text.WriteString(value)
-			}
-		}
-		if text.Len() > 0 {
-			return text.String()
+		if text := messageText(message); text != "" {
+			return text
 		}
 	}
 	return ""

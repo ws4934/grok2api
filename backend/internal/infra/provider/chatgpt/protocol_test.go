@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -70,5 +71,46 @@ func TestOnlyExplicitReasoningSummaryIsEmitted(t *testing.T) {
 	event, e := state.event(map[string]any{"message": map[string]any{"author": map[string]any{"role": "assistant"}, "channel": "analysis", "content": map[string]any{"content_type": "thoughts", "thoughts": []any{map[string]any{"summary": "可见摘要", "content": "raw analysis must not be emitted"}}}}})
 	if e != nil || event.Thinking != "可见摘要" || event.Text != "" {
 		t.Fatalf("summary extraction: %+v %v", event, e)
+	}
+}
+
+func chatSnapshot(id, text, status string, metadata string) string {
+	return `data: {"message":{"id":"` + id + `","author":{"role":"assistant"},"channel":"final","status":"` + status + `","content":{"content_type":"text","parts":[` + strconv.Quote(text) + `]},"metadata":` + metadata + `}}` + "\n\n"
+}
+
+func TestChatStreamUsesMergedAnswerNotFragments(t *testing.T) {
+	fragment := `{"is_message_fragment":true,"merged_message_id":"merged"}`
+	merged := `{"is_merged_message":true,"source_message_ids":["a","b"]}`
+	stream := chatSnapshot("a", "第一段。", "in_progress", fragment) +
+		chatSnapshot("merged", "第一段。", "in_progress", merged) +
+		chatSnapshot("a", "第一段。", "finished_successfully", fragment) +
+		`data: {"message":{"id":"w","author":{"role":"assistant"},"channel":"final","status":"finished_successfully","content":{"content_type":"text","parts":["<box border radius=\"xl\">"]},"metadata":{"is_visually_hidden_from_conversation":true}}}` + "\n\n" +
+		`data: {"message":{"id":"c","author":{"role":"assistant"},"channel":"final","status":"finished_successfully","content":{"content_type":"code","text":"widget()"},"metadata":{}}}` + "\n\n" +
+		chatSnapshot("b", "你", "in_progress", fragment) +
+		chatSnapshot("merged", "第一段。你", "in_progress", merged) +
+		chatSnapshot("b", "你可以查看天气网。", "finished_successfully", fragment) +
+		chatSnapshot("merged", "第一段。你可以查看天气网。", "finished_successfully", merged) +
+		"data: [DONE]\n\n"
+	var text strings.Builder
+	if err := scanOpenAIChat(strings.NewReader(stream), func(event OpenAIChatEvent) error {
+		text.WriteString(event.Text)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if text.String() != "第一段。你可以查看天气网。" {
+		t.Fatalf("text = %q", text.String())
+	}
+}
+
+func TestChatStreamFallsBackToFragmentsWithoutMergedAnswer(t *testing.T) {
+	fragment := `{"is_message_fragment":true}`
+	stream := chatSnapshot("a", "前半", "finished_successfully", fragment) + chatSnapshot("b", "后半", "finished_successfully", fragment) + "data: [DONE]\n\n"
+	var text strings.Builder
+	if err := scanOpenAIChat(strings.NewReader(stream), func(event OpenAIChatEvent) error {
+		text.WriteString(event.Text)
+		return nil
+	}); err != nil || text.String() != "前半后半" {
+		t.Fatalf("text = %q, err = %v", text.String(), err)
 	}
 }
