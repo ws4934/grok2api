@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
+	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"

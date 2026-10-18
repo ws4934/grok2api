@@ -20,6 +20,8 @@ type Media struct {
 	TTS             bool `json:"tts"`
 	STT             bool `json:"stt"`
 	Realtime        bool `json:"realtime"`
+	// AsyncImages providers run images as durable jobs (Responses image_generation with background).
+	AsyncImages bool `json:"asyncImages"`
 }
 
 type Credential struct {
@@ -65,7 +67,9 @@ func (c *Catalog) Entries() []Entry {
 	if c.registry != nil {
 		for _, value := range c.registry.Providers() {
 			if definition, ok := c.registry.Definition(value); ok {
-				out = append(out, entryFor(definition))
+				entry := entryFor(definition)
+				_, entry.Media.AsyncImages = c.registry.AsyncImages(value)
+				out = append(out, entry)
 			}
 		}
 	}

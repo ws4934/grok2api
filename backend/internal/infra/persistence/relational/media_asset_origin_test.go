@@ -94,7 +94,7 @@ func TestMediaAssetListFiltersByOrigin(t *testing.T) {
 			}
 			return value.ID
 		}
-		first := asset("first", "image", 0, mediadomain.Origin{Provider: provider, Model: model, Operation: "image", ClientKeyID: 11, AccountID: 21, Prompt: "a red fox"})
+		first := asset("first", "image", 0, mediadomain.Origin{Provider: provider, Model: model, Operation: "image", ClientKeyID: 11, AccountID: 21, Prompt: "a red fox", JobID: "resp_img_" + suffix})
 		second := asset("second", "image", time.Hour, mediadomain.Origin{Provider: provider, Model: "other", Operation: "image_edit", ClientKeyID: 12, AccountID: 22, Prompt: "a blue whale"})
 		video := asset("video", "video", 2*time.Hour, mediadomain.Origin{Provider: provider, Model: model, Operation: "video", ClientKeyID: 11, AccountID: 21})
 		asset("other", "image", 3*time.Hour, mediadomain.Origin{Provider: "q" + suffix, Model: model})
@@ -122,6 +122,7 @@ func TestMediaAssetListFiltersByOrigin(t *testing.T) {
 			{"from", repository.MediaAssetListFilter{Provider: provider, CreatedFrom: halfPast}, "", []string{second}},
 			{"to", repository.MediaAssetListFilter{Provider: provider, CreatedTo: halfPast}, "", []string{first}},
 			{"prompt search", repository.MediaAssetListFilter{Provider: provider}, "WHALE", []string{second}},
+			{"job", repository.MediaAssetListFilter{JobID: "resp_img_" + suffix}, "", []string{first}},
 		} {
 			values, total, err := repo.ListMediaAssets(ctx, repository.MediaAssetListQuery{
 				Page: repository.PageQuery{Limit: 10, Search: tc.search}, Filter: tc.filter,

@@ -9,6 +9,8 @@ import (
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/cli"
 )
 
 type definedAdapter struct{ definition provider.Definition }
@@ -67,5 +69,16 @@ func TestCatalogPublishesCredentialAndQuotaSurface(t *testing.T) {
 	}
 	if got := byID["grok_build"]; got.Credential.RedirectOAuth || got.DefaultMaxConcurrent != account.DefaultMaxConcurrent || got.QuotaModes == nil {
 		t.Fatalf("build entry = %+v", got)
+	}
+}
+
+func TestCatalogMarksAsyncImageProviders(t *testing.T) {
+	catalog := New(provider.NewRegistry(chatgpt.NewAdapter(chatgpt.Config{}, nil, nil, nil), cli.NewAdapter(cli.Config{}, nil)))
+	async := map[string]bool{}
+	for _, entry := range catalog.Entries() {
+		async[entry.ID] = entry.Media.AsyncImages
+	}
+	if !async["chatgpt"] || async["grok_build"] {
+		t.Fatalf("async images = %v", async)
 	}
 }

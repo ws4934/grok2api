@@ -76,6 +76,9 @@ func (r *MediaAssetRepository) ListMediaAssets(ctx context.Context, input reposi
 	if filter.AccountID != 0 {
 		query = query.Where("account_id = ?", filter.AccountID)
 	}
+	if filter.JobID != "" {
+		query = query.Where("job_id = ?", filter.JobID)
+	}
 	if !filter.CreatedFrom.IsZero() {
 		query = query.Where("created_at >= ?", filter.CreatedFrom.UTC())
 	}

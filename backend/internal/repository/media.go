@@ -17,6 +17,7 @@ type MediaAssetListFilter struct {
 	Operation   string
 	ClientKeyID uint64
 	AccountID   uint64
+	JobID       string
 	// CreatedFrom 含边界，CreatedTo 不含边界。
 	CreatedFrom time.Time
 	CreatedTo   time.Time

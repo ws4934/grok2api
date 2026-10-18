@@ -159,6 +159,7 @@ type assetListQuery struct {
 	Operation   string    `form:"operation"`
 	ClientKeyID uint64    `form:"clientKeyId"`
 	AccountID   uint64    `form:"accountId"`
+	JobID       string    `form:"jobId"`
 	From        time.Time `form:"from" time_format:"2006-01-02T15:04:05Z07:00"`
 	To          time.Time `form:"to" time_format:"2006-01-02T15:04:05Z07:00"`
 }
@@ -172,7 +173,7 @@ func (h *Handler) listImages(c *gin.Context) {
 	}
 	assets, total, err := h.service.AdminListImages(c.Request.Context(), page, pageSize, c.Query("search"), repository.MediaAssetListFilter{
 		Kind: query.Kind, Provider: query.Provider, Model: query.Model, Operation: query.Operation,
-		ClientKeyID: query.ClientKeyID, AccountID: query.AccountID, CreatedFrom: query.From, CreatedTo: query.To,
+		ClientKeyID: query.ClientKeyID, AccountID: query.AccountID, JobID: query.JobID, CreatedFrom: query.From, CreatedTo: query.To,
 	})
 	if errors.Is(err, mediaapp.ErrInvalidFilter) {
 		response.Error(c, http.StatusBadRequest, "invalidFilter", err.Error())
