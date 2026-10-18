@@ -2,6 +2,7 @@ package toolemu
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -156,6 +157,19 @@ func TestClosingTagsInsideArguments(t *testing.T) {
 	broken := writeFileBlock(`{"content":"x</tool_calls> y`) + " tail"
 	if text, calls := sieveAll(available, broken, 3); text != broken || len(calls) != 0 {
 		t.Fatalf("broken: text %q calls %#v", text, calls)
+	}
+}
+
+// TestSieveLongBlockIsLinear: copying the buffer on every delta once cost
+// 1.7 GB of allocations for a 64 KiB argument in 4-byte deltas.
+func TestSieveLongBlockIsLinear(t *testing.T) {
+	arguments := `{"content":"` + strings.Repeat("abcd", 16<<10) + `"}`
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, calls := sieveAll(map[string]struct{}{"write_file": {}}, writeFileBlock(arguments), 4)
+	runtime.ReadMemStats(&after)
+	if allocated := after.TotalAlloc - before.TotalAlloc; len(calls) != 1 || calls[0].Arguments != arguments || allocated > 16<<20 {
+		t.Fatalf("calls %d, allocated %d bytes", len(calls), allocated)
 	}
 }
 

@@ -2,6 +2,7 @@ package chatgpt
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -217,6 +218,37 @@ func TestEmulatedToolHistoryRendersCallsAndResults(t *testing.T) {
 	payload = <-payloads
 	if parts := payloadParts(payload, 2); role(0) != "system" || !strings.HasPrefix(parts[0].(string), "<tool_calls>") || payloadParts(payload, 3)[1] != "found a" {
 		t.Fatalf("chat history = %v", payload["messages"])
+	}
+}
+
+// A long reply in small append deltas costs linear memory: string += once
+// copied the whole reply per delta (0.7 GB for 64 KiB as text, 1.1 GB as a
+// tool call).
+func TestLongAppendedReplyIsLinear(t *testing.T) {
+	words := strings.Repeat("word ", 13<<10)
+	for _, c := range []struct{ answer, tools string }{
+		{words, ""},
+		{`<tool_calls><tool_call><tool_name>lookup</tool_name><parameters>{"q":"` + words + `"}</parameters></tool_call></tool_calls>`, `"tools":` + lookupTool + `,`},
+	} {
+		stream := `data: {"v":{"message":{"id":"m","author":{"role":"assistant"},"channel":"final","status":"in_progress","content":{"content_type":"text","parts":[""]},"metadata":{}}},"o":"add"}` + "\n\n"
+		var deltas strings.Builder
+		for i := 0; i < len(c.answer); i += 4 {
+			delta, _ := json.Marshal(c.answer[i:min(i+4, len(c.answer))])
+			deltas.WriteString(`data: {"p":"/message/content/parts/0","o":"append","v":` + string(delta) + "}\n\n")
+		}
+		a, _ := newTestAdapter(t, answerUpstream(t, nil, stream+deltas.String()+"data: [DONE]\n\n"))
+		// Each delta is metered on its own, which overcounts small deltas.
+		cfg := a.config()
+		cfg.OutputTokenLimit = 100000
+		a.UpdateConfig(cfg)
+		credential := testCredential(t, a, credentials{AccessToken: "AT"})
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		object := decodeBody(t, forward(t, a, credential, "responses", `{"model":"gpt-5","max_output_tokens":100000,`+c.tools+`"input":"x"}`, false))
+		runtime.ReadMemStats(&after)
+		if allocated := after.TotalAlloc - before.TotalAlloc; object["status"] != "completed" || allocated > 128<<20 {
+			t.Fatalf("status %v, allocated %d bytes", object["status"], allocated)
+		}
 	}
 }
 
