@@ -52,7 +52,7 @@ func messagesResponse(value parsedResponse, options ResponseOptions) map[string]
 	return map[string]any{
 		"id": anthropicMessageID(value.ID), "type": "message", "role": "assistant",
 		"model": value.Model, "content": content, "stop_reason": stopReason, "stop_sequence": nullableAnthropicString(value.StopSequence),
-		"usage": anthropicUsage(value.Usage, webSearchRequestCount(webSearch)),
+		"usage": withoutXAIUsage(anthropicUsage(value.Usage, webSearchRequestCount(webSearch)), options.OpenAIUsage),
 	}
 }
 

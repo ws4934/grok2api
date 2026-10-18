@@ -252,6 +252,9 @@ func TestResponsesJSONAndConvertedProtocols(t *testing.T) {
 	if chat["object"] != "chat.completion" || choice["content"] != "Hello world" {
 		t.Fatalf("chat completion = %v", chat)
 	}
+	if usage := chat["usage"].(map[string]any); usage["prompt_tokens"] == nil || usage["cost_in_usd_ticks"] != nil || usage["context_details"] != nil || usage["num_sources_used"] != nil {
+		t.Fatalf("chat usage carries xAI extensions: %v", usage)
+	}
 
 	chunks := events(t, forward(t, a, credential, "chat", `{"model":"gpt-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`, true).Body)
 	text := ""
@@ -276,6 +279,11 @@ func TestResponsesJSONAndConvertedProtocols(t *testing.T) {
 	}
 	if stream[0]["type"] != "message_start" || stream[len(stream)-1]["type"] != "message_stop" || text != "Hello world" {
 		t.Fatalf("messages stream = %v", stream)
+	}
+	for _, event := range stream {
+		if usage, ok := event["usage"].(map[string]any); ok && (usage["cost_in_usd_ticks"] != nil || usage["context_details"] != nil) {
+			t.Fatalf("messages usage carries xAI extensions: %v", usage)
+		}
 	}
 }
 

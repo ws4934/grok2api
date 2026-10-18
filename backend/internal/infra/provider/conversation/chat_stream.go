@@ -113,7 +113,7 @@ func (c *streamConverter) doneChat(status string) error {
 	}
 	if err := c.writeData(map[string]any{
 		"id": strings.Replace(c.id, "resp_", "chatcmpl_", 1), "object": "chat.completion.chunk", "created": c.created, "model": c.model,
-		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finishReason}}, "usage": chatUsage(c.usage),
+		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": finishReason}}, "usage": chatUsage(c.usage, c.options.OpenAIUsage),
 	}); err != nil {
 		return err
 	}

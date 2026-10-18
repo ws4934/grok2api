@@ -6,7 +6,7 @@ import (
 )
 
 func (c *streamConverter) startMessages() error {
-	usage := anthropicUsage(c.usage, 0)
+	usage := withoutXAIUsage(anthropicUsage(c.usage, 0), c.options.OpenAIUsage)
 	// Anthropic emits output-token breakdowns only on the terminal
 	// message_delta. Keep message_start limited to the initial usage shape.
 	delete(usage, "output_tokens_details")
@@ -273,7 +273,7 @@ func (c *streamConverter) doneMessages(status string) error {
 	} else if status == "incomplete" {
 		stopReason = "max_tokens"
 	}
-	usage := anthropicUsage(c.usage, webSearchRequestCount(c.webSearch))
+	usage := withoutXAIUsage(anthropicUsage(c.usage, webSearchRequestCount(c.webSearch)), c.options.OpenAIUsage)
 	if err := c.writeEvent("message_delta", map[string]any{
 		"type": "message_delta", "delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nullableAnthropicString(c.stopSequence)},
 		"usage": usage,

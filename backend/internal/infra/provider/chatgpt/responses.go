@@ -66,6 +66,8 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 			return errorResponse(operation, http.StatusBadRequest, "invalid_request", err.Error()), nil
 		}
 	}
+	// ChatGPT reports none of the xAI usage extensions.
+	options.OpenAIUsage = true
 	in, err := parseTurn(body)
 	if err != nil {
 		return errorResponse(operation, http.StatusBadRequest, "invalid_request", err.Error()), nil

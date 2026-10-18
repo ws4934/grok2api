@@ -8,6 +8,10 @@ import (
 
 // ResponseOptions 保留无法直接交给 Responses 上游执行的下游协议语义。
 type ResponseOptions struct {
+	// OpenAIUsage drops the xAI usage extensions (cost_in_usd_ticks,
+	// num_sources_used, num_server_side_tools_used, context_details) for
+	// providers that never report them.
+	OpenAIUsage       bool
 	AnthropicThinking bool
 	// ReasoningEffort is the effective client-facing Messages setting after
 	// budget and effort aliases have been converted to a canonical level.
@@ -156,7 +160,7 @@ func ConvertResponseJSONWithOptions(body []byte, operation string, options Respo
 	if operation == OperationMessages {
 		result = messagesResponse(parsed, options)
 	} else {
-		result = chatResponse(parsed)
+		result = chatResponse(parsed, options.OpenAIUsage)
 	}
 	return json.Marshal(result)
 }
