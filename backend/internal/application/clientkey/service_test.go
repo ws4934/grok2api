@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
@@ -84,7 +85,7 @@ func TestQualityGuardIdentityIsStableHiddenAndSystemManaged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.ID == 0 || second.ID != first.ID || first.InternalKind != clientkeydomain.InternalKindQualityGuard || !first.Enabled || first.ProviderScope != clientkeydomain.ProviderScopeBuild {
+	if first.ID == 0 || second.ID != first.ID || first.InternalKind != clientkeydomain.InternalKindQualityGuard || !first.Enabled || !first.ProviderScope.Equal(clientkeydomain.ProviderScopeOf(account.ProviderBuild)) {
 		t.Fatalf("first = %#v, second = %#v", first, second)
 	}
 	if values, total, listErr := service.List(ctx, 1, 20, "", ListFilter{}); listErr != nil || total != 0 || len(values) != 0 {
@@ -319,7 +320,8 @@ func TestAccountScopePersistsAndAuthCacheInvalidatesOnChange(t *testing.T) {
 	}
 	base := relational.NewClientKeyRepository(database)
 	service := NewService(base, successfulRateLimiter{}, successfulConcurrencyLimiter{}, 60, 5, testCipher(t))
-	created, err := service.Create(ctx, CreateInput{Name: "scoped", Enabled: true, ProviderScope: clientkeydomain.ProviderScopeBuild | clientkeydomain.ProviderScopeWeb, TierScope: clientkeydomain.TierScopeFree})
+	buildWeb := clientkeydomain.ProviderScopeOf(account.ProviderBuild, account.ProviderWeb)
+	created, err := service.Create(ctx, CreateInput{Name: "scoped", Enabled: true, ProviderScope: buildWeb, TierScope: clientkeydomain.TierScopeFree})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,10 +330,10 @@ func TestAccountScopePersistsAndAuthCacheInvalidatesOnChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	release()
-	if value.ProviderScope != clientkeydomain.ProviderScopeBuild|clientkeydomain.ProviderScopeWeb || value.TierScope != clientkeydomain.TierScopeFree {
+	if !value.ProviderScope.Equal(buildWeb) || value.TierScope != clientkeydomain.TierScopeFree {
 		t.Fatalf("authenticated account scope = %+v", value.AccountScope())
 	}
-	consoleScope := clientkeydomain.ProviderScopeConsole
+	consoleScope := clientkeydomain.ProviderScopeOf(account.ProviderConsole)
 	superTier := clientkeydomain.TierScopeSuper
 	if _, err := service.Update(ctx, created.Key.ID, UpdateInput{ProviderScope: &consoleScope, TierScope: &superTier}); err != nil {
 		t.Fatal(err)
@@ -341,14 +343,15 @@ func TestAccountScopePersistsAndAuthCacheInvalidatesOnChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	release()
-	if value.ProviderScope != clientkeydomain.ProviderScopeConsole || value.TierScope != clientkeydomain.TierScopeSuper {
+	if !value.ProviderScope.Equal(consoleScope) || value.TierScope != clientkeydomain.TierScopeSuper {
 		t.Fatalf("account scope after cache invalidation = %+v", value.AccountScope())
 	}
 	stored, err := base.Get(ctx, created.Key.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stored.ProviderScope = clientkeydomain.ProviderScopeWeb
+	webScope := clientkeydomain.ProviderScopeOf(account.ProviderWeb)
+	stored.ProviderScope = webScope
 	stored.TierScope = clientkeydomain.TierScopeFree
 	if _, err := base.Update(ctx, stored); err != nil {
 		t.Fatal(err)
@@ -358,7 +361,7 @@ func TestAccountScopePersistsAndAuthCacheInvalidatesOnChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	release()
-	if value.ProviderScope != clientkeydomain.ProviderScopeConsole || value.TierScope != clientkeydomain.TierScopeSuper {
+	if !value.ProviderScope.Equal(consoleScope) || value.TierScope != clientkeydomain.TierScopeSuper {
 		t.Fatalf("cache unexpectedly changed before remote invalidation = %+v", value.AccountScope())
 	}
 	service.ApplyInvalidation(repository.InvalidationEvent{Kind: repository.InvalidationClientKeyChanged, ClientKeyID: created.Key.ID})
@@ -367,7 +370,7 @@ func TestAccountScopePersistsAndAuthCacheInvalidatesOnChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	release()
-	if value.ProviderScope != clientkeydomain.ProviderScopeWeb || value.TierScope != clientkeydomain.TierScopeFree {
+	if !value.ProviderScope.Equal(webScope) || value.TierScope != clientkeydomain.TierScopeFree {
 		t.Fatalf("account scope after remote invalidation = %+v", value.AccountScope())
 	}
 	service.ApplyInvalidation(repository.InvalidationEvent{Kind: repository.InvalidationClientKeyChanged})
@@ -377,13 +380,42 @@ func TestAccountScopePersistsAndAuthCacheInvalidatesOnChange(t *testing.T) {
 	if cacheEntries != 0 {
 		t.Fatalf("batch invalidation retained %d auth cache entries", cacheEntries)
 	}
-	invalid := clientkeydomain.ProviderScope(8)
+	invalid := clientkeydomain.ProviderScope{Providers: []account.Provider{"Not-Valid"}}
 	if _, err := service.Update(ctx, created.Key.ID, UpdateInput{ProviderScope: &invalid}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("invalid account scope error = %v", err)
 	}
 	all, err := service.Create(ctx, CreateInput{Name: "legacy-default", Enabled: true})
-	if err != nil || all.Key.ProviderScope != clientkeydomain.ProviderScopeAll || all.Key.TierScope != clientkeydomain.TierScopeAll {
+	if err != nil || !all.Key.ProviderScope.All || all.Key.TierScope != clientkeydomain.TierScopeAll {
 		t.Fatalf("default account scope = %+v, err = %v", all.Key.AccountScope(), err)
+	}
+}
+
+func TestProviderValidatorRejectsUnregisteredProviders(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "provider-validator.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(relational.NewClientKeyRepository(database), successfulRateLimiter{}, successfulConcurrencyLimiter{}, 60, 5, testCipher(t))
+	future := clientkeydomain.ProviderScopeOf(account.ProviderWeb, "chatgpt")
+	created, err := service.Create(ctx, CreateInput{Name: "future", Enabled: true, ProviderScope: future})
+	if err != nil || !created.Key.ProviderScope.Equal(future) {
+		t.Fatalf("unvalidated future provider = %+v, err = %v", created.Key.ProviderScope, err)
+	}
+	service.SetProviderValidator(func(value account.Provider) bool { return value != "chatgpt" })
+	if _, err := service.Create(ctx, CreateInput{Name: "unknown", Enabled: true, ProviderScope: future}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("unregistered provider create error = %v", err)
+	}
+	if _, err := service.Update(ctx, created.Key.ID, UpdateInput{ProviderScope: &future}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("unregistered provider update error = %v", err)
+	}
+	all := clientkeydomain.AllProviders()
+	if updated, err := service.Update(ctx, created.Key.ID, UpdateInput{ProviderScope: &all}); err != nil || !updated.ProviderScope.All {
+		t.Fatalf("all providers update = %+v, err = %v", updated.ProviderScope, err)
 	}
 }
 

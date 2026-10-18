@@ -33,7 +33,7 @@ func TestFilterModelRoutesForClientKeyUsesProviderAndModelIntersection(t *testin
 		{ID: 2, Provider: account.ProviderWeb, PublicID: "Web/grok-shared"},
 		{ID: 3, Provider: account.ProviderConsole, PublicID: "Console/grok-shared"},
 	}
-	key := clientkeydomain.Key{ProviderScope: clientkeydomain.ProviderScopeWeb | clientkeydomain.ProviderScopeConsole, AllowedModels: []uint64{2, 3}}
+	key := clientkeydomain.Key{ProviderScope: clientkeydomain.ProviderScopeOf(account.ProviderWeb, account.ProviderConsole), AllowedModels: []uint64{2, 3}}
 	filtered := filterModelRoutesForClientKey(routes, key)
 	if len(filtered) != 2 || filtered[0].ID != 2 || filtered[1].ID != 3 {
 		t.Fatalf("filtered routes = %#v", filtered)

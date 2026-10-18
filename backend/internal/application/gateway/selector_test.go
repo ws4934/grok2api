@@ -916,19 +916,9 @@ func TestSelectorEnforcesClientKeyAccountScopeAcrossProvidersAndTiers(t *testing
 	console := create(account.Credential{Provider: account.ProviderConsole, AuthType: account.AuthTypeSSO, Name: "console", SourceKey: "console", EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, Priority: 10, MaxConcurrent: 2})
 
 	selector := NewSelector(accounts, memory.NewConcurrencyLimiter(), memory.NewStickyStore(), staticTierOrder{order: []account.WebTier{account.WebTierBasic, account.WebTierSuper, account.WebTierHeavy}}, time.Hour, time.Second, time.Minute)
-	providerScope := func(provider account.Provider) clientkeydomain.ProviderScope {
-		switch provider {
-		case account.ProviderBuild:
-			return clientkeydomain.ProviderScopeBuild
-		case account.ProviderWeb:
-			return clientkeydomain.ProviderScopeWeb
-		default:
-			return clientkeydomain.ProviderScopeConsole
-		}
-	}
 	assertSelected := func(provider account.Provider, tiers clientkeydomain.TierScope, excluded map[uint64]bool, want uint64) {
 		t.Helper()
-		scope := clientkeydomain.AccountScope{Providers: providerScope(provider), Tiers: tiers}
+		scope := clientkeydomain.AccountScope{Providers: clientkeydomain.ProviderScopeOf(provider), Tiers: tiers}
 		lease, acquireErr := selector.AcquireForKey(ctx, provider, 0, "", "", "", excluded, false, scope)
 		if acquireErr != nil {
 			t.Fatal(acquireErr)
@@ -945,21 +935,22 @@ func TestSelectorEnforcesClientKeyAccountScopeAcrossProvidersAndTiers(t *testing
 	assertSelected(account.ProviderWeb, clientkeydomain.TierScopeSuper, map[uint64]bool{webSuper.ID: true}, webHeavy.ID)
 	assertSelected(account.ProviderConsole, clientkeydomain.TierScopeFree, nil, console.ID)
 
-	freeBuildScope := clientkeydomain.AccountScope{Providers: clientkeydomain.ProviderScopeBuild, Tiers: clientkeydomain.TierScopeFree}
+	buildScope := clientkeydomain.ProviderScopeOf(account.ProviderBuild)
+	freeBuildScope := clientkeydomain.AccountScope{Providers: buildScope, Tiers: clientkeydomain.TierScopeFree}
 	_, err = selector.AcquireForKey(ctx, account.ProviderBuild, 0, "", "", "", map[uint64]bool{buildFree.ID: true}, false, freeBuildScope)
 	var unavailable *SelectionUnavailableError
-	if !errors.As(err, &unavailable) || unavailable.Code() != "client_key_account_scope_unavailable" || unavailable.Scope != freeBuildScope {
+	if !errors.As(err, &unavailable) || unavailable.Code() != "client_key_account_scope_unavailable" || !unavailable.Scope.Providers.Equal(buildScope) || unavailable.Scope.Tiers != clientkeydomain.TierScopeFree {
 		t.Fatalf("scoped exhaustion error = %#v, err = %v", unavailable, err)
 	}
-	superBuildScope := clientkeydomain.AccountScope{Providers: clientkeydomain.ProviderScopeBuild, Tiers: clientkeydomain.TierScopeSuper}
+	superBuildScope := clientkeydomain.AccountScope{Providers: buildScope, Tiers: clientkeydomain.TierScopeSuper}
 	if _, err := selector.AcquirePinnedForKey(ctx, account.ProviderBuild, buildUnknown.ID, 0, "", "", true, superBuildScope); !errors.As(err, &unavailable) || unavailable.Code() != "client_key_account_scope_unavailable" {
 		t.Fatalf("out-of-pool pinned error = %#v, err = %v", unavailable, err)
 	}
-	allKnownBuildTiers := clientkeydomain.AccountScope{Providers: clientkeydomain.ProviderScopeBuild, Tiers: clientkeydomain.TierScopeFree | clientkeydomain.TierScopeSuper}
+	allKnownBuildTiers := clientkeydomain.AccountScope{Providers: buildScope, Tiers: clientkeydomain.TierScopeFree | clientkeydomain.TierScopeSuper}
 	if _, err := selector.AcquirePinnedForKey(ctx, account.ProviderBuild, buildUnknown.ID, 0, "", "", true, allKnownBuildTiers); !errors.As(err, &unavailable) {
 		t.Fatalf("unknown Build tier should be excluded: %v", err)
 	}
-	buildOnlyScope := clientkeydomain.AccountScope{Providers: clientkeydomain.ProviderScopeBuild, Tiers: clientkeydomain.TierScopeAll}
+	buildOnlyScope := clientkeydomain.AccountScope{Providers: buildScope, Tiers: clientkeydomain.TierScopeAll}
 	if _, err := selector.AcquireForKey(ctx, account.ProviderWeb, 0, "", "", "", nil, false, buildOnlyScope); !errors.As(err, &unavailable) || unavailable.Code() != "client_key_account_scope_unavailable" {
 		t.Fatalf("provider scope should fail closed: %#v, err = %v", unavailable, err)
 	}

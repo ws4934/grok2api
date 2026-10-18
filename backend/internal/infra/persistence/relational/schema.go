@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
+	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	settingsdomain "github.com/chenyme/grok2api/backend/internal/domain/settings"
 	"gorm.io/gorm"
@@ -49,6 +49,7 @@ var schemaModels = []any{
 	&accountEgressLeaseBlockModel{},
 	&clientKeyModel{},
 	&clientKeyModelPermission{},
+	&clientKeyProviderScopeModel{},
 	&billingReservationModel{},
 	&requestAuditModel{},
 	&requestAuditAttemptModel{},
@@ -86,6 +87,7 @@ var schemaIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_model_route_aliases_route ON model_route_aliases(model_route_id, alias)",
 	"CREATE INDEX IF NOT EXISTS idx_model_route_accounts_account_route ON model_route_accounts(account_id, model_route_id)",
 	"CREATE INDEX IF NOT EXISTS idx_account_model_quota_blocks_due ON account_model_quota_blocks(cooldown_until, account_id)",
+	"CREATE UNIQUE INDEX IF NOT EXISTS idx_client_keys_prefix ON client_keys(prefix)",
 	"CREATE INDEX IF NOT EXISTS idx_client_keys_created_id ON client_keys(created_at DESC, id DESC)",
 	"CREATE INDEX IF NOT EXISTS idx_client_keys_status ON client_keys(enabled, expires_at, created_at DESC, id DESC)",
 	"CREATE UNIQUE INDEX IF NOT EXISTS idx_client_keys_internal_kind ON client_keys(internal_kind) WHERE internal_kind IS NOT NULL",
@@ -138,7 +140,7 @@ func (d *Database) InitializeSchema(ctx context.Context) error {
 func (d *Database) initializeSchema(ctx context.Context) error {
 	db := d.db.WithContext(ctx)
 	hadClientKeys := db.Migrator().HasTable(&clientKeyModel{})
-	hadProviderScope := hadClientKeys && db.Migrator().HasColumn(&clientKeyModel{}, "ProviderScopeMask")
+	hadProviderScope := hadClientKeys && (db.Migrator().HasColumn("client_keys", "provider_scope_mask") || db.Migrator().HasColumn("client_keys", "provider_scope_mode"))
 	hadTierScope := hadClientKeys && db.Migrator().HasColumn(&clientKeyModel{}, "TierScopeMask")
 	hadLegacyAccountPool := hadClientKeys && db.Migrator().HasColumn("client_keys", "account_pool")
 	hadGlobalSubscriptionProxy := db.Migrator().HasTable("egress_operations_config") && db.Migrator().HasColumn("egress_operations_config", "encrypted_subscription_proxy_url")
@@ -172,6 +174,9 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	}
 	if err := d.migrateClientKeyAccountScopes(ctx, hadLegacyAccountPool, !hadProviderScope, !hadTierScope); err != nil {
 		return fmt.Errorf("迁移客户端 Key 调用范围: %w", err)
+	}
+	if err := d.migrateClientKeyProviderScopeMask(ctx); err != nil {
+		return fmt.Errorf("迁移客户端 Key Provider 范围: %w", err)
 	}
 	if err := d.migrateBuildResponseHeaderTimeout(ctx); err != nil {
 		return fmt.Errorf("迁移 Grok Build 响应头超时: %w", err)
@@ -366,12 +371,47 @@ func (d *Database) migrateClientKeyAccountScopes(ctx context.Context, hadLegacyA
 	}
 	updates := make(map[string]any, 2)
 	if providerScopeAdded {
-		updates["provider_scope_mask"] = uint8(clientkeydomain.ProviderScopeAll)
+		updates["provider_scope_mode"] = providerScopeModeAll
 	}
 	if tierScopeAdded {
 		updates["tier_scope_mask"] = gorm.Expr("CASE account_pool WHEN 'free' THEN 1 WHEN 'super' THEN 2 ELSE 7 END")
 	}
 	return d.db.WithContext(ctx).Table("client_keys").Where("1 = 1").Updates(updates).Error
+}
+
+// migrateClientKeyProviderScopeMask converts the retired Build/Web/Console
+// bitmask into the explicit provider set and drops the column. Mask 7 meant
+// every provider and becomes mode 'all', so those keys also gain providers
+// registered later. Rows are written before the mode, so an interrupted SQLite
+// upgrade never exposes a list-mode key without providers and simply reruns.
+func (d *Database) migrateClientKeyProviderScopeMask(ctx context.Context) error {
+	db := d.db.WithContext(ctx)
+	if !db.Migrator().HasColumn("client_keys", "provider_scope_mask") {
+		return nil
+	}
+	for bit, provider := range []account.Provider{account.ProviderBuild, account.ProviderWeb, account.ProviderConsole} {
+		if err := db.Exec(`INSERT INTO client_key_provider_scopes (client_key_id, provider)
+			SELECT id, ? FROM client_keys
+			WHERE provider_scope_mask <> 7 AND (provider_scope_mask & ?) <> 0
+			AND NOT EXISTS (SELECT 1 FROM client_key_provider_scopes existing WHERE existing.client_key_id = client_keys.id AND existing.provider = ?)`,
+			string(provider), 1<<bit, string(provider)).Error; err != nil {
+			return err
+		}
+	}
+	if err := db.Exec("UPDATE client_keys SET provider_scope_mode = CASE WHEN provider_scope_mask = 7 THEN 'all' ELSE 'list' END").Error; err != nil {
+		return err
+	}
+	if d.dialect != "sqlite" {
+		// PostgreSQL drops the single-column CHECK together with the column.
+		return db.Exec("ALTER TABLE client_keys DROP COLUMN provider_scope_mask").Error
+	}
+	return d.withSQLiteForeignKeysDisabled(ctx, func() error {
+		migrator := d.db.WithContext(ctx).Migrator()
+		if err := migrator.DropConstraint(&clientKeyModel{}, "chk_client_keys_provider_scope"); err != nil {
+			return err
+		}
+		return migrator.DropColumn(&clientKeyModel{}, "provider_scope_mask")
+	})
 }
 
 // migrateBuildResponseHeaderTimeout persists the runtime default for settings

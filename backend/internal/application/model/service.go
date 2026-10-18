@@ -227,9 +227,9 @@ func (s *Service) ListEnabledForClientKey(ctx context.Context, key clientkeydoma
 	if !scope.IsRestricted() {
 		return s.models.ListEnabled(ctx)
 	}
-	providers := scope.Providers.Values()
-	if len(providers) == 1 && providers[0] == "all" {
-		providers = nil
+	var providers []string
+	if !scope.Providers.All {
+		providers = scope.Providers.Values()
 	}
 	tiers := scope.Tiers.Values()
 	if len(tiers) == 1 && tiers[0] == "all" {

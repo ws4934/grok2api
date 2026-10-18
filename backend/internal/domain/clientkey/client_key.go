@@ -1,6 +1,7 @@
 package clientkey
 
 import (
+	"slices"
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -16,14 +17,23 @@ const (
 
 const InternalKindQualityGuard = "quality_guard"
 
-type ProviderScope uint8
+// ProviderScope restricts a key to upstream providers. All covers every
+// registered provider, including providers registered after the key was saved;
+// otherwise Providers is a sorted, duplicate-free explicit set. The zero value
+// is unrestricted, matching the zero AccountScope used by internal callers.
+type ProviderScope struct {
+	All       bool
+	Providers []account.Provider
+}
 
-const (
-	ProviderScopeBuild ProviderScope = 1 << iota
-	ProviderScopeWeb
-	ProviderScopeConsole
-	ProviderScopeAll = ProviderScopeBuild | ProviderScopeWeb | ProviderScopeConsole
-)
+// AllProviders returns the scope that follows the provider registry.
+func AllProviders() ProviderScope { return ProviderScope{All: true} }
+
+// ProviderScopeOf returns the normalized explicit set; no providers means all.
+func ProviderScopeOf(providers ...account.Provider) ProviderScope {
+	value, _ := NormalizeProviderScope(ProviderScope{Providers: providers})
+	return value
+}
 
 type TierScope uint8
 
@@ -47,29 +57,24 @@ type AccountScope struct {
 	Tiers     TierScope
 }
 
+// ParseProviderScopeValues accepts ["all"] or syntactically valid provider ids.
+// Whether an id is registered is checked by the application layer.
 func ParseProviderScopeValues(values []string) (ProviderScope, bool) {
 	if len(values) == 0 {
-		return 0, false
+		return ProviderScope{}, false
 	}
-	var scope ProviderScope
+	if len(values) == 1 && values[0] == "all" {
+		return AllProviders(), true
+	}
+	providers := make([]account.Provider, 0, len(values))
 	for _, value := range values {
-		switch value {
-		case "all":
-			if len(values) != 1 {
-				return 0, false
-			}
-			return ProviderScopeAll, true
-		case string(account.ProviderBuild):
-			scope |= ProviderScopeBuild
-		case string(account.ProviderWeb):
-			scope |= ProviderScopeWeb
-		case string(account.ProviderConsole):
-			scope |= ProviderScopeConsole
-		default:
-			return 0, false
+		provider := account.Provider(value)
+		if value == "all" || !provider.IsValid() {
+			return ProviderScope{}, false
 		}
+		providers = append(providers, provider)
 	}
-	return NormalizeProviderScope(scope)
+	return NormalizeProviderScope(ProviderScope{Providers: providers})
 }
 
 func ParseTierScopeValues(values []string) (TierScope, bool) {
@@ -97,18 +102,12 @@ func ParseTierScopeValues(values []string) (TierScope, bool) {
 
 func (s ProviderScope) Values() []string {
 	value, valid := NormalizeProviderScope(s)
-	if !valid || value == ProviderScopeAll {
+	if !valid || value.All {
 		return []string{"all"}
 	}
-	values := make([]string, 0, 3)
-	if value&ProviderScopeBuild != 0 {
-		values = append(values, string(account.ProviderBuild))
-	}
-	if value&ProviderScopeWeb != 0 {
-		values = append(values, string(account.ProviderWeb))
-	}
-	if value&ProviderScopeConsole != 0 {
-		values = append(values, string(account.ProviderConsole))
+	values := make([]string, 0, len(value.Providers))
+	for _, provider := range value.Providers {
+		values = append(values, string(provider))
 	}
 	return values
 }
@@ -128,14 +127,30 @@ func (s TierScope) Values() []string {
 	return values
 }
 
+// NormalizeProviderScope sorts and deduplicates an explicit set; an empty set
+// means all providers. An already-normalized set is returned without copying
+// because routing checks the scope on every request.
 func NormalizeProviderScope(value ProviderScope) (ProviderScope, bool) {
-	if value == 0 {
-		return ProviderScopeAll, true
+	if value.All || len(value.Providers) == 0 {
+		return AllProviders(), true
 	}
-	if value&^ProviderScopeAll != 0 {
-		return value, false
+	sorted := true
+	for index, provider := range value.Providers {
+		if !provider.IsValid() {
+			return value, false
+		}
+		sorted = sorted && (index == 0 || value.Providers[index-1] < provider)
 	}
-	return value, true
+	if sorted {
+		return ProviderScope{Providers: value.Providers}, true
+	}
+	return ProviderScope{Providers: slices.Compact(slices.Sorted(slices.Values(value.Providers)))}, true
+}
+
+func (s ProviderScope) Equal(other ProviderScope) bool {
+	left, leftValid := NormalizeProviderScope(s)
+	right, rightValid := NormalizeProviderScope(other)
+	return leftValid == rightValid && left.All == right.All && slices.Equal(left.Providers, right.Providers)
 }
 
 func NormalizeTierScope(value TierScope) (TierScope, bool) {
@@ -158,19 +173,10 @@ func NormalizeAccountScope(value AccountScope) (AccountScope, bool) {
 
 func (s ProviderScope) Allows(provider account.Provider) bool {
 	value, valid := NormalizeProviderScope(s)
-	if !valid {
+	if !valid || !provider.IsValid() {
 		return false
 	}
-	switch provider {
-	case account.ProviderBuild:
-		return value&ProviderScopeBuild != 0
-	case account.ProviderWeb:
-		return value&ProviderScopeWeb != 0
-	case account.ProviderConsole:
-		return value&ProviderScopeConsole != 0
-	default:
-		return false
-	}
+	return value.All || slices.Contains(value.Providers, provider)
 }
 
 func (s TierScope) Allows(tier AccountTier) bool {
@@ -195,22 +201,9 @@ func (s AccountScope) AllowsProvider(provider account.Provider) bool {
 	return valid && value.Providers.Allows(provider)
 }
 
-// AllowsAccount applies provider restrictions to every channel while tier
-// restrictions apply only to channels with a reliable tier classification.
-func (s AccountScope) AllowsAccount(provider account.Provider, tier AccountTier) bool {
-	value, valid := NormalizeAccountScope(s)
-	if !valid || !value.Providers.Allows(provider) {
-		return false
-	}
-	if provider == account.ProviderConsole {
-		return true
-	}
-	return value.Tiers.Allows(tier)
-}
-
 func (s AccountScope) IsRestricted() bool {
 	value, valid := NormalizeAccountScope(s)
-	return valid && (value.Providers != ProviderScopeAll || value.Tiers != TierScopeAll)
+	return valid && (!value.Providers.All || value.Tiers != TierScopeAll)
 }
 
 func (k Key) AccountScope() AccountScope {

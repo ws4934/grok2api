@@ -271,9 +271,10 @@ type clientKeyModel struct {
 	BilledUsageUSDTicks   int64 `gorm:"not null;default:0;check:chk_client_keys_billed_usage,billed_usage_usd_ticks >= 0"`
 	ReservedUsageUSDTicks int64 `gorm:"not null;default:0;check:chk_client_keys_reserved_usage,reserved_usage_usd_ticks >= 0"`
 	// AllowModelAliases defaults false so existing keys keep a clean base-model list.
-	AllowModelAliases bool  `gorm:"not null;default:false"`
-	ProviderScopeMask uint8 `gorm:"not null;default:7;check:chk_client_keys_provider_scope,provider_scope_mask BETWEEN 1 AND 7"`
-	TierScopeMask     uint8 `gorm:"not null;default:7;check:chk_client_keys_tier_scope,tier_scope_mask IN (1,2,3,7)"`
+	AllowModelAliases bool `gorm:"not null;default:false"`
+	// ProviderScopeMode 'all' follows the provider registry; 'list' reads client_key_provider_scopes.
+	ProviderScopeMode string `gorm:"size:8;not null;default:'all';check:chk_client_keys_provider_scope_mode,provider_scope_mode IN ('all','list')"`
+	TierScopeMask     uint8  `gorm:"not null;default:7;check:chk_client_keys_tier_scope,tier_scope_mask IN (1,2,3,7)"`
 	LastUsedAt        *time.Time
 	CreatedAt         time.Time `gorm:"not null"`
 	UpdatedAt         time.Time `gorm:"not null"`
@@ -289,6 +290,14 @@ type clientKeyModelPermission struct {
 }
 
 func (clientKeyModelPermission) TableName() string { return "client_key_models" }
+
+type clientKeyProviderScopeModel struct {
+	ClientKeyID uint64          `gorm:"primaryKey"`
+	Provider    string          `gorm:"size:32;primaryKey"`
+	ClientKey   *clientKeyModel `gorm:"foreignKey:ClientKeyID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+}
+
+func (clientKeyProviderScopeModel) TableName() string { return "client_key_provider_scopes" }
 
 type billingReservationModel struct {
 	EventID     string          `gorm:"size:64;primaryKey;check:chk_billing_reservations_event_id,length(event_id) BETWEEN 16 AND 64"`

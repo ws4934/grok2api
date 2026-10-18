@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/perfmetrics"
@@ -88,6 +89,7 @@ type Service struct {
 	cipher        *security.Cipher
 	activeMu      sync.RWMutex
 	activeBilling map[string]struct{}
+	providerValid func(account.Provider) bool
 }
 
 type billingReservationRepository interface {
@@ -109,6 +111,25 @@ func NewService(keys repository.ClientKeyRepository, rateLimiter repository.Rate
 func (s *Service) UpdateDefaults(defaultRPM, defaultMax int) {
 	s.defaultRPM.Store(int64(defaultRPM))
 	s.defaultMax.Store(int64(defaultMax))
+}
+
+// SetProviderValidator rejects explicit provider ids that are not registered.
+// It must be wired before the service handles requests.
+func (s *Service) SetProviderValidator(valid func(account.Provider) bool) {
+	s.providerValid = valid
+}
+
+func (s *Service) normalizeProviderScope(value clientkeydomain.ProviderScope) (clientkeydomain.ProviderScope, bool) {
+	scope, valid := clientkeydomain.NormalizeProviderScope(value)
+	if !valid || scope.All || s.providerValid == nil {
+		return scope, valid
+	}
+	for _, provider := range scope.Providers {
+		if !s.providerValid(provider) {
+			return scope, false
+		}
+	}
+	return scope, true
 }
 
 // ApplyInvalidation removes cached authorization policy after a local or remote
@@ -173,7 +194,7 @@ func (s *Service) EnsureQualityGuardIdentity(ctx context.Context, enabled bool) 
 	value.BillingLimitUSDTicks = 0
 	value.AllowModelAliases = false
 	value.AllowedModels = nil
-	value.ProviderScope = clientkeydomain.ProviderScopeBuild
+	value.ProviderScope = clientkeydomain.ProviderScopeOf(account.ProviderBuild)
 	value.TierScope = clientkeydomain.TierScopeAll
 	updated, err := s.keys.Update(ctx, value)
 	if err != nil {
@@ -200,7 +221,7 @@ func (s *Service) createQualityGuardIdentity(ctx context.Context) (clientkeydoma
 		Name: qualityGuardInternalName, Prefix: qualityGuardInternalPrefix,
 		SecretHash: security.HashToken(raw), EncryptedSecret: encrypted,
 		InternalKind: clientkeydomain.InternalKindQualityGuard, Enabled: true,
-		ProviderScope: clientkeydomain.ProviderScopeBuild, TierScope: clientkeydomain.TierScopeAll,
+		ProviderScope: clientkeydomain.ProviderScopeOf(account.ProviderBuild), TierScope: clientkeydomain.TierScopeAll,
 	})
 }
 
@@ -227,7 +248,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Created, error
 	if input.BillingLimitUSDTicks < 0 || input.BillingLimitUSDTicks > clientkeydomain.MaxBillingLimitTicks {
 		return Created{}, invalidInput("billingLimitUsdTicks 超出允许范围")
 	}
-	providerScope, providerScopeValid := clientkeydomain.NormalizeProviderScope(input.ProviderScope)
+	providerScope, providerScopeValid := s.normalizeProviderScope(input.ProviderScope)
 	tierScope, tierScopeValid := clientkeydomain.NormalizeTierScope(input.TierScope)
 	if !providerScopeValid || !tierScopeValid {
 		return Created{}, invalidInput("providerScope 或 tierScope 无效")
@@ -340,7 +361,7 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateInput) (cli
 		value.AllowedModels = *input.AllowedModels
 	}
 	if input.ProviderScope != nil {
-		providerScope, valid := clientkeydomain.NormalizeProviderScope(*input.ProviderScope)
+		providerScope, valid := s.normalizeProviderScope(*input.ProviderScope)
 		if !valid {
 			return clientkeydomain.Key{}, invalidInput("providerScope 无效")
 		}

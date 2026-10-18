@@ -149,7 +149,7 @@ func TestClientKeyMutationsNotifyAfterCommit(t *testing.T) {
 	keys := NewClientKeyRepository(database)
 	created, err := keys.Create(ctx, clientkeydomain.Key{
 		Name: "scoped", Prefix: "scoped", SecretHash: testSecretHash, EncryptedSecret: testEncryptedToken,
-		Enabled: true, RPMLimit: 60, MaxConcurrent: 4, ProviderScope: clientkeydomain.ProviderScopeBuild, TierScope: clientkeydomain.TierScopeFree,
+		Enabled: true, RPMLimit: 60, MaxConcurrent: 4, ProviderScope: clientkeydomain.ProviderScopeOf(account.ProviderBuild), TierScope: clientkeydomain.TierScopeFree,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestClientKeyMutationsNotifyAfterCommit(t *testing.T) {
 		events = append(events, event)
 	})
 
-	created.ProviderScope = clientkeydomain.ProviderScopeWeb
+	created.ProviderScope = clientkeydomain.ProviderScopeOf(account.ProviderWeb)
 	created.TierScope = clientkeydomain.TierScopeSuper
 	if _, err := keys.Update(ctx, created); err != nil {
 		t.Fatal(err)

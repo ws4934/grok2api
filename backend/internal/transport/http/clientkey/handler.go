@@ -297,7 +297,7 @@ func parseRequestedScopes(providerValues, tierValues *[]string, legacyPool *stri
 		return nil, nil, errors.New("accountPool 不能与 providerScope 或 tierScope 同时设置")
 	}
 	if legacyPool != nil {
-		providers := clientkeydomain.ProviderScopeAll
+		providers := clientkeydomain.AllProviders()
 		var tiers clientkeydomain.TierScope
 		switch strings.TrimSpace(*legacyPool) {
 		case "all":
@@ -315,7 +315,7 @@ func parseRequestedScopes(providerValues, tierValues *[]string, legacyPool *stri
 	if providerValues != nil {
 		value, valid := clientkeydomain.ParseProviderScopeValues(*providerValues)
 		if !valid {
-			return nil, nil, errors.New("providerScope 必须是 all，或 grok_build、grok_web、grok_console 的组合")
+			return nil, nil, errors.New("providerScope 必须是 all，或一个或多个有效的 Provider ID")
 		}
 		providers = &value
 	}

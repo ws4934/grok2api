@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"gorm.io/gorm"
@@ -72,7 +73,7 @@ func (r *ClientKeyRepository) List(ctx context.Context, input repository.ClientK
 		"expiresAt":     {expression: "client_keys.expires_at", nullsLast: true, defaultDirection: repository.SortDescending},
 		"lastUsedAt":    {expression: "client_keys.last_used_at", nullsLast: true, defaultDirection: repository.SortDescending},
 	}, sortSpec{expression: "client_keys.created_at", defaultDirection: repository.SortDescending}, "client_keys.id")
-	if err := query.Select("id", "name", "prefix", "enabled", "expires_at", "rpm_limit", "max_concurrent", "billing_limit_usd_ticks", "billed_usage_usd_ticks", "reserved_usage_usd_ticks", "allow_model_aliases", "provider_scope_mask", "tier_scope_mask", "last_used_at", "created_at", "updated_at").Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
+	if err := query.Select("id", "name", "prefix", "enabled", "expires_at", "rpm_limit", "max_concurrent", "billing_limit_usd_ticks", "billed_usage_usd_ticks", "reserved_usage_usd_ticks", "allow_model_aliases", "provider_scope_mode", "tier_scope_mask", "last_used_at", "created_at", "updated_at").Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	ids := make([]uint64, 0, len(rows))
@@ -83,9 +84,13 @@ func (r *ClientKeyRepository) List(ctx context.Context, input repository.ClientK
 	if err != nil {
 		return nil, 0, err
 	}
+	providers, err := r.providerScopes(ctx, rows...)
+	if err != nil {
+		return nil, 0, err
+	}
 	out := make([]clientkey.Key, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, toClientKeyDomain(row, permissions[row.ID]))
+		out = append(out, toClientKeyDomain(row, permissions[row.ID], providers[row.ID]))
 	}
 	return out, total, nil
 }
@@ -111,7 +116,7 @@ func (r *ClientKeyRepository) Create(ctx context.Context, value clientkey.Key) (
 		kind := value.InternalKind
 		internalKind = &kind
 	}
-	row := clientKeyModel{Name: value.Name, Prefix: value.Prefix, SecretHash: value.SecretHash, EncryptedSecret: value.EncryptedSecret, InternalKind: internalKind, Enabled: value.Enabled, ExpiresAt: value.ExpiresAt, RPMLimit: value.RPMLimit, MaxConcurrent: value.MaxConcurrent, BillingLimitUSDTicks: value.BillingLimitUSDTicks, BilledUsageUSDTicks: value.BilledUsageUSDTicks, ReservedUsageUSDTicks: value.ReservedUsageUSDTicks, AllowModelAliases: value.AllowModelAliases, ProviderScopeMask: uint8(scope.Providers), TierScopeMask: uint8(scope.Tiers)}
+	row := clientKeyModel{Name: value.Name, Prefix: value.Prefix, SecretHash: value.SecretHash, EncryptedSecret: value.EncryptedSecret, InternalKind: internalKind, Enabled: value.Enabled, ExpiresAt: value.ExpiresAt, RPMLimit: value.RPMLimit, MaxConcurrent: value.MaxConcurrent, BillingLimitUSDTicks: value.BillingLimitUSDTicks, BilledUsageUSDTicks: value.BilledUsageUSDTicks, ReservedUsageUSDTicks: value.ReservedUsageUSDTicks, AllowModelAliases: value.AllowModelAliases, ProviderScopeMode: providerScopeMode(scope.Providers), TierScopeMask: uint8(scope.Tiers)}
 	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&row).Error; err != nil {
 			return err
@@ -132,12 +137,15 @@ func (r *ClientKeyRepository) Create(ctx context.Context, value clientkey.Key) (
 				return err
 			}
 		}
-		return replacePermissions(tx, row.ID, value.AllowedModels)
+		if err := replacePermissions(tx, row.ID, value.AllowedModels); err != nil {
+			return err
+		}
+		return replaceProviderScopes(tx, row.ID, scope.Providers)
 	})
 	if err != nil {
 		return clientkey.Key{}, mapError(err)
 	}
-	return toClientKeyDomain(row, value.AllowedModels), nil
+	return toClientKeyDomain(row, value.AllowedModels, scope.Providers.Providers), nil
 }
 
 func (r *ClientKeyRepository) Get(ctx context.Context, id uint64) (clientkey.Key, error) {
@@ -145,11 +153,7 @@ func (r *ClientKeyRepository) Get(ctx context.Context, id uint64) (clientkey.Key
 	if err := r.db.db.WithContext(ctx).First(&row, id).Error; err != nil {
 		return clientkey.Key{}, mapError(err)
 	}
-	models, err := r.allowedModels(ctx, id)
-	if err != nil {
-		return clientkey.Key{}, err
-	}
-	return toClientKeyDomain(row, models), nil
+	return r.loadKey(ctx, row)
 }
 
 func (r *ClientKeyRepository) GetByPrefix(ctx context.Context, prefix string) (clientkey.Key, error) {
@@ -157,11 +161,21 @@ func (r *ClientKeyRepository) GetByPrefix(ctx context.Context, prefix string) (c
 	if err := r.db.db.WithContext(ctx).Where("prefix = ?", prefix).First(&row).Error; err != nil {
 		return clientkey.Key{}, mapError(err)
 	}
+	return r.loadKey(ctx, row)
+}
+
+// loadKey adds model permissions and, only for list-mode keys, one primary-key
+// lookup of the provider set.
+func (r *ClientKeyRepository) loadKey(ctx context.Context, row clientKeyModel) (clientkey.Key, error) {
 	models, err := r.allowedModels(ctx, row.ID)
 	if err != nil {
 		return clientkey.Key{}, err
 	}
-	return toClientKeyDomain(row, models), nil
+	providers, err := r.providerScopes(ctx, row)
+	if err != nil {
+		return clientkey.Key{}, err
+	}
+	return toClientKeyDomain(row, models, providers[row.ID]), nil
 }
 
 func (r *ClientKeyRepository) Update(ctx context.Context, value clientkey.Key) (clientkey.Key, error) {
@@ -174,7 +188,7 @@ func (r *ClientKeyRepository) Update(ctx context.Context, value clientkey.Key) (
 			"name": value.Name, "enabled": value.Enabled, "expires_at": value.ExpiresAt,
 			"rpm_limit": value.RPMLimit, "max_concurrent": value.MaxConcurrent,
 			"billing_limit_usd_ticks": value.BillingLimitUSDTicks, "allow_model_aliases": value.AllowModelAliases,
-			"provider_scope_mask": uint8(scope.Providers), "tier_scope_mask": uint8(scope.Tiers),
+			"provider_scope_mode": providerScopeMode(scope.Providers), "tier_scope_mask": uint8(scope.Tiers),
 			"updated_at": time.Now().UTC(),
 		})
 		if result.Error != nil {
@@ -183,7 +197,10 @@ func (r *ClientKeyRepository) Update(ctx context.Context, value clientkey.Key) (
 		if result.RowsAffected == 0 {
 			return repository.ErrNotFound
 		}
-		return replacePermissions(tx, value.ID, value.AllowedModels)
+		if err := replacePermissions(tx, value.ID, value.AllowedModels); err != nil {
+			return err
+		}
+		return replaceProviderScopes(tx, value.ID, scope.Providers)
 	})
 	if err != nil {
 		return clientkey.Key{}, mapError(err)
@@ -493,6 +510,54 @@ func (r *ClientKeyRepository) allowedModelsForKeys(ctx context.Context, keyIDs [
 		result[row.ClientKeyID] = append(result[row.ClientKeyID], row.ModelRouteID)
 	}
 	return result, nil
+}
+
+const (
+	providerScopeModeAll  = "all"
+	providerScopeModeList = "list"
+)
+
+func providerScopeMode(scope clientkey.ProviderScope) string {
+	if scope.All {
+		return providerScopeModeAll
+	}
+	return providerScopeModeList
+}
+
+// providerScopes batch-loads explicit provider sets; all-mode keys need no rows.
+func (r *ClientKeyRepository) providerScopes(ctx context.Context, rows ...clientKeyModel) (map[uint64][]account.Provider, error) {
+	ids := make([]uint64, 0, len(rows))
+	for _, row := range rows {
+		if row.ProviderScopeMode == providerScopeModeList {
+			ids = append(ids, row.ID)
+		}
+	}
+	result := make(map[uint64][]account.Provider, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	var scopes []clientKeyProviderScopeModel
+	if err := r.db.db.WithContext(ctx).Where("client_key_id IN ?", ids).Find(&scopes).Error; err != nil {
+		return nil, err
+	}
+	for _, scope := range scopes {
+		result[scope.ClientKeyID] = append(result[scope.ClientKeyID], account.Provider(scope.Provider))
+	}
+	return result, nil
+}
+
+func replaceProviderScopes(tx *gorm.DB, keyID uint64, scope clientkey.ProviderScope) error {
+	if err := tx.Where("client_key_id = ?", keyID).Delete(&clientKeyProviderScopeModel{}).Error; err != nil {
+		return err
+	}
+	if scope.All {
+		return nil
+	}
+	rows := make([]clientKeyProviderScopeModel, 0, len(scope.Providers))
+	for _, provider := range scope.Providers {
+		rows = append(rows, clientKeyProviderScopeModel{ClientKeyID: keyID, Provider: string(provider)})
+	}
+	return tx.Create(&rows).Error
 }
 
 func replacePermissions(tx *gorm.DB, keyID uint64, modelIDs []uint64) error {

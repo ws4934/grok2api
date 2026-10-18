@@ -233,8 +233,11 @@ func toModelDomain(value modelRouteModel) model.Route {
 	return model.Route{ID: value.ID, PublicID: value.PublicID, Provider: account.Provider(value.Provider), UpstreamModel: value.UpstreamModel, Capability: model.Capability(value.Capability), Origin: model.Origin(value.Origin), Enabled: value.Enabled, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
 }
 
-func toClientKeyDomain(value clientKeyModel, allowedModels []uint64) clientkey.Key {
-	providerScope, _ := clientkey.NormalizeProviderScope(clientkey.ProviderScope(value.ProviderScopeMask))
+func toClientKeyDomain(value clientKeyModel, allowedModels []uint64, providers []account.Provider) clientkey.Key {
+	providerScope := clientkey.AllProviders()
+	if value.ProviderScopeMode == providerScopeModeList {
+		providerScope = clientkey.ProviderScopeOf(providers...)
+	}
 	tierScope, _ := clientkey.NormalizeTierScope(clientkey.TierScope(value.TierScopeMask))
 	internalKind := ""
 	if value.InternalKind != nil {

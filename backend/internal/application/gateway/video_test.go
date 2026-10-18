@@ -257,7 +257,7 @@ func TestCreateVideoAppliesRouteConstraintsAfterKeyEligibilityAndBeforeInputIO(t
 		PublicModel: "shared-video", Prompt: "animate", Duration: 6, Resolution: "720p",
 		ReferenceURLs: references,
 		ClientKey: clientkey.Key{
-			ProviderScope: clientkey.ProviderScopeConsole,
+			ProviderScope: clientkey.ProviderScopeOf(account.ProviderConsole),
 			AllowedModels: []uint64{3},
 		},
 	})
@@ -926,7 +926,7 @@ func TestVideoRetryDoesNotEscapeClientKeyAccountScope(t *testing.T) {
 		Name: "video-scope-test", Prefix: "video-scope-test", SecretHash: strings.Repeat("b", 64),
 		EncryptedSecret: "encrypted", Enabled: true, RPMLimit: 60, MaxConcurrent: 4,
 		// Restricted to Super-tier Web accounts only.
-		ProviderScope: clientkey.ProviderScopeWeb, TierScope: clientkey.TierScopeSuper,
+		ProviderScope: clientkey.ProviderScopeOf(account.ProviderWeb), TierScope: clientkey.TierScopeSuper,
 	})
 	if err != nil {
 		t.Fatal(err)

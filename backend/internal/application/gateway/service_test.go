@@ -353,7 +353,7 @@ func TestGatewayFailsOverBeforeReturningBody(t *testing.T) {
 
 	adapter.resetAttempts()
 	blockedKey := clientKey
-	blockedKey.ProviderScope = clientkey.ProviderScopeConsole
+	blockedKey.ProviderScope = clientkey.ProviderScopeOf(account.ProviderConsole)
 	if _, err := service.GetResponse(ctx, ResourceInput{ClientKey: blockedKey, ResponseID: "resp-test"}); err == nil {
 		t.Fatal("owned response should be rejected after its provider leaves the key scope")
 	} else {
@@ -1128,35 +1128,35 @@ func TestSelectConversationRouteRespectsClientKeyAcrossSharedPublicModel(t *test
 		{ID: 15, PublicID: "Web/grok-shared", Provider: account.ProviderWeb, UpstreamModel: "grok-shared"},
 		{ID: 20, PublicID: "Console/grok-shared", Provider: account.ProviderConsole, UpstreamModel: "grok-shared"},
 	}
-	selected, err := service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeWeb | clientkey.ProviderScopeConsole}, audit.OperationResponses, "/responses", false, nil)
+	selected, err := service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeOf(account.ProviderWeb, account.ProviderConsole)}, audit.OperationResponses, "/responses", false, nil)
 	if err != nil || selected.ID != 15 {
 		t.Fatalf("provider-scoped route = %#v, err = %v", selected, err)
 	}
-	selected, err = service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeConsole, AllowedModels: []uint64{20}}, audit.OperationResponses, "/responses", false, nil)
+	selected, err = service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeOf(account.ProviderConsole), AllowedModels: []uint64{20}}, audit.OperationResponses, "/responses", false, nil)
 	if err != nil || selected.ID != 20 {
 		t.Fatalf("selected route = %#v, err = %v", selected, err)
 	}
-	_, err = service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeBuild, AllowedModels: []uint64{20}}, audit.OperationResponses, "/responses", false, nil)
+	_, err = service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeOf(account.ProviderBuild), AllowedModels: []uint64{20}}, audit.OperationResponses, "/responses", false, nil)
 	if !errors.Is(err, clientkeyapp.ErrModelNotAllowed) {
 		t.Fatalf("scope and model intersection should reject the request: %v", err)
 	}
-	_, err = service.selectConversationRoute(routes[1:], clientkey.Key{ProviderScope: clientkey.ProviderScopeBuild}, audit.OperationResponses, "/responses", false, nil)
+	_, err = service.selectConversationRoute(routes[1:], clientkey.Key{ProviderScope: clientkey.ProviderScopeOf(account.ProviderBuild)}, audit.OperationResponses, "/responses", false, nil)
 	var unavailable *SelectionUnavailableError
 	if !errors.As(err, &unavailable) || unavailable.Code() != "client_key_account_scope_unavailable" {
 		t.Fatalf("provider scope must not fall back: %#v, err = %v", unavailable, err)
 	}
 	ownership := &inferencedomain.ResponseOwnership{Provider: account.ProviderWeb}
-	_, err = service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeBuild}, audit.OperationResponses, "/responses", true, ownership)
+	_, err = service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeOf(account.ProviderBuild)}, audit.OperationResponses, "/responses", true, ownership)
 	if !errors.As(err, &unavailable) || unavailable.Code() != "client_key_account_scope_unavailable" {
 		t.Fatalf("owned response must remain inside the updated provider scope: %#v, err = %v", unavailable, err)
 	}
 	duplicateBuild := modeldomain.Route{ID: 11, PublicID: "Build/grok-shared", Provider: account.ProviderBuild, UpstreamModel: "grok-alternate"}
 	routes = append(routes, duplicateBuild)
-	eligible, _, err := service.eligibleConversationRoutes(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeBuild, AllowedModels: []uint64{duplicateBuild.ID}}, audit.OperationResponses, "/responses", false, nil)
+	eligible, _, err := service.eligibleConversationRoutes(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeOf(account.ProviderBuild), AllowedModels: []uint64{duplicateBuild.ID}}, audit.OperationResponses, "/responses", false, nil)
 	if err != nil || len(eligible) != 1 || eligible[0].ID != duplicateBuild.ID {
 		t.Fatalf("target-scoped permission candidates = %#v, err = %v", eligible, err)
 	}
-	selected, err = service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeBuild}, audit.OperationResponses, "/responses", true, &inferencedomain.ResponseOwnership{Provider: account.ProviderBuild, ModelRouteID: duplicateBuild.ID})
+	selected, err = service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeOf(account.ProviderBuild)}, audit.OperationResponses, "/responses", true, &inferencedomain.ResponseOwnership{Provider: account.ProviderBuild, ModelRouteID: duplicateBuild.ID})
 	if err != nil || selected.ID != duplicateBuild.ID {
 		t.Fatalf("route-owned response selected %#v, err = %v", selected, err)
 	}
@@ -1303,7 +1303,7 @@ func TestSelectMediaRouteSkipsSameNamedConversationRoute(t *testing.T) {
 	if err != nil || selected.ID != 20 {
 		t.Fatalf("selected route = %#v, err = %v", selected, err)
 	}
-	_, err = service.selectMediaRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeBuild}, modeldomain.CapabilityImage, func(providerValue account.Provider) bool {
+	_, err = service.selectMediaRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeOf(account.ProviderBuild)}, modeldomain.CapabilityImage, func(providerValue account.Provider) bool {
 		_, ok := registry.ImageGeneration(providerValue)
 		return ok
 	})

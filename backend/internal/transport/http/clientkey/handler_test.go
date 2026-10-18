@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
@@ -15,14 +19,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestCreateDistinguishesOmittedLimitsFromExplicitZero(t *testing.T) {
+func newHandlerTestRouter(t *testing.T) (*gin.Engine, *clientkeyapp.Service) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	ctx := context.Background()
 	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "client-key-handler.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	t.Cleanup(func() { _ = database.Close() })
 	if err := database.InitializeSchema(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -33,6 +38,12 @@ func TestCreateDistinguishesOmittedLimitsFromExplicitZero(t *testing.T) {
 	service := clientkeyapp.NewService(relational.NewClientKeyRepository(database), nil, nil, 60, 5, cipher)
 	router := gin.New()
 	NewHandler(service).Register(router.Group("/api"))
+	return router, service
+}
+
+func TestCreateDistinguishesOmittedLimitsFromExplicitZero(t *testing.T) {
+	ctx := context.Background()
+	router, service := newHandlerTestRouter(t)
 
 	assertCreate := func(body string) {
 		t.Helper()
@@ -64,11 +75,11 @@ func TestCreateDistinguishesOmittedLimitsFromExplicitZero(t *testing.T) {
 		t.Fatalf("explicit zero limits = rpm %d, concurrency %d", unlimited[0].RPMLimit, unlimited[0].MaxConcurrent)
 	}
 	freePool, total, err := service.List(ctx, 1, 20, "free-pool", clientkeyapp.ListFilter{})
-	if err != nil || total != 1 || len(freePool) != 1 || freePool[0].ProviderScope != 7 || freePool[0].TierScope != 1 {
+	if err != nil || total != 1 || len(freePool) != 1 || !freePool[0].ProviderScope.All || freePool[0].TierScope != 1 {
 		t.Fatalf("free-pool key list = %#v, total = %d, err = %v", freePool, total, err)
 	}
 	mixedScope, total, err := service.List(ctx, 1, 20, "mixed-scope", clientkeyapp.ListFilter{})
-	if err != nil || total != 1 || len(mixedScope) != 1 || mixedScope[0].ProviderScope != 3 || mixedScope[0].TierScope != 3 {
+	if err != nil || total != 1 || len(mixedScope) != 1 || !reflect.DeepEqual(mixedScope[0].ProviderScope.Values(), []string{"grok_build", "grok_web"}) || mixedScope[0].TierScope != 3 {
 		t.Fatalf("mixed-scope key list = %#v, total = %d, err = %v", mixedScope, total, err)
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/client-keys", bytes.NewBufferString(`{"name":"invalid-pool","accountPool":"unknown"}`))
@@ -97,5 +108,51 @@ func TestCreateDistinguishesOmittedLimitsFromExplicitZero(t *testing.T) {
 		if response.Code != http.StatusBadRequest {
 			t.Fatalf("empty scope response = %d %s", response.Code, response.Body.String())
 		}
+	}
+}
+
+func TestProviderScopeWireFormatAcceptsAllAndExplicitProviders(t *testing.T) {
+	router, _ := newHandlerTestRouter(t)
+	send := func(method, path, body string, wantStatus int) []byte {
+		t.Helper()
+		request := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if response.Code != wantStatus {
+			t.Fatalf("%s %s = %d %s", method, path, response.Code, response.Body.String())
+		}
+		return response.Body.Bytes()
+	}
+	var created struct {
+		Data struct {
+			Key keyResponse `json:"key"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(send(http.MethodPost, "/api/client-keys", `{"name":"all","providerScope":["all"]}`, http.StatusCreated), &created); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(created.Data.Key.ProviderScope, []string{"all"}) {
+		t.Fatalf("created provider scope = %#v", created.Data.Key.ProviderScope)
+	}
+	path := "/api/client-keys/" + strconv.FormatUint(created.Data.Key.ID, 10)
+	var updated struct {
+		Data keyResponse `json:"data"`
+	}
+	if err := json.Unmarshal(send(http.MethodPatch, path, `{"providerScope":["grok_web","chatgpt"]}`, http.StatusOK), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(updated.Data.ProviderScope, []string{"chatgpt", "grok_web"}) {
+		t.Fatalf("updated provider scope = %#v", updated.Data.ProviderScope)
+	}
+	if err := json.Unmarshal(send(http.MethodPatch, path, `{"providerScope":["all"]}`, http.StatusOK), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(updated.Data.ProviderScope, []string{"all"}) {
+		t.Fatalf("provider scope after reset = %#v", updated.Data.ProviderScope)
+	}
+	invalid := string(send(http.MethodPatch, path, `{"providerScope":["all","grok_web"]}`, http.StatusBadRequest))
+	if strings.Contains(invalid, "grok_build") || strings.Contains(invalid, "grok_console") {
+		t.Fatalf("provider scope error lists a closed provider set: %s", invalid)
 	}
 }

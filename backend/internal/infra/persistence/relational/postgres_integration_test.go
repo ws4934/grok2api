@@ -284,7 +284,7 @@ func TestPostgresRepositoriesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.db.WithContext(ctx).Migrator().DropColumn(&clientKeyModel{}, "ProviderScopeMask"); err != nil {
+	if err := database.db.WithContext(ctx).Migrator().DropColumn(&clientKeyModel{}, "ProviderScopeMode"); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.db.WithContext(ctx).Migrator().DropColumn(&clientKeyModel{}, "TierScopeMask"); err != nil {
@@ -294,13 +294,13 @@ func TestPostgresRepositoriesIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	loadedPoolKey, err := keyRepository.Get(ctx, poolKey.ID)
-	if err != nil || loadedPoolKey.ProviderScope != clientkey.ProviderScopeAll || loadedPoolKey.TierScope != clientkey.TierScopeAll {
+	if err != nil || !loadedPoolKey.ProviderScope.All || loadedPoolKey.TierScope != clientkey.TierScopeAll {
 		t.Fatalf("postgres migrated client key account scope = %+v, err = %v", loadedPoolKey.AccountScope(), err)
 	}
-	loadedPoolKey.ProviderScope = clientkey.ProviderScopeBuild | clientkey.ProviderScopeWeb
+	loadedPoolKey.ProviderScope = clientkey.ProviderScopeOf(account.ProviderBuild, account.ProviderWeb)
 	loadedPoolKey.TierScope = clientkey.TierScopeSuper
 	loadedPoolKey, err = keyRepository.Update(ctx, loadedPoolKey)
-	if err != nil || loadedPoolKey.ProviderScope != clientkey.ProviderScopeBuild|clientkey.ProviderScopeWeb || loadedPoolKey.TierScope != clientkey.TierScopeSuper {
+	if err != nil || !loadedPoolKey.ProviderScope.Equal(clientkey.ProviderScopeOf(account.ProviderBuild, account.ProviderWeb)) || loadedPoolKey.TierScope != clientkey.TierScopeSuper {
 		t.Fatalf("postgres updated client key account scope = %+v, err = %v", loadedPoolKey.AccountScope(), err)
 	}
 	if err := keyRepository.Delete(ctx, poolKey.ID); err != nil {
@@ -434,7 +434,7 @@ func TestPostgresMigratesLegacyClientKeyAccountPoolToScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.db.WithContext(ctx).Exec("ALTER TABLE client_keys DROP COLUMN provider_scope_mask, DROP COLUMN tier_scope_mask").Error; err != nil {
+	if err := database.db.WithContext(ctx).Exec("ALTER TABLE client_keys DROP COLUMN provider_scope_mode, DROP COLUMN tier_scope_mask").Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := database.db.WithContext(ctx).Exec("ALTER TABLE client_keys ADD COLUMN account_pool text NOT NULL DEFAULT 'all' CHECK (account_pool IN ('all','free','super'))").Error; err != nil {
@@ -447,7 +447,7 @@ func TestPostgresMigratesLegacyClientKeyAccountPoolToScopes(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, err := repository.Get(ctx, value.ID)
-	if err != nil || stored.ProviderScope != clientkey.ProviderScopeAll || stored.TierScope != clientkey.TierScopeFree {
+	if err != nil || !stored.ProviderScope.All || stored.TierScope != clientkey.TierScopeFree {
 		t.Fatalf("migrated PostgreSQL account scope = %+v, err = %v", stored.AccountScope(), err)
 	}
 	if err := repository.Delete(ctx, value.ID); err != nil {
