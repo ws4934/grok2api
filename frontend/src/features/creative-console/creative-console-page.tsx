@@ -1724,6 +1724,8 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
     ? modelChoices[subMode]
     : filteredModels[0]?.publicId ?? "";
   const activeProvider = filteredModels.find((item) => item.publicId === activeModel)?.provider ?? "";
+  // ChatGPT reads the language from the text and ignores speed; /v1/tts still requires a language, so the current one is sent.
+  const chatgptTTS = subMode === "tts" && activeProvider === "chatgpt";
 
   const voicesQuery = useQuery({
     queryKey: ["creative-console", "voices", apiKey, activeModel],
@@ -1815,8 +1817,12 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
         <div className="flex items-center justify-between gap-2 px-3 pb-3">
           <div className="flex min-w-0 flex-wrap items-center gap-1">
             <CompactModelSelect value={activeModel} models={filteredModels} onChange={(value) => setModelChoices((current) => ({ ...current, [subMode]: value }))} />
-            <CompactSelect value={language} options={languageOptions} onChange={setLanguage} ariaLabel={t("creativeConsole.voiceLanguage")} />
-            {subMode === "tts" ? (
+            {chatgptTTS ? (
+              <span className="px-2 text-xs text-muted-foreground">{t("creativeConsole.voiceLanguageFromText")}</span>
+            ) : (
+              <CompactSelect value={language} options={languageOptions} onChange={setLanguage} ariaLabel={t("creativeConsole.voiceLanguage")} />
+            )}
+            {subMode === "tts" && !chatgptTTS ? (
               <CompactSelect value={speed} options={speedOptions} onChange={setSpeed} ariaLabel={t("creativeConsole.voiceSpeed")} suffix="x" icon={<Clock3 />} />
             ) : null}
             {subMode === "tts" ? (

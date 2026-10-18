@@ -233,6 +233,7 @@ const resources = {
         synthesize: "合成语音",
         transcribe: "识别语音",
         voiceLanguage: "语言",
+        voiceLanguageFromText: "语言跟随文本",
         voiceId: "音色",
         voiceSpeed: "语速",
 
@@ -1620,6 +1621,7 @@ const resources = {
         synthesize: "Synthesize",
         transcribe: "Transcribe",
         voiceLanguage: "Language",
+        voiceLanguageFromText: "Language follows the text",
         voiceId: "Voice",
         voiceSpeed: "Speed",
         send: "Send",
