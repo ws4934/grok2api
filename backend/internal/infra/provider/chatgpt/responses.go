@@ -599,10 +599,10 @@ func estimateInput(messages []turnMessage, vision int) (int64, error) {
 type meter struct {
 	limit, used     int64
 	truncated       bool
-	text, reasoning string
+	text, reasoning strings.Builder
 }
 
-func (m *meter) take(part string, into *string) (string, error) {
+func (m *meter) take(part string, into *strings.Builder) (string, error) {
 	if part == "" || m.truncated {
 		return "", nil
 	}
@@ -617,7 +617,7 @@ func (m *meter) take(part string, into *string) (string, error) {
 		}
 	}
 	m.used += n
-	*into += part
+	into.WriteString(part)
 	return part, nil
 }
 
@@ -641,11 +641,11 @@ func fit(text string, budget int64) (string, int64, error) {
 }
 
 func (m *meter) usage(input int64) (map[string]any, error) {
-	text, err := countTokens(m.text)
+	text, err := countTokens(m.text.String())
 	if err != nil {
 		return nil, err
 	}
-	reasoning, err := countTokens(m.reasoning)
+	reasoning, err := countTokens(m.reasoning.String())
 	if err != nil {
 		return nil, err
 	}
@@ -684,7 +684,8 @@ type turn struct {
 type block struct {
 	index     int
 	reasoning bool
-	id, text  string
+	id        string
+	text      strings.Builder
 }
 
 func (t *turn) object(status string) map[string]any {
@@ -760,7 +761,7 @@ func (t *turn) write(reasoning bool, text string) error {
 			return err
 		}
 	}
-	t.current.text += text
+	t.current.text.WriteString(text)
 	if reasoning {
 		return t.emit("response.reasoning_summary_text.delta", map[string]any{"item_id": t.current.id, "output_index": t.current.index, "summary_index": 0, "delta": text})
 	}
@@ -803,19 +804,20 @@ func (t *turn) closeCurrent() error {
 	if status == "" {
 		status = "completed"
 	}
+	text := b.text.String()
 	if b.reasoning {
-		item := map[string]any{"id": b.id, "type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": b.text}}}
+		item := map[string]any{"id": b.id, "type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": text}}}
 		t.output = append(t.output, item)
-		if err := t.emit("response.reasoning_summary_text.done", map[string]any{"item_id": b.id, "output_index": b.index, "summary_index": 0, "text": b.text}); err != nil {
+		if err := t.emit("response.reasoning_summary_text.done", map[string]any{"item_id": b.id, "output_index": b.index, "summary_index": 0, "text": text}); err != nil {
 			return err
 		}
-		if err := t.emit("response.reasoning_summary_part.done", map[string]any{"item_id": b.id, "output_index": b.index, "summary_index": 0, "part": map[string]any{"type": "summary_text", "text": b.text}}); err != nil {
+		if err := t.emit("response.reasoning_summary_part.done", map[string]any{"item_id": b.id, "output_index": b.index, "summary_index": 0, "part": map[string]any{"type": "summary_text", "text": text}}); err != nil {
 			return err
 		}
 		return t.emit("response.output_item.done", map[string]any{"output_index": b.index, "item": item})
 	}
-	annotations := annotate(b.text, t.cited)
-	part := map[string]any{"type": "output_text", "text": b.text, "annotations": annotations}
+	annotations := annotate(text, t.cited)
+	part := map[string]any{"type": "output_text", "text": text, "annotations": annotations}
 	item := map[string]any{"id": b.id, "type": "message", "status": status, "role": "assistant", "content": []any{part}}
 	t.output = append(t.output, item)
 	for i, annotation := range annotations {
@@ -823,7 +825,7 @@ func (t *turn) closeCurrent() error {
 			return err
 		}
 	}
-	if err := t.emit("response.output_text.done", map[string]any{"item_id": b.id, "output_index": b.index, "content_index": 0, "text": b.text, "logprobs": []any{}}); err != nil {
+	if err := t.emit("response.output_text.done", map[string]any{"item_id": b.id, "output_index": b.index, "content_index": 0, "text": text, "logprobs": []any{}}); err != nil {
 		return err
 	}
 	if err := t.emit("response.content_part.done", map[string]any{"item_id": b.id, "output_index": b.index, "content_index": 0, "part": part}); err != nil {

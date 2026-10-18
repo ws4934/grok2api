@@ -230,8 +230,8 @@ func openAIChatPayloadWithImages(request wireChatRequest, images []OpenAIChatIma
 }
 
 type openAIChatState struct {
-	text    string
-	summary string
+	text    strings.Builder
+	summary strings.Builder
 	path    string
 	hidden  bool
 	// fragments keeps the text of answer fragments (is_message_fragment) by
@@ -391,7 +391,7 @@ func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
 			event.Text = appendDelta(&s.text, candidate)
 		} else if delta, ok := object["v"].(string); ok && object["o"] == "append" && !s.hidden && (s.path == "/message/content/parts/0" || s.path == "/message/content/text") {
 			event.Text = delta
-			s.text += delta
+			s.text.WriteString(delta)
 		}
 		if object["is_complete"] == true || object["finished_successfully"] == true {
 			event.Done = true
@@ -491,18 +491,19 @@ func openAIAssistantText(value map[string]any) string {
 	return ""
 }
 
-func appendDelta(current *string, candidate string) string {
+func appendDelta(current *strings.Builder, candidate string) string {
 	if candidate == "" {
 		return ""
 	}
-	if strings.HasPrefix(candidate, *current) {
-		delta := strings.TrimPrefix(candidate, *current)
-		*current = candidate
+	seen := current.String()
+	if strings.HasPrefix(candidate, seen) {
+		delta := candidate[len(seen):]
+		current.WriteString(delta)
 		return delta
 	}
-	if strings.HasPrefix(*current, candidate) {
+	if strings.HasPrefix(seen, candidate) {
 		return ""
 	}
-	*current += candidate
+	current.WriteString(candidate)
 	return candidate
 }
