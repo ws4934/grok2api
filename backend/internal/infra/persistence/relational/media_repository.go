@@ -590,8 +590,14 @@ func (r *MediaJobRepository) SummarizeMediaJobs(ctx context.Context, kind string
 	return stats, err
 }
 
-// auditedStatuses end with an audit record; canceled jobs never reached a billable outcome.
+// auditedStatuses end with an audit record. A canceled image job is audited
+// too, for the images it delivered before the cancel; a canceled video never
+// reached a billable outcome.
 var auditedStatuses = []media.Status{media.StatusCompleted, media.StatusFailed, media.StatusUncertain}
+
+func usageRecordable(query *gorm.DB) *gorm.DB {
+	return query.Where("(status IN ? OR (status = ? AND kind = ?))", auditedStatuses, media.StatusCanceled, media.KindImage)
+}
 
 // ListUnrecordedTerminalMediaJobs 返回尚未完成审计写入的终态任务。
 func (r *MediaJobRepository) ListUnrecordedTerminalMediaJobs(ctx context.Context, limit int) ([]media.Job, error) {
@@ -599,7 +605,7 @@ func (r *MediaJobRepository) ListUnrecordedTerminalMediaJobs(ctx context.Context
 		limit = 200
 	}
 	var rows []mediaJobModel
-	if err := r.db.db.WithContext(ctx).Omit("input_json").Where("status IN ? AND usage_recorded_at IS NULL", auditedStatuses).Order("completed_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
+	if err := usageRecordable(r.db.db.WithContext(ctx).Omit("input_json")).Where("usage_recorded_at IS NULL").Order("completed_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	values := make([]media.Job, 0, len(rows))
@@ -613,15 +619,15 @@ func (r *MediaJobRepository) MarkMediaJobUsageRecorded(ctx context.Context, id s
 	// Once the durable audit owns the input-image count, terminal jobs no longer
 	// need raw Base64 references. Compact them in the same idempotent update;
 	// uncertain jobs keep them for an administrator retry.
-	result := r.db.db.WithContext(ctx).Model(&mediaJobModel{}).
-		Where("id = ? AND status IN ? AND usage_recorded_at IS NULL", id, auditedStatuses).
+	result := usageRecordable(r.db.db.WithContext(ctx).Model(&mediaJobModel{})).
+		Where("id = ? AND usage_recorded_at IS NULL", id).
 		Updates(map[string]any{"usage_recorded_at": recordedAt, "input_json": gorm.Expr("CASE WHEN status = ? THEN input_json ELSE ? END", media.StatusUncertain, "{}")})
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
 		var count int64
-		if err := r.db.db.WithContext(ctx).Model(&mediaJobModel{}).Where("id = ? AND status IN ? AND usage_recorded_at IS NOT NULL", id, auditedStatuses).Count(&count).Error; err != nil {
+		if err := usageRecordable(r.db.db.WithContext(ctx).Model(&mediaJobModel{})).Where("id = ? AND usage_recorded_at IS NOT NULL", id).Count(&count).Error; err != nil {
 			return err
 		}
 		if count == 0 {

@@ -751,8 +751,8 @@ func (s *Service) recordImageJobAudits(ctx context.Context, job media.Job, upstr
 		}
 	}
 	// A resumed job that delivered its image ends on images it never drew:
-	// the failure that stopped them is already recorded.
-	if job.Status != media.StatusCompleted && len(job.ResultAssetIDs) < job.ItemCount && !resumeDone(job) {
+	// the failure that stopped them is already recorded. A cancel is no failure.
+	if job.Status != media.StatusCompleted && job.Status != media.StatusCanceled && len(job.ResultAssetIDs) < job.ItemCount && !resumeDone(job) {
 		statusCode := resolveVideoAuditStatusCode(job, upstreamStatus, nil)
 		if err := s.recordImageItemAudit(ctx, job, len(job.ResultAssetIDs), statusCode, job.ErrorCode, durationMS, attempts...); err != nil {
 			return err
@@ -885,6 +885,13 @@ func (s *Service) cancelMediaJob(ctx context.Context, id string, clientKeyID uin
 	if job.Status == media.StatusCanceled {
 		// ponytail: canceled video inputs are left to the 24h input TTL.
 		s.releaseJobReservations(job)
+		// Images delivered before the cancel are billed; their audits may not
+		// be written yet. Reconciliation retries a failed write.
+		if job.Kind == media.KindImage {
+			if err := s.recordImageJobAudits(context.WithoutCancel(ctx), job, 0); err != nil {
+				s.logger.Error("image_usage_record_failed", "job_id", job.ID, "error", err)
+			}
+		}
 	}
 	return job, nil
 }

@@ -114,6 +114,63 @@ func TestSyncImageBillsDeliveredImagesOnly(t *testing.T) {
 	}
 }
 
+// deliverFirstImageWithoutAudit leaves a two-image job as a worker that saved
+// its first image and stopped before writing that image's audit.
+func deliverFirstImageWithoutAudit(t *testing.T, f *imageJobFixture) media.Job {
+	t.Helper()
+	ctx := context.Background()
+	job := f.create(t, ImageJobInput{Count: 2})
+	now := time.Now().UTC()
+	claimed, ok, err := f.jobs.TryClaimMediaJob(ctx, job.ID, now, now.Add(time.Hour), "claim_delivered_first_image")
+	if err != nil || !ok {
+		t.Fatalf("claim = %v %v", ok, err)
+	}
+	claimed.ResultAssetIDs = []string{"asset_delivered_000001"}
+	if err := f.jobs.UpdateMediaJob(ctx, claimed); err != nil {
+		t.Fatal(err)
+	}
+	return job
+}
+
+func TestCanceledImageJobBillsImagesDeliveredBeforeTheCancel(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	ctx := context.Background()
+	job := deliverFirstImageWithoutAudit(t, f)
+	canceled, err := f.service.CancelImageJob(ctx, f.key, job.ID)
+	if err != nil || canceled.Status != media.StatusCanceled {
+		t.Fatalf("cancel = %#v err = %v", canceled, err)
+	}
+	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
+		t.Fatalf("billed = %d reserved = %d", billed, reserved)
+	}
+	audits := f.auditsByEvent(t)
+	if record := audits[imageUsageEventID(job.ID, 0)]; record.StatusCode != http.StatusOK || record.MediaOutputImages != 1 || len(audits) != 1 {
+		t.Fatalf("audits = %#v", audits)
+	}
+	if stored := f.job(t, job.ID); stored.UsageRecordedAt == nil {
+		t.Fatal("usage of the canceled job is not recorded")
+	}
+}
+
+func TestReconciliationBillsImagesOfACanceledJob(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	ctx := context.Background()
+	job := deliverFirstImageWithoutAudit(t, f)
+	// The cancel committed but its process died before writing the audits.
+	if _, err := f.jobs.CancelMediaJob(ctx, job.ID, f.key.ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.RecoverMediaJobs(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if billed, _ := f.billing(t); billed != 400_000_000 {
+		t.Fatalf("billed = %d", billed)
+	}
+	if stored := f.job(t, job.ID); stored.UsageRecordedAt == nil {
+		t.Fatal("usage of the canceled job is not recorded")
+	}
+}
+
 type requestScopedTestError struct{ message string }
 
 func (e requestScopedTestError) Error() string              { return e.message }
