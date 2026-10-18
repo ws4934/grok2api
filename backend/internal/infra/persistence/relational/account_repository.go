@@ -2029,12 +2029,12 @@ func applyAssociationFilter(query *gorm.DB, providerValue, association string) *
 
 func (r *AccountRepository) UpdateTokens(ctx context.Context, id uint64, accessToken, refreshToken, state string, expiresAt time.Time, buildBotFlagSource int) (account.Credential, error) {
 	now := time.Now().UTC()
-	refreshDueAt := account.CredentialRefreshDueAt(id, expiresAt)
 	if err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var providerRow struct{ Provider string }
 		if err := tx.Model(&accountModel{}).Select("provider").Where("id = ?", id).Take(&providerRow).Error; err != nil {
 			return err
 		}
+		refreshDueAt := account.CredentialRefreshDueAt(account.Provider(providerRow.Provider), id, expiresAt, now)
 		updates := map[string]any{
 			"encrypted_primary": accessToken, "expires_at": expiresAt, "refresh_due_at": refreshDueAt,
 			"build_bot_flag_source": normalizeBuildBotFlagSource(account.Provider(providerRow.Provider), buildBotFlagSource),
@@ -2070,12 +2070,13 @@ func (r *AccountRepository) BackfillCredentialRefreshSchedules(ctx context.Conte
 	}
 	var rows []struct {
 		AccountID        uint64
+		Provider         string
 		ExpiresAt        *time.Time
 		EncryptedPrimary string
 	}
 	err := r.db.db.WithContext(ctx).
 		Table("account_credentials AS credential").
-		Select("credential.account_id, credential.expires_at, credential.encrypted_primary").
+		Select("credential.account_id, account.provider, credential.expires_at, credential.encrypted_primary").
 		Joins("JOIN provider_accounts AS account ON account.id = credential.account_id").
 		Where("account.provider IN ? AND account.enabled = ? AND account.auth_status = ?", providers, true, account.AuthStatusActive).
 		Where("credential.auth_type = ? AND credential.encrypted_refresh <> '' AND credential.refresh_due_at IS NULL", account.AuthTypeOAuth).
@@ -2088,7 +2089,7 @@ func (r *AccountRepository) BackfillCredentialRefreshSchedules(ctx context.Conte
 		for _, row := range rows {
 			dueAt := now
 			if row.EncryptedPrimary != "" && row.ExpiresAt != nil && !row.ExpiresAt.IsZero() {
-				dueAt = account.CredentialRefreshDueAt(row.AccountID, *row.ExpiresAt)
+				dueAt = account.CredentialRefreshDueAt(account.Provider(row.Provider), row.AccountID, *row.ExpiresAt, now)
 			}
 			if err := tx.Model(&accountCredentialModel{}).Where("account_id = ? AND refresh_due_at IS NULL", row.AccountID).Update("refresh_due_at", dueAt).Error; err != nil {
 				return err

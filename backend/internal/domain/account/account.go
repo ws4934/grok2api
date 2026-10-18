@@ -302,16 +302,30 @@ func (m CredentialMaterial) ApplyTo(value Credential) (Credential, bool) {
 	return value, true
 }
 
-// CredentialRefreshDueAt 将账号稳定地分散到到期前 5~8 分钟，避免同批导入账号同时刷新。
-func CredentialRefreshDueAt(accountID uint64, expiresAt time.Time) time.Time {
+// CredentialRefreshLead is how long before expiry a provider renews its
+// access token. ChatGPT tokens live about a week, so a day of lead leaves room
+// to retry a failed renewal; other providers renew minutes ahead, which keeps
+// refresh-token rotation to one per token lifetime.
+func (p Provider) CredentialRefreshLead() time.Duration {
+	if p == ProviderChatGPT {
+		return 24 * time.Hour
+	}
+	return 5 * time.Minute
+}
+
+// CredentialRefreshDueAt 将账号稳定地分散到续期提前量之前 0~3 分钟，避免同批导入账号同时刷新。
+// 提前量取 Provider 的 CredentialRefreshLead，但不超过剩余有效期的一半（至少 5 分钟），
+// 短期令牌因此不会被连续续期。
+func CredentialRefreshDueAt(provider Provider, accountID uint64, expiresAt, now time.Time) time.Time {
 	if expiresAt.IsZero() {
 		return time.Time{}
 	}
+	lead := max(5*time.Minute, min(provider.CredentialRefreshLead(), expiresAt.Sub(now)/2))
 	var identity [8]byte
 	binary.BigEndian.PutUint64(identity[:], accountID)
 	digest := sha256.Sum256(identity[:])
 	jitterSeconds := binary.BigEndian.Uint16(digest[:2]) % 181
-	return expiresAt.UTC().Add(-5*time.Minute - time.Duration(jitterSeconds)*time.Second)
+	return expiresAt.UTC().Add(-lead - time.Duration(jitterSeconds)*time.Second)
 }
 
 type QuotaSource string

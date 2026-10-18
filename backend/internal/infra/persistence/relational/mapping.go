@@ -157,7 +157,7 @@ func fromAccountCredentialDomain(value account.Credential) accountCredentialMode
 	}
 	refreshDueAt := value.RefreshDueAt
 	if refreshDueAt == nil && value.EncryptedRefreshToken != "" && !value.ExpiresAt.IsZero() {
-		due := account.CredentialRefreshDueAt(value.ID, value.ExpiresAt)
+		due := account.CredentialRefreshDueAt(value.Provider, value.ID, value.ExpiresAt, time.Now())
 		refreshDueAt = &due
 	}
 	authType := value.AuthType

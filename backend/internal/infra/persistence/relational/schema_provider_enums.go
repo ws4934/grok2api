@@ -3,6 +3,7 @@ package relational
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/model"
@@ -97,4 +98,35 @@ func (d *Database) dropChatGPTImageChatRoutes(ctx context.Context) error {
 	return d.db.WithContext(ctx).
 		Where("provider = ? AND origin = ? AND capability = ? AND upstream_model LIKE ?", account.ProviderChatGPT, model.OriginDiscovered, model.CapabilityResponses, "gpt-image-%").
 		Delete(&modelRouteModel{}).Error
+}
+
+// rescheduleChatGPTCredentialRefresh moves ChatGPT renewals that an earlier
+// release scheduled minutes before expiry to the provider's lead. It only
+// ever moves a renewal earlier, so running it on every start is a no-op once
+// applied; failed renewals keep their retry schedule.
+func (d *Database) rescheduleChatGPTCredentialRefresh(ctx context.Context) error {
+	var rows []struct {
+		AccountID    uint64
+		ExpiresAt    time.Time
+		RefreshDueAt time.Time
+	}
+	err := d.db.WithContext(ctx).Table("account_credentials AS credential").
+		Select("credential.account_id, credential.expires_at, credential.refresh_due_at").
+		Joins("JOIN provider_accounts AS account ON account.id = credential.account_id").
+		Where("account.provider = ? AND credential.refresh_failures = 0 AND credential.expires_at IS NOT NULL AND credential.refresh_due_at IS NOT NULL", account.ProviderChatGPT).
+		Scan(&rows).Error
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	for _, row := range rows {
+		due := account.CredentialRefreshDueAt(account.ProviderChatGPT, row.AccountID, row.ExpiresAt, now)
+		if !due.Before(row.RefreshDueAt) {
+			continue
+		}
+		if err := d.db.WithContext(ctx).Model(&accountCredentialModel{}).Where("account_id = ?", row.AccountID).Update("refresh_due_at", due).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
