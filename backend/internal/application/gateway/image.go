@@ -384,14 +384,20 @@ func (s *Service) executeImage(
 			record.DurationMS, record.CreatedAt = time.Since(startedAt).Milliseconds(), time.Now().UTC()
 			applyAuditEgress(&record, egressTrace, route.Provider)
 			if successful {
-				record.MediaOutputImages = int64(max(0, requestedCount))
+				// A provider that delivers fewer images than requested reports the
+				// delivered count in QuotaUnits; only those are billed.
+				deliveredCount := requestedCount
+				if response.QuotaUnits > 0 {
+					deliveredCount = min(requestedCount, response.QuotaUnits)
+				}
+				record.MediaOutputImages = int64(max(0, deliveredCount))
 				var pricing audit.PricingResult
 				var priced bool
 				switch operation {
 				case audit.OperationImage:
-					pricing, priced = s.pricing.QuoteImage(route.Provider, pricingModel, pricingResolution, pricingQuality, requestedCount)
+					pricing, priced = s.pricing.QuoteImage(route.Provider, pricingModel, pricingResolution, pricingQuality, deliveredCount)
 				case audit.OperationImageEdit:
-					pricing, priced = s.pricing.QuoteImageEdit(route.Provider, pricingModel, pricingResolution, pricingQuality, requestedCount, inputImageCount)
+					pricing, priced = s.pricing.QuoteImageEdit(route.Provider, pricingModel, pricingResolution, pricingQuality, deliveredCount, inputImageCount)
 				}
 				if priced {
 					pricing.Apply(&record)
