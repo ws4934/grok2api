@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1287,6 +1288,36 @@ func TestConvertResponsesStreamEmitsDoneOnlyToolArguments(t *testing.T) {
 	}
 	if strings.Count(text, `"type":"content_block_stop"`) != 1 {
 		t.Fatalf("tool block closed multiple times: %s", text)
+	}
+}
+
+func TestConvertResponsesStreamMessagesClosesTextBeforeToolUse(t *testing.T) {
+	stream := strings.Join([]string{
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"Sure.ST"}`, "",
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","item":{"id":"item_1","type":"function_call","call_id":"call_1","name":"Read","arguments":""}}`, "",
+		`event: response.function_call_arguments.delta`,
+		`data: {"type":"response.function_call_arguments.delta","item_id":"item_1","delta":"{}"}`, "",
+		`event: response.output_item.done`,
+		`data: {"type":"response.output_item.done","item":{"id":"item_1","type":"function_call","call_id":"call_1","name":"Read","arguments":"{}"}}`, "",
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","delta":"Done."}`, "",
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"status":"completed"}}`, "", "",
+	}, "\n")
+	converted, err := io.ReadAll(ConvertResponseStreamWithOptions(io.NopCloser(strings.NewReader(stream)), OperationMessages, ResponseOptions{StopSequences: []string{"STOP"}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(converted)
+	assertSequentialContentBlocks(t, text)
+	if got, want := contentBlockStartTypes(t, text), []string{"text", "tool_use", "text"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("content block order = %v, want %v\n%s", got, want, text)
+	}
+	// Held stop-sequence prefix is flushed into the first block before it closes.
+	if !strings.Contains(text, `"text":"ST","type":"text_delta"},"index":0`) || !strings.Contains(text, `"index":2,"type":"content_block_start"`) || !strings.Contains(text, `"stop_reason":"tool_use"`) {
+		t.Fatalf("stream = %s", text)
 	}
 }
 

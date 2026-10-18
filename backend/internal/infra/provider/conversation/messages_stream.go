@@ -161,6 +161,10 @@ func (c *streamConverter) toolStartMessages(item responseItem) error {
 	if err := c.start(); err != nil {
 		return err
 	}
+	// Anthropic content blocks never interleave: finish the text block first.
+	if err := c.closeTextMessages(); err != nil {
+		return err
+	}
 	tool := streamTool{Index: c.nextIndex, ID: anthropicToolUseID(item.CallID), Name: item.Name, Arguments: item.Arguments}
 	c.nextIndex++
 	c.tools[item.ID] = tool
@@ -168,6 +172,23 @@ func (c *streamConverter) toolStartMessages(item responseItem) error {
 		"type": "content_block_start", "index": tool.Index,
 		"content_block": map[string]any{"type": "tool_use", "id": tool.ID, "name": tool.Name, "input": map[string]any{}},
 	})
+}
+
+// closeTextMessages flushes text held by the stop filter and stops the open
+// text block. Text arriving later opens a new block with the next index.
+func (c *streamConverter) closeTextMessages() error {
+	if c.stopSequence == "" {
+		if pending := c.stopFilter.Flush(); pending != "" {
+			if err := c.textDeltaWithoutFilter(pending); err != nil {
+				return err
+			}
+		}
+	}
+	if !c.textStarted {
+		return nil
+	}
+	c.textStarted = false
+	return c.writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": c.textIndex})
 }
 
 func (c *streamConverter) toolDeltaMessages(itemID, delta string) error {
@@ -229,17 +250,8 @@ func (c *streamConverter) doneMessages(status string) error {
 			}
 		}
 	}
-	if c.stopSequence == "" {
-		if pending := c.stopFilter.Flush(); pending != "" {
-			if err := c.textDeltaWithoutFilter(pending); err != nil {
-				return err
-			}
-		}
-	}
-	if c.textStarted {
-		if err := c.writeEvent("content_block_stop", map[string]any{"type": "content_block_stop", "index": c.textIndex}); err != nil {
-			return err
-		}
+	if err := c.closeTextMessages(); err != nil {
+		return err
 	}
 	if !c.deferSearchText {
 		// If text arrived before the search item, close it before starting any server
