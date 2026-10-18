@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { galleryQuery, localDayStart, mediaAssetPath, mediaAssetSchema, mediaJobActions, mediaJobSchema, mediaJobsQuery, mediaJobStatsSchema, pageSchema, type MediaJobStatus } from "./media-model.ts";
+import { galleryQuery, localDayStart, mediaAssetPath, mediaAssetSchema, mediaJobActions, mediaJobSchema, mediaJobsQuery, mediaJobsRefetchInterval, mediaJobStatsSchema, pageSchema, retriedMediaJobSchema, type MediaJobStatus } from "./media-model.ts";
 
 describe("media jobs query", () => {
   it("sends only set filters and pairs sort fields", () => {
@@ -44,18 +44,40 @@ describe("media job actions", () => {
   });
 
   it("maps statuses to the allowed actions", () => {
-    assert.deepEqual(mediaJobActions(job("queued", { cancellable: true })), { cancel: true, retry: false, delete: false, results: false });
-    assert.deepEqual(mediaJobActions(job("in_progress")), { cancel: false, retry: false, delete: false, results: false });
-    assert.deepEqual(mediaJobActions(job("in_progress", { cancellable: true, assetIds: ["a"] })), { cancel: true, retry: false, delete: false, results: true });
-    assert.deepEqual(mediaJobActions(job("completed", { assetIds: ["a"] })), { cancel: false, retry: false, delete: true, results: true });
-    assert.deepEqual(mediaJobActions(job("failed")), { cancel: false, retry: false, delete: true, results: false });
-    assert.deepEqual(mediaJobActions(job("canceled")), { cancel: false, retry: false, delete: true, results: false });
-    assert.deepEqual(mediaJobActions(job("uncertain", { retryable: true })), { cancel: false, retry: true, delete: true, results: false });
+    assert.deepEqual(mediaJobActions(job("queued", { cancellable: true })), { cancel: true, retry: false, resume: false, delete: false, results: false });
+    assert.deepEqual(mediaJobActions(job("in_progress")), { cancel: false, retry: false, resume: false, delete: false, results: false });
+    assert.deepEqual(mediaJobActions(job("in_progress", { cancellable: true, assetIds: ["a"] })), { cancel: true, retry: false, resume: false, delete: false, results: true });
+    assert.deepEqual(mediaJobActions(job("completed", { assetIds: ["a"] })), { cancel: false, retry: false, resume: false, delete: true, results: true });
+    assert.deepEqual(mediaJobActions(job("failed")), { cancel: false, retry: false, resume: false, delete: true, results: false });
+    assert.deepEqual(mediaJobActions(job("canceled")), { cancel: false, retry: false, resume: false, delete: true, results: false });
+    assert.deepEqual(mediaJobActions(job("uncertain", { retryable: true })), { cancel: false, retry: true, resume: false, delete: true, results: false });
+  });
+
+  it("labels a retryable failed job as fetching its result again, not as a retry", () => {
+    assert.deepEqual(mediaJobActions(job("failed", { retryable: true, assetIds: ["a"] })), { cancel: false, retry: false, resume: true, delete: true, results: true });
   });
 
   it("ignores server flags that contradict the status", () => {
     assert.equal(mediaJobActions(job("completed", { cancellable: true })).cancel, false);
-    assert.equal(mediaJobActions(job("failed", { retryable: true })).retry, false);
+    const completed = mediaJobActions(job("completed", { retryable: true }));
+    assert.equal(completed.retry || completed.resume, false);
+  });
+});
+
+describe("media jobs polling", () => {
+  it("polls only while a listed job is running", () => {
+    assert.equal(mediaJobsRefetchInterval(), false);
+    assert.equal(mediaJobsRefetchInterval([{ status: "completed" }, { status: "failed" }, { status: "uncertain" }]), false);
+    assert.equal(mediaJobsRefetchInterval([{ status: "completed" }, { status: "queued" }]), 5_000);
+    assert.equal(mediaJobsRefetchInterval([{ status: "in_progress" }]), 5_000);
+  });
+});
+
+describe("media job retry result", () => {
+  it("tells a resumed job from a new one", () => {
+    const base = { id: "resp_img_1", kind: "image", status: "in_progress", createdAt: "2026-10-18T00:00:00Z" };
+    assert.equal(retriedMediaJobSchema.parse({ ...base, resumed: true }).resumed, true);
+    assert.equal(retriedMediaJobSchema.parse(base).resumed, false);
   });
 });
 

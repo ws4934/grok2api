@@ -33,6 +33,10 @@ export const mediaJobSchema = z.object({
 });
 export type MediaJobDTO = z.infer<typeof mediaJobSchema>;
 
+// resumed: the same job fetches its result again; otherwise the retry is a new job.
+export const retriedMediaJobSchema = mediaJobSchema.extend({ resumed: z.boolean().default(false) });
+export type RetriedMediaJobDTO = z.infer<typeof retriedMediaJobSchema>;
+
 export const mediaJobStatsSchema = z.object({
   totalJobs: z.number().default(0),
   queued: z.number().default(0),
@@ -135,14 +139,21 @@ export function isTerminalJob(status: MediaJobStatus): boolean {
 }
 
 // The server decides cancel/retry (it knows whether work already reached the upstream); only ended jobs can be deleted.
+// A retryable uncertain job is resubmitted as a new job; a retryable failed job fetches the result the upstream already drew.
 export function mediaJobActions(job: Pick<MediaJobDTO, "status" | "cancellable" | "retryable" | "assetIds">) {
   const terminal = isTerminalJob(job.status);
   return {
     cancel: job.cancellable && !terminal,
     retry: job.retryable && job.status === "uncertain",
+    resume: job.retryable && job.status === "failed",
     delete: terminal,
     results: job.assetIds.length > 0,
   };
+}
+
+// Poll the list while a listed job is still running.
+export function mediaJobsRefetchInterval(jobs: readonly Pick<MediaJobDTO, "status">[] = []): number | false {
+  return jobs.some((job) => !isTerminalJob(job.status)) ? 5_000 : false;
 }
 
 export function mediaProviders<T extends { media: { imageGeneration: boolean; imageEdit: boolean; videoGeneration: boolean } }>(providers: readonly T[] = []): T[] {

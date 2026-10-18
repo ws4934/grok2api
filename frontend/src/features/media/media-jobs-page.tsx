@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Ban, CheckCircle2, CircleHelp, Clock, Eye, Image as ImageIcon, ListChecks, Loader2, RefreshCw, RotateCcw, Search, Trash2, Video } from "lucide-react";
+import { AlertCircle, Ban, CheckCircle2, CircleHelp, Clock, Download, Eye, Image as ImageIcon, ListChecks, Loader2, RefreshCw, RotateCcw, Search, Trash2, Video } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,7 +17,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api";
 import { cancelMediaJob, deleteMediaJobs, getMediaJobStats, listMediaJobs, retryMediaJob } from "@/features/media/media-api";
-import { mediaAssetPath, mediaJobActions, mediaJobStatuses, mediaProviders, type MediaJobDTO, type MediaJobStatsDTO, type MediaJobStatus, type MediaKind } from "@/features/media/media-model";
+import { mediaAssetPath, mediaJobActions, mediaJobsRefetchInterval, mediaJobStatuses, mediaProviders, type MediaJobDTO, type MediaJobStatsDTO, type MediaJobStatus, type MediaKind } from "@/features/media/media-model";
 import { ProviderTag, VideoPreview } from "@/features/media/media-ui";
 import { EmptyState, ErrorState, TableLoadingRow } from "@/shared/components/data-state";
 import { DataTableFilters } from "@/shared/components/data-table-filters";
@@ -68,14 +68,17 @@ export function MediaJobsPage() {
   const debouncedSearch = useDebouncedValue(search);
   const normalizedSearch = debouncedSearch.trim();
 
+  // Both poll while a listed job runs; react-query pauses the interval in a hidden tab.
   const jobsQuery = useQuery({
     queryKey: ["media", "jobs", kind, page, pageSize, statusFilter, providerFilter, normalizedSearch, sort.field, sort.order],
     queryFn: () => listMediaJobs({ page, pageSize, kind, status: statusFilter, provider: providerFilter, search: normalizedSearch || undefined, sortBy: sort.field, sortOrder: sort.order }),
+    refetchInterval: (query) => mediaJobsRefetchInterval(query.state.data?.items),
   });
   const statsQuery = useQuery({
     queryKey: ["media", "jobs", "stats", kind],
     queryFn: () => getMediaJobStats(kind),
     staleTime: 30_000,
+    refetchInterval: mediaJobsRefetchInterval(jobsQuery.data?.items),
   });
 
   const result = jobsQuery.data;
@@ -124,7 +127,7 @@ export function MediaJobsPage() {
     mutationFn: (id: string) => retryMediaJob(id),
     onSuccess: (job) => {
       invalidate();
-      toast.success(t("media.jobs.retried", { id: job.id }));
+      toast.success(job.resumed ? t("media.jobs.resumed") : t("media.jobs.retried", { id: job.id }));
     },
     onError: failed,
   });
@@ -300,6 +303,7 @@ export function MediaJobsPage() {
                     <TableActionCell>
                       <div className="flex items-center justify-end gap-0.5">
                         {actions.retry ? <Button type="button" variant="ghost" size="icon" className="size-8" disabled={retryMutation.isPending} title={t("media.jobs.retry")} aria-label={t("media.jobs.retry")} onClick={() => retryMutation.mutate(job.id)}><RotateCcw /></Button> : null}
+                        {actions.resume ? <Button type="button" variant="ghost" size="icon" className="size-8" disabled={retryMutation.isPending} title={t("media.jobs.resumeHint")} aria-label={t("media.jobs.resume")} onClick={() => retryMutation.mutate(job.id)}><Download /></Button> : null}
                         {actions.cancel ? <Button type="button" variant="ghost" size="icon" className="size-8 text-destructive hover:text-destructive" title={t("media.jobs.cancel")} aria-label={t("media.jobs.cancel")} onClick={() => setCancelTarget(job)}><Ban /></Button> : null}
                         <Button type="button" variant="ghost" size="icon" className="size-8" title={t("media.jobs.details")} aria-label={t("media.jobs.details")} onClick={() => setViewing(job)}><Eye /></Button>
                       </div>

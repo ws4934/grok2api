@@ -1,4 +1,4 @@
-import { galleryQuery, mediaAssetSchema, mediaJobSchema, mediaJobsQuery, mediaJobStatsSchema, pageSchema, type GalleryFilter, type MediaAssetDTO, type MediaJobDTO, type MediaJobsFilter, type MediaJobStatsDTO } from "@/features/media/media-model";
+import { galleryQuery, mediaAssetSchema, mediaJobSchema, mediaJobsQuery, mediaJobStatsSchema, pageSchema, retriedMediaJobSchema, type GalleryFilter, type MediaAssetDTO, type MediaJobDTO, type MediaJobsFilter, type MediaJobStatsDTO, type RetriedMediaJobDTO } from "@/features/media/media-model";
 import { apiRequest, type PaginatedDTO } from "@/shared/api/client";
 import {
   createObjectDecoder,
@@ -53,9 +53,10 @@ export function cancelMediaJob(id: string): Promise<MediaJobDTO> {
   return apiRequest(`/api/admin/v1/media/jobs/${encodeURIComponent(id)}/cancel`, { method: "POST" }, (value) => mediaJobSchema.parse(value));
 }
 
-// The server's default idempotency key (retry:<id>) makes repeated clicks resolve to one new job.
-export function retryMediaJob(id: string): Promise<MediaJobDTO> {
-  return apiRequest(`/api/admin/v1/media/jobs/${encodeURIComponent(id)}/retry`, { method: "POST" }, (value) => mediaJobSchema.parse(value));
+// The server's default idempotency key (retry:<id>) makes repeated clicks resolve to one new job;
+// a resumable failed job comes back itself with resumed: true.
+export function retryMediaJob(id: string): Promise<RetriedMediaJobDTO> {
+  return apiRequest(`/api/admin/v1/media/jobs/${encodeURIComponent(id)}/retry`, { method: "POST" }, (value) => retriedMediaJobSchema.parse(value));
 }
 
 // 临时输入不会进入图库，也不会生成公开 URL；任务只持久化短 file_id。
