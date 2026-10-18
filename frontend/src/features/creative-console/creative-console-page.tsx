@@ -67,6 +67,8 @@ import { PageHeader } from "@/shared/components/page-header";
 import { cn } from "@/shared/lib/cn";
 
 type CreativeMode = "chat" | "image" | "video" | "voice";
+// VoicePanel keeps separate TTS/STT model choices itself; the page tracks the other modes.
+type ModelMode = Exclude<CreativeMode, "voice">;
 type ConversationMessage = ChatMessage & {
   id: string;
   reasoning?: string;
@@ -126,7 +128,7 @@ export function CreativeConsolePage() {
   const [selectedKeyId, setSelectedKeyId] = useState("");
   const [secretState, setSecretState] = useState<SecretState | null>(null);
   const [keyError, setKeyError] = useState("");
-  const [selectedModels, setSelectedModels] = useState<Record<CreativeMode, string>>({ chat: "", image: "", video: "", voice: "" });
+  const [selectedModels, setSelectedModels] = useState<Record<ModelMode, string>>({ chat: "", image: "", video: "" });
   const [toolbarElement, setToolbarElement] = useState<HTMLDivElement | null>(null);
   const requestedSecretKeyRef = useRef("");
 
@@ -162,13 +164,11 @@ export function CreativeConsolePage() {
     // Keep capability-specific routes for VoicePanel so TTS/STT can filter correctly.
     voice: permittedModels.filter((model) => model.capability === "tts" || model.capability === "stt" || model.capability === "realtime"),
   }), [permittedModels]);
-  const voiceModelChoices = useMemo(() => uniqueModelsByPublicID(modelGroups.voice), [modelGroups.voice]);
-  const effectiveModels = useMemo<Record<CreativeMode, string>>(() => ({
+  const effectiveModels = useMemo<Record<ModelMode, string>>(() => ({
     chat: modelGroups.chat.some((model) => model.publicId === selectedModels.chat) ? selectedModels.chat : modelGroups.chat[0]?.publicId ?? "",
     image: modelGroups.image.some((model) => model.publicId === selectedModels.image) ? selectedModels.image : modelGroups.image[0]?.publicId ?? "",
     video: modelGroups.video.some((model) => model.publicId === selectedModels.video) ? selectedModels.video : modelGroups.video[0]?.publicId ?? "",
-    voice: voiceModelChoices.some((model) => model.publicId === selectedModels.voice) ? selectedModels.voice : voiceModelChoices[0]?.publicId ?? "",
-  }), [modelGroups, selectedModels, voiceModelChoices]);
+  }), [modelGroups, selectedModels]);
 
   const secretMutation = useMutation({
     mutationFn: (id: string) => getClientKeySecret(id),
@@ -197,12 +197,12 @@ export function CreativeConsolePage() {
   const apiKey = secretState?.keyId === effectiveKeyId ? secretState.secret : "";
   const storageScope = effectiveKeyId || "default";
 
-  function panelProps(panelMode: CreativeMode): CreativePanelProps {
+  function panelProps(panelMode: ModelMode): CreativePanelProps {
     return {
       apiKey,
       model: effectiveModels[panelMode],
       modelOptions: modelGroups[panelMode],
-      onModelChange: (model) => setSelectedModels((current) => ({ ...current, [panelMode]: model })),
+      onModelChange: (model) => setSelectedModels((current) => current[panelMode] === model ? current : { ...current, [panelMode]: model }),
     };
   }
 
@@ -261,7 +261,7 @@ export function CreativeConsolePage() {
           <div className="h-full" hidden={mode !== "chat"}><ChatPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "chat" ? toolbarElement : null} {...panelProps("chat")} /></div>
           <div className="h-full" hidden={mode !== "image"}><ImagePanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "image" ? toolbarElement : null} {...panelProps("image")} /></div>
           <div className="h-full" hidden={mode !== "video"}><VideoPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "video" ? toolbarElement : null} {...panelProps("video")} /></div>
-          <div className="h-full" hidden={mode !== "voice"}><VoicePanel {...panelProps("voice")} /></div>
+          <div className="h-full" hidden={mode !== "voice"}><VoicePanel apiKey={apiKey} modelOptions={modelGroups.voice} /></div>
         </div>
       </section>
     </div>
@@ -1695,9 +1695,11 @@ function ClearHistoryButton({ disabled, onConfirm }: { disabled: boolean; onConf
   );
 }
 
-function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePanelProps) {
+function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" | "modelOptions">) {
   const { t } = useTranslation();
   const [subMode, setSubMode] = useState<"tts" | "stt">("tts");
+  // Separate choices so switching sub-mode never overwrites the other mode's model.
+  const [modelChoices, setModelChoices] = useState({ tts: "", stt: "" });
   const [prompt, setPrompt] = useState("");
   const [language, setLanguage] = useState("zh");
   const [voiceId, setVoiceId] = useState("eve");
@@ -1715,13 +1717,9 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
     ));
     return uniqueModelsByPublicID(matched);
   }, [modelOptions, subMode]);
-  const activeModel = filteredModels.some((item) => item.publicId === model)
-    ? model
+  const activeModel = filteredModels.some((item) => item.publicId === modelChoices[subMode])
+    ? modelChoices[subMode]
     : filteredModels[0]?.publicId ?? "";
-
-  useEffect(() => {
-    if (activeModel !== model) onModelChange(activeModel);
-  }, [activeModel, model, onModelChange]);
 
   const voicesQuery = useQuery({
     queryKey: ["creative-console", "voices", apiKey, activeModel],
@@ -1775,7 +1773,7 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-1 py-4">
         {!ttsResult && !sttResult && !busy ? <WelcomeState title={t("creativeConsole.welcomeVoice")} /> : null}
-        {busy ? <LoadingResult text={subMode === "tts" ? t("creativeConsole.synthesizing") : t("creativeConsole.transcribing")} /> : null}
+        {busy ? <LoadingResult text={ttsMutation.isPending ? t("creativeConsole.synthesizing") : t("creativeConsole.transcribing")} /> : null}
         {ttsResult ? (
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 rounded-2xl bg-secondary/40 p-4">
             <audio controls src={ttsResult.url} className="w-full" />
@@ -1793,8 +1791,8 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
             </div>
           </div>
         ) : null}
-        {ttsMutation.isError ? <div className="px-2 text-[11px] text-destructive">{ttsMutation.error.message}</div> : null}
-        {sttMutation.isError ? <div className="px-2 text-[11px] text-destructive">{sttMutation.error.message}</div> : null}
+        {subMode === "tts" && ttsMutation.isError ? <div className="px-2 text-[11px] text-destructive">{ttsMutation.error.message}</div> : null}
+        {subMode === "stt" && sttMutation.isError ? <div className="px-2 text-[11px] text-destructive">{sttMutation.error.message}</div> : null}
       </div>
       <form onSubmit={submit} className={composerClassName}>
         <div className="flex items-center gap-2 px-3 pt-3">
@@ -1812,7 +1810,7 @@ function VoicePanel({ apiKey, model, modelOptions, onModelChange }: CreativePane
         )}
         <div className="flex items-center justify-between gap-2 px-3 pb-3">
           <div className="flex min-w-0 flex-wrap items-center gap-1">
-            <CompactModelSelect value={activeModel} models={filteredModels} onChange={onModelChange} />
+            <CompactModelSelect value={activeModel} models={filteredModels} onChange={(value) => setModelChoices((current) => ({ ...current, [subMode]: value }))} />
             <CompactSelect value={language} options={languageOptions} onChange={setLanguage} ariaLabel={t("creativeConsole.voiceLanguage")} />
             {subMode === "tts" ? (
               <CompactSelect value={speed} options={speedOptions} onChange={setSpeed} ariaLabel={t("creativeConsole.voiceSpeed")} suffix="x" icon={<Clock3 />} />
