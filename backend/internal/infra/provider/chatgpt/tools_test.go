@@ -232,6 +232,54 @@ func TestEmulatedCallUnclosedOrFenced(t *testing.T) {
 	}
 }
 
+// The newlines around a tool call block make no blank message; whitespace
+// before real text, or as the whole reply, still reaches the client.
+func TestWhitespaceAroundToolCallMakesNoMessage(t *testing.T) {
+	block := `<tool_calls><tool_call><tool_name>lookup</tool_name><parameters>{"q":"x"}</parameters></tool_call></tool_calls>`
+	answer := "\n" + block + "\n"
+	_, object := respondTo(t, "responses", answer, `{"model":"gpt-5","tools":`+lookupTool+`,"input":"find x"}`)
+	if len(outputOf(object, "message")) != 0 || len(outputOf(object, "function_call")) != 1 {
+		t.Fatalf("responses output = %v", object["output"])
+	}
+	_, chat := respondTo(t, "chat", answer, `{"model":"gpt-5","tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"x"}]}`)
+	if message := chat["choices"].([]any)[0].(map[string]any)["message"].(map[string]any); message["content"] != nil || len(message["tool_calls"].([]any)) != 1 {
+		t.Fatalf("chat message = %v", message)
+	}
+	_, reply := respondTo(t, "messages", answer, `{"model":"gpt-5","max_tokens":1000,"tools":[{"name":"lookup","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"x"}]}`)
+	if content := reply["content"].([]any); len(content) != 1 || content[0].(map[string]any)["type"] != "tool_use" {
+		t.Fatalf("messages content = %v", content)
+	}
+	if _, object := respondTo(t, "responses", "\n"+callAnswer, `{"model":"gpt-5","tools":`+lookupTool+`,"input":"find x"}`); outputText(t, object) != "\nSure." {
+		t.Fatalf("text before a call = %v", object["output"])
+	}
+	if _, object := respondTo(t, "responses", "\n\n", `{"model":"gpt-5","input":"x"}`); outputText(t, object) != "\n\n" {
+		t.Fatalf("whitespace reply = %v", object["output"])
+	}
+}
+
+// Hosted web search declared beside tools that cannot run is not called
+// unavailable, which would contradict a forced search.
+func TestToolNoticeKeepsHostedWebSearch(t *testing.T) {
+	system := func(body string) string {
+		t.Helper()
+		in, err := parseTurn([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return in.Messages[0].Parts[0].Text
+	}
+	in, err := parseTurn([]byte(`{"tools":[{"type":"web_search"},{"type":"file_search"}],"tool_choice":"required","input":"news?"}`))
+	if err != nil || !in.Search || in.Messages[0].Parts[0].Text != plainMarkdown+"\n\n"+onlyWebSearch {
+		t.Fatalf("forced search: %v %v %q", err, in.Search, in.Messages[0].Parts[0].Text)
+	}
+	if got := system(`{"tools":[{"type":"web_search"},{"type":"function","name":"lookup"}],"tool_choice":"none","input":"x"}`); got != plainMarkdown+"\n\n"+toolsUnavailable {
+		t.Fatalf("tool_choice none: %q", got)
+	}
+	if got := system(`{"tools":[{"type":"web_search"},{"type":"file_search"},{"type":"function","name":"lookup"}],"input":"x"}`); !strings.Contains(got, "Only the tools listed above and web search can be used") || strings.Contains(got, toolsUnavailable) {
+		t.Fatalf("functions beside search: %q", got)
+	}
+}
+
 func TestToolCallsOnlyForDeclaredFunctionsWhenAllowed(t *testing.T) {
 	plain := `<tool_calls><tool_call><tool_name>lookup</tool_name><parameters>{"q":"x"}</parameters></tool_call></tool_calls>`
 	payload, object := respondTo(t, "responses", plain, `{"model":"gpt-5","tools":`+lookupTool+`,"tool_choice":"none","input":"x"}`)

@@ -22,8 +22,12 @@ import (
 
 // toolsUnavailable is prepended when the client declares tools the model
 // cannot call (non-function tools, or functions with tool_choice none), so it
-// answers in plain text.
-const toolsUnavailable = "Tools are unavailable in this session: you cannot call functions, run commands or read files. Answer directly in plain text and never claim to have used a tool."
+// answers in plain text; onlyWebSearch replaces it when web search, which
+// ChatGPT runs itself, is declared too.
+const (
+	toolsUnavailable = "Tools are unavailable in this session: you cannot call functions, run commands or read files. Answer directly in plain text and never claim to have used a tool."
+	onlyWebSearch    = "Web search is the only tool available in this session: you cannot call functions, run commands or read files. Never claim to have used another tool."
+)
 
 // ChatGPT otherwise sends the declared functions through its own tool
 // channel (functions, container), where they fail, or prefers its built-in
@@ -392,20 +396,26 @@ func parseTurn(body []byte) (turnRequest, error) {
 }
 
 // toolNotice is the system text for the declared tools: the toolemu call
-// convention when functions may be called, toolsUnavailable when a declared
-// tool cannot run, nothing for web search alone (ChatGPT runs it).
+// convention when functions may be called, toolsUnavailable (onlyWebSearch
+// beside web search) when a declared tool cannot run, nothing for web search
+// alone (ChatGPT runs it).
 func toolNotice(tools toolemu.Config, parallel bool) string {
 	if !tools.Enabled() {
-		if len(tools.Functions) > 0 || len(tools.Unsupported) > 0 {
-			return toolsUnavailable
+		switch {
+		case len(tools.Functions) == 0 && len(tools.Unsupported) == 0:
+			return ""
+		case tools.HostedWebSearch && tools.Choice != "none":
+			return onlyWebSearch
 		}
-		return ""
+		return toolsUnavailable
 	}
 	prompt := toolemu.Prompt(tools)
 	if !parallel {
 		prompt += "\nCall at most one tool per reply."
 	}
-	if len(tools.Unsupported) > 0 {
+	if len(tools.Unsupported) > 0 && tools.HostedWebSearch {
+		prompt += "\nOnly the tools listed above and web search can be used; any other tool is unavailable in this session."
+	} else if len(tools.Unsupported) > 0 {
 		prompt += "\nOnly the tools listed above can be called; any other tool is unavailable in this session."
 	}
 	prompt += "\n" + clientTools
@@ -660,6 +670,8 @@ type turn struct {
 	held      string
 	output    []any
 	status    string
+	// blank is whitespace that would open the message; it waits for text.
+	blank string
 	// calls are the emulated function calls, emitted after the text.
 	calls []toolemu.Call
 	// search and cited come from ChatGPT's own web search.
@@ -719,10 +731,23 @@ func (t *turn) begin() error {
 // add orders interleaved reasoning and text into sequential output items.
 // Reasoning before any text streams live as the first item; reasoning that
 // arrives while text is open is held and emitted after the text closes.
+// Whitespace that would open the message waits for real text, so the
+// newlines around a tool call block do not make a blank message.
 func (t *turn) add(reasoning bool, text string) error {
 	if text == "" {
 		return nil
 	}
+	if !reasoning && (t.current == nil || t.current.reasoning) {
+		if strings.TrimSpace(text) == "" {
+			t.blank += text
+			return nil
+		}
+		text, t.blank = t.blank+text, ""
+	}
+	return t.write(reasoning, text)
+}
+
+func (t *turn) write(reasoning bool, text string) error {
 	if reasoning && t.current != nil && !t.current.reasoning {
 		t.held += text
 		return nil
@@ -858,6 +883,12 @@ func (t *turn) finish(usage map[string]any, truncated bool) (map[string]any, err
 	}
 	if err := t.begin(); err != nil {
 		return nil, err
+	}
+	// Whitespace alone is the answer only when there are no calls.
+	if t.blank != "" && len(t.calls) == 0 {
+		if err := t.write(false, t.blank); err != nil {
+			return nil, err
+		}
 	}
 	if err := t.closeCurrent(); err != nil {
 		return nil, err
