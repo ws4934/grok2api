@@ -26,8 +26,8 @@ const (
 )
 
 // Newer answers cite with a Web component instead: <Cite refs={["turn0search8"]}/>,
-// where each ref names a search result by its ref_id.
-var citeTag = regexp.MustCompile(`^<Cite\s+refs=\{\[([^\]]*)\]\}\s*/>$`)
+// where each ref names a search result by its ref_id; other attributes are ignored.
+var citeTag = regexp.MustCompile(`^<Cite\b[^>]*?\brefs=\{\[([^\]]*)\]\}[^>]*?/>$`)
 
 // chatSearch is what a reply shows of ChatGPT's own web search, which runs
 // server-side: queries and result groups from the search messages, citation

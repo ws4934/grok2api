@@ -45,3 +45,28 @@ func TestRichUIFilterUnwrapsHyphenatedContainers(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// Ordinary Markdown about markup must come through: tags inside inline code
+// stay, and a tag on a prose line never opens a container.
+func TestRichUIFilterLeavesMarkdownAboutMarkupAlone(t *testing.T) {
+	for _, text := range []string{
+		"Put the page name in a `<title>` element.\n",
+		"Render `<Spinner />` while loading, then ``<box gap={3}>`` stays too.\n",
+		"Wrap inputs in `<label for=\"x\">`.\n",
+		"Use the `<list>` tag for groups.\n\nSecond paragraph.\n\n    indented code\n\n- a\n  - nested\n",
+		"Use the <list> tag for groups.\n\nSecond paragraph.\n\n    indented code\n",
+	} {
+		whole := &richUIFilter{}
+		if got := whole.Feed(text) + whole.Flush(); got != text {
+			t.Errorf("got %q\nwant %q", got, text)
+		}
+		streamed := &richUIFilter{}
+		var out strings.Builder
+		for _, r := range text {
+			out.WriteString(streamed.Feed(string(r)))
+		}
+		if got := out.String() + streamed.Flush(); got != text {
+			t.Errorf("streamed %q", got)
+		}
+	}
+}
