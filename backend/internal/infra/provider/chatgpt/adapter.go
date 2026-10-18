@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -38,6 +39,17 @@ type Adapter struct {
 	oauth    *http.Client
 	authURL  string
 	tokenURL string
+	logger   *slog.Logger
+}
+
+// SetLogger routes the adapter's diagnostic logs to the application logger.
+func (a *Adapter) SetLogger(logger *slog.Logger) { a.logger = logger }
+
+func (a *Adapter) log() *slog.Logger {
+	if a.logger != nil {
+		return a.logger
+	}
+	return slog.Default()
 }
 
 func NewAdapter(cfg Config, egress *infraegress.Manager, cipher *security.Cipher, assets provider.ImageAssetStore) *Adapter {

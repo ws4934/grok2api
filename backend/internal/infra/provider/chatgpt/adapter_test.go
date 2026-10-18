@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -775,5 +777,28 @@ func TestImageRoutesDefaultToChatGPTConversationModels(t *testing.T) {
 	}
 	if len(Routes()) != 8 {
 		t.Fatalf("routes = %d", len(Routes()))
+	}
+}
+
+func TestSubmittedImageFinishesAfterClientDisconnect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var submits atomic.Int32
+	inner := imageUpstream(t, "", 0, &submits)
+	target, _ := url.Parse(inner.URL)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/backend-api/conversation/conv1" {
+			cancel() // the client goes away while the image is being drawn
+		}
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(upstream.Close)
+	a, assets := newTestAdapter(t, upstream)
+	credential := testCredential(t, a, credentials{AccessToken: "AT"})
+
+	response, err := a.GenerateImage(ctx, provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "a fox"})
+	if err != nil || response.StatusCode != http.StatusOK || submits.Load() != 1 || assets.saved != 1 {
+		t.Fatalf("response = %+v, err = %v, submits = %d, saved = %d", response, err, submits.Load(), assets.saved)
 	}
 }

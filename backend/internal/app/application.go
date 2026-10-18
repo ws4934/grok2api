@@ -232,6 +232,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	webAdapter.SetLogger(logger)
 	consoleAdapter := consoleprovider.NewAdapter(consoleProviderConfig(cfg), egressManager, cipher, mediaService)
 	chatgptAdapter := chatgpt.NewAdapter(chatgptProviderConfig(cfg), egressManager, cipher, mediaService)
+	chatgptAdapter.SetLogger(logger)
 	egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(cfg))
 	providers := provider.NewRegistry(cliAdapter, webAdapter, consoleAdapter, chatgptAdapter)
 	if err := providers.Validate(); err != nil {

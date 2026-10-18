@@ -237,11 +237,19 @@ func (a *Adapter) generateImage(ctx context.Context, credential account.Credenti
 			return err
 		}
 		ctx = a.image.withTimezone(ctx, w)
+		started := time.Now()
 		id, files, err := a.submitDrawing(ctx, w, job, model, inputs, mask, uploads)
+		a.logImageStage(ctx, credential, "submit", started, err, "conversation_id", id, "image_refs", len(files), "conversation_model", model)
 		if err != nil {
 			return err
 		}
-		raw, mime, err = a.finishDrawing(ctx, w, id, files)
+		// The generation is sent and costs quota: finish it even if the client
+		// went away, so the image still lands in the gallery.
+		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.image.RequestTimeout)
+		defer cancel()
+		started = time.Now()
+		raw, mime, err = a.finishDrawing(finishCtx, w, id, files)
+		a.logImageStage(ctx, credential, "result", started, err, "conversation_id", id, "bytes", len(raw), "mime", mime)
 		return err
 	})
 	if err != nil {
@@ -251,7 +259,7 @@ func (a *Adapter) generateImage(ctx context.Context, credential account.Credenti
 	if err != nil {
 		return imageOutput{}, true, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, err)
 	}
-	asset, err := a.assets.SaveImage(ctx, raw)
+	asset, err := a.assets.SaveImage(context.WithoutCancel(ctx), raw)
 	if err != nil {
 		return imageOutput{}, true, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
 	}
@@ -605,4 +613,16 @@ func (s *sseWriter) keepAlive(every time.Duration) func() {
 		}
 	}()
 	return func() { close(done); <-finished }
+}
+
+// logImageStage records one image step so failures show where they happened
+// and whether the caller's context was already canceled.
+func (a *Adapter) logImageStage(ctx context.Context, credential account.Credential, stage string, started time.Time, err error, attrs ...any) {
+	attrs = append(attrs, "stage", stage, "account_id", credential.ID, "duration_ms", time.Since(started).Milliseconds())
+	if err != nil {
+		attrs = append(attrs, "error", err.Error(), "context_error", fmt.Sprint(ctx.Err()))
+		a.log().Warn("chatgpt_image_stage_failed", attrs...)
+		return
+	}
+	a.log().Info("chatgpt_image_stage", attrs...)
 }

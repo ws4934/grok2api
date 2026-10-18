@@ -181,6 +181,7 @@ func publicTransferClient(proxy string) (*http.Client, error) {
 		return validatePublicHost(req.Context(), req.URL.Hostname())
 	}}, nil
 }
+
 // trustedTransferHost reports OpenAI-owned hosts. Their DNS answers are
 // trusted even when a local TUN proxy's fake-ip resolver (Clash, Surge:
 // 198.18.0.0/15) returns reserved addresses; other hosts that signed URLs or

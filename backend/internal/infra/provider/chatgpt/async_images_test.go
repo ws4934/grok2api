@@ -27,7 +27,9 @@ func TestAsyncImageStepsCheckpointAroundTheSend(t *testing.T) {
 	}
 	cp, err := a.SubmitImage(ctx, request, save)
 	want := []provider.ImageCheckpoint{{Submitted: true}, {Submitted: true, UpstreamID: "conv1"}}
-	if err != nil || cp.UpstreamID != "conv1" || !cp.Submitted || len(saved) != 2 || !slices.EqualFunc(saved, want, func(a, b provider.ImageCheckpoint) bool { return a.Submitted == b.Submitted && a.UpstreamID == b.UpstreamID }) {
+	if err != nil || cp.UpstreamID != "conv1" || !cp.Submitted || len(saved) != 2 || !slices.EqualFunc(saved, want, func(a, b provider.ImageCheckpoint) bool {
+		return a.Submitted == b.Submitted && a.UpstreamID == b.UpstreamID
+	}) {
 		t.Fatalf("submit = %+v %v, saved %+v", cp, err, saved)
 	}
 
