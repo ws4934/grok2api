@@ -1711,6 +1711,12 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
   const [ttsResult, setTtsResult] = useState<TTSResult | null>(null);
   const [sttResult, setSttResult] = useState<STTResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const ttsURL = ttsResult?.url;
+
+  // Release each clip's object URL once a new result replaces it or the panel unmounts (no-op for data: URLs).
+  useEffect(() => () => {
+    if (ttsURL) URL.revokeObjectURL(ttsURL);
+  }, [ttsURL]);
 
   const filteredModels = useMemo(() => {
     const matched = modelOptions.filter((item) => (
