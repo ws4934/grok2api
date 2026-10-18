@@ -790,11 +790,12 @@ func readOpenAIHTTPError(response *http.Response, target string, secrets ...stri
 	if message == "" {
 		message = fmt.Sprintf("OpenAI endpoint %s returned HTTP %d", target, response.StatusCode)
 	}
-	endpoint := target
+	endpoint, upstreamURL := target, ""
 	if response.Request != nil && response.Request.URL != nil {
 		endpoint = response.Request.URL.Path
+		upstreamURL = (&url.URL{Scheme: response.Request.URL.Scheme, Host: response.Request.URL.Host, Path: response.Request.URL.Path}).String()
 	}
-	return &upstreamError{Status: response.StatusCode, Message: message, Body: message, Endpoint: endpoint, Challenge: isCloudflareChallenge(response.StatusCode, response.Header, string(raw)), RetryAfter: response.Header.Get("Retry-After")}
+	return &upstreamError{URL: upstreamURL, Status: response.StatusCode, Message: message, Body: message, Endpoint: endpoint, Challenge: isCloudflareChallenge(response.StatusCode, response.Header, string(raw)), RetryAfter: response.Header.Get("Retry-After")}
 }
 
 func scanOpenAISSE(reader io.Reader, onPayload func([]byte) bool) error {

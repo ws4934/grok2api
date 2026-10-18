@@ -90,6 +90,8 @@ type imageItemOutcome struct {
 	code           string
 	err            error
 	upstreamStatus int
+	// attempts are the failed upstream calls shown in the request diagnostics.
+	attempts []audit.Attempt
 }
 
 func imageUsageEventID(jobID string, index int) string {
@@ -376,7 +378,7 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 			}
 		}
 		if outcome.status != "" {
-			s.endImageJob(parent, &job, outcome.status, outcome.code, outcome.err, outcome.upstreamStatus)
+			s.endImageJob(parent, &job, outcome.status, outcome.code, outcome.err, outcome.upstreamStatus, outcome.attempts...)
 			return
 		}
 	}
@@ -423,6 +425,7 @@ func (s *Service) saveImageJob(ctx context.Context, job *media.Job) error {
 func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeldomain.Route, adapter provider.AsyncImageAdapter, request provider.ImageJobRequest, egressTrace *infraegress.Trace) imageItemOutcome {
 	startedAt := time.Now()
 	index := len(job.ResultAssetIDs)
+	attempts := newFailureAttemptRecorder(http.MethodPost, "/v1/responses")
 	var cp provider.ImageCheckpoint
 	_ = json.Unmarshal([]byte(job.Checkpoint), &cp)
 	save := func(next provider.ImageCheckpoint) error {
@@ -447,7 +450,7 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 		request.Credential = credential
 	default:
 		var outcome *imageItemOutcome
-		lease, cp, outcome = s.submitImageItem(ctx, job, route, adapter, request, save, quotaMode)
+		lease, cp, outcome = s.submitImageItem(ctx, job, route, adapter, request, save, quotaMode, attempts)
 		if outcome != nil {
 			return *outcome
 		}
@@ -459,11 +462,13 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 		lease.completeSelectorObservation(succeeded)
 		lease.Release()
 	}()
+	stageStarted := time.Now()
 	fail := func(code string, err error) imageItemOutcome {
 		if ctx.Err() != nil {
 			return imageItemOutcome{err: context.Cause(ctx)}
 		}
-		return imageItemOutcome{status: media.StatusFailed, code: code, err: err, upstreamStatus: provider.ErrorHTTPStatusOrZero(err)}
+		_ = attempts.captureResponse(request.Credential, stageStarted, nil, err)
+		return imageItemOutcome{status: media.StatusFailed, code: code, err: err, upstreamStatus: provider.ErrorHTTPStatusOrZero(err), attempts: attempts.snapshot()}
 	}
 	cp, err := adapter.PollImage(ctx, request, cp)
 	if err != nil {
@@ -473,6 +478,7 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 		return imageItemOutcome{err: err}
 	}
 	var data []byte
+	stageStarted = time.Now()
 	for attempt := 0; attempt < videoOutputAttempts; attempt++ {
 		if data, err = adapter.FetchImage(ctx, request, cp); err == nil || ctx.Err() != nil || attempt+1 == videoOutputAttempts {
 			break
@@ -506,14 +512,14 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 
 // submitImageItem sends the image from the job's account, failing over to
 // others while nothing has reached the upstream.
-func (s *Service) submitImageItem(ctx context.Context, job *media.Job, route modeldomain.Route, adapter provider.AsyncImageAdapter, request provider.ImageJobRequest, save func(provider.ImageCheckpoint) error, quotaMode string) (*accountLease, provider.ImageCheckpoint, *imageItemOutcome) {
+func (s *Service) submitImageItem(ctx context.Context, job *media.Job, route modeldomain.Route, adapter provider.AsyncImageAdapter, request provider.ImageJobRequest, save func(provider.ImageCheckpoint) error, quotaMode string, attempts *failureAttemptRecorder) (*accountLease, provider.ImageCheckpoint, *imageItemOutcome) {
 	var cp provider.ImageCheckpoint
 	stop := func(status media.Status, code string, err error) (*accountLease, provider.ImageCheckpoint, *imageItemOutcome) {
 		if ctx.Err() != nil {
 			err = context.Cause(ctx)
 			status = ""
 		}
-		return nil, cp, &imageItemOutcome{status: status, code: code, err: err, upstreamStatus: provider.ErrorHTTPStatusOrZero(err)}
+		return nil, cp, &imageItemOutcome{status: status, code: code, err: err, upstreamStatus: provider.ErrorHTTPStatusOrZero(err), attempts: attempts.snapshot()}
 	}
 	scope := clientkey.AccountScope{}
 	if job.ClientKeyID > 0 {
@@ -553,8 +559,10 @@ func (s *Service) submitImageItem(ctx context.Context, job *media.Job, route mod
 			return stop(media.StatusFailed, "account_unavailable", lastErr)
 		}
 		excluded[lease.Credential.ID] = true
+		attemptStarted := time.Now()
 		credential, err := s.accounts.EnsureCredential(ctx, lease.Credential, false)
 		if err != nil {
+			attempts.captureCredentialFailure(lease.Credential, attemptStarted, false, err)
 			lastErr = err
 			lease.Release()
 			continue
@@ -563,10 +571,12 @@ func (s *Service) submitImageItem(ctx context.Context, job *media.Job, route mod
 		job.AccountID, job.AccountName = credential.ID, credential.Name
 		request.Credential = credential
 		lease.markSelectorUpstreamStarted()
+		attemptStarted = time.Now()
 		cp, err = adapter.SubmitImage(ctx, request, save)
 		if err == nil {
 			return lease, cp, nil
 		}
+		_ = attempts.captureResponse(credential, attemptStarted, nil, err)
 		status := provider.ErrorHTTPStatusOrZero(err)
 		if errors.Is(err, errJobLost) || ctx.Err() != nil {
 			lease.Release()
@@ -667,7 +677,7 @@ func (s *Service) consumeImageQuota(route modeldomain.Route, accountID uint64, q
 
 // endImageJob writes the terminal state, releases the reservations of
 // undelivered images and records the remaining audits.
-func (s *Service) endImageJob(ctx context.Context, job *media.Job, status media.Status, code string, err error, upstreamStatus int) {
+func (s *Service) endImageJob(ctx context.Context, job *media.Job, status media.Status, code string, err error, upstreamStatus int, attempts ...audit.Attempt) {
 	now := time.Now().UTC()
 	job.Status, job.ErrorCode, job.ErrorMessage = status, code, ""
 	if err != nil {
@@ -685,14 +695,14 @@ func (s *Service) endImageJob(ctx context.Context, job *media.Job, status media.
 		return
 	}
 	s.releaseJobReservations(*job)
-	if auditErr := s.recordImageJobAudits(context.Background(), *job, upstreamStatus); auditErr != nil {
+	if auditErr := s.recordImageJobAudits(context.Background(), *job, upstreamStatus, attempts...); auditErr != nil {
 		s.logger.Error("image_usage_record_failed", "job_id", job.ID, "error", auditErr)
 	}
 }
 
 // recordImageJobAudits writes the audit of every delivered image and of the
 // image that ended the job; repeated calls are idempotent per event ID.
-func (s *Service) recordImageJobAudits(ctx context.Context, job media.Job, upstreamStatus int) error {
+func (s *Service) recordImageJobAudits(ctx context.Context, job media.Job, upstreamStatus int, attempts ...audit.Attempt) error {
 	durationMS := int64(0)
 	if job.CompletedAt != nil {
 		durationMS = max(int64(0), job.CompletedAt.Sub(job.CreatedAt).Milliseconds())
@@ -704,7 +714,7 @@ func (s *Service) recordImageJobAudits(ctx context.Context, job media.Job, upstr
 	}
 	if job.Status != media.StatusCompleted && len(job.ResultAssetIDs) < job.ItemCount {
 		statusCode := resolveVideoAuditStatusCode(job, upstreamStatus, nil)
-		if err := s.recordImageItemAudit(ctx, job, len(job.ResultAssetIDs), statusCode, job.ErrorCode, durationMS); err != nil {
+		if err := s.recordImageItemAudit(ctx, job, len(job.ResultAssetIDs), statusCode, job.ErrorCode, durationMS, attempts...); err != nil {
 			return err
 		}
 	}
@@ -715,7 +725,7 @@ func (s *Service) recordImageJobAudits(ctx context.Context, job media.Job, upstr
 
 // recordImageItemAudit bills a delivered image at its share of the reserved
 // quote, or records the failure of the image that ended the job.
-func (s *Service) recordImageItemAudit(ctx context.Context, job media.Job, index, statusCode int, errorCode string, durationMS int64) error {
+func (s *Service) recordImageItemAudit(ctx context.Context, job media.Job, index, statusCode int, errorCode string, durationMS int64, attempts ...audit.Attempt) error {
 	createdAt := time.Now().UTC()
 	if statusCode != http.StatusOK && job.CompletedAt != nil {
 		createdAt = job.CompletedAt.UTC()
@@ -727,6 +737,7 @@ func (s *Service) recordImageItemAudit(ctx context.Context, job media.Job, index
 		AccountID: auditAccountID(job.AccountID), AccountName: job.AccountName, StatusCode: statusCode, ErrorCode: errorCode,
 		EgressNodeID: job.EgressNodeID, EgressNodeName: job.EgressNodeName, EgressScope: job.EgressScope, EgressMode: audit.EgressMode(job.EgressMode),
 		DurationMS: durationMS, CreatedAt: createdAt, RequestMethod: http.MethodPost, RequestPath: "/v1/responses",
+		Attempts: attempts,
 	}
 	if job.Operation == media.VideoOperationEdit {
 		record.MediaInputImages = int64(job.InputImageCount)

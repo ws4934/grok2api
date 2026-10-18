@@ -194,10 +194,12 @@ func (s *Service) executeImage(
 	if err := s.checkLedgerReady(); err != nil {
 		return nil, err
 	}
+	failureAttempts := newFailureAttemptRecorder(method, path)
 	writeFailureAudit := func(statusCode int, errorCode string, credential *accountdomain.Credential) {
 		record := auditBase
 		record.StatusCode = statusCode
 		record.ErrorCode = errorCode
+		record.Attempts = failureAttempts.snapshot()
 		s.persistFailureAudit(record, startedAt, egressTrace, credential)
 	}
 	pricingModel := s.providers.PricingModel(route.Provider, route.UpstreamModel)
@@ -257,8 +259,10 @@ func (s *Service) executeImage(
 			return nil, fmt.Errorf("%w: %w", ErrNoAvailableAccount, err)
 		}
 		excluded[lease.Credential.ID] = true
+		attemptStarted := time.Now()
 		credential, err = s.accounts.EnsureCredential(ctx, lease.Credential, false)
 		if err != nil {
+			failureAttempts.captureCredentialFailure(lease.Credential, attemptStarted, false, err)
 			s.logger.Error("image_credential_failed", "event_id", eventID, "request_id", requestID, "model", externalModel, "provider", route.Provider, "account_id", lease.Credential.ID, "error", err)
 			failedCredential := lease.Credential
 			lastCredentialFailure = &failedCredential
@@ -273,7 +277,10 @@ func (s *Service) executeImage(
 			ClientKeyID: key.ID, ClientKeyName: key.Name, AccountID: credential.ID, AccountName: credential.Name,
 			Operation: string(operation), RequestID: requestID, Prompt: prompt,
 		})
+		attemptStarted = time.Now()
 		response, err = execute(originCtx, route.Provider, credential, route.UpstreamModel)
+		// Failed attempts (errors and non-2xx responses) appear in the request diagnostics.
+		_ = failureAttempts.captureResponse(credential, attemptStarted, response, err)
 		if err != nil {
 			s.logger.Error("image_upstream_failed", "event_id", eventID, "request_id", requestID, "model", externalModel, "provider", route.Provider, "account_id", credential.ID, "error", err)
 			if isSSOCredentialRejected(err, credential) {
@@ -372,6 +379,8 @@ func (s *Service) executeImage(
 			record := auditBase
 			record.AccountID, record.AccountName, record.StatusCode = &accountID, credential.Name, response.StatusCode
 			record.ErrorCode = errorCode
+			// Earlier failed attempts (other accounts, rejected responses) stay visible on the final record.
+			record.Attempts = failureAttempts.snapshot()
 			record.DurationMS, record.CreatedAt = time.Since(startedAt).Milliseconds(), time.Now().UTC()
 			applyAuditEgress(&record, egressTrace, route.Provider)
 			if successful {

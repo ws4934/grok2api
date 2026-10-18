@@ -13,6 +13,7 @@ import (
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
@@ -103,5 +104,72 @@ func TestGenerateImageRefreshesOAuthCredentialAfterUnauthorized(t *testing.T) {
 	_ = result.Body.Close()
 	if result.StatusCode != http.StatusOK || len(adapter.calls) != 2 || adapter.calls[0] != "stale" || adapter.calls[1] != "fresh" {
 		t.Fatalf("status = %d, calls = %#v", result.StatusCode, adapter.calls)
+	}
+}
+
+// downloadDeniedError mimics a provider failure on an upstream HTTP response.
+type downloadDeniedError struct{}
+
+func (downloadDeniedError) Error() string { return "upstream HTTP 403 at /backend-api/estuary/content" }
+func (downloadDeniedError) UpstreamDiagnostic() (string, provider.DiagnosticResponse) {
+	return "https://chatgpt.com/backend-api/estuary/content", provider.DiagnosticResponse{StatusCode: 403, Status: "403 Forbidden", Body: []byte(`{"detail":"File stream access denied."}`)}
+}
+
+type deniedImageAdapter struct{ staleTokenImageAdapter }
+
+func (a *deniedImageAdapter) GenerateImage(context.Context, provider.ImageGenerationRequest) (*provider.Response, error) {
+	return nil, downloadDeniedError{}
+}
+
+func TestImageFailureAuditKeepsUpstreamDiagnostic(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "image-diagnostic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accountRepo := relational.NewAccountRepository(database)
+	modelRepo := relational.NewModelRepository(database)
+	auditRepo := relational.NewAuditRepository(database)
+	credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
+		Provider: account.ProviderBuild, AuthType: account.AuthTypeOAuth, Name: "diag", SourceKey: "diag",
+		EncryptedAccessToken: "fresh", EncryptedRefreshToken: "refresh", ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := modelRepo.UpsertRoutes(ctx, []modeldomain.Route{{PublicID: "image-diag", Provider: account.ProviderBuild, UpstreamModel: "image-diag", Capability: modeldomain.CapabilityImage, Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := modelRepo.ReplaceAccountCapabilities(ctx, credential.ID, []string{"image-diag"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	registry := provider.NewRegistry(&deniedImageAdapter{})
+	sticky := memory.NewStickyStore()
+	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
+	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
+	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(nil, nil, nil, 60, 4, nil), registry, selector, relational.NewResponseRepository(database), 1)
+
+	if _, err := service.GenerateImage(ctx, ImageGenerationInput{RequestID: "req-diag", ClientKey: clientkey.Key{ID: 1, Name: "k"}, PublicModel: "image-diag", Prompt: "fox", Count: 1, Method: http.MethodPost, Path: "/v1/images/generations"}); err == nil {
+		t.Fatal("expected the image request to fail")
+	}
+	records, _, err := auditRepo.List(ctx, 0, 10)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("records = %d, err = %v", len(records), err)
+	}
+	stored, err := auditRepo.Get(ctx, records[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Attempts) != 1 {
+		t.Fatalf("attempts = %#v", stored.Attempts)
+	}
+	attempt := stored.Attempts[0]
+	if attempt.Source != audit.AttemptSourceUpstreamHTTP || attempt.UpstreamStatusCode == nil || *attempt.UpstreamStatusCode != 403 ||
+		attempt.UpstreamURL != "https://chatgpt.com/backend-api/estuary/content" || !strings.Contains(string(attempt.ResponseBody), "File stream access denied") {
+		t.Fatalf("attempt = %#v", attempt)
 	}
 }

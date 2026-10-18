@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/pkg/netguard"
 	"github.com/google/uuid"
 )
@@ -31,6 +32,8 @@ type wireChatRequest struct {
 	ReasoningEffort string
 }
 type upstreamError struct {
+	// URL is scheme, host and path of the failed request, without the query.
+	URL      string
 	Endpoint string
 	Status   int
 	Message  string
@@ -39,6 +42,11 @@ type upstreamError struct {
 	Challenge bool
 	// RetryAfter is the upstream Retry-After header, when sent.
 	RetryAfter string
+}
+
+// UpstreamDiagnostic exposes the failed upstream response to request audits.
+func (e *upstreamError) UpstreamDiagnostic() (string, provider.DiagnosticResponse) {
+	return e.URL, provider.DiagnosticResponse{StatusCode: e.Status, Status: fmt.Sprintf("%d %s", e.Status, http.StatusText(e.Status)), Body: []byte(e.Body)}
 }
 
 // Error is for logs and admin views only (no PublicErrorMessage): it carries

@@ -436,6 +436,13 @@ type DiagnosticResponse struct {
 	BodyTruncated bool
 }
 
+// UpstreamDiagnosticError is implemented by provider errors caused by an
+// upstream HTTP response, so request diagnostics can show that response.
+// The URL must not carry credentials or signed query parameters.
+type UpstreamDiagnosticError interface {
+	UpstreamDiagnostic() (upstreamURL string, response DiagnosticResponse)
+}
+
 // RecoveredAttempt 表示一次被后续恢复结果替代的真实上游调用。
 type RecoveredAttempt struct {
 	Stage       string

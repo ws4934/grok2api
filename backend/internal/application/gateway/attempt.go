@@ -75,6 +75,31 @@ func (r *failureAttemptRecorder) captureResponse(credential accountdomain.Creden
 	if response != nil {
 		r.captureRecoveredAttempts(credential, startedAt, response)
 	}
+	var upstream provider.UpstreamDiagnosticError
+	if requestErr != nil && errors.As(requestErr, &upstream) {
+		// The provider failed on an upstream HTTP response: show that response.
+		upstreamURL, diagnostic := upstream.UpstreamDiagnostic()
+		statusCode := diagnostic.StatusCode
+		body, truncated := r.captureBody(diagnostic.Body, diagnostic.BodyTruncated)
+		r.append(audit.Attempt{
+			Source:                audit.AttemptSourceUpstreamHTTP,
+			Stage:                 "upstream_response",
+			AccountID:             auditAccountID(credential.ID),
+			AccountName:           credential.Name,
+			Method:                r.method,
+			RequestPath:           r.path,
+			UpstreamURL:           sanitizeUpstreamURL(upstreamURL),
+			StartedAt:             startedAt.UTC(),
+			DurationMS:            time.Since(startedAt).Milliseconds(),
+			UpstreamStatusCode:    &statusCode,
+			UpstreamStatus:        diagnostic.Status,
+			ResponseHeaders:       sanitizeDiagnosticHeaders(diagnostic.Header),
+			ResponseBody:          body,
+			ResponseBodyTruncated: truncated,
+			ErrorChain:            errorFrames(requestErr),
+		})
+		return requestErr
+	}
 	if requestErr != nil {
 		r.append(audit.Attempt{
 			Source:         audit.AttemptSourceTransport,

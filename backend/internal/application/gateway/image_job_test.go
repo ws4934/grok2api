@@ -49,6 +49,8 @@ type asyncImageAdapter struct {
 	mu     sync.Mutex
 	calls  []string
 	submit func(provider.ImageJobRequest, func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error)
+	// fetchErr, when set, fails every download.
+	fetchErr error
 }
 
 func (a *asyncImageAdapter) record(call string) {
@@ -87,6 +89,9 @@ func (a *asyncImageAdapter) PollImage(_ context.Context, request provider.ImageJ
 
 func (a *asyncImageAdapter) FetchImage(context.Context, provider.ImageJobRequest, provider.ImageCheckpoint) ([]byte, error) {
 	a.record("fetch")
+	if a.fetchErr != nil {
+		return nil, a.fetchErr
+	}
 	return a.image, nil
 }
 
@@ -458,5 +463,26 @@ func TestImageToolModelFallsBackToDefaultOnlyForAsyncTextModels(t *testing.T) {
 	}
 	if got := f.service.ImageToolModel(ctx, "", "grok-4"); got != "" {
 		t.Fatalf("unknown top-level model = %q", got)
+	}
+}
+
+func TestImageJobFailureAuditKeepsUpstreamDiagnostic(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	f.adapter.fetchErr = downloadDeniedError{}
+	job := f.create(t, ImageJobInput{})
+	f.service.processMediaJob(context.Background(), job.ID)
+	if stored := f.job(t, job.ID); stored.Status != media.StatusFailed || stored.ErrorCode != "media_download_failed" {
+		t.Fatalf("job = %#v", stored)
+	}
+	record, ok := f.auditsByEvent(t)[imageUsageEventID(job.ID, 0)]
+	if !ok {
+		t.Fatal("missing failure audit")
+	}
+	stored, err := f.audits.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Attempts) != 1 || stored.Attempts[0].UpstreamStatusCode == nil || *stored.Attempts[0].UpstreamStatusCode != 403 || !strings.Contains(string(stored.Attempts[0].ResponseBody), "File stream access denied") {
+		t.Fatalf("attempts = %#v", stored.Attempts)
 	}
 }
