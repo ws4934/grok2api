@@ -351,6 +351,14 @@ func (s *Service) executeVoice(
 	var responseRequestScoped bool
 	var lastCredentialFailure *accountdomain.Credential
 	var lastCredentialError error
+	// retried keeps the last upstream failure that moved the request to
+	// another account, so running out of accounts reports it instead of a
+	// generic "no account" error.
+	var retried *retriedVoiceResponse
+	keepRetried := func() {
+		body, _ := readRetryableBody(response.Body)
+		retried = &retriedVoiceResponse{status: response.StatusCode, header: response.Header.Clone(), body: body, credential: credential}
+	}
 	for attempt := 0; attemptPolicy.allows(attempt); attempt++ {
 		if selection == nil {
 			selection, err = s.selector.beginSelectionSessionForKey(ctx, route.Provider, route.ID, route.UpstreamModel, quotaMode, "", excluded, false, key.AccountScope())
@@ -363,6 +371,10 @@ func (s *Service) executeVoice(
 			var selectionFailure *SelectionUnavailableError
 			if errors.As(err, &selectionFailure) {
 				errorCode = selectionFailure.Code()
+			}
+			if retried != nil {
+				writeFailureAudit(retried.status, "upstream_error", &retried.credential)
+				return retried.result(), nil
 			}
 			writeFailureAudit(http.StatusServiceUnavailable, errorCode, lastCredentialFailure)
 			return nil, fmt.Errorf("%w: %w", ErrNoAvailableAccount, err)
@@ -443,13 +455,15 @@ func (s *Service) executeVoice(
 				s.selector.MarkFailure(ctx, credential, response.StatusCode, retryAfter)
 			}
 			if attemptPolicy.hasNext(attempt) {
-				_, _ = readRetryableBody(response.Body)
+				keepRetried()
 				lease.Release()
 				continue
 			}
 		}
-		if response.StatusCode >= http.StatusInternalServerError && attemptPolicy.hasNext(attempt) {
-			_, _ = readRetryableBody(response.Body)
+		// A request-scoped failure (a shared backend, a bad input) fails the
+		// same way on every account.
+		if response.StatusCode >= http.StatusInternalServerError && !responseRequestScoped && attemptPolicy.hasNext(attempt) {
+			keepRetried()
 			lease.Release()
 			continue
 		}
@@ -505,6 +519,23 @@ func (s *Service) executeVoice(
 		})
 	}
 	return &Result{StatusCode: response.StatusCode, Status: response.Status, Header: response.Header, Body: &finalizingBody{ReadCloser: response.Body, finalize: func() { finalize(Usage{}, "", "stream_closed") }}, Finalize: finalize}, nil
+}
+
+// retriedVoiceResponse is an upstream failure the request moved past.
+type retriedVoiceResponse struct {
+	status     int
+	header     http.Header
+	body       []byte
+	credential accountdomain.Credential
+}
+
+// result returns the failure as the final response; its audit is already written.
+func (r *retriedVoiceResponse) result() *Result {
+	r.header.Set("Content-Length", strconv.Itoa(len(r.body)))
+	return &Result{
+		StatusCode: r.status, Status: fmt.Sprintf("%d %s", r.status, http.StatusText(r.status)), Header: r.header,
+		Body: io.NopCloser(bytes.NewReader(r.body)), Finalize: func(Usage, string, string) {},
+	}
 }
 
 func jsonVoiceResponse(status int, value any) *provider.Response {
