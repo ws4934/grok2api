@@ -40,7 +40,7 @@ func ParseImageMask(raw []byte, inputs []OpenAIImageInput) (*ImageMask, error) {
 		return invalid("mask must be a valid PNG")
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxImageMaskPixels {
-		return invalid("mask exceeds 4096x4096 pixels")
+		return invalid("mask exceeds the 4096x4096 (16.7 megapixel) limit")
 	}
 	source, _, err := image.DecodeConfig(bytes.NewReader(inputs[0].Data))
 	if err != nil {
