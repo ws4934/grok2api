@@ -173,7 +173,9 @@ func (r *AccountRepository) TouchLastUsed(ctx context.Context, id uint64, usedAt
 	if id == 0 || usedAt.IsZero() {
 		return repository.ErrNotFound
 	}
-	result := r.db.db.WithContext(ctx).Model(&accountModel{}).Where("id = ?", id).Update("last_used_at", usedAt.UTC())
+	// A single UPDATE on the request path needs no wrapping transaction.
+	result := r.db.db.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).
+		Model(&accountModel{}).Where("id = ?", id).Update("last_used_at", usedAt.UTC())
 	if result.Error != nil {
 		return mapError(result.Error)
 	}

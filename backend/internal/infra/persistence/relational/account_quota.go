@@ -343,7 +343,8 @@ func (r *AccountRepository) saveQuotaWindows(ctx context.Context, accountID uint
 }
 
 func (r *AccountRepository) DecrementQuotaWindow(ctx context.Context, accountID uint64, mode string, now time.Time) (bool, error) {
-	result := r.db.db.WithContext(ctx).Model(&quotaWindowModel{}).
+	// A single UPDATE on the request path needs no wrapping transaction.
+	result := r.db.db.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&quotaWindowModel{}).
 		Where("account_id = ? AND mode = ? AND remaining > 0", accountID, mode).
 		Updates(map[string]any{"remaining": gorm.Expr("remaining - 1"), "updated_at": now})
 	return result.RowsAffected == 1, result.Error
@@ -353,7 +354,7 @@ func (r *AccountRepository) DecrementQuotaWindowBy(ctx context.Context, accountI
 	if amount <= 0 {
 		amount = 1
 	}
-	result := r.db.db.WithContext(ctx).Model(&quotaWindowModel{}).
+	result := r.db.db.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).Model(&quotaWindowModel{}).
 		Where("account_id = ? AND mode = ? AND remaining > 0", accountID, mode).
 		Updates(map[string]any{
 			"remaining":  gorm.Expr("CASE WHEN remaining <= ? THEN 0 ELSE remaining - ? END", amount, amount),
