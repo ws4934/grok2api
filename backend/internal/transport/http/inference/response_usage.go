@@ -36,6 +36,10 @@ func extractMetadata(data []byte) responseMetadata {
 	if json.Unmarshal(data, &root) != nil {
 		return responseMetadata{}
 	}
+	return root.toMetadata()
+}
+
+func (root responsePayloadDTO) toMetadata() responseMetadata {
 	metadata := responseMetadata{ResponseID: root.ID, Model: root.Model, SequenceNumber: root.SequenceNumber}
 	usage := root.Usage
 	if root.Response != nil {
