@@ -314,12 +314,13 @@ func sanitizeRequestMetadata(value auditdomain.Record) auditdomain.Record {
 	}
 	sort.Strings(names)
 	result := make(map[string][]string, len(value.RequestHeaders))
+	size := len("{}") // encoded size of result, kept incrementally
 	for _, originalName := range names {
 		if len(result) >= requestHeaderCountLimit {
 			break
 		}
 		name := truncateRequestMetadata(strings.TrimSpace(originalName), requestHeaderNameLimit)
-		if name == "" {
+		if _, duplicate := result[name]; name == "" || duplicate {
 			continue
 		}
 		values := value.RequestHeaders[originalName]
@@ -331,12 +332,17 @@ func sanitizeRequestMetadata(value auditdomain.Record) auditdomain.Record {
 				cloned = append(cloned, truncateRequestMetadata(item, requestHeaderValueLimit))
 			}
 		}
-		result[name] = cloned
-		encoded, err := json.Marshal(result)
-		if err != nil || len(encoded) > requestHeadersLimit {
-			delete(result, name)
+		encodedName, _ := json.Marshal(name)
+		encodedValues, _ := json.Marshal(cloned)
+		entry := len(encodedName) + len(":") + len(encodedValues)
+		if len(result) > 0 {
+			entry += len(",")
+		}
+		if size+entry > requestHeadersLimit {
 			break
 		}
+		size += entry
+		result[name] = cloned
 	}
 	value.RequestHeaders = result
 	return value
