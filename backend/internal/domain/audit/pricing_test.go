@@ -1,6 +1,9 @@
 package audit
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEstimateOfficialCostHandlesCacheAliasesAndLongContext(t *testing.T) {
 	result, ok := EstimateOfficialCost("grok-code-fast-1", 1_000_000, 200_000, 500_000, 100_000)
@@ -99,6 +102,33 @@ func TestEstimateOfficialTextReservationUsesOutputLimitAndIgnoresInlineMediaByte
 	}
 	if _, ok := EstimateOfficialTextReservation("unknown-model", []byte(`{"input":"hello"}`)); ok {
 		t.Fatal("unknown model was priced")
+	}
+}
+
+func TestEstimateReservationTokensReadsLimitsAsInt64Fields(t *testing.T) {
+	for body, want := range map[string]int64{
+		`{"max_output_tokens":1000}`:                                1000,
+		`{"max_output_tokens":1000.0}`:                              16_384,
+		`{"max_output_tokens":1e3,"max_tokens":500}`:                500,
+		`{"max_output_tokens":"1000","max_completion_tokens":2000}`: 2000,
+		`{"max_tokens":-5}`:                                         16_384,
+		`{"max_tokens":99999999999999999999}`:                       16_384,
+		`{"max_tokens":999999}`:                                     131_072,
+		`{"MAX_TOKENS":5}`:                                          16_384,
+		`{"max_tokens":5,"max_tokens":9}`:                           9,
+		`[{"max_tokens":5}]`:                                        16_384,
+		`{"max_tokens":5}{}`:                                        16_384,
+	} {
+		if _, got := EstimateReservationTokens([]byte(body)); got != want {
+			t.Fatalf("%s output tokens = %d, want %d", body, got, want)
+		}
+	}
+	text := `{"input":"` + strings.Repeat("x", 3000) + `"}`
+	if got, _ := EstimateReservationTokens([]byte(text)); got != 3+1000+128 {
+		t.Fatalf("valid body input tokens = %d", got)
+	}
+	if got, _ := EstimateReservationTokens([]byte(text + " x")); got != int64((len(text)+2+2)/3) {
+		t.Fatalf("trailing data must use the byte fallback, got %d", got)
 	}
 }
 

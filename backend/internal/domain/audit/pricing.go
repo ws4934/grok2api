@@ -235,17 +235,31 @@ func EstimateOfficialTextReservation(model string, body []byte) (PricingResult, 
 // EstimateReservationTokens returns the conservative input and output token
 // counts a text reservation is priced at.
 func EstimateReservationTokens(body []byte) (int64, int64) {
-	return estimateRequestInputTokens(body), estimateRequestOutputLimit(body)
+	inputTokens, payload := estimateRequestInputTokens(body)
+	// Limits are read from their literals as int64 fields, which costs a second
+	// parse; a decoded object without any limit key needs none.
+	if object, ok := payload.(map[string]any); ok {
+		for _, key := range outputLimitKeys {
+			if _, exists := object[key]; exists {
+				return inputTokens, estimateRequestOutputLimit(body)
+			}
+		}
+		return inputTokens, defaultOutputTokens
+	}
+	return inputTokens, estimateRequestOutputLimit(body)
 }
 
+const defaultOutputTokens int64 = 16_384
+
+var outputLimitKeys = []string{"max_output_tokens", "max_completion_tokens", "max_tokens"}
+
 func estimateRequestOutputLimit(body []byte) int64 {
-	const defaultOutputTokens int64 = 16_384
 	const maximumOutputTokens int64 = 131_072
 	var payload map[string]json.RawMessage
 	if json.Unmarshal(body, &payload) != nil {
 		return defaultOutputTokens
 	}
-	for _, key := range []string{"max_output_tokens", "max_completion_tokens", "max_tokens"} {
+	for _, key := range outputLimitKeys {
 		var value int64
 		if raw, ok := payload[key]; ok && json.Unmarshal(raw, &value) == nil && value > 0 {
 			return min(value, maximumOutputTokens)
@@ -254,12 +268,12 @@ func estimateRequestOutputLimit(body []byte) int64 {
 	return defaultOutputTokens
 }
 
-func estimateRequestInputTokens(body []byte) int64 {
+func estimateRequestInputTokens(body []byte) (int64, any) {
 	var payload any
 	if json.Unmarshal(body, &payload) != nil {
-		return max(256, int64((len(body)+2)/3))
+		return max(256, int64((len(body)+2)/3)), nil
 	}
-	return max(256, estimateJSONTokens(payload)+128)
+	return max(256, estimateJSONTokens(payload)+128), payload
 }
 
 func estimateJSONTokens(value any) int64 {
