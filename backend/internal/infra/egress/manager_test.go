@@ -2987,3 +2987,55 @@ func TestAccountIsolationHotUpdateEvictsOldPools(t *testing.T) {
 		t.Fatal("disabling isolation did not restore the shared pool")
 	}
 }
+
+// blockingNodeRepository holds the node read until release and aborts when its
+// ctx ends, like a database driver.
+type blockingNodeRepository struct {
+	egressRepositoryTestStub
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingNodeRepository) ListEgressNodes(ctx context.Context, _ domain.Scope, _ repository.SortQuery) ([]domain.Node, error) {
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-r.release:
+		return []domain.Node{{ID: 1, Name: "shared", Enabled: true}}, nil
+	}
+}
+
+func TestSharedNodeLoadSurvivesFirstCallerCancel(t *testing.T) {
+	repo := &blockingNodeRepository{started: make(chan struct{}, 1), release: make(chan struct{})}
+	manager := NewManager(repo, nil)
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := manager.listNodes(leaderCtx, domain.ScopeWeb, time.Now().UTC())
+		leaderErr <- err
+	}()
+	<-repo.started
+	var followerNodes []domain.Node
+	followerErr := make(chan error, 1)
+	go func() {
+		nodes, err := manager.listNodes(context.Background(), domain.ScopeWeb, time.Now().UTC())
+		followerNodes = nodes
+		followerErr <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // let the follower join the in-flight load
+	cancelLeader()
+	if err := <-leaderErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled caller error = %v, want context.Canceled before the load ends", err)
+	}
+	close(repo.release)
+	if err := <-followerErr; err != nil {
+		t.Fatalf("follower error = %v, want the shared load result", err)
+	}
+	if len(followerNodes) != 1 || followerNodes[0].ID != 1 {
+		t.Fatalf("follower nodes = %#v", followerNodes)
+	}
+}

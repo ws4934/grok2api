@@ -1018,3 +1018,58 @@ func newLayeredRepositoryFixture() *layeredAccountRepository {
 		overlayCalls: make(map[string]int),
 	}
 }
+
+// blockingCandidateRepository holds the routing read until release and aborts
+// when its ctx ends, like a database driver.
+type blockingCandidateRepository struct {
+	repository.AccountRepository
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingCandidateRepository) ListRoutingCandidates(ctx context.Context, _ account.Provider, _ uint64, _, _ string) ([]account.RoutingCandidate, error) {
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-r.release:
+		return []account.RoutingCandidate{{Credential: account.Credential{ID: 7}}}, nil
+	}
+}
+
+func TestSharedCandidateLoadSurvivesFirstCallerCancel(t *testing.T) {
+	repo := &blockingCandidateRepository{started: make(chan struct{}, 1), release: make(chan struct{})}
+	selector := NewSelector(repo, nil, nil, nil, 0, 0, 0)
+	load := func(ctx context.Context) ([]account.RoutingCandidate, error) {
+		return selector.loadCombinedCandidates(ctx, account.ProviderBuild, 0, "model-a", "", time.Now().UTC(), false)
+	}
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderErr := make(chan error, 1)
+	go func() {
+		_, err := load(leaderCtx)
+		leaderErr <- err
+	}()
+	<-repo.started
+	var followerValues []account.RoutingCandidate
+	followerErr := make(chan error, 1)
+	go func() {
+		values, err := load(context.Background())
+		followerValues = values
+		followerErr <- err
+	}()
+	time.Sleep(50 * time.Millisecond) // let the follower join the in-flight load
+	cancelLeader()
+	if err := <-leaderErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled caller error = %v, want context.Canceled before the load ends", err)
+	}
+	close(repo.release)
+	if err := <-followerErr; err != nil {
+		t.Fatalf("follower error = %v, want the shared load result", err)
+	}
+	if len(followerValues) != 1 || followerValues[0].Credential.ID != 7 {
+		t.Fatalf("follower candidates = %#v", followerValues)
+	}
+}

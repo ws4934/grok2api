@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/pkg/flight"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
@@ -57,7 +58,7 @@ func (s *Selector) loadCombinedCandidates(ctx context.Context, provider account.
 	}
 	s.candidateMu.Unlock()
 	loadKey := fmt.Sprintf("%s\x00%d\x00%s\x00%s\x00%t", provider, modelRouteID, upstreamModel, quotaMode, includeBotFlagged)
-	loaded, err, _ := s.candidateLoads.Do(loadKey, func() (any, error) {
+	return flight.Do(ctx, &s.candidateLoads, loadKey, candidateLoadTimeout, func(ctx context.Context) ([]account.RoutingCandidate, error) {
 		checkTime := time.Now().UTC()
 		var stale candidateSnapshot
 		hasStale := false
@@ -96,10 +97,6 @@ func (s *Selector) loadCombinedCandidates(ctx context.Context, provider account.
 		s.candidateMu.Unlock()
 		return values, nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return loaded.([]account.RoutingCandidate), nil
 }
 
 func (s *Selector) loadLayeredCandidates(ctx context.Context, provider account.Provider, modelRouteID uint64, upstreamModel, quotaMode string, now time.Time, includeBotFlagged bool) ([]account.RoutingCandidate, error) {
@@ -113,7 +110,7 @@ func (s *Selector) loadLayeredCandidates(ctx context.Context, provider account.P
 	}
 	s.candidateMu.Unlock()
 	loadKey := fmt.Sprintf("assembled\x00%s\x00%d\x00%s\x00%s\x00%t", provider, modelRouteID, upstreamModel, quotaMode, includeBotFlagged)
-	loaded, err, _ := s.candidateLoads.Do(loadKey, func() (any, error) {
+	return flight.Do(ctx, &s.candidateLoads, loadKey, candidateLoadTimeout, func(ctx context.Context) ([]account.RoutingCandidate, error) {
 		checkTime := time.Now().UTC()
 		s.candidateMu.Lock()
 		if snapshot, ok := s.candidates[key]; ok && checkTime.Before(snapshot.expiresAt) {
@@ -161,10 +158,6 @@ func (s *Selector) loadLayeredCandidates(ctx context.Context, provider account.P
 		}
 		return s.maybeFilterBotFlagged(ctx, provider, values, includeBotFlagged)
 	})
-	if err != nil {
-		return nil, err
-	}
-	return loaded.([]account.RoutingCandidate), nil
 }
 
 func (s *Selector) loadRoutingBases(ctx context.Context, layered repository.RoutingLayerRepository, provider account.Provider, quotaMode string, now time.Time) ([]account.RoutingAccountBase, routingLayerVersion, error) {
@@ -180,7 +173,7 @@ func (s *Selector) loadRoutingBases(ctx context.Context, layered repository.Rout
 	}
 	s.candidateMu.Unlock()
 	loadKey := "base\x00" + string(provider) + "\x00" + quotaMode
-	loaded, err, _ := s.candidateLoads.Do(loadKey, func() (any, error) {
+	result, err := flight.Do(ctx, &s.candidateLoads, loadKey, candidateLoadTimeout, func(ctx context.Context) (routingBaseLoadResult, error) {
 		checkTime := time.Now().UTC()
 		checkVersion := s.routingBaseVersion(provider)
 		var stale routingBaseSnapshot
@@ -210,7 +203,7 @@ func (s *Selector) loadRoutingBases(ctx context.Context, layered repository.Rout
 				s.logStaleRoutingFallback("base", provider, checkTime, stale.staleUntil, loadErr)
 				return routingBaseLoadResult{values: stale.values, version: checkVersion}, nil
 			}
-			return nil, loadErr
+			return routingBaseLoadResult{}, loadErr
 		}
 		s.candidateMu.Lock()
 		currentVersion := s.routingBaseVersionLocked(provider)
@@ -232,7 +225,6 @@ func (s *Selector) loadRoutingBases(ctx context.Context, layered repository.Rout
 	if err != nil {
 		return nil, routingLayerVersion{}, err
 	}
-	result := loaded.(routingBaseLoadResult)
 	return result.values, result.version, nil
 }
 
@@ -249,7 +241,7 @@ func (s *Selector) loadRoutingOverlay(ctx context.Context, layered repository.Ro
 	}
 	s.candidateMu.Unlock()
 	loadKey := fmt.Sprintf("overlay\x00%s\x00%d\x00%s", provider, modelRouteID, upstreamModel)
-	loaded, err, _ := s.candidateLoads.Do(loadKey, func() (any, error) {
+	result, err := flight.Do(ctx, &s.candidateLoads, loadKey, candidateLoadTimeout, func(ctx context.Context) (routingOverlayLoadResult, error) {
 		checkTime := time.Now().UTC()
 		checkVersion := s.routingOverlayVersion(provider)
 		var stale routingOverlaySnapshot
@@ -279,7 +271,7 @@ func (s *Selector) loadRoutingOverlay(ctx context.Context, layered repository.Ro
 				s.logStaleRoutingFallback("overlay", provider, checkTime, stale.staleUntil, loadErr)
 				return routingOverlayLoadResult{value: stale.value, version: checkVersion}, nil
 			}
-			return nil, loadErr
+			return routingOverlayLoadResult{}, loadErr
 		}
 		s.candidateMu.Lock()
 		currentVersion := s.routingOverlayVersionLocked(provider)
@@ -292,7 +284,6 @@ func (s *Selector) loadRoutingOverlay(ctx context.Context, layered repository.Ro
 	if err != nil {
 		return account.RoutingOverlaySnapshot{}, routingLayerVersion{}, err
 	}
-	result := loaded.(routingOverlayLoadResult)
 	return result.value, result.version, nil
 }
 

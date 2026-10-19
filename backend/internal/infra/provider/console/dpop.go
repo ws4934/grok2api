@@ -23,6 +23,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	"github.com/chenyme/grok2api/backend/internal/pkg/flight"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
@@ -32,6 +33,9 @@ const (
 	dpopSessionCacheLimit = 4096
 	dpopRefreshSkew       = 20 * time.Second
 	maxDPoPTokenLifetime  = time.Hour
+	// dpopTokenTimeout bounds one shared token mint, which no longer stops when
+	// the request that started it leaves; same budget as the quota call.
+	dpopTokenTimeout = consoleQuotaTimeout
 )
 
 type dpopJWK struct {
@@ -111,7 +115,7 @@ func (m *dpopSessionManager) get(
 	if session, ok := m.cached(key); ok {
 		return session, key, nil
 	}
-	value, err, _ := m.loads.Do(key, func() (any, error) {
+	session, err := flight.Do(ctx, &m.loads, key, dpopTokenTimeout, func(ctx context.Context) (dpopSession, error) {
 		if session, ok := m.cached(key); ok {
 			return session, nil
 		}
@@ -124,10 +128,6 @@ func (m *dpopSessionManager) get(
 	})
 	if err != nil {
 		return dpopSession{}, key, err
-	}
-	session, ok := value.(dpopSession)
-	if !ok {
-		return dpopSession{}, key, errors.New("Console DPoP session 类型无效")
 	}
 	return session, key, nil
 }

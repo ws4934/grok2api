@@ -9,6 +9,7 @@ import (
 
 	application "github.com/chenyme/grok2api/backend/internal/application/egress"
 	domain "github.com/chenyme/grok2api/backend/internal/domain/egress"
+	"github.com/chenyme/grok2api/backend/internal/pkg/flight"
 )
 
 // acquireUnavailableFallback keeps the primary selection error when fallback
@@ -87,7 +88,7 @@ func (m *Manager) loadOperationsConfig(ctx context.Context, now time.Time) (doma
 	if !cached.expiresAt.IsZero() && now.Before(cached.expiresAt) {
 		return cached.value, true, nil
 	}
-	loaded, err, _ := m.operationsConfigLoad.Do("operations", func() (any, error) {
+	loaded, err := flight.Do(ctx, &m.operationsConfigLoad, "operations", snapshotLoadTimeout, func(ctx context.Context) (domain.OperationsConfig, error) {
 		checkTime := time.Now().UTC()
 		m.operationsMu.RLock()
 		cached := m.operationsConfig
@@ -112,7 +113,7 @@ func (m *Manager) loadOperationsConfig(ctx context.Context, now time.Time) (doma
 	if err != nil {
 		return domain.OperationsConfig{}, true, err
 	}
-	return loaded.(domain.OperationsConfig), true, nil
+	return loaded, true, nil
 }
 
 func (m *Manager) fixedFallbackNode(ctx context.Context, scope domain.Scope, nodeID uint64) (domain.Node, error) {

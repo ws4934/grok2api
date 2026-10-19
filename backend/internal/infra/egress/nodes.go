@@ -13,6 +13,7 @@ import (
 
 	application "github.com/chenyme/grok2api/backend/internal/application/egress"
 	domain "github.com/chenyme/grok2api/backend/internal/domain/egress"
+	"github.com/chenyme/grok2api/backend/internal/pkg/flight"
 	neterrorpkg "github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
@@ -49,7 +50,7 @@ func (m *Manager) listNodes(ctx context.Context, scope domain.Scope, now time.Ti
 			return values, nil
 		}
 		m.nodeMu.RUnlock()
-		loaded, err, _ := m.nodeLoads.Do(string(scope), func() (any, error) {
+		loaded, err := flight.Do(ctx, &m.nodeLoads, string(scope), snapshotLoadTimeout, func(ctx context.Context) ([]domain.Node, error) {
 			checkTime := time.Now().UTC()
 			m.nodeMu.RLock()
 			if snapshot, ok := m.nodes[scope]; ok && checkTime.Before(snapshot.expiresAt) {
@@ -80,7 +81,7 @@ func (m *Manager) listNodes(ctx context.Context, scope domain.Scope, now time.Ti
 			}
 			return nil, err
 		}
-		return loaded.([]domain.Node), nil
+		return loaded, nil
 	}
 }
 

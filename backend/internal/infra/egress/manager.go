@@ -19,6 +19,10 @@ import (
 const DefaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
 const nodeSnapshotTTL = time.Second
 const operationsConfigSnapshotTTL = time.Second
+
+// snapshotLoadTimeout bounds a shared node or operations-config read, which
+// no longer stops when the request that started it leaves.
+const snapshotLoadTimeout = 30 * time.Second
 const proxyPoolRetryLimit = 2
 const clientCacheIdleTTL = 30 * time.Minute
 const clientCacheCleanupInterval = time.Minute

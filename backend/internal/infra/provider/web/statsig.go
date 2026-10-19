@@ -17,6 +17,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	domainegress "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
+	"github.com/chenyme/grok2api/backend/internal/pkg/flight"
 	"github.com/chenyme/grok2api/backend/internal/pkg/signerurl"
 	"golang.org/x/net/html"
 	"golang.org/x/sync/singleflight"
@@ -28,6 +29,9 @@ const (
 	statsigCacheMaxEntries  = 4096
 	statsigMetaBodyLimit    = 4 << 20
 	statsigResponseLimit    = 4 << 10
+	// statsigRefreshTimeout caps one shared refresh; each meta fetch (15s) and
+	// signer call (12s) keeps its own shorter timeout.
+	statsigRefreshTimeout = time.Minute
 )
 
 var errStatsigMetaMissing = errors.New("Grok index 缺少 grok-site-verification")
@@ -78,7 +82,7 @@ func (s *statsigSigner) Sign(ctx context.Context, baseURL, signerURL, token stri
 	if value, ok := s.cached(key, s.now().UTC()); ok {
 		return value, "cache", nil
 	}
-	value, err, _ := s.refreshes.Do(key, func() (any, error) {
+	result, err := flight.Do(ctx, &s.refreshes, key, statsigRefreshTimeout, func(ctx context.Context) (statsigSignResult, error) {
 		now := s.now().UTC()
 		if cached, ok := s.cached(key, now); ok {
 			return statsigSignResult{value: cached, source: "cache"}, nil
@@ -96,7 +100,6 @@ func (s *statsigSigner) Sign(ctx context.Context, baseURL, signerURL, token stri
 	if err != nil {
 		return "", "", err
 	}
-	result := value.(statsigSignResult)
 	return result.value, result.source, nil
 }
 

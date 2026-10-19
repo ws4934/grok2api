@@ -22,6 +22,10 @@ const candidateCacheTTL = 30 * time.Second
 const candidateCacheStaleTTL = 5 * time.Minute
 const candidateCacheRetryTTL = 5 * time.Second
 const candidateCacheStaleLogInterval = time.Minute
+
+// candidateLoadTimeout bounds a shared routing read, which no longer stops
+// when the request that started it leaves. Large pools can take seconds.
+const candidateLoadTimeout = 30 * time.Second
 const maxCandidateCacheSnapshots = 64
 const maxCandidateCacheValues = 100_000
 const maxRoutingBaseSnapshots = 8

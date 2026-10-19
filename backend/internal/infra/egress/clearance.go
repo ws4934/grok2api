@@ -12,6 +12,7 @@ import (
 
 	application "github.com/chenyme/grok2api/backend/internal/application/egress"
 	domain "github.com/chenyme/grok2api/backend/internal/domain/egress"
+	"github.com/chenyme/grok2api/backend/internal/pkg/flight"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
@@ -123,17 +124,32 @@ func (m *Manager) ensureClearance(ctx context.Context, node domain.Node, proxyUR
 	}
 	m.clearanceMu.Unlock()
 
-	result, err, _ := m.clearanceLoads.Do(key, func() (any, error) {
-		return m.refreshNode(ctx, node, proxyURL, key, persist, forceRefresh, !fallbackAllowed, refreshAfter)
-	})
+	solution, err := m.refreshShared(ctx, node, proxyURL, key, persist, forceRefresh, !fallbackAllowed, refreshAfter)
 	if err != nil {
 		if fallbackAllowed {
 			return fallback.Cookies, fallback.UserAgent, nil
 		}
 		return "", "", err
 	}
-	solution := result.(clearanceSolution)
 	return solution.Cookies, solution.UserAgent, nil
+}
+
+// refreshShared runs one refreshNode per key for all concurrent callers,
+// bounded by the clearance lock lease the refresh may hold.
+func (m *Manager) refreshShared(ctx context.Context, node domain.Node, proxyURL, key string, persist, force, waitForPeer bool, refreshAfter time.Time) (clearanceSolution, error) {
+	m.clearanceMu.Lock()
+	cfg, _ := m.clearanceForLocked(node.Scope)
+	m.clearanceMu.Unlock()
+	return flight.Do(ctx, &m.clearanceLoads, key, clearanceSolveTimeout(cfg)+clearanceLockGrace, func(ctx context.Context) (clearanceSolution, error) {
+		return m.refreshNode(ctx, node, proxyURL, key, persist, force, waitForPeer, refreshAfter)
+	})
+}
+
+func clearanceSolveTimeout(cfg ClearanceConfig) time.Duration {
+	if cfg.Timeout <= 0 {
+		return time.Minute
+	}
+	return cfg.Timeout
 }
 
 func (m *Manager) refreshNode(ctx context.Context, node domain.Node, proxyURL, key string, persist, force, waitForPeer bool, refreshAfter time.Time) (clearanceSolution, error) {
@@ -146,10 +162,7 @@ func (m *Manager) refreshNode(ctx context.Context, node domain.Node, proxyURL, k
 	if cfg.Mode != "flaresolverr" && cfg.Mode != "on_demand" {
 		return clearanceSolution{}, errors.New("FlareSolverr Clearance 未启用")
 	}
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = time.Minute
-	}
+	timeout := clearanceSolveTimeout(cfg)
 	fingerprint := clearanceFingerprint(cfg, proxyURL)
 	bindingFingerprint := clearanceBindingFingerprint(cfg, proxyURL)
 	interval := clearanceRefreshInterval(cfg)
@@ -361,9 +374,7 @@ func (m *Manager) recordClearanceError(ctx context.Context, node domain.Node, pe
 
 func (m *Manager) RefreshClearance(ctx context.Context, nodeID uint64) error {
 	if nodeID == 0 {
-		_, err, _ := m.clearanceLoads.Do("direct", func() (any, error) {
-			return m.refreshNode(ctx, domain.Node{Name: "direct", Scope: domain.ScopeWeb, Enabled: true}, "", "direct", false, true, true, time.Time{})
-		})
+		_, err := m.refreshShared(ctx, domain.Node{Name: "direct", Scope: domain.ScopeWeb, Enabled: true}, "", "direct", false, true, true, time.Time{})
 		return err
 	}
 	node, err := m.repository.GetEgressNode(ctx, nodeID)
@@ -385,9 +396,7 @@ func (m *Manager) RefreshClearance(ctx context.Context, nodeID uint64) error {
 		return err
 	}
 	key := clearanceCacheKey(node.ID, proxyURL, false)
-	_, err, _ = m.clearanceLoads.Do(key, func() (any, error) {
-		return m.refreshNode(ctx, node, proxyURL, key, true, true, true, time.Time{})
-	})
+	_, err = m.refreshShared(ctx, node, proxyURL, key, true, true, true, time.Time{})
 	return err
 }
 
@@ -549,18 +558,14 @@ func (m *Manager) RefreshDueClearances(ctx context.Context, force bool) error {
 		if refreshForce && known && state.invalid {
 			refreshAfter = state.refreshedAt
 		}
-		_, refreshErr, _ := m.clearanceLoads.Do(key, func() (any, error) {
-			return m.refreshNode(ctx, node, proxyURL, key, true, refreshForce, false, refreshAfter)
-		})
+		_, refreshErr := m.refreshShared(ctx, node, proxyURL, key, true, refreshForce, false, refreshAfter)
 		if refreshErr != nil {
 			refreshErrors = append(refreshErrors, refreshErr)
 		}
 	}
 	shouldUseDirect := direct.used || force && webNodeCount == 0
 	if shouldUseDirect && (force || direct.invalid || direct.userAgent == "" || direct.version != version || now.Sub(direct.refreshedAt) >= interval) {
-		_, err, _ := m.clearanceLoads.Do("direct", func() (any, error) {
-			return m.refreshNode(ctx, domain.Node{Name: "direct", Scope: domain.ScopeWeb, Enabled: true}, "", "direct", false, force, false, time.Time{})
-		})
+		_, err := m.refreshShared(ctx, domain.Node{Name: "direct", Scope: domain.ScopeWeb, Enabled: true}, "", "direct", false, force, false, time.Time{})
 		if err != nil {
 			refreshErrors = append(refreshErrors, err)
 		}
