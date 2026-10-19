@@ -127,6 +127,7 @@ func TestCanceledRequestDoesNotPenalizeEgress(t *testing.T) {
 		{name: "canceled transport", transportErr: context.Canceled},
 		{name: "wrapped canceled transport", transportErr: fmt.Errorf("request failed: %w", context.Canceled)},
 		{name: "client closed status", status: clientClosedRequestStatus},
+		{name: "discarded stream", transportErr: fmt.Errorf("copy stream: %w", io.ErrClosedPipe)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

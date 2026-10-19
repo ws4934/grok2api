@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -164,7 +165,9 @@ func (m *Manager) Feedback(ctx context.Context, nodeID uint64, status int, trans
 }
 
 func (m *Manager) FeedbackForScope(ctx context.Context, scope domain.Scope, nodeID uint64, status int, transportErr error) {
-	if status == clientClosedRequestStatus || errors.Is(transportErr, context.Canceled) {
+	// io.ErrClosedPipe means our side closed the stream (client gone or the
+	// gateway discarded the answer), not that the proxy failed.
+	if status == clientClosedRequestStatus || errors.Is(transportErr, context.Canceled) || errors.Is(transportErr, io.ErrClosedPipe) {
 		return
 	}
 	// Console media hosts are public and do not use clearance credentials. A
