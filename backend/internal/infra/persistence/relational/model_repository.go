@@ -620,10 +620,7 @@ func findModelRoutesByPublicID(db *gorm.DB, publicID string) ([]modelRouteModel,
 	}
 	query := db.Session(&gorm.Session{})
 	query = query.Where(`
-		EXISTS (
-			SELECT 1 FROM model_route_aliases alias
-			WHERE alias.model_route_id = model_routes.id AND alias.alias = ?
-		)
+		model_routes.id IN (SELECT alias.model_route_id FROM model_route_aliases alias WHERE alias.alias = ?)
 	`, requested).Order(modelProviderPriorityExpression + ", model_routes.id ASC")
 	var rows []modelRouteModel
 	if err := query.Find(&rows).Error; err != nil {
@@ -640,11 +637,13 @@ func findModelRoutesByPublicIDGroup(db *gorm.DB, candidates []string, requested 
 	if requested != "" && !slices.Contains(aliasCandidates, requested) {
 		aliasCandidates = append(aliasCandidates, requested)
 	}
+	// Matching IDs come from the indexes first, so the caller's availability
+	// predicate runs only for those routes (an OR EXISTS forced a full scan).
 	query := db.Session(&gorm.Session{}).Where(`
-		(model_routes.public_id IN ? OR EXISTS (
-			SELECT 1 FROM model_route_aliases alias
-			WHERE alias.model_route_id = model_routes.id AND alias.alias IN ?
-		))
+		model_routes.id IN (
+			SELECT route.id FROM model_routes route WHERE route.public_id IN ?
+			UNION SELECT alias.model_route_id FROM model_route_aliases alias WHERE alias.alias IN ?
+		)
 	`, candidates, aliasCandidates).Clauses(clause.OrderBy{Expression: clause.Expr{
 		SQL:  "CASE WHEN model_routes.public_id IN ? THEN 0 ELSE 1 END, " + modelProviderPriorityExpression + ", model_routes.id ASC",
 		Vars: []any{candidates},
