@@ -144,6 +144,37 @@ func TestProviderDefinitionRejectsInconsistentMediaCapability(t *testing.T) {
 }
 
 // 尾帧与参考视频只交给声明了对应 Media 能力的 Provider；其余渠道在注册表层直接拒绝。
+// 不传的视频参数由各 Provider 补：Grok 三家用 xAI 的 16:9 / 720p / 8 秒并限定取值，Adobe
+// 用模型自己的默认值，传了不支持的就近对齐。
+func TestRegistryNormalizesVideoParametersPerProvider(t *testing.T) {
+	registry := provider.NewRegistry(
+		cliprovider.NewAdapter(cliprovider.Config{}, nil),
+		webprovider.NewAdapter(webprovider.Config{}, nil, nil, nil, nil),
+		consoleprovider.NewAdapter(consoleprovider.Config{}, nil, nil, nil),
+		adobeprovider.NewAdapter(adobeprovider.Config{}, nil, nil, nil, nil),
+	)
+	for _, value := range []account.Provider{account.ProviderBuild, account.ProviderWeb, account.ProviderConsole} {
+		grok := provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: "grok-imagine-video"}
+		if got, err := registry.NormalizeVideoRequest(value, grok); err != nil || got.AspectRatio != "16:9" || got.Resolution != "720p" || got.Duration != 8 {
+			t.Fatalf("%s defaults = %+v, %v", value, got, err)
+		}
+		for _, bad := range []provider.VideoRequestOptions{{Duration: 16}, {AspectRatio: "21:9"}, {Resolution: "4k"}, {Resolution: "1080p", ReferenceAudios: 1}} {
+			bad.Operation, bad.UpstreamModel = grok.Operation, grok.UpstreamModel
+			if _, err := registry.NormalizeVideoRequest(value, bad); !errors.Is(err, provider.ErrVideoParameterInvalid) {
+				t.Errorf("%s %+v err = %v", value, bad, err)
+			}
+		}
+	}
+	ray := provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: "luma/3.0-ray"}
+	if got, err := registry.NormalizeVideoRequest(account.ProviderAdobe, ray); err != nil || got.AspectRatio != "16:9" || got.Resolution != "720p" || got.Duration != 5 {
+		t.Fatalf("ray3 defaults = %+v, %v", got, err)
+	}
+	ray.AspectRatio, ray.Resolution, ray.Duration = "21:9", "4k", 8
+	if got, err := registry.NormalizeVideoRequest(account.ProviderAdobe, ray); err != nil || got.AspectRatio != "21:9" || got.Resolution != "4K" || got.Duration != 10 {
+		t.Fatalf("ray3 explicit = %+v, %v", got, err)
+	}
+}
+
 func TestRegistryRejectsLastFrameForProvidersWithoutSupport(t *testing.T) {
 	registry := provider.NewRegistry(
 		webprovider.NewAdapter(webprovider.Config{}, nil, nil, nil, nil),

@@ -49,6 +49,11 @@ func (a *Adapter) Definition() provider.Definition {
 	}
 }
 
+// NormalizeVideoRequest applies the xAI video defaults and ranges.
+func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
+	return provider.NormalizeGrokVideoRequest(options)
+}
+
 // ValidateVideoRequest rejects requests the Console upstream fails only after
 // the asynchronous job was queued. Edit and extension exist for
 // grok-imagine-video only.

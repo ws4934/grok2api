@@ -77,7 +77,10 @@ type SwaggerImageEditRequest struct {
 }
 
 // SwaggerVideoGenerationRequest 表示视频生成请求。
-// image 与 reference_images/reference_audios 互斥；参考图模式 resolution 最高 720p。
+// duration / aspect_ratio / resolution 不传时用模型默认值（Grok：8 秒、16:9、720p）。
+// Grok 路由限 1–15 秒、7 种比例与 480p/720p/1080p，参考图模式最高 720p；Adobe 模型按
+// 自身范围，不支持的值就近对齐，实际时长见结果的 video.duration。
+// image 与 reference_images/reference_audios 互斥。
 // last_frame（尾帧）必须同时提供 image，目前仅 Adobe 支持首尾帧的模型接受。
 // reference_videos（参考视频，url 或 file_id，MP4/QuickTime，最多 10 个）需提供 prompt，
 // 目前仅 Adobe 的 Seedance（不能与首尾帧同用）、Gemini Omni 接受。

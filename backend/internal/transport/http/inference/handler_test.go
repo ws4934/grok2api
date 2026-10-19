@@ -74,11 +74,11 @@ func TestVideoGenerationUsesOfficialXAIEndpointsAndFields(t *testing.T) {
 		})
 	}
 
-	invalidDuration := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{"model":"grok-imagine-video","prompt":"test","duration":16}`))
+	invalidDuration := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{"model":"grok-imagine-video","prompt":"test","duration":0}`))
 	invalidDuration.Header.Set("Content-Type", "application/json")
 	invalidRecorder := httptest.NewRecorder()
 	router.ServeHTTP(invalidRecorder, invalidDuration)
-	if invalidRecorder.Code != http.StatusBadRequest || !strings.Contains(invalidRecorder.Body.String(), "1 到 15") {
+	if invalidRecorder.Code != http.StatusBadRequest || !strings.Contains(invalidRecorder.Body.String(), "正整数") {
 		t.Fatalf("invalid duration status=%d body=%s", invalidRecorder.Code, invalidRecorder.Body.String())
 	}
 
@@ -604,10 +604,28 @@ func TestJSONInferenceEndpointsRejectWrongMediaTypeAndTrailingDocument(t *testin
 }
 
 func TestVideoDurationUsesOfficialFieldOnly(t *testing.T) {
-	if value, err := parseVideoDuration(nil); err != nil || value != 8 {
+	// 没传时留 0，由路由的 Provider 取模型默认值。
+	if value, err := parseVideoDuration(nil); err != nil || value != 0 {
 		t.Fatalf("default duration=%d err=%v", value, err)
 	}
 	if value, err := parseVideoDuration(json.RawMessage(`"6"`)); err != nil || value != 6 {
+		t.Fatalf("duration=%d err=%v", value, err)
+	}
+}
+
+// 接口层只查写法；21:9、4k、30 秒是否支持由路由的 Provider 决定。
+func TestVideoParametersCheckFormatOnly(t *testing.T) {
+	for value, want := range map[string]bool{"21:9": true, "auto": true, "AUTO": true, "16x9": false, "0:1": false, "16:": false} {
+		if validVideoAspectRatio(value) != want {
+			t.Errorf("validVideoAspectRatio(%q) = %v", value, !want)
+		}
+	}
+	for value, want := range map[string]bool{"4k": true, "1080p": true, "360p": true, "720": false, "p": false, "0p": false} {
+		if validVideoResolution(value) != want {
+			t.Errorf("validVideoResolution(%q) = %v", value, !want)
+		}
+	}
+	if value, err := parseVideoDuration(json.RawMessage(`30`)); err != nil || value != 30 {
 		t.Fatalf("duration=%d err=%v", value, err)
 	}
 }
@@ -1866,17 +1884,6 @@ func TestReferenceToVideoRequestValidation(t *testing.T) {
 	router.ServeHTTP(combinedRec, combined)
 	if combinedRec.Code != http.StatusBadRequest || !strings.Contains(combinedRec.Body.String(), "不能与") {
 		t.Fatalf("combined image+refs status=%d body=%s", combinedRec.Code, combinedRec.Body.String())
-	}
-
-	highRes := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{
-		"model":"grok-imagine-video","prompt":"x","resolution":"1080p",
-		"reference_images":[{"url":"https://example.com/b.png"}]
-	}`))
-	highRes.Header.Set("Content-Type", "application/json")
-	highResRec := httptest.NewRecorder()
-	router.ServeHTTP(highResRec, highRes)
-	if highResRec.Code != http.StatusBadRequest || !strings.Contains(highResRec.Body.String(), "720p") {
-		t.Fatalf("r2v 1080p status=%d body=%s", highResRec.Code, highResRec.Body.String())
 	}
 
 	tooManyAudio := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{

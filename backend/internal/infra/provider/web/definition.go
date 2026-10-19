@@ -63,6 +63,11 @@ func (a *Adapter) CandidateQuotaMode(candidate account.RoutingCandidate, quotaMo
 	}
 }
 
+// NormalizeVideoRequest applies the xAI video defaults and ranges.
+func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
+	return provider.NormalizeGrokVideoRequest(options)
+}
+
 // ValidateVideoRequest: the Web protocol is captured for text-to-video only;
 // the removed media-post path must not come back for image or reference input.
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {

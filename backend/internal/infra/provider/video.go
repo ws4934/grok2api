@@ -1,12 +1,14 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -128,9 +130,11 @@ const (
 )
 
 // VideoRequestOptions are the video parameters a route must accept before a job is queued.
+// Zero Duration, AspectRatio and Resolution mean the client left them out.
 type VideoRequestOptions struct {
 	Operation       VideoOperation
 	UpstreamModel   string
+	AspectRatio     string
 	Resolution      string
 	HasImage        bool
 	HasLastFrame    bool
@@ -147,6 +151,14 @@ type VideoRequestOptions struct {
 type VideoRequestValidator interface {
 	Adapter
 	ValidateVideoRequest(options VideoRequestOptions) error
+}
+
+// VideoRequestNormalizer picks the duration, aspect ratio and resolution a
+// route generates with: defaults for the values left out, and the provider's
+// rules for the rest. Providers without it get the options unchanged.
+type VideoRequestNormalizer interface {
+	Adapter
+	NormalizeVideoRequest(options VideoRequestOptions) (VideoRequestOptions, error)
 }
 
 // VideoQuotaModeAdapter refines a video route's quota mode by the requested resolution.
@@ -270,6 +282,41 @@ func (r *Registry) ValidateVideoRequest(value account.Provider, options VideoReq
 		return ErrVideoOperationUnsupported
 	}
 	return nil
+}
+
+// NormalizeVideoRequest returns the parameters the route generates (and
+// bills) with, then applies the provider's validation to them.
+func (r *Registry) NormalizeVideoRequest(value account.Provider, options VideoRequestOptions) (VideoRequestOptions, error) {
+	if normalizer, ok := adapterAs[VideoRequestNormalizer](r, value); ok {
+		var err error
+		if options, err = normalizer.NormalizeVideoRequest(options); err != nil {
+			return options, err
+		}
+	}
+	return options, r.ValidateVideoRequest(value, options)
+}
+
+// NormalizeGrokVideoRequest fills the xAI defaults (16:9, 720p, 8 s) for
+// generation and enforces the xAI ranges. Edit and extension keep the
+// gateway's rules.
+func NormalizeGrokVideoRequest(options VideoRequestOptions) (VideoRequestOptions, error) {
+	if options.Operation != VideoOperationGenerate {
+		return options, nil
+	}
+	options.AspectRatio = cmp.Or(options.AspectRatio, "16:9")
+	options.Resolution = cmp.Or(strings.ToLower(options.Resolution), "720p")
+	options.Duration = cmp.Or(options.Duration, 8)
+	switch {
+	case options.Duration < 1 || options.Duration > 15:
+		return options, fmt.Errorf("%w: duration 必须在 1 到 15 秒之间", ErrVideoParameterInvalid)
+	case !slices.Contains([]string{"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}, options.AspectRatio):
+		return options, fmt.Errorf("%w: aspect_ratio 必须是 1:1、16:9、9:16、4:3、3:4、3:2 或 2:3", ErrVideoParameterInvalid)
+	case !slices.Contains([]string{"480p", "720p", "1080p"}, options.Resolution):
+		return options, fmt.Errorf("%w: resolution 必须是 480p、720p 或 1080p", ErrVideoParameterInvalid)
+	case options.Resolution == "1080p" && (options.ReferenceImages > 0 || options.ReferenceAudios > 0):
+		return options, fmt.Errorf("%w: 参考图视频 resolution 最高 720p", ErrVideoParameterInvalid)
+	}
+	return options, nil
 }
 
 // VideoQuotaMode refines a video route's quota mode by resolution.

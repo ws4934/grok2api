@@ -18,9 +18,22 @@ type videoCheckpoint struct {
 	Submitting bool   `json:"submitting,omitempty"`
 }
 
+// NormalizeVideoRequest 选定实际生成（也用于计费和任务记录）的比例、分辨率与时长：
+// 没传的用模型默认值，传了但模型不支持的就近对齐；参考图模式下 Veo 固定 16:9、8 秒。
+// 未知模型原样返回，由随后的 ValidateVideoRequest 拒绝。
+func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
+	v, ok := a.catalog.Load().lookup(options.UpstreamModel)
+	if !ok || !v.video || options.Operation != provider.VideoOperationGenerate {
+		return options, nil
+	}
+	in := v.videoPlan("", options.AspectRatio, options.Resolution, options.Duration, options.HasImage, options.ReferenceImages > 0)
+	options.AspectRatio, options.Resolution = in.aspect, in.resolution
+	options.Duration, _ = v.chooseDuration(in.duration)
+	return options, nil
+}
+
 // ValidateVideoRequest 按模型 schema 校验视频请求：首帧图、参考图的支持与数量。
-// 时长、比例、分辨率不在这里拒绝：网关会给未填的参数填默认值，GenerateVideo 会就近
-// 对齐到模型支持的值。
+// 时长、比例、分辨率由 NormalizeVideoRequest 对齐，不在这里拒绝。
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
 	if options.Operation != provider.VideoOperationGenerate {
 		return provider.ErrVideoOperationUnsupported

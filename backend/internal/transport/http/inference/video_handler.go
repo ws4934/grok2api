@@ -122,20 +122,15 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
+		// 这里只查写法、不填默认值：取值范围和默认值由路由的 Provider 按模型决定。
 		aspectRatio = strings.TrimSpace(request.AspectRatio)
-		if aspectRatio == "" {
-			aspectRatio = "16:9"
-		}
-		if !validVideoAspectRatio(aspectRatio) {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "aspect_ratio 必须是 1:1、16:9、9:16、4:3、3:4、3:2 或 2:3")
+		if aspectRatio != "" && !validVideoAspectRatio(aspectRatio) {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "aspect_ratio 应为 宽:高（如 16:9）或 auto")
 			return
 		}
 		resolution = strings.ToLower(strings.TrimSpace(request.Resolution))
-		if resolution == "" {
-			resolution = "720p"
-		}
-		if resolution != "480p" && resolution != "720p" && resolution != "1080p" {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "resolution 必须是 480p、720p 或 1080p")
+		if resolution != "" && !validVideoResolution(resolution) {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "resolution 应为 720p、1080p、4k 这类写法")
 			return
 		}
 		if request.Image != nil {
@@ -201,15 +196,9 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 			return
 		}
 		hasReferenceMode := len(referenceURLs) > 0 || len(referenceAudios) > 0
-		if hasReferenceMode {
-			if prompt == "" {
-				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "参考图/参考音频视频必须提供 prompt")
-				return
-			}
-			if resolution == "1080p" {
-				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "参考图视频 resolution 最高 720p")
-				return
-			}
+		if hasReferenceMode && prompt == "" {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "参考图/参考音频视频必须提供 prompt")
+			return
 		}
 		if prompt == "" && imageURL == "" && !hasReferenceMode {
 			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "文本生视频必须提供 prompt；图片生视频可以省略 prompt")
@@ -389,19 +378,16 @@ func normalizeVideoResponseContentType(value string) (string, bool) {
 	}
 }
 
+// parseVideoDuration 解析可选的 duration；没传时返回 0，由路由的 Provider 取模型默认值。
 func parseVideoDuration(durationRaw json.RawMessage) (int, error) {
 	duration, hasDuration, err := parseOptionalVideoInteger(durationRaw)
 	if err != nil {
 		return 0, fmt.Errorf("duration 必须是整数或整数字符串")
 	}
-	value := 8
-	if hasDuration {
-		value = duration
+	if hasDuration && duration < 1 {
+		return 0, fmt.Errorf("duration 必须是正整数")
 	}
-	if value < 1 || value > 15 {
-		return 0, fmt.Errorf("duration 必须在 1 到 15 秒之间")
-	}
-	return value, nil
+	return duration, nil
 }
 
 func parseOptionalVideoInteger(raw json.RawMessage) (int, bool, error) {
@@ -428,13 +414,25 @@ func hasJSONValue(value json.RawMessage) bool {
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
+// validVideoAspectRatio 只检查写法：宽:高（正整数）或 auto。
 func validVideoAspectRatio(value string) bool {
-	switch value {
-	case "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3":
+	if strings.EqualFold(value, "auto") {
 		return true
-	default:
-		return false
 	}
+	w, h, ok := strings.Cut(value, ":")
+	width, errW := strconv.Atoi(w)
+	height, errH := strconv.Atoi(h)
+	return ok && errW == nil && errH == nil && width > 0 && height > 0
+}
+
+// validVideoResolution 只检查写法：正整数加 p 或 k（720p、1080p、4k）。
+func validVideoResolution(value string) bool {
+	number, ok := strings.CutSuffix(value, "p")
+	if !ok {
+		number, ok = strings.CutSuffix(value, "k")
+	}
+	n, err := strconv.Atoi(number)
+	return ok && err == nil && n > 0
 }
 
 func videoGenerationResponse(job mediadomain.Job, contentURLs ...string) gin.H {

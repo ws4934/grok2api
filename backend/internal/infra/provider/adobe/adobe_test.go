@@ -454,6 +454,31 @@ func TestSnapshotCatalogMatchesOfficialModels(t *testing.T) {
 	}
 }
 
+// 没传的参数用模型默认值，传了不支持的就近对齐；参考图模式与首帧的强制规则照官网。
+func TestNormalizeVideoRequest(t *testing.T) {
+	a := &Adapter{}
+	a.catalog.Store(mustSnapshot())
+	for _, test := range []struct {
+		name     string
+		in       provider.VideoRequestOptions
+		aspect   string
+		tier     string
+		duration int
+	}{
+		{"kling 2.5 defaults", provider.VideoRequestOptions{UpstreamModel: "kling/kling_v2_5_turbo_pro_i2v", HasImage: true}, "16:9", "1080p", 5},
+		{"veo snaps", provider.VideoRequestOptions{UpstreamModel: "veo/3.1-generate", AspectRatio: "21:9", Resolution: "4k", Duration: 10}, "16:9", "1080p", 8},
+		{"veo references", provider.VideoRequestOptions{UpstreamModel: "veo/3.1-generate", ReferenceImages: 1, AspectRatio: "9:16", Duration: 4}, "16:9", "720p", 8},
+		{"seedance 2.5 frame", provider.VideoRequestOptions{UpstreamModel: "seedance/seedance_2.5", HasImage: true, AspectRatio: "16:9", Duration: 30}, "auto", "720p", 30},
+		{"seedance 2.0 auto", provider.VideoRequestOptions{UpstreamModel: "seedance/seedance_2.0", AspectRatio: "auto"}, "auto", "720p", 4},
+	} {
+		test.in.Operation = provider.VideoOperationGenerate
+		got, err := a.NormalizeVideoRequest(test.in)
+		if err != nil || got.AspectRatio != test.aspect || got.Resolution != test.tier || got.Duration != test.duration {
+			t.Errorf("%s = %s %s %ds (%v), want %s %s %ds", test.name, got.AspectRatio, got.Resolution, got.Duration, err, test.aspect, test.tier, test.duration)
+		}
+	}
+}
+
 func mustVersion(t *testing.T, slug string) *modelVersion {
 	t.Helper()
 	for _, v := range mustSnapshot().versions {

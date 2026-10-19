@@ -186,7 +186,7 @@ const endpoints: Record<string, EndpointDefinition> = {
       { name: "model", required: true, descriptionKey: "docs.reference.fieldModel" },
       { name: "prompt", descriptionKey: "docs.reference.fieldVideoPrompt" },
       { name: "duration", descriptionKey: "docs.reference.fieldDuration" },
-      { name: "aspect_ratio", descriptionKey: "docs.reference.fieldAspectRatio" },
+      { name: "aspect_ratio", descriptionKey: "docs.reference.fieldVideoAspectRatio" },
       { name: "resolution", descriptionKey: "docs.reference.fieldVideoResolution" },
       { name: "image", descriptionKey: "docs.reference.fieldVideoImage" },
       { name: "last_frame", descriptionKey: "docs.reference.fieldVideoLastFrame" },

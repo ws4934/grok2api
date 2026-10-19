@@ -116,9 +116,13 @@ func (v *modelVersion) defaultResolution(options []string) string {
 			return def
 		}
 	}
-	for _, preferred := range []string{"1K", "720p"} {
-		if slices.Contains(options, preferred) {
-			return preferred
+	preferred := []string{"1K", "720p"}
+	if v.video {
+		preferred = []string{"720p"} // 官网视频取第一档；Runway 的 1K 只有非 16:9 尺寸
+	}
+	for _, tier := range preferred {
+		if slices.Contains(options, tier) {
+			return tier
 		}
 	}
 	if len(options) > 0 {
@@ -128,15 +132,17 @@ func (v *modelVersion) defaultResolution(options []string) string {
 }
 
 func (v *modelVersion) defaultAspect(options []string) string {
+	// 官网视频默认取第一个比例（都是 16:9），不用 schema 默认（Ray 3.14 写的是 1:1）。
+	if v.video && slices.Contains(options, "16:9") {
+		return "16:9"
+	}
 	if ar, ok := nested(v.props, "generationSettings", "aspectRatio"); ok {
 		if def, _ := ar["default"].(string); def != "" && !isAuto(def) && slices.Contains(options, def) {
 			return def
 		}
 	}
-	for _, preferred := range []string{"16:9", "1:1"} {
-		if v.video == (preferred == "16:9") && slices.Contains(options, preferred) {
-			return preferred
-		}
+	if !v.video && slices.Contains(options, "1:1") {
+		return "1:1"
 	}
 	for _, option := range options {
 		if !isAuto(option) {
@@ -620,7 +626,7 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 	return in, nil
 }
 
-// videoPlan 选定视频的比例、分辨率与时长：网关会给未填的参数填默认值，所以这里
+// videoPlan 选定视频的比例、分辨率与时长：没传的用模型默认值，传了但模型不支持的
 // 就近对齐而不是拒绝；参考图的支持与数量已在 ValidateVideoRequest 校验。
 func (v *modelVersion) videoPlan(prompt, aspect, resolution string, duration int, hasFrame, hasRefs bool) genInput {
 	in := genInput{prompt: prompt, count: 1, duration: duration}

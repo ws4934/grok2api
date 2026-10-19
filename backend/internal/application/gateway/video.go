@@ -40,8 +40,10 @@ type VideoInput struct {
 	ClientKey   clientkey.Key
 	PublicModel string
 	// Operation defaults to generate when empty.
-	Operation   provider.VideoOperation
-	Prompt      string
+	Operation provider.VideoOperation
+	Prompt    string
+	// Duration, AspectRatio and Resolution are left zero when the client omits
+	// them; the selected route's provider fills its model's defaults.
 	Duration    int
 	AspectRatio string
 	Resolution  string
@@ -98,13 +100,8 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		if hasImage && (hasRefs || hasRefAudio) {
 			return media.Job{}, fmt.Errorf("image 不能与 reference_images/reference_audios 同时使用")
 		}
-		if hasRefs || hasRefAudio {
-			if len(input.Prompt) == 0 {
-				return media.Job{}, fmt.Errorf("参考图/参考音频视频必须提供 prompt")
-			}
-			if resolution := strings.ToLower(strings.TrimSpace(input.Resolution)); resolution == "1080p" {
-				return media.Job{}, fmt.Errorf("参考图视频 resolution 最高 720p")
-			}
+		if (hasRefs || hasRefAudio) && len(input.Prompt) == 0 {
+			return media.Job{}, fmt.Errorf("参考图/参考音频视频必须提供 prompt")
 		}
 		if len(input.Prompt) == 0 && !hasImage && !hasRefs && !hasRefAudio {
 			return media.Job{}, fmt.Errorf("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
@@ -153,11 +150,12 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err != nil {
 		return media.Job{}, err
 	}
-	routes, err = s.routesForVideoParameters(routes, provider.VideoRequestOptions{
-		Operation: operation, Resolution: input.Resolution, HasImage: strings.TrimSpace(input.ImageURL) != "", HasLastFrame: hasLastFrame,
+	options := provider.VideoRequestOptions{
+		Operation: operation, AspectRatio: input.AspectRatio, Resolution: input.Resolution, HasImage: strings.TrimSpace(input.ImageURL) != "", HasLastFrame: hasLastFrame,
 		ReferenceImages: len(input.ReferenceURLs), ReferenceVideos: len(input.ReferenceVideoURLs), ReferenceAudios: len(input.ReferenceAudios),
 		Duration: input.Duration,
-	})
+	}
+	routes, err = s.routesForVideoParameters(routes, options)
 	if err != nil {
 		return media.Job{}, err
 	}
@@ -192,6 +190,13 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err != nil {
 		return media.Job{}, err
 	}
+	// 选中路由的 Provider 决定实际生成的时长、比例与分辨率；计费和任务记录都用它。
+	options.UpstreamModel = route.UpstreamModel
+	effective, err := s.providers.NormalizeVideoRequest(route.Provider, options)
+	if err != nil {
+		return media.Job{}, err
+	}
+	input.Duration, input.AspectRatio, input.Resolution = effective.Duration, effective.AspectRatio, effective.Resolution
 	if err := s.checkLedgerReady(); err != nil {
 		return media.Job{}, err
 	}
@@ -273,7 +278,8 @@ func (s *Service) routesForVideoParameters(routes []model.Route, options provide
 // keeps the same checks at its outbound boundary.
 func (s *Service) validateVideoRouteParameters(providerValue account.Provider, upstreamModel string, options provider.VideoRequestOptions) error {
 	options.UpstreamModel = upstreamModel
-	return s.providers.ValidateVideoRequest(providerValue, options)
+	_, err := s.providers.NormalizeVideoRequest(providerValue, options)
+	return err
 }
 
 // routesForVideoOperation keeps the routes whose provider serves an edit or extension.

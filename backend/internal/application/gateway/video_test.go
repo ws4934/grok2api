@@ -18,13 +18,16 @@ import (
 
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
+	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/domain/model"
+	pricingdomain "github.com/chenyme/grok2api/backend/internal/domain/pricing"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/adobe"
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
@@ -235,6 +238,59 @@ func TestRoutesForVideoParametersKeepsCompatibleSameNameProviders(t *testing.T) 
 	}
 }
 
+// 不传 duration 时用模型默认值，计费和任务记录也用它。Ray 3 默认 5 秒；以前网关先填
+// 8 秒，Adobe 再就近对齐成 10 秒，账却按 8 秒记。
+func TestCreateVideoBillsTheParametersTheProviderPicks(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "video-params.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accountRepo, modelRepo, auditRepo, keyRepo := relational.NewAccountRepository(database), relational.NewModelRepository(database), relational.NewAuditRepository(database), relational.NewClientKeyRepository(database)
+	if _, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
+		Provider: account.ProviderAdobe, AuthType: account.AuthTypeOAuth, Name: "adobe", SourceKey: "adobe",
+		EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := modelRepo.UpsertRoutes(ctx, adobe.SnapshotRoutes()); err != nil {
+		t.Fatal(err)
+	}
+	key, err := keyRepo.Create(ctx, clientkey.Key{Name: "video-params", Prefix: "vparams", SecretHash: strings.Repeat("e", 64), EncryptedSecret: "e",
+		Enabled: true, RPMLimit: 60, MaxConcurrent: 4, ProviderScope: clientkey.AllProviders(), BillingLimitUSDTicks: 100_000_000_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := provider.NewRegistry(adobe.NewAdapter(adobe.Config{}, nil, nil, nil, nil))
+	sticky := memory.NewStickyStore()
+	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
+	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
+	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(keyRepo, nil, nil, 60, 4, nil), registry, selector, nil, 1)
+	prices, err := pricingapp.NewService(ctx, relational.NewModelPriceRepository(database), func(account.Provider) bool { return true }, registry.PricingModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prices.Put(ctx, pricingapp.Input{Provider: string(account.ProviderAdobe), PricingModel: "luma/3.0-ray", Operation: string(pricingdomain.OperationVideo),
+		Rates: map[pricingdomain.Component]string{pricingdomain.OutputSecond: "0.1"}}); err != nil {
+		t.Fatal(err)
+	}
+	service.SetPricing(prices)
+	service.ConfigureMedia(relational.NewMediaJobRepository(database), 1)
+
+	job, err := service.CreateVideo(ctx, VideoInput{RequestID: "video-params", ClientKey: key, PublicModel: "adobe/ray3", Prompt: "waves"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := prices.QuoteVideo(account.ProviderAdobe, "luma/3.0-ray", "720p", 5, 0)
+	if job.Seconds != 5 || job.Size != "16:9" || job.Quality != "720p" || job.Price == nil || want.CostInUSDTicks == 0 || job.Price.CostInUSDTicks != want.CostInUSDTicks {
+		t.Fatalf("job = %ds %s %s price %+v, want 5s 16:9 720p at %d ticks", job.Seconds, job.Size, job.Quality, job.Price, want.CostInUSDTicks)
+	}
+}
+
 func TestCreateVideoAppliesRouteConstraintsAfterKeyEligibilityAndBeforeInputIO(t *testing.T) {
 	routes := []model.Route{
 		{ID: 1, PublicID: "shared-video", Provider: account.ProviderBuild, UpstreamModel: "grok-imagine-video-1.5", Capability: model.CapabilityResponses},
@@ -277,7 +333,8 @@ func TestVideo1080pValidationUsesResolvedUpstreamModel(t *testing.T) {
 	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080p", Duration: 6}); !errors.Is(err, ErrVideoOperationUnsupported) {
 		t.Fatalf("legacy 1080p error = %v", err)
 	}
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080p", ReferenceImages: 1, Duration: 6}); !errors.Is(err, ErrVideoOperationUnsupported) {
+	// 参考图模式的 1080p 先被 xAI 取值规则拦下（与原先接口层的 400 invalid_request 一致）。
+	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080p", ReferenceImages: 1, Duration: 6}); !errors.Is(err, ErrVideoParameterInvalid) {
 		t.Fatalf("reference 1080p error = %v", err)
 	}
 }

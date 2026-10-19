@@ -48,6 +48,11 @@ func (a *Adapter) AccountTier(candidate account.RoutingCandidate) clientkey.Acco
 	return clientkey.AccountTierUnknown
 }
 
+// NormalizeVideoRequest applies the xAI video defaults and ranges.
+func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
+	return provider.NormalizeGrokVideoRequest(options)
+}
+
 // ValidateVideoRequest: Build generates videos only, within the Imagine resolution tiers.
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
 	if options.Operation != provider.VideoOperationGenerate {
