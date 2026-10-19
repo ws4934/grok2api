@@ -24,7 +24,6 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	inferencedomain "github.com/chenyme/grok2api/backend/internal/domain/inference"
-	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -306,7 +305,6 @@ func TestPostgresRepositoriesIntegration(t *testing.T) {
 	if err := keyRepository.Delete(ctx, poolKey.ID); err != nil {
 		t.Fatal(err)
 	}
-	verifyPostgresMediaJobInputConstraintUpgrade(t, ctx, database)
 	repository := NewAccountRepository(database)
 	created, wasCreated, err := repository.UpsertByIdentity(ctx, account.Credential{
 		Provider: account.ProviderBuild, Name: "postgres", SourceKey: "postgres-integration-" + time.Now().UTC().Format("150405.000000"),
@@ -412,46 +410,6 @@ func TestPostgresRepositoriesIntegration(t *testing.T) {
 		if err := repository.Delete(ctx, id); err != nil {
 			t.Fatal(err)
 		}
-	}
-}
-
-func TestPostgresMigratesLegacyClientKeyAccountPoolToScopes(t *testing.T) {
-	dsn := os.Getenv("TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("TEST_POSTGRES_DSN is not configured")
-	}
-	ctx := context.Background()
-	database, err := OpenPostgres(ctx, dsn, 10, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	repository := NewClientKeyRepository(database)
-	value, err := repository.Create(ctx, clientkey.Key{Name: "postgres-legacy-pool", Prefix: "postgres-legacy-pool", SecretHash: testSecretHash, EncryptedSecret: testEncryptedToken, Enabled: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := database.db.WithContext(ctx).Exec("ALTER TABLE client_keys DROP COLUMN provider_scope_mode, DROP COLUMN tier_scope_mask").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := database.db.WithContext(ctx).Exec("ALTER TABLE client_keys ADD COLUMN account_pool text NOT NULL DEFAULT 'all' CHECK (account_pool IN ('all','free','super'))").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := database.db.WithContext(ctx).Table("client_keys").Where("id = ?", value.ID).Update("account_pool", "free").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	stored, err := repository.Get(ctx, value.ID)
-	if err != nil || !stored.ProviderScope.All || stored.TierScope != clientkey.TierScopeFree {
-		t.Fatalf("migrated PostgreSQL account scope = %+v, err = %v", stored.AccountScope(), err)
-	}
-	if err := repository.Delete(ctx, value.ID); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -1093,31 +1051,5 @@ func TestPostgresP1RouteLookupAndBoundedResponseCleanup(t *testing.T) {
 	second, err := responses.DeleteExpired(ctx, now, 10, 10)
 	if err != nil || second.OwnershipDeleted != 1 || second.WebStateDeleted != 2 || second.HasMore {
 		t.Fatalf("second bounded cleanup = %#v, err = %v", second, err)
-	}
-}
-
-func verifyPostgresMediaJobInputConstraintUpgrade(t *testing.T, ctx context.Context, database *Database) {
-	t.Helper()
-	tx := database.db.WithContext(ctx).Begin()
-	if tx.Error != nil {
-		t.Fatal(tx.Error)
-	}
-	defer tx.Rollback()
-	if err := tx.Exec("ALTER TABLE media_jobs DROP CONSTRAINT IF EXISTS chk_media_jobs_input_json").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.Exec("ALTER TABLE media_jobs ADD CONSTRAINT chk_media_jobs_input_json CHECK (length(input_json) <= 1048576) NOT VALID").Error; err != nil {
-		t.Fatal(err)
-	}
-	testDatabase := &Database{db: tx, dialect: "postgres"}
-	if err := testDatabase.ensureMediaJobInputConstraint(ctx); err != nil {
-		t.Fatal(err)
-	}
-	definition, err := testDatabase.constraintDefinition(ctx, consoleConstraint{model: &mediaJobModel{}, table: "media_jobs", name: "chk_media_jobs_input_json"})
-	if err != nil || !strings.Contains(definition, strconv.Itoa(media.MaxInputJSONBytes)) || strings.Contains(definition, "1048576") {
-		t.Fatalf("postgres input constraint = %q, err=%v", definition, err)
-	}
-	if err := testDatabase.ensureMediaJobInputConstraint(ctx); err != nil {
-		t.Fatalf("postgres input constraint migration is not idempotent: %v", err)
 	}
 }

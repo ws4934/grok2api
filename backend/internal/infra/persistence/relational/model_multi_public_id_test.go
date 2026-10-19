@@ -331,30 +331,3 @@ func TestReplaceProviderRoutesKeepsManualAliasesWithSharedUpstream(t *testing.T)
 		t.Fatalf("manual alias rewritten: %#v", manualAfter)
 	}
 }
-
-func TestDropProviderUpstreamUniqueIndexOnUpgrade(t *testing.T) {
-	ctx := context.Background()
-	database := openTestDatabase(t)
-	if err := database.db.WithContext(ctx).Exec("CREATE UNIQUE INDEX IF NOT EXISTS uidx_provider_upstream ON model_routes(provider, upstream_model)").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	assertSQLiteMissingIndexes(t, database, "model_routes", "uidx_provider_upstream")
-	assertSQLiteIndexes(t, database, "model_routes", "idx_model_routes_provider_upstream")
-
-	repo := NewModelRepository(database)
-	if _, err := repo.Create(ctx, model.Route{
-		PublicID: "shared-a", Provider: account.ProviderBuild, UpstreamModel: "shared-upstream",
-		Capability: model.CapabilityResponses, Origin: model.OriginManual, Enabled: true,
-	}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := repo.Create(ctx, model.Route{
-		PublicID: "shared-b", Provider: account.ProviderBuild, UpstreamModel: "shared-upstream",
-		Capability: model.CapabilityResponses, Origin: model.OriginManual, Enabled: true,
-	}, nil); err != nil {
-		t.Fatal(err)
-	}
-}

@@ -528,49 +528,6 @@ func TestFreshSchemaContract(t *testing.T) {
 	}
 }
 
-func TestInitializeSchemaAddsUnclassifiedAuthFailureCountWithoutLosingCredentialState(t *testing.T) {
-	ctx := context.Background()
-	database := openTestDatabase(t)
-	repo := NewAccountRepository(database)
-	now := time.Now().UTC()
-	created, _, err := repo.UpsertByIdentity(ctx, account.Credential{
-		Provider: account.ProviderBuild, Name: "legacy-refresh", SourceKey: "legacy-refresh",
-		EncryptedAccessToken: "preserved-access", EncryptedRefreshToken: "preserved-refresh",
-		ExpiresAt: now.Add(time.Hour), AuthStatus: account.AuthStatusActive,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := repo.UpdateCredentialRefreshFailure(ctx, created.ID, repository.CredentialRefreshFailure{
-		Count: 3, UnclassifiedAuthFailureCount: 3, RetryAt: now.Add(10 * time.Minute),
-		Status: 401, Code: "oauth_http_401", Message: "Unauthorized",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.withSQLiteForeignKeysDisabled(ctx, func() error {
-		if err := database.db.WithContext(ctx).Migrator().DropConstraint(&accountCredentialModel{}, "chk_account_credentials_refresh_unclassified_auth_failures"); err != nil {
-			return err
-		}
-		return database.db.WithContext(ctx).Migrator().DropColumn(&accountCredentialModel{}, "RefreshUnclassifiedAuthFailures")
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if !database.db.WithContext(ctx).Migrator().HasColumn(&accountCredentialModel{}, "RefreshUnclassifiedAuthFailures") {
-		t.Fatal("refresh_unclassified_auth_failures column was not restored")
-	}
-	stored, err := repo.Get(ctx, created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.EncryptedAccessToken != "preserved-access" || stored.EncryptedRefreshToken != "preserved-refresh" || stored.RefreshFailureCount != 3 || stored.LastRefreshErrorStatus != 401 || stored.LastRefreshErrorCode != "oauth_http_401" || stored.RefreshUnclassifiedAuthCount != 0 {
-		t.Fatalf("credential state after schema upgrade = %#v", stored)
-	}
-}
-
 func TestSchemaRejectsInvalidPersistentValues(t *testing.T) {
 	database := openTestDatabase(t)
 	ctx := context.Background()

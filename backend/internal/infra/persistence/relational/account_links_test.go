@@ -137,64 +137,6 @@ func TestReconcileProviderLinksUsesOnlyHighConfidenceIdentity(t *testing.T) {
 	}
 }
 
-func TestInitializeSchemaBackfillsStableWebEgressIdentity(t *testing.T) {
-	ctx := context.Background()
-	database, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "legacy-account-links.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	repo := NewAccountRepository(database)
-	digest := strings.Repeat("c", 64)
-	web := createLinkedAccountTestCredential(t, ctx, repo, account.Credential{
-		Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, Name: "legacy-web", SourceKey: "sso:" + digest,
-		FailureCount: 3, LastError: "preserve-me",
-	})
-	build := createLinkedAccountTestCredential(t, ctx, repo, account.Credential{
-		Provider: account.ProviderBuild, AuthType: account.AuthTypeOAuth, Name: "legacy-build", SourceKey: "legacy-build",
-	})
-	if err := repo.LinkWebToBuild(ctx, web.ID, build.ID); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	if err := repo.SaveQuotaWindows(ctx, web.ID, account.WebTierAuto, now, []account.QuotaWindow{{
-		AccountID: web.ID, Mode: "weekly", Remaining: 7, Total: 10, WindowSeconds: 3600, SyncedAt: &now, Source: account.QuotaSourceUpstream,
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.db.Migrator().DropConstraint(&webAccountProfileModel{}, "chk_web_account_profiles_egress_identity"); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.db.Migrator().DropColumn(&webAccountProfileModel{}, "EgressIdentity"); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatalf("migration is not idempotent: %v", err)
-	}
-	web, err = repo.Get(ctx, web.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	build, err = repo.Get(ctx, build.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	windows, err := repo.GetQuotaWindows(ctx, []uint64{web.ID})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantIdentity := "sso_" + digest[:32]
-	if web.EgressIdentity != wantIdentity || build.EgressIdentity != wantIdentity || web.FailureCount != 3 || web.LastError != "preserve-me" || len(windows[web.ID]) != 1 || windows[web.ID][0].Remaining != 7 {
-		t.Fatalf("migration result web=%#v buildIdentity=%q windows=%#v", web, build.EgressIdentity, windows[web.ID])
-	}
-}
-
 func TestReconcileWebConsoleUsesUniqueUserIDAcrossDifferentSSOTokens(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

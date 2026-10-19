@@ -34,50 +34,6 @@ func priceDatabases(t *testing.T, run func(*testing.T, *Database)) {
 	})
 }
 
-func TestModelPriceSchemaUpgradeIsIdempotent(t *testing.T) {
-	priceDatabases(t, func(t *testing.T, database *Database) {
-		ctx := context.Background()
-		db := database.db.WithContext(ctx)
-		// Simulate a database from before the price book.
-		if err := db.Exec("DROP TABLE IF EXISTS model_prices").Error; err != nil {
-			t.Fatal(err)
-		}
-		if err := db.Migrator().DropColumn(&requestAuditModel{}, "PriceID"); err != nil {
-			t.Fatal(err)
-		}
-		eventID := "evt_price_upgrade_" + uuid.NewString()[:8]
-		if err := db.Exec("INSERT INTO request_audits (event_id, request_id, client_key_id, model_route_id, provider, operation, usage_source, status_code, created_at) VALUES (?, 'legacy', 1, 1, 'grok_build', 'responses', 'none', 200, ?)", eventID, time.Now().UTC()).Error; err != nil {
-			t.Fatal(err)
-		}
-		for range 2 {
-			if err := database.InitializeSchema(ctx); err != nil {
-				t.Fatal(err)
-			}
-		}
-		var priceID uint64 = 99
-		if err := db.Raw("SELECT price_id FROM request_audits WHERE event_id = ?", eventID).Scan(&priceID).Error; err != nil || priceID != 0 {
-			t.Fatalf("legacy audit price_id = %d, %v", priceID, err)
-		}
-		repo := NewModelPriceRepository(database)
-		provider := "p" + uuid.NewString()[:8]
-		first, err := repo.Replace(ctx, pricing.Price{Provider: provider, PricingModel: "m", Operation: pricing.OperationImage, Rates: pricing.Rates{OutputImage: 5}}, time.Now().UTC())
-		if err != nil {
-			t.Fatal(err)
-		}
-		// The partial unique index allows exactly one active row per key.
-		duplicate := modelPriceModel{Provider: provider, PricingModel: "m", Operation: "image", CreatedAt: time.Now().UTC()}
-		if err := mapError(db.Create(&duplicate).Error); !errors.Is(err, repository.ErrConflict) {
-			t.Fatalf("second active row err = %v", err)
-		}
-		if err := db.Model(&modelPriceModel{}).Where("id = ?", first.ID).Update("output_image_ticks", -1).Error; err == nil {
-			t.Fatal("negative rate accepted")
-		}
-		if err := db.Create(&modelPriceModel{Provider: provider, PricingModel: "m", Operation: "audio", CreatedAt: time.Now().UTC()}).Error; err == nil {
-			t.Fatal("unknown operation accepted")
-		}
-	})
-}
-
 func TestModelPriceRepositoryIsAppendOnly(t *testing.T) {
 	priceDatabases(t, func(t *testing.T, database *Database) {
 		ctx := context.Background()

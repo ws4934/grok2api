@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,58 +15,15 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
-// mediaJobModelBeforeKinds is media_jobs as released before image jobs.
-type mediaJobModelBeforeKinds struct {
-	ID              string  `gorm:"size:64;primaryKey;check:chk_media_jobs_id,length(id) BETWEEN 1 AND 64"`
-	RequestID       string  `gorm:"size:64;not null;check:chk_media_jobs_request_id,length(request_id) BETWEEN 1 AND 64"`
-	ClientKeyID     uint64  `gorm:"not null;check:chk_media_jobs_client_key_id,client_key_id > 0"`
-	ClientKeyName   string  `gorm:"size:160;not null;default:''"`
-	ClientIP        string  `gorm:"size:45;not null;default:''"`
-	AccountID       *uint64 `gorm:"check:chk_media_jobs_account_id,account_id IS NULL OR account_id > 0"`
-	AccountName     string  `gorm:"size:160;not null;default:''"`
-	EgressNodeID    *uint64
-	EgressNodeName  string `gorm:"size:160;not null;default:''"`
-	EgressScope     string `gorm:"size:32;not null;default:''"`
-	EgressMode      string `gorm:"size:16;not null;default:'';check:chk_media_jobs_egress_mode,egress_mode IN ('','direct','proxy')"`
-	Provider        string `gorm:"size:32;not null"`
-	Model           string `gorm:"size:255;not null"`
-	ModelRouteID    uint64 `gorm:"not null"`
-	UpstreamModel   string `gorm:"size:255;not null"`
-	Operation       string `gorm:"size:16;not null;default:'generate';check:chk_media_jobs_operation,operation IN ('generate','edit','extend')"`
-	Prompt          string `gorm:"type:text;not null"`
-	Seconds         int    `gorm:"not null;check:chk_media_jobs_seconds,seconds BETWEEN 0 AND 15"`
-	Size            string `gorm:"size:32;not null;default:''"`
-	Quality         string `gorm:"size:32;not null;default:''"`
-	Status          string `gorm:"size:32;not null;check:chk_media_jobs_status,status IN ('queued','in_progress','completed','failed')"`
-	Progress        int    `gorm:"not null"`
-	InputJSON       string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_input_json,length(input_json) <= 33554432"`
-	InputImageCount *int   `gorm:"check:chk_media_jobs_input_image_count,input_image_count IS NULL OR input_image_count BETWEEN 0 AND 8"`
-	UpstreamURL     string `gorm:"type:text;not null;default:''"`
-	ResultAssetID   string `gorm:"size:64;not null;default:''"`
-	ContentType     string `gorm:"size:128;not null;default:''"`
-	ErrorCode       string `gorm:"size:100;not null;default:''"`
-	ErrorMessage    string `gorm:"size:512;not null;default:''"`
-	LeaseUntil      *time.Time
-	ClaimToken      string    `gorm:"size:64;not null;default:''"`
-	CreatedAt       time.Time `gorm:"not null"`
-	UpdatedAt       time.Time `gorm:"not null"`
-	CompletedAt     *time.Time
-	UsageRecordedAt *time.Time
-	Account         *accountModel   `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL"`
-	ClientKey       *clientKeyModel `gorm:"foreignKey:ClientKeyID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT"`
-}
-
-func (mediaJobModelBeforeKinds) TableName() string { return "media_jobs" }
-
-func TestMediaJobKindUpgradeKeepsVideoRows(t *testing.T) {
-	verifyMediaJobKindUpgrade(t, openTestDatabase(t))
-}
-
 func TestMediaJobLifecycleFencesClaimsAndCancels(t *testing.T) {
 	verifyMediaJobLifecycle(t, openTestDatabase(t))
 }
 
-func TestPostgresMediaJobKindUpgradeAndLifecycle(t *testing.T) {
+func TestMediaJobChecks(t *testing.T) {
+	verifyMediaJobChecks(t, openTestDatabase(t))
+}
+
+func TestPostgresMediaJobChecksAndLifecycle(t *testing.T) {
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("TEST_POSTGRES_DSN is not configured")
@@ -78,8 +37,70 @@ func TestPostgresMediaJobKindUpgradeAndLifecycle(t *testing.T) {
 	if err := database.InitializeSchema(ctx); err != nil {
 		t.Fatal(err)
 	}
-	verifyMediaJobKindUpgrade(t, database)
+	verifyMediaJobChecks(t, database)
 	verifyMediaJobLifecycle(t, database)
+}
+
+func TestMediaJobModelTagsAllowAllVideoProvidersAndPrimaryScopes(t *testing.T) {
+	modelType := reflect.TypeOf(mediaJobModel{})
+	providerField, ok := modelType.FieldByName("Provider")
+	if !ok {
+		t.Fatal("Provider field missing")
+	}
+	providerTag := providerField.Tag.Get("gorm")
+	if strings.Contains(providerTag, "check:") {
+		t.Fatalf("closed provider tag: %s", providerTag)
+	}
+	scopeField, ok := modelType.FieldByName("EgressScope")
+	if !ok {
+		t.Fatal("EgressScope field missing")
+	}
+	scopeTag := scopeField.Tag.Get("gorm")
+	if strings.Contains(scopeTag, "check:") {
+		t.Fatalf("closed scope tag: %s", scopeTag)
+	}
+	inputField, ok := modelType.FieldByName("InputJSON")
+	if !ok {
+		t.Fatal("InputJSON field missing")
+	}
+	inputTag := inputField.Tag.Get("gorm")
+	limitLiteral := strconv.Itoa(mediadomain.MaxInputJSONBytes)
+	if !strings.Contains(inputTag, "chk_media_jobs_input_json") ||
+		!strings.Contains(inputTag, limitLiteral) || strings.Contains(inputTag, "1048576") {
+		t.Fatalf("input_json tag = %q, want limit %s", inputTag, limitLiteral)
+	}
+	countField, ok := modelType.FieldByName("InputImageCount")
+	if !ok {
+		t.Fatal("InputImageCount field missing")
+	}
+	countTag := countField.Tag.Get("gorm")
+	maxImages := strconv.Itoa(mediadomain.MaxInputImages)
+	if !strings.Contains(countTag, "chk_media_jobs_input_image_count") ||
+		!strings.Contains(countTag, "IS NULL OR input_image_count BETWEEN 0 AND "+maxImages) {
+		t.Fatalf("input_image_count tag = %q, want max %s", countTag, maxImages)
+	}
+	operationField, ok := modelType.FieldByName("Operation")
+	if !ok {
+		t.Fatal("Operation field missing")
+	}
+	operationTag := operationField.Tag.Get("gorm")
+	if !strings.Contains(operationTag, "chk_media_jobs_operation") ||
+		!strings.Contains(operationTag, "'generate','edit','extend'") {
+		t.Fatalf("operation tag = %q", operationTag)
+	}
+	for fieldName, expected := range map[string]string{
+		"Seconds": "seconds BETWEEN 0 AND 60",
+		"Size":    "length(trim(size)) BETWEEN 0 AND 32",
+		"Quality": "length(trim(quality)) BETWEEN 0 AND 32",
+	} {
+		field, exists := modelType.FieldByName(fieldName)
+		if !exists {
+			t.Fatalf("%s field missing", fieldName)
+		}
+		if tag := field.Tag.Get("gorm"); !strings.Contains(tag, expected) {
+			t.Fatalf("%s tag = %q, want %q", fieldName, tag, expected)
+		}
+	}
 }
 
 func mediaJobFixtureOwners(t *testing.T, database *Database, name string) (uint64, uint64, uint64) {
@@ -115,62 +136,20 @@ func testImageJob(id string, accountID, keyID uint64, status mediadomain.Status)
 	}
 }
 
-func verifyMediaJobKindUpgrade(t *testing.T, database *Database) {
+// verifyMediaJobChecks 覆盖 media_jobs 的约束与仓库校验：幂等键按 client key 唯一、图像任务不收
+// 视频操作、视频最长 60 秒、Provider 只查写法（是否支持视频由网关按注册表判断）、主出口不能是
+// 资源作用域。
+func verifyMediaJobChecks(t *testing.T, database *Database) {
 	t.Helper()
 	ctx := context.Background()
-	accountID, keyID, otherKeyID := mediaJobFixtureOwners(t, database, "kind-upgrade")
-	migrator := database.db.WithContext(ctx).Migrator()
-	if err := migrator.DropTable("media_jobs"); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrator.CreateTable(&mediaJobModelBeforeKinds{}); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC().Truncate(time.Second)
-	completedAt := now.Add(time.Minute)
-	images := 2
-	legacy := mediaJobModelBeforeKinds{
-		ID: "video_before_kinds", RequestID: "request-before-kinds", ClientKeyID: keyID, AccountID: &accountID,
-		Provider: "grok_console", Model: "grok-imagine-video", ModelRouteID: 7, UpstreamModel: "Console/grok-imagine-video",
-		Operation: "extend", Prompt: "keep me", Seconds: 10, Size: "16:9", Quality: "720p", Status: "completed", Progress: 100,
-		InputJSON: `{"image_urls":["https://example.com/a.png","https://example.com/b.png"]}`, InputImageCount: &images,
-		ResultAssetID: "vid_before_kinds_00000001", ContentType: "video/mp4", CreatedAt: now, UpdatedAt: now, CompletedAt: &completedAt,
-	}
-	if err := database.db.WithContext(ctx).Create(&legacy).Error; err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		if err := database.InitializeSchema(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
+	accountID, keyID, otherKeyID := mediaJobFixtureOwners(t, database, "checks")
 	jobs := NewMediaJobRepository(database)
-	stored, err := jobs.GetMediaJob(ctx, legacy.ID, keyID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.Kind != mediadomain.KindVideo || stored.ItemCount != 1 || stored.Operation != mediadomain.VideoOperationExtend || stored.Seconds != 10 ||
-		stored.Prompt != "keep me" || stored.Status != mediadomain.StatusCompleted || stored.ResultAssetID != legacy.ResultAssetID ||
-		stored.InputImageCount != 2 || stored.Price != nil || stored.Generation != 0 || stored.Checkpoint != "{}" || len(stored.ResultAssetIDs) != 0 ||
-		!stored.CompletedAt.Equal(completedAt) {
-		t.Fatalf("upgraded video row = %#v", stored)
-	}
-	if input, err := jobs.GetMediaJobInput(ctx, legacy.ID); err != nil || input != legacy.InputJSON {
-		t.Fatalf("upgraded input = %q err = %v", input, err)
-	}
-	for name, marker := range map[string]string{"chk_media_jobs_operation": "kind", "chk_media_jobs_seconds": "kind", "chk_media_jobs_status": "uncertain", "chk_media_jobs_kind": "image"} {
-		definition, err := database.constraintDefinition(ctx, consoleConstraint{model: &mediaJobModel{}, table: "media_jobs", name: name})
-		if err != nil || !strings.Contains(definition, marker) {
-			t.Fatalf("%s = %q err = %v", name, definition, err)
-		}
-	}
-
-	image := testImageJob("resp_img_upgrade_ok", accountID, keyID, mediadomain.StatusUncertain)
+	image := testImageJob("resp_img_checks_ok", accountID, keyID, mediadomain.StatusUncertain)
 	image.IdempotencyKey, image.PayloadHash = "client-retry-1", strings.Repeat("a", 64)
 	if err := jobs.CreateMediaJob(ctx, image); err != nil {
 		t.Fatalf("image job rejected: %v", err)
 	}
-	duplicate := testImageJob("resp_img_upgrade_dup", accountID, keyID, mediadomain.StatusQueued)
+	duplicate := testImageJob("resp_img_checks_dup", accountID, keyID, mediadomain.StatusQueued)
 	duplicate.IdempotencyKey = image.IdempotencyKey
 	if err := jobs.CreateMediaJob(ctx, duplicate); !errors.Is(err, repository.ErrConflict) {
 		t.Fatalf("duplicate idempotency key = %v", err)
@@ -183,15 +162,27 @@ func verifyMediaJobKindUpgrade(t *testing.T, database *Database) {
 	if found, err := jobs.GetMediaJobByIdempotencyKey(ctx, keyID, image.IdempotencyKey); err != nil || found.ID != image.ID || found.PayloadHash != image.PayloadHash || found.Params != image.Params {
 		t.Fatalf("idempotent lookup = %#v err = %v", found, err)
 	}
-	extend := testImageJob("resp_img_upgrade_extend", accountID, keyID, mediadomain.StatusQueued)
+	extend := testImageJob("resp_img_checks_extend", accountID, keyID, mediadomain.StatusQueued)
 	extend.Operation = mediadomain.VideoOperationExtend
 	if err := jobs.CreateMediaJob(ctx, extend); err == nil {
 		t.Fatal("image job accepted the video-only extend operation")
 	}
-	longVideo := testMediaJob("video_upgrade_long", accountID, keyID, mediadomain.StatusQueued, now)
-	longVideo.Seconds = 61
-	if err := jobs.CreateMediaJob(ctx, longVideo); err == nil {
-		t.Fatal("video job accepted 61 seconds")
+	for _, tc := range []struct {
+		id, provider, scope string
+		seconds             int
+		ok                  bool
+	}{
+		{"video_checks_adobe", "adobe", "", 30, true},
+		{"video_checks_console", "grok_console", "grok_console", 15, true},
+		{"video_checks_long", "adobe", "", 61, false},
+		{"video_checks_bad_provider", "Invalid-Provider", "", 6, false},
+		{"video_checks_asset_scope", "grok_web", "grok_console_asset", 6, false},
+	} {
+		job := testMediaJob(tc.id, accountID, keyID, mediadomain.StatusQueued, time.Now().UTC())
+		job.Provider, job.EgressScope, job.Seconds = tc.provider, tc.scope, tc.seconds
+		if err := jobs.CreateMediaJob(ctx, job); (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok=%v", tc.id, err, tc.ok)
+		}
 	}
 }
 

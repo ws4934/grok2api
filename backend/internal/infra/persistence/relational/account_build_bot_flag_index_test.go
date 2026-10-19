@@ -177,38 +177,3 @@ func TestBuildBotFlagBackfillUsesAccessTokenCompareAndSwap(t *testing.T) {
 		t.Fatalf("matching backfill did not update credential = %#v, err=%v", stored, err)
 	}
 }
-
-func TestInitializeSchemaAddsBuildBotFlagIndexWithoutLosingCredentials(t *testing.T) {
-	ctx := context.Background()
-	database := openTestDatabase(t)
-	repo := NewAccountRepository(database)
-	created, _, err := repo.UpsertByIdentity(ctx, account.Credential{
-		Provider: account.ProviderBuild, Name: "legacy", SourceKey: "legacy",
-		EncryptedAccessToken: "preserved-secret", AuthStatus: account.AuthStatusActive,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := database.db.WithContext(ctx).Exec("DROP INDEX idx_account_credentials_build_bot_flag").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := database.withSQLiteForeignKeysDisabled(ctx, func() error {
-		if err := database.db.WithContext(ctx).Migrator().DropConstraint(&accountCredentialModel{}, "chk_account_credentials_build_bot_flag_source"); err != nil {
-			return err
-		}
-		return database.db.WithContext(ctx).Migrator().DropColumn(&accountCredentialModel{}, "BuildBotFlagSource")
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if !database.db.WithContext(ctx).Migrator().HasColumn(&accountCredentialModel{}, "BuildBotFlagSource") {
-		t.Fatal("build_bot_flag_source column was not restored")
-	}
-	assertSQLiteIndexes(t, database, "account_credentials", "idx_account_credentials_build_bot_flag")
-	stored, err := repo.Get(ctx, created.ID)
-	if err != nil || stored.EncryptedAccessToken != "preserved-secret" || stored.BuildBotFlagSource != 0 {
-		t.Fatalf("stored credential = %#v, err=%v", stored, err)
-	}
-}

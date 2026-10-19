@@ -31,67 +31,6 @@ func accountStateDatabases(t *testing.T, run func(*testing.T, *Database)) {
 	})
 }
 
-func TestInitializeSchemaAddsCredentialStateAndPlanColumns(t *testing.T) {
-	accountStateDatabases(t, func(t *testing.T, database *Database) {
-		ctx := context.Background()
-		migrator := database.db.WithContext(ctx).Migrator()
-		if !migrator.HasColumn(&accountModel{}, "Plan") || !migrator.HasColumn(&accountCredentialModel{}, "EncryptedState") {
-			t.Fatal("fresh schema is missing plan or encrypted_state")
-		}
-		repo := NewAccountRepository(database)
-		suffix := uuid.NewString()
-		created, _, err := repo.UpsertByIdentity(ctx, account.Credential{
-			Provider: account.ProviderBuild, AuthType: account.AuthTypeOAuth, Name: "legacy", SourceKey: "legacy-state-" + suffix,
-			EncryptedAccessToken: testEncryptedToken, Enabled: true, AuthStatus: account.AuthStatusActive,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Simulate a database created before the columns existed.
-		dropColumns := func() error {
-			if err := database.db.WithContext(ctx).Migrator().DropColumn(&accountModel{}, "Plan"); err != nil {
-				return err
-			}
-			return database.db.WithContext(ctx).Migrator().DropColumn(&accountCredentialModel{}, "EncryptedState")
-		}
-		if database.dialect == "sqlite" {
-			err = database.withSQLiteForeignKeysDisabled(ctx, dropColumns)
-		} else {
-			err = dropColumns()
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		if migrator.HasColumn(&accountModel{}, "Plan") || migrator.HasColumn(&accountCredentialModel{}, "EncryptedState") {
-			t.Fatal("legacy columns were not dropped")
-		}
-		for range 2 {
-			if err := database.InitializeSchema(ctx); err != nil {
-				t.Fatal(err)
-			}
-		}
-		// Drop pooled connections: PostgreSQL statement caches must not outlive the in-process schema change.
-		sqlDB, err := database.db.DB()
-		if err != nil {
-			t.Fatal(err)
-		}
-		sqlDB.SetMaxIdleConns(0)
-		sqlDB.SetMaxIdleConns(4)
-		stored, err := repo.Get(ctx, created.ID)
-		if err != nil || stored.Plan != "" || stored.EncryptedState != "" || stored.EncryptedAccessToken != testEncryptedToken {
-			t.Fatalf("upgraded account = %#v, err = %v", stored, err)
-		}
-		stored.Plan = "plus"
-		stored.EncryptedState = "sealed"
-		if _, err := repo.Update(ctx, stored); err != nil {
-			t.Fatal(err)
-		}
-		if reloaded, err := repo.Get(ctx, created.ID); err != nil || reloaded.Plan != "plus" || reloaded.EncryptedState != "sealed" {
-			t.Fatalf("reloaded = %#v, err = %v", reloaded, err)
-		}
-	})
-}
-
 func TestCredentialStateAndPlanPersistence(t *testing.T) {
 	accountStateDatabases(t, func(t *testing.T, database *Database) {
 		ctx := context.Background()

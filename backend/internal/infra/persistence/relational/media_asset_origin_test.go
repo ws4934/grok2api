@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestMediaAssetOriginSchemaFreshAndUpgrade(t *testing.T) {
+func TestMediaAssetOriginSchema(t *testing.T) {
 	priceDatabases(t, func(t *testing.T, database *Database) {
 		ctx := context.Background()
 		db := database.db.WithContext(ctx)
@@ -27,7 +27,7 @@ func TestMediaAssetOriginSchemaFreshAndUpgrade(t *testing.T) {
 			}
 		}
 
-		// Fresh schema: origin round-trips and is clipped to the column sizes.
+		// Origin round-trips and is clipped to the column sizes.
 		assertOriginIndexes()
 		fresh := testMediaAsset("media_origin_fresh_"+suffix, "media/origin-fresh-"+suffix+".png", time.Now().UTC())
 		fresh.Origin = mediadomain.Origin{
@@ -45,33 +45,6 @@ func TestMediaAssetOriginSchemaFreshAndUpgrade(t *testing.T) {
 		want.Model, want.Prompt = strings.Repeat("m", 255), strings.Repeat("猫", 1000)
 		if stored.Origin != want {
 			t.Fatalf("stored origin = %#v", stored.Origin)
-		}
-
-		// Simulate a database from before provenance, then upgrade twice.
-		for _, name := range originIndexes {
-			if err := db.Exec("DROP INDEX IF EXISTS " + name).Error; err != nil {
-				t.Fatal(err)
-			}
-		}
-		for _, field := range []string{"Provider", "Model", "UpstreamModel", "ClientKeyID", "ClientKeyName", "AccountID", "AccountName", "Operation", "JobID", "RequestID", "Prompt"} {
-			if err := db.Migrator().DropColumn(&mediaAssetModel{}, field); err != nil {
-				t.Fatal(err)
-			}
-		}
-		legacyID := "media_origin_legacy_" + suffix
-		if err := db.Exec("INSERT INTO media_assets (id, kind, storage_key, mime_type, size_bytes, sha256, created_at) VALUES (?, 'image', ?, 'image/png', 1, ?, ?)",
-			legacyID, "media/"+legacyID+".png", strings.Repeat("a", 64), time.Now().UTC()).Error; err != nil {
-			t.Fatal(err)
-		}
-		for range 2 {
-			if err := database.InitializeSchema(ctx); err != nil {
-				t.Fatal(err)
-			}
-		}
-		assertOriginIndexes()
-		legacy, err := repo.GetMediaAsset(ctx, legacyID)
-		if err != nil || legacy.Origin != (mediadomain.Origin{}) {
-			t.Fatalf("legacy asset = %#v, err = %v", legacy, err)
 		}
 	})
 }

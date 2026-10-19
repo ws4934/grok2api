@@ -11,34 +11,6 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
-type legacyAllEgressNode struct {
-	ID    uint64 `gorm:"primaryKey;autoIncrement"`
-	Scope string `gorm:"size:32;not null"`
-}
-
-func (legacyAllEgressNode) TableName() string { return "egress_nodes" }
-
-type legacyEgressNodeWithoutProxyPool struct {
-	ID                          uint64 `gorm:"primaryKey;autoIncrement"`
-	Name                        string `gorm:"size:160;not null"`
-	Scope                       string `gorm:"size:32;not null"`
-	Enabled                     bool   `gorm:"not null;default:true"`
-	EncryptedProxyURL           string `gorm:"type:text;not null;default:''"`
-	UserAgent                   string `gorm:"size:512;not null;default:''"`
-	EncryptedCloudflareCookie   string `gorm:"type:text;not null;default:''"`
-	ClearanceRefreshedAt        *time.Time
-	ClearanceFingerprint        string  `gorm:"size:64;not null;default:''"`
-	ClearanceBindingFingerprint string  `gorm:"size:64;not null;default:''"`
-	Health                      float64 `gorm:"not null;default:1"`
-	FailureCount                int     `gorm:"not null;default:0"`
-	CooldownUntil               *time.Time
-	LastError                   string    `gorm:"size:512"`
-	CreatedAt                   time.Time `gorm:"not null"`
-	UpdatedAt                   time.Time `gorm:"not null"`
-}
-
-func (legacyEgressNodeWithoutProxyPool) TableName() string { return "egress_nodes" }
-
 func TestEgressRepositorySortsInDatabase(t *testing.T) {
 	ctx := context.Background()
 	database, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "egress-sort.db"))
@@ -162,65 +134,10 @@ func TestEgressStateUpdatesDoNotOverwriteClearanceOrHealth(t *testing.T) {
 	}
 }
 
-func TestInitializeSchemaRemovesAndRejectsLegacyAllEgressNodes(t *testing.T) {
+// Build 与 Web 共用一个 all 作用域会混用 UA、健康度和冷却状态，数据库直接拒绝。
+func TestEgressNodesRejectAllScope(t *testing.T) {
 	ctx := context.Background()
-	database, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "legacy-egress.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	if err := database.db.WithContext(ctx).AutoMigrate(&legacyAllEgressNode{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.db.WithContext(ctx).Create(&legacyAllEgressNode{Scope: "all"}).Error; err != nil {
-		t.Fatal(err)
-	}
-
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	var count int64
-	if err := database.db.WithContext(ctx).Model(&egressNodeModel{}).Where("scope = ?", "all").Count(&count).Error; err != nil {
-		t.Fatal(err)
-	}
-	if count != 0 {
-		t.Fatalf("legacy all-scope nodes = %d", count)
-	}
-	if _, err := NewEgressRepository(database).CreateEgressNode(ctx, egress.Node{Name: "invalid", Scope: egress.Scope("all"), Enabled: true}); err == nil {
+	if _, err := NewEgressRepository(openTestDatabase(t)).CreateEgressNode(ctx, egress.Node{Name: "invalid", Scope: egress.Scope("all"), Enabled: true}); err == nil {
 		t.Fatal("all-scope node passed the database constraint")
-	}
-}
-
-func TestInitializeSchemaAddsProxyPoolWithoutChangingExistingRows(t *testing.T) {
-	ctx := context.Background()
-	database, err := OpenSQLite(ctx, filepath.Join(t.TempDir(), "legacy-proxy-pool.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	if err := database.db.WithContext(ctx).AutoMigrate(&legacyEgressNodeWithoutProxyPool{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.db.WithContext(ctx).Create(&legacyEgressNodeWithoutProxyPool{Name: "existing", Scope: string(egress.ScopeBuild), Enabled: true}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatalf("repeated schema initialization failed: %v", err)
-	}
-	repo := NewEgressRepository(database)
-	existing, err := repo.GetEgressNode(ctx, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if existing.ProxyPool || existing.Name != "existing" || existing.ProbeProvider != "" || existing.IPv4Probe.Status != egress.ProbeStatusUnknown || existing.IPv6Probe.Status != egress.ProbeStatusUnknown {
-		t.Fatalf("legacy row changed during migration: %#v", existing)
-	}
-	existing.ProxyPool = true
-	updated, err := repo.UpdateEgressNode(ctx, existing)
-	if err != nil || !updated.ProxyPool {
-		t.Fatalf("proxy pool did not round trip: %#v, err=%v", updated, err)
 	}
 }
