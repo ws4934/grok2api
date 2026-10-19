@@ -549,11 +549,14 @@ func (s *Service) CancelBilling(ctx context.Context, eventID string) error {
 	if !ok {
 		return nil
 	}
-	if err := repo.CancelBillingReservation(ctx, eventID); err != nil {
+	err := repo.CancelBillingReservation(ctx, eventID)
+	// The request is over either way: a reservation whose cancel failed must
+	// stop being protected so the expiry cleanup can reclaim it.
+	s.CompleteBilling(eventID)
+	if err != nil {
 		perfmetrics.Default.Inc("billing_reservation_total", perfmetrics.Labels{Subsystem: "billing", Operation: "cancel", Outcome: "failed"})
 		return fmt.Errorf("%w: 取消计费预留: %v", ErrRuntimeUnavailable, err)
 	}
-	s.CompleteBilling(eventID)
 	perfmetrics.Default.Inc("billing_reservation_total", perfmetrics.Labels{Subsystem: "billing", Operation: "cancel", Outcome: "success"})
 	return nil
 }
