@@ -92,11 +92,12 @@ func (d *Database) dropChannelTables(ctx context.Context) error {
 }
 
 // dropChatGPTImageChatRoutes removes the Responses routes that model discovery
-// created for ChatGPT image models before every gpt-image-* ID was treated as
-// an image route. Referencing tables cascade; audits keep their route IDs.
+// created for ChatGPT image models before every gpt-image-* and
+// codex-gpt-image-* ID was treated as an image route. Referencing tables
+// cascade; audits keep their route IDs.
 func (d *Database) dropChatGPTImageChatRoutes(ctx context.Context) error {
 	return d.db.WithContext(ctx).
-		Where("provider = ? AND origin = ? AND capability = ? AND upstream_model LIKE ?", account.ProviderChatGPT, model.OriginDiscovered, model.CapabilityResponses, "gpt-image-%").
+		Where("provider = ? AND origin = ? AND capability = ? AND (upstream_model LIKE ? OR upstream_model LIKE ?)", account.ProviderChatGPT, model.OriginDiscovered, model.CapabilityResponses, "gpt-image-%", "codex-gpt-image-%").
 		Delete(&modelRouteModel{}).Error
 }
 

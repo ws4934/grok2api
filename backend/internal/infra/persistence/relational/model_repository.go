@@ -838,10 +838,11 @@ func discoveredRouteDefaults(provider account.Provider, upstreamModel string) (s
 		return upstreamModel, model.CapabilityResponses
 	case account.ProviderChatGPT:
 		// The image routes come from the ChatGPT catalog; discovery only sees
-		// their upstream IDs (gpt-image-2, gpt-image-2.5*) through the account
-		// capability overlay and must never turn them into chat routes.
+		// their upstream IDs (gpt-image-2, gpt-image-2.5*, codex-gpt-image-*)
+		// through the account capability overlay and must never turn them into
+		// chat routes.
 		switch {
-		case strings.HasPrefix(upstreamModel, "gpt-image-"):
+		case strings.HasPrefix(strings.TrimPrefix(upstreamModel, "codex-"), "gpt-image-"):
 			return upstreamModel, model.CapabilityImage
 		case upstreamModel == "chatgpt-tts":
 			return upstreamModel, model.CapabilityTTS

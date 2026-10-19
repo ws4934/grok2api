@@ -1106,7 +1106,7 @@ export function AccountsPage() {
                     <TableCell className="min-w-0"><AccountNameCell account={account} /></TableCell>
                     <TableCell className="text-center whitespace-nowrap"><TypeCell account={account} /></TableCell>
                     <TableCell className="text-center whitespace-nowrap"><AccountStatus account={account} blockingQuotaMode={ui.blockingQuotaMode} /></TableCell>
-                    <TableCell className={refreshable ? undefined : "px-6"}><QuotaCell account={account} locale={i18n.language} quotaModes={(catalogEntry?.quotaModes ?? []).filter((mode) => !ui.hiddenQuotaModes?.includes(mode))} /></TableCell>
+                    <TableCell className={refreshable ? undefined : "px-6"}><QuotaCell account={account} locale={i18n.language} quotaModes={catalogEntry?.quotaModes ?? []} /></TableCell>
                     {refreshable ? <TableCell className="whitespace-nowrap pl-4 text-xs">
                       {account.credentialKind ? (
                         <Tooltip>

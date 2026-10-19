@@ -47,8 +47,6 @@ export type ProviderAccountUI = {
   egressScopes?: readonly string[];
   // An exhausted window of this mode shows the account as waiting for reset.
   blockingQuotaMode?: string;
-  // Quota modes that only route requests (derived from shown windows); not displayed.
-  hiddenQuotaModes?: readonly string[];
   // Overrides the provider refresh-quotas task and the per-account quota refresh.
   syncAll?: (onProgress: (value: AccountTaskProgressDTO) => void, signal: AbortSignal) => Promise<AccountBatchResultDTO>;
   refreshQuota?: (id: string) => Promise<unknown>;

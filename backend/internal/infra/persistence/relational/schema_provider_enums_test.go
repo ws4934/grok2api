@@ -106,17 +106,21 @@ func TestChatGPTImageAndVoiceModelsNeverBecomeChatRoutes(t *testing.T) {
 		if err := db.db.WithContext(ctx).Create(&legacy).Error; err != nil {
 			t.Fatal(err)
 		}
+		legacyCodex := modelRouteModel{PublicID: "chatgpt/codex-gpt-image-2", Provider: string(account.ProviderChatGPT), UpstreamModel: "codex-gpt-image-2", Capability: string(model.CapabilityResponses), Origin: string(model.OriginDiscovered), Enabled: true}
+		if err := db.db.WithContext(ctx).Create(&legacyCodex).Error; err != nil {
+			t.Fatal(err)
+		}
 		if err := db.InitializeSchema(ctx); err != nil {
 			t.Fatal(err)
 		}
 		repo := NewModelRepository(db)
-		if err := repo.UpsertDiscovered(ctx, account.ProviderChatGPT, []string{"gpt-6", "gpt-image-2.5", "gpt-image-2.5-sunburst", "chatgpt-tts", "chatgpt-transcribe"}); err != nil {
+		if err := repo.UpsertDiscovered(ctx, account.ProviderChatGPT, []string{"gpt-6", "gpt-image-2.5", "gpt-image-2.5-sunburst", "codex-gpt-image-2.5", "chatgpt-tts", "chatgpt-transcribe"}); err != nil {
 			t.Fatal(err)
 		}
 		// PostgreSQL tests share one database, so only this test's models are checked.
 		var chatRoutes []modelRouteModel
 		if err := db.db.WithContext(ctx).Where("provider = ? AND capability = ? AND upstream_model IN ?", account.ProviderChatGPT, model.CapabilityResponses,
-			[]string{"gpt-6", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "chatgpt-tts", "chatgpt-transcribe"}).Find(&chatRoutes).Error; err != nil {
+			[]string{"gpt-6", "gpt-image-2.5", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "codex-gpt-image-2", "codex-gpt-image-2.5", "chatgpt-tts", "chatgpt-transcribe"}).Find(&chatRoutes).Error; err != nil {
 			t.Fatal(err)
 		}
 		if len(chatRoutes) != 1 || chatRoutes[0].UpstreamModel != "gpt-6" {

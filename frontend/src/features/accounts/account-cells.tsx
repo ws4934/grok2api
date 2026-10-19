@@ -40,12 +40,13 @@ export function QuotaModeBar({ mode, window, locale, compact = false, recoveryPr
 }
 
 // Remaining-count bars (total may be unknown) with the reset time in the tooltip.
-export function QuotaWindowRow({ items, locale }: { items: Array<{ label: string; window: QuotaWindow }>; locale: string }) {
+// percent: remaining and total are percent points. details replace the reset line in the tooltip.
+export function QuotaWindowRow({ items, locale }: { items: Array<{ label: string; window: QuotaWindow; percent?: boolean; details?: string[] }>; locale: string }) {
   const { t } = useTranslation();
   if (items.length === 0) return null;
   return (
     <div className="grid w-full min-w-0 divide-x divide-border/70" style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}>
-      {items.map(({ label, window }) => {
+      {items.map(({ label, window, percent: inPercent, details }) => {
         const exhausted = window.remaining <= 0;
         const hasTotal = window.total > 0;
         const used = hasTotal ? Math.max(0, window.total - window.remaining) : 0;
@@ -58,6 +59,8 @@ export function QuotaWindowRow({ items, locale }: { items: Array<{ label: string
                   <span className={cn("truncate", exhausted ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>{label}</span>
                   {exhausted ? (
                     <span className="shrink-0 truncate text-amber-600 dark:text-amber-400">{t("accounts.imagineQuotaExhausted")}</span>
+                  ) : inPercent ? (
+                    <span className="shrink-0 tabular-nums text-muted-foreground">{formatNumber(window.remaining, locale, 0)}%</span>
                   ) : hasTotal ? (
                     <span className="shrink-0 tabular-nums text-muted-foreground">{formatNumber(window.remaining, locale, 0)}/{formatNumber(window.total, locale, 0)}</span>
                   ) : (
@@ -70,8 +73,10 @@ export function QuotaWindowRow({ items, locale }: { items: Array<{ label: string
               </button>
             </TooltipTrigger>
             <TooltipContent>
-              <div>{exhausted ? t("accounts.imagineQuotaExhausted") : t("accounts.imagineQuotaRemaining", { remaining: formatNumber(window.remaining, locale, 0) })}</div>
-              <div className="text-muted-foreground">{window.resetAt ? t("accounts.quotaResetAt", { time: formatDateTime(window.resetAt, locale) }) : t("accounts.quotaResetUnknown")}</div>
+              <div>{exhausted ? t("accounts.imagineQuotaExhausted") : t(inPercent ? "accounts.quotaRemainingPercent" : "accounts.imagineQuotaRemaining", { remaining: formatNumber(window.remaining, locale, 0) })}</div>
+              {details ? details.map((line) => <div key={line} className="text-muted-foreground">{line}</div>) : (
+                <div className="text-muted-foreground">{window.resetAt ? t("accounts.quotaResetAt", { time: formatDateTime(window.resetAt, locale) }) : t("accounts.quotaResetUnknown")}</div>
+              )}
             </TooltipContent>
           </Tooltip>
         );
