@@ -55,7 +55,7 @@ database:
     dsn: "postgres://user:password@127.0.0.1:5432/grok2api?sslmode=disable"
     # [按需修改] 根据数据库连接容量调整。
     maxOpenConns: 50
-    maxIdleConns: 10
+    maxIdleConns: 50
 
 runtimeStore:
   # [按需修改] 单实例使用 memory；多实例改为 redis。

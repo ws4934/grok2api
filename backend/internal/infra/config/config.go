@@ -911,7 +911,7 @@ func defaultConfig() Config {
 		Database: DatabaseConfig{
 			Driver:   "sqlite",
 			SQLite:   SQLiteDatabaseConfig{Path: "./data/backend.db"},
-			Postgres: PostgresDatabaseConfig{MaxOpenConns: 50, MaxIdleConns: 10},
+			Postgres: PostgresDatabaseConfig{MaxOpenConns: 50, MaxIdleConns: 50},
 		},
 		RuntimeStore: RuntimeStoreConfig{
 			Driver: "memory",
