@@ -181,16 +181,6 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
 | ChatGPT 聊天 | 本地估算的输入、输出 token × 自定义的每百万 token 价格 |
 | 图片 | 只对成功交付的图片计费；失败和结果不确定的不收费 |
 
-## 从扩展渠道版本升级
-
-旧的"扩展渠道"子系统（渠道中心、`channel_*` 表、`/api/admin/v1/channels/*`）已删除。升级时会自动：
-
-- 删除 `channel_*` 表。
-- 删除旧渠道导入的 ChatGPT 账号（`auth_type = channel_v1`）。
-- 删除旧渠道创建的路由。
-
-ChatGPT 账号需要在账号页重新添加，价格需要在模型页重新设置。原有密钥范围为"全部"的，自动包含 ChatGPT。
-
 ## Adobe（Firefly）接入
 
 Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游是 `firefly-3p.ff.adobe.io` 的异步任务（submit → poll → 取结果 URL）。模型目录是一张手写表，请求体按官网前端的规则构建。图像走共享的 `AsyncImageAdapter`、视频走 `VideoAdapter`，持久任务、账号池、出口、定价、审计全部复用。

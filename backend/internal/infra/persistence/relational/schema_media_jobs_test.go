@@ -76,7 +76,7 @@ func TestMediaJobModelTagsAllowAllVideoProvidersAndPrimaryScopes(t *testing.T) {
 	countTag := countField.Tag.Get("gorm")
 	maxImages := strconv.Itoa(mediadomain.MaxInputImages)
 	if !strings.Contains(countTag, "chk_media_jobs_input_image_count") ||
-		!strings.Contains(countTag, "IS NULL OR input_image_count BETWEEN 0 AND "+maxImages) {
+		!strings.Contains(countTag, "not null") || !strings.Contains(countTag, "input_image_count BETWEEN 0 AND "+maxImages) {
 		t.Fatalf("input_image_count tag = %q, want max %s", countTag, maxImages)
 	}
 	operationField, ok := modelType.FieldByName("Operation")

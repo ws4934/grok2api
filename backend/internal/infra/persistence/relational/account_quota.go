@@ -211,7 +211,7 @@ func (r *AccountRepository) HasQuotaWindows(ctx context.Context, accountID uint6
 		return false, err
 	}
 	var count int64
-	query := r.db.db.WithContext(ctx).Model(&quotaWindowModel{}).Where("account_id = ? AND synced_at IS NOT NULL", accountID)
+	query := r.db.db.WithContext(ctx).Model(&quotaWindowModel{}).Where("account_id = ?", accountID)
 	if account.Provider(providerRow.Provider) == account.ProviderConsole {
 		// Only the complete authoritative /usage snapshot counts as initialized;
 		// a partial or local window is replaced by the next sync.
@@ -402,9 +402,8 @@ func (r *AccountRepository) ListQuotaRecoveryWindows(ctx context.Context, limit 
 }
 
 // ListStaleQuotaAccountIDs 返回指定 Provider 中缺失或长期未同步额度的账号，供低优先级追赶任务使用。
-// An account is stale when its last quota sync is missing or older than before,
-// or when any window was flagged for resync (synced_at NULL). Never-synced and
-// flagged accounts come first on every dialect.
+// An account is stale when its last quota sync is missing or older than before;
+// never-synced accounts come first on every dialect.
 func (r *AccountRepository) ListStaleQuotaAccountIDs(ctx context.Context, providers []account.Provider, before time.Time, limit int) ([]uint64, error) {
 	if len(providers) == 0 {
 		return []uint64{}, nil
@@ -416,7 +415,7 @@ func (r *AccountRepository) ListStaleQuotaAccountIDs(ctx context.Context, provid
 	err := r.db.db.WithContext(ctx).
 		Table("provider_accounts AS account").
 		Where("account.provider IN ? AND account.enabled = ? AND account.auth_status = ?", providers, true, account.AuthStatusActive).
-		Where("account.quota_synced_at IS NULL OR account.quota_synced_at < ? OR EXISTS (SELECT 1 FROM account_quota_windows AS quota WHERE quota.account_id = account.id AND quota.synced_at IS NULL)", before.UTC()).
+		Where("account.quota_synced_at IS NULL OR account.quota_synced_at < ?", before.UTC()).
 		Order("CASE WHEN account.quota_synced_at IS NULL THEN 0 ELSE 1 END, account.quota_synced_at ASC, account.id ASC").
 		Limit(limit).
 		Pluck("account.id", &ids).Error

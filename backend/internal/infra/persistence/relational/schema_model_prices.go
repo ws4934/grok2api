@@ -1,9 +1,6 @@
 package relational
 
-import (
-	"context"
-	"time"
-)
+import "time"
 
 // modelPriceModel is one append-only administrator price version.
 type modelPriceModel struct {
@@ -23,13 +20,3 @@ type modelPriceModel struct {
 }
 
 func (modelPriceModel) TableName() string { return "model_prices" }
-
-// ensureModelPriceSchema creates the price book idempotently. The partial
-// unique index keeps one active row per key on SQLite and PostgreSQL.
-func (d *Database) ensureModelPriceSchema(ctx context.Context) error {
-	db := d.db.WithContext(ctx)
-	if err := db.AutoMigrate(&modelPriceModel{}); err != nil {
-		return err
-	}
-	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS uidx_model_prices_active ON model_prices(provider, pricing_model, operation) WHERE superseded_at IS NULL").Error
-}

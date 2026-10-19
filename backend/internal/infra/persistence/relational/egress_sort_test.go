@@ -134,10 +134,10 @@ func TestEgressStateUpdatesDoNotOverwriteClearanceOrHealth(t *testing.T) {
 	}
 }
 
-// Build 与 Web 共用一个 all 作用域会混用 UA、健康度和冷却状态，数据库直接拒绝。
+// Build 与 Web 共用一个 all 作用域会混用 UA、健康度和冷却状态，仓库直接拒绝。
 func TestEgressNodesRejectAllScope(t *testing.T) {
 	ctx := context.Background()
 	if _, err := NewEgressRepository(openTestDatabase(t)).CreateEgressNode(ctx, egress.Node{Name: "invalid", Scope: egress.Scope("all"), Enabled: true}); err == nil {
-		t.Fatal("all-scope node passed the database constraint")
+		t.Fatal("all-scope node was accepted")
 	}
 }

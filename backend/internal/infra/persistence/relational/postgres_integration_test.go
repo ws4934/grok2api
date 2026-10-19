@@ -283,18 +283,9 @@ func TestPostgresRepositoriesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.db.WithContext(ctx).Migrator().DropColumn(&clientKeyModel{}, "ProviderScopeMode"); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.db.WithContext(ctx).Migrator().DropColumn(&clientKeyModel{}, "TierScopeMask"); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.InitializeSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
 	loadedPoolKey, err := keyRepository.Get(ctx, poolKey.ID)
 	if err != nil || !loadedPoolKey.ProviderScope.All || loadedPoolKey.TierScope != clientkey.TierScopeAll {
-		t.Fatalf("postgres migrated client key account scope = %+v, err = %v", loadedPoolKey.AccountScope(), err)
+		t.Fatalf("postgres default client key account scope = %+v, err = %v", loadedPoolKey.AccountScope(), err)
 	}
 	loadedPoolKey.ProviderScope = clientkey.ProviderScopeOf(account.ProviderBuild, account.ProviderWeb)
 	loadedPoolKey.TierScope = clientkey.TierScopeSuper

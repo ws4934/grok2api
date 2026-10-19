@@ -13,8 +13,6 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const retiredWebImageQualityLitePublicID = "Web/grok-imagine-image-quality-lite"
-
 func (r *ModelRepository) UpsertDiscovered(ctx context.Context, provider account.Provider, upstreamModels []string) error {
 	changed := false
 	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -297,16 +295,9 @@ func (r *ModelRepository) ReplaceProviderRoutes(ctx context.Context, provider ac
 		// stable route IDs and key permissions survive.
 		for index, row := range matched {
 			if row.PublicID != values[index].PublicID {
-				if row.PublicID != retiredWebImageQualityLitePublicID {
-					if err := preserveModelRouteAlias(tx, row.PublicID, row.ID); err != nil {
-						return err
-					}
+				if err := preserveModelRouteAlias(tx, row.PublicID, row.ID); err != nil {
+					return err
 				}
-			}
-		}
-		if provider == account.ProviderWeb {
-			if err := tx.Delete(&modelRouteAliasModel{}, "alias = ?", retiredWebImageQualityLitePublicID).Error; err != nil {
-				return err
 			}
 		}
 		for _, row := range matched {

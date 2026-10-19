@@ -606,8 +606,9 @@ func TestReplaceProviderRoutesSplitsWebImagineProtocolProducts(t *testing.T) {
 	if route := byUpstream["grok-imagine-image-2.0"]; route.ID == 0 || route.PublicID != "Web/grok-imagine-image-2.0" {
 		t.Fatalf("Imagine 2.0 route = %#v", route)
 	}
-	if _, err := repo.GetByPublicIDIncludingDisabled(ctx, "grok-imagine-image-quality-lite"); !errors.Is(err, repository.ErrNotFound) {
-		t.Fatalf("retired Web image model remains callable: %v", err)
+	// 改名后的旧名照常留作兼容名称。
+	if route, err := repo.GetByPublicIDIncludingDisabled(ctx, "grok-imagine-image-quality-lite"); err != nil || route.ID != qualityID {
+		t.Fatalf("renamed Web image model alias = %#v, %v", route, err)
 	}
 	var promotedAliasCount int64
 	if err := database.db.WithContext(ctx).Model(&modelRouteAliasModel{}).

@@ -34,6 +34,31 @@ func priceDatabases(t *testing.T, run func(*testing.T, *Database)) {
 	})
 }
 
+// The partial unique index keeps one active row per key; CHECKs reject bad rates and operations.
+func TestModelPriceSchemaKeepsOneActiveRow(t *testing.T) {
+	priceDatabases(t, func(t *testing.T, database *Database) {
+		db := database.db.WithContext(context.Background())
+		provider := "p" + uuid.NewString()[:8]
+		now := time.Now().UTC()
+		if err := db.Create(&modelPriceModel{Provider: provider, PricingModel: "m", Operation: "image", CreatedAt: now, SupersededAt: &now}).Error; err != nil {
+			t.Fatal(err)
+		}
+		active := modelPriceModel{Provider: provider, PricingModel: "m", Operation: "image", CreatedAt: now}
+		if err := db.Create(&active).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := mapError(db.Create(&modelPriceModel{Provider: provider, PricingModel: "m", Operation: "image", CreatedAt: now}).Error); !errors.Is(err, repository.ErrConflict) {
+			t.Fatalf("second active row err = %v", err)
+		}
+		if err := db.Model(&modelPriceModel{}).Where("id = ?", active.ID).Update("output_image_ticks", -1).Error; err == nil {
+			t.Fatal("negative rate accepted")
+		}
+		if err := db.Create(&modelPriceModel{Provider: provider, PricingModel: "m", Operation: "audio", CreatedAt: now}).Error; err == nil {
+			t.Fatal("unknown operation accepted")
+		}
+	})
+}
+
 func TestModelPriceRepositoryIsAppendOnly(t *testing.T) {
 	priceDatabases(t, func(t *testing.T, database *Database) {
 		ctx := context.Background()

@@ -62,13 +62,3 @@ func TestClientKeyProviderScopesRoundTrip(t *testing.T) {
 		t.Fatalf("deleted key kept %d provider scope rows", count)
 	}
 }
-
-// providerScopeMaskFixtures maps each retired bitmask to the scope it must become.
-var providerScopeMaskFixtures = []struct {
-	mask uint8
-	want clientkeydomain.ProviderScope
-}{
-	{mask: 7, want: clientkeydomain.AllProviders()},
-	{mask: 1, want: clientkeydomain.ProviderScopeOf(account.ProviderBuild)},
-	{mask: 3, want: clientkeydomain.ProviderScopeOf(account.ProviderBuild, account.ProviderWeb)},
-}

@@ -696,7 +696,7 @@ func mediaJobFromDomain(value media.Job) *mediaJobModel {
 		Provider: value.Provider,
 		Model:    value.Model, ModelRouteID: value.ModelRouteID, UpstreamModel: value.UpstreamModel, Operation: string(operation),
 		Prompt: value.Prompt, Seconds: value.Seconds, Size: value.Size, Quality: value.Quality,
-		Status: string(value.Status), Progress: value.Progress, InputJSON: value.InputJSON, InputImageCount: mediaJobInputImageCount(value.InputImageCount), UpstreamURL: value.UpstreamURL,
+		Status: string(value.Status), Progress: value.Progress, InputJSON: value.InputJSON, InputImageCount: value.InputImageCount, UpstreamURL: value.UpstreamURL,
 		ResultAssetID: value.ResultAssetID, ResultAssetIDs: string(resultAssetIDs), ItemCount: itemCount, CheckpointJSON: checkpoint, Submitted: value.Submitted,
 		ParamsJSON: string(params), IdempotencyKey: value.IdempotencyKey, PayloadHash: value.PayloadHash, Generation: value.Generation,
 		ResumeItem: value.ResumeItem, ResumeGeneration: value.ResumeGeneration,
@@ -719,10 +719,6 @@ func mediaJobToDomain(row mediaJobModel) media.Job {
 	if row.AccountID != nil {
 		accountID = *row.AccountID
 	}
-	var inputImageCount int
-	if row.InputImageCount != nil {
-		inputImageCount = *row.InputImageCount
-	}
 	operation := media.VideoOperation(row.Operation)
 	if operation == "" {
 		operation = media.VideoOperationGenerate
@@ -742,7 +738,7 @@ func mediaJobToDomain(row mediaJobModel) media.Job {
 		Provider: row.Provider,
 		Model:    row.Model, ModelRouteID: row.ModelRouteID, UpstreamModel: row.UpstreamModel, Operation: operation,
 		Prompt: row.Prompt, Seconds: row.Seconds, Size: row.Size, Quality: row.Quality,
-		Status: media.Status(row.Status), Progress: row.Progress, InputJSON: row.InputJSON, InputImageCount: inputImageCount, UpstreamURL: row.UpstreamURL,
+		Status: media.Status(row.Status), Progress: row.Progress, InputJSON: row.InputJSON, InputImageCount: row.InputImageCount, UpstreamURL: row.UpstreamURL,
 		ResultAssetID: row.ResultAssetID, ResultAssetIDs: resultAssetIDs, ItemCount: max(1, row.ItemCount), Checkpoint: row.CheckpointJSON, Submitted: row.Submitted,
 		Params: params, IdempotencyKey: row.IdempotencyKey, PayloadHash: row.PayloadHash, Generation: row.Generation,
 		ResumeItem: row.ResumeItem, ResumeGeneration: row.ResumeGeneration,
@@ -755,8 +751,6 @@ func mediaJobToDomain(row mediaJobModel) media.Job {
 	}
 	return job
 }
-
-func mediaJobInputImageCount(value int) *int { return &value }
 
 func mediaJobAccountID(value uint64) *uint64 {
 	if value == 0 {

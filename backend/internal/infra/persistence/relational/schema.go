@@ -36,6 +36,7 @@ var schemaModels = []any{
 	&clientKeyModelPermission{},
 	&clientKeyProviderScopeModel{},
 	&billingReservationModel{},
+	&modelPriceModel{},
 	&requestAuditModel{},
 	&requestAuditAttemptModel{},
 	&responseOwnershipModel{},
@@ -69,6 +70,8 @@ var schemaIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_model_routes_grouping ON model_routes(provider, public_id, upstream_model, origin, id)",
 	"CREATE INDEX IF NOT EXISTS idx_model_routes_created_id ON model_routes(created_at DESC, id DESC)",
 	"CREATE INDEX IF NOT EXISTS idx_model_routes_enabled ON model_routes(enabled, public_id, id)",
+	// One active price per key; superseded rows keep the history.
+	"CREATE UNIQUE INDEX IF NOT EXISTS uidx_model_prices_active ON model_prices(provider, pricing_model, operation) WHERE superseded_at IS NULL",
 	"CREATE INDEX IF NOT EXISTS idx_model_route_aliases_route ON model_route_aliases(model_route_id, alias)",
 	"CREATE INDEX IF NOT EXISTS idx_model_route_accounts_account_route ON model_route_accounts(account_id, model_route_id)",
 	// Routing overlays, route availability and the dashboard look capabilities up by model.
@@ -144,9 +147,6 @@ func (d *Database) initializeSchema(ctx context.Context) error {
 	}
 	if migrateErr != nil {
 		return fmt.Errorf("初始化数据库表: %w", migrateErr)
-	}
-	if err := d.ensureModelPriceSchema(ctx); err != nil {
-		return fmt.Errorf("初始化模型价格表: %w", err)
 	}
 	for _, statement := range schemaIndexes {
 		if err := db.Exec(statement).Error; err != nil {
