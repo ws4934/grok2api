@@ -1513,6 +1513,17 @@ func (r *Registry) QuotaRefreshGroup(value account.Provider, upstreamModel strin
 	return metadata.QuotaRefreshGroup(upstreamModel)
 }
 
+// QuotaSnapshotProvider reports a provider whose quota sync reads every
+// window at once: after a sync, a mode without a window is not limited.
+func (r *Registry) QuotaSnapshotProvider(value account.Provider) bool {
+	adapter, ok := r.Quota(value)
+	if !ok {
+		return false
+	}
+	_, snapshot := adapter.(interface{ QuotaModeSyncReadsSnapshot() })
+	return snapshot
+}
+
 func (r *Registry) TierOrder(value account.Provider, upstreamModel string) []account.WebTier {
 	adapter, ok := r.Get(value)
 	if !ok {

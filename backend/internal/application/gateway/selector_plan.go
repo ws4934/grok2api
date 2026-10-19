@@ -204,6 +204,8 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 		if candidate.QuotaWindow != nil && candidate.QuotaWindow.Source == account.QuotaSourceUpstream {
 			score.quotaKnown = true
 			score.quotaAvailable = candidate.QuotaWindow.Remaining > 0
+		} else if s.quotaUnlimited(candidate) {
+			score.quotaKnown, score.quotaAvailable = true, true
 		}
 		if candidate.Billing != nil {
 			score.remaining = candidate.Billing.Remaining()

@@ -85,7 +85,7 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 			}
 		} else {
 			concurrencyHints := make(map[int]int, min(len(indexes), request.windowSize*segmentedWindowsBeforeFullFallback))
-			cohorts := segmentedCandidateCohorts(values, indexes, now, tierOrder, s.staticCatalog(request.provider), preferFreeBuild, request.cursor, request.windowSize, segmentedWindowsBeforeFullFallback)
+			cohorts := segmentedCandidateCohorts(values, indexes, now, tierOrder, s.staticCatalog(request.provider), preferFreeBuild, s.quotaUnlimited, request.cursor, request.windowSize, segmentedWindowsBeforeFullFallback)
 			roundWindows := 0
 			fallbackToFull := false
 			for cohortIndex, bucket := range cohorts {
@@ -188,7 +188,9 @@ func (s *Selector) claimSegmentedPlan(ctx context.Context, plan *candidatePlan, 
 }
 
 // catalogTiers marks tierOrder as a static-catalog entitlement (see candidateSupportsModel).
-func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, catalogTiers, preferFreeBuild bool, cursor uint64, windowSize, maxWindows int) []segmentedSelectorCohortBucket {
+// unlimited, when set, reports an account whose synced snapshot does not limit
+// the requested mode.
+func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, catalogTiers, preferFreeBuild bool, unlimited func(account.RoutingCandidate) bool, cursor uint64, windowSize, maxWindows int) []segmentedSelectorCohortBucket {
 	if windowSize <= 0 || maxWindows <= 0 {
 		return nil
 	}
@@ -206,6 +208,8 @@ func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int,
 		if candidate.QuotaWindow != nil && candidate.QuotaWindow.Source == account.QuotaSourceUpstream {
 			cohort.quotaKnown = true
 			cohort.quotaAvailable = candidate.QuotaWindow.Remaining > 0
+		} else if unlimited != nil && unlimited(candidate) {
+			cohort.quotaKnown, cohort.quotaAvailable = true, true
 		}
 		if candidate.Billing != nil {
 			cohort.billingFresh = now.Sub(candidate.Billing.SyncedAt) <= 30*time.Minute

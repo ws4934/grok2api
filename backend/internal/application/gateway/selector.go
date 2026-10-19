@@ -1226,6 +1226,20 @@ func (s *Selector) quotaConsumptionSnapshot(provider account.Provider) map[accou
 	return result
 }
 
+// quotaUnlimited reports an account whose last complete quota snapshot listed
+// no window for the requested mode, e.g. ChatGPT Plus has no message limit. It
+// ranks as known to have quota, not as an unknown fallback; concurrency limits
+// and in-flight balancing still apply.
+func (s *Selector) quotaUnlimited(candidate account.RoutingCandidate) bool {
+	if candidate.QuotaWindow != nil || candidate.Credential.QuotaSyncedAt == nil {
+		return false
+	}
+	snapshots, ok := s.tierOrders.(interface {
+		QuotaSnapshotProvider(account.Provider) bool
+	})
+	return ok && snapshots.QuotaSnapshotProvider(candidate.Credential.Provider)
+}
+
 func quotaWindowExhausted(candidate account.RoutingCandidate, consumed map[accountQuotaConsumptionKey]int) bool {
 	if candidate.QuotaWindow == nil {
 		return false
