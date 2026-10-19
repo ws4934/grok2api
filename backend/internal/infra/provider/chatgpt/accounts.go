@@ -23,7 +23,7 @@ import (
 )
 
 const oauthProfile = "platform_pkce_v1"
-const oauthClientID = "app_2SKx67EdpoN0G6j64fRvigXD"
+const oauthClientID = "app_2SKx67EdpoN0G6j64rFvigXD"
 const oauthRedirect = "https://platform.openai.com/auth/callback"
 const defaultAccountName = "ChatGPT account"
 
