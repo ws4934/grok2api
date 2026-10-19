@@ -17,7 +17,7 @@ var (
 	// ErrVideoParameterInvalid and ErrVideoOperationUnsupported are wrapped by
 	// VideoRequestValidator rejections.
 	ErrVideoParameterInvalid     = errors.New("视频请求参数无效")
-	ErrVideoOperationUnsupported = errors.New("视频编辑/延长仅支持路由到 Console grok-imagine-video")
+	ErrVideoOperationUnsupported = errors.New("所选模型不支持该视频操作")
 )
 
 // HTTPStatusError preserves the upstream status when a streaming or asynchronous Provider cannot return a Response.
