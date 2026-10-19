@@ -2618,7 +2618,7 @@ func TestImageStreamPropagatesWithoutTouchingChatQuota(t *testing.T) {
 	if logs, total, err := auditRepo.List(ctx, 0, 10); err != nil || total != 0 || len(logs) != 0 {
 		t.Fatalf("audit persisted before finalization: logs=%#v total=%d err=%v", logs, total, err)
 	}
-	result.Finalize(Usage{}, "", "")
+	result.Finalize(Usage{OutputImages: 1}, "", "")
 	_ = result.Body.Close()
 
 	logs, total, err := auditRepo.List(ctx, 0, 10)
@@ -2702,7 +2702,7 @@ func TestImageStreamPropagatesWithoutTouchingChatQuota(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _ = io.ReadAll(editResult.Body)
-	editResult.Finalize(Usage{}, "", "")
+	editResult.Finalize(Usage{OutputImages: 3}, "", "")
 	_ = editResult.Body.Close()
 	logs, total, err = auditRepo.List(ctx, 0, 10)
 	if err != nil || total != 4 || logs[0].RequestID != "req-image-edit" || logs[0].MediaInputImages != 2 || logs[0].MediaOutputImages != 3 || logs[0].PricingModel != "grok-imagine-image-edit-2k" || logs[0].EstimatedCostInUSDTicks != 2_300_000_000 {

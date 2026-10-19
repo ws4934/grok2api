@@ -370,7 +370,7 @@ func (s *Service) executeImage(
 	effectiveQuotaMode := lease.QuotaMode
 	accountID := credential.ID
 	var once sync.Once
-	finalize := func(_ Usage, _ string, errorCode string) {
+	finalize := func(usage Usage, _ string, errorCode string) {
 		once.Do(func() {
 			successful := auditRequestSucceeded(response.StatusCode, errorCode)
 			lease.completeSelectorObservation(successful)
@@ -383,13 +383,18 @@ func (s *Service) executeImage(
 			record.Attempts = failureAttempts.snapshot()
 			record.DurationMS, record.CreatedAt = time.Since(startedAt).Milliseconds(), time.Now().UTC()
 			applyAuditEgress(&record, egressTrace, route.Provider)
-			if successful {
+			deliveredCount, quotaUnits, billed := requestedCount, response.QuotaUnits, successful
+			if streaming {
+				// A stream bills the images it forwarded, also when it failed
+				// after them: the client and the gallery already have them.
+				deliveredCount = min(requestedCount, int(usage.OutputImages))
+				quotaUnits, billed = deliveredCount, deliveredCount > 0
+			} else if response.QuotaUnits > 0 {
 				// A provider that delivers fewer images than requested reports the
 				// delivered count in QuotaUnits; only those are billed.
-				deliveredCount := requestedCount
-				if response.QuotaUnits > 0 {
-					deliveredCount = min(requestedCount, response.QuotaUnits)
-				}
+				deliveredCount = min(requestedCount, response.QuotaUnits)
+			}
+			if billed {
 				record.MediaOutputImages = int64(max(0, deliveredCount))
 				var pricing audit.PricingResult
 				var priced bool
@@ -407,7 +412,7 @@ func (s *Service) executeImage(
 			refreshMode, decrementMode, availabilityMode := quotaFinalizationModes(effectiveQuotaMode, quotaRefreshGroup)
 			if successful && quotaKind == provider.QuotaRemoteWindow && refreshMode != "" {
 				if decrementMode != "" && decrementMode != "weekly" {
-					units := max(1, response.QuotaUnits)
+					units := max(1, quotaUnits)
 					var updated bool
 					err := budget.run("quota_decrement", finalizationQuotaBudget, func(stageCtx context.Context) error {
 						var decrementErr error

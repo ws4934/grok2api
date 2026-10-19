@@ -41,3 +41,16 @@ func TestWriteResultImageEditStreamCompletes(t *testing.T) {
 		t.Fatalf("final = %q body = %q", code, recorder.Body.String())
 	}
 }
+
+// Images a stream forwarded before an error event reach Finalize, so the
+// gateway can bill them; partial previews are not counted.
+func TestWriteResultImageStreamCountsImagesBeforeAnError(t *testing.T) {
+	body := "event: image_generation.partial_image\ndata: " + `{"type":"image_generation.partial_image","b64_json":"AA==","partial_image_index":0}` + "\n\n" +
+		"event: image_generation.completed\ndata: " + `{"type":"image_generation.completed","b64_json":"AA==","usage":{"total_tokens":0,"input_tokens":0,"output_tokens":0}}` + "\n\n" +
+		": keep-alive\n\n" +
+		"event: error\ndata: " + `{"type":"error","error":{"type":"server_error","code":"upstream_error","message":"second image failed","param":null}}` + "\n\n"
+	recorder, usage, code := writeImageStream(t, body)
+	if code != "upstream_stream_error" || usage.OutputImages != 1 || recorder.Body.String() != body {
+		t.Fatalf("final = %q images = %d body = %q", code, usage.OutputImages, recorder.Body.String())
+	}
+}

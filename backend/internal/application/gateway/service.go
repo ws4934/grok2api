@@ -152,6 +152,8 @@ type Usage struct {
 	ContextInputTokens     int64
 	ContextOutputTokens    int64
 	ResponseModel          string
+	// OutputImages counts the final images an image stream forwarded.
+	OutputImages int64
 }
 
 type Result struct {
