@@ -83,6 +83,8 @@ var schemaIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_model_routes_enabled ON model_routes(enabled, public_id, id)",
 	"CREATE INDEX IF NOT EXISTS idx_model_route_aliases_route ON model_route_aliases(model_route_id, alias)",
 	"CREATE INDEX IF NOT EXISTS idx_model_route_accounts_account_route ON model_route_accounts(account_id, model_route_id)",
+	// Routing overlays, route availability and the dashboard look capabilities up by model.
+	"CREATE INDEX IF NOT EXISTS idx_account_model_capabilities_model ON account_model_capabilities(upstream_model, account_id)",
 	"CREATE INDEX IF NOT EXISTS idx_account_model_quota_blocks_due ON account_model_quota_blocks(cooldown_until, account_id)",
 	"CREATE UNIQUE INDEX IF NOT EXISTS idx_client_keys_prefix ON client_keys(prefix)",
 	"CREATE INDEX IF NOT EXISTS idx_client_keys_created_id ON client_keys(created_at DESC, id DESC)",

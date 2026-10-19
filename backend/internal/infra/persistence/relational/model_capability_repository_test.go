@@ -974,3 +974,18 @@ func TestBuildVideo15DiscoveredAsVideoCapability(t *testing.T) {
 		t.Fatalf("web video route = %#v, err = %v", webVideo, err)
 	}
 }
+
+func TestInitializeSchemaIndexesCapabilitiesByModel(t *testing.T) {
+	verifyCapabilityModelIndex(t, openTestDatabase(t))
+}
+
+func TestPostgresInitializeSchemaIndexesCapabilitiesByModel(t *testing.T) {
+	verifyCapabilityModelIndex(t, openPostgresTestDatabase(t))
+}
+
+func verifyCapabilityModelIndex(t *testing.T, database *Database) {
+	t.Helper()
+	if !database.db.Migrator().HasIndex("account_model_capabilities", "idx_account_model_capabilities_model") {
+		t.Fatal("account_model_capabilities must be indexed by upstream model for routing overlays and availability")
+	}
+}
