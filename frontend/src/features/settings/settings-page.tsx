@@ -28,6 +28,8 @@ export function SettingsPage() {
   const [searchParams] = useSearchParams();
   const [autoCleanConfirm, setAutoCleanConfirm] = useState<"enabled" | "includeDisabled" | null>(null);
   const [unlimitedAttemptsConfirm, setUnlimitedAttemptsConfirm] = useState(false);
+  // The egress pool loads only once its tab is opened (panes are force-mounted).
+  const [egressOpened, setEgressOpened] = useState(false);
   const limitedRoutingAttemptsRef = useRef(3);
   const limitedVideoRoutingAttemptsRef = useRef(999);
   const autoCleanEnabled = form.watch("accounts.autoCleanReauthEnabled") === true;
@@ -80,7 +82,7 @@ export function SettingsPage() {
 
       {loading ? <div className="flex min-h-64 items-center justify-center"><Spinner /></div> : null}
       {snapshot ? (
-        <Tabs defaultValue={searchParams.get("tab") === "about" ? "about" : "build"} className="flex min-w-0 flex-col gap-7 lg:flex-row lg:items-start">
+        <Tabs defaultValue={searchParams.get("tab") === "about" ? "about" : "build"} onValueChange={(value) => { if (value === "delivery") setEgressOpened(true); }} className="flex min-w-0 flex-col gap-7 lg:flex-row lg:items-start">
           <TabsList className="flex h-auto w-full max-w-full shrink-0 justify-start gap-1 overflow-x-auto overscroll-x-contain rounded-none bg-transparent p-0 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden [&>span]:rounded-md [&>span]:bg-muted/70 [&>span]:shadow-none lg:sticky lg:top-[148px] lg:w-56 lg:flex-col lg:items-stretch lg:overflow-visible">
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="build">{t("models.providerGrokBuild")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="web">{t("settings.web.title")}</TabsTrigger>
@@ -225,7 +227,7 @@ export function SettingsPage() {
             </div>
           </SettingsSection>
 
-          <EgressNodes title={t("settings.egress.title")} clearanceMode={activeClearanceMode} />
+          {egressOpened ? <EgressNodes title={t("settings.egress.title")} clearanceMode={activeClearanceMode} /> : null}
           </SettingsPane>
 
           <SettingsPane value="policies">

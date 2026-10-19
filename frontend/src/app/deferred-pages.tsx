@@ -2,18 +2,44 @@ import { lazy, Suspense, type ComponentType, type LazyExoticComponent } from "re
 
 import { Spinner } from "@/components/ui/spinner";
 
-const AccountsPage = lazyNamed(() => import("@/features/accounts/accounts-page"), "AccountsPage");
-const AppShell = lazyNamed(() => import("@/app/app-shell"), "AppShell");
-const RequestAuditsPage = lazyNamed(() => import("@/features/audits/request-audits-page"), "RequestAuditsPage");
-const ClientKeysPage = lazyNamed(() => import("@/features/client-keys/client-keys-page"), "ClientKeysPage");
-const CreativeConsolePage = lazyNamed(() => import("@/features/creative-console/creative-console-page"), "CreativeConsolePage");
-const DashboardPage = lazyNamed(() => import("@/features/dashboard/dashboard-page"), "DashboardPage");
-const ApiDocsPage = lazyNamed(() => import("@/features/docs/api-docs-page"), "ApiDocsPage");
-const GalleryPage = lazyNamed(() => import("@/features/media/gallery-page"), "GalleryPage");
-const MediaJobsPage = lazyNamed(() => import("@/features/media/media-jobs-page"), "MediaJobsPage");
-const ModelsPage = lazyNamed(() => import("@/features/models/models-page"), "ModelsPage");
-const QualityGuardPage = lazyNamed(() => import("@/features/quality-guard/quality-guard-page"), "QualityGuardPage");
-const SettingsPage = lazyNamed(() => import("@/features/settings/settings-page"), "SettingsPage");
+// Keyed by the first path segment, so preloadRoute can find a page by URL.
+const pageLoaders = {
+  "accounts": () => import("@/features/accounts/accounts-page"),
+  "request-audits": () => import("@/features/audits/request-audits-page"),
+  "client-keys": () => import("@/features/client-keys/client-keys-page"),
+  "creative-console": () => import("@/features/creative-console/creative-console-page"),
+  "dashboard": () => import("@/features/dashboard/dashboard-page"),
+  "docs": () => import("@/features/docs/api-docs-page"),
+  "gallery": () => import("@/features/media/gallery-page"),
+  "media-jobs": () => import("@/features/media/media-jobs-page"),
+  "models": () => import("@/features/models/models-page"),
+  "quality-guard": () => import("@/features/quality-guard/quality-guard-page"),
+  "settings": () => import("@/features/settings/settings-page"),
+};
+const loadAppShell = () => import("@/app/app-shell");
+
+const AccountsPage = lazyNamed(pageLoaders["accounts"], "AccountsPage");
+const AppShell = lazyNamed(loadAppShell, "AppShell");
+const RequestAuditsPage = lazyNamed(pageLoaders["request-audits"], "RequestAuditsPage");
+const ClientKeysPage = lazyNamed(pageLoaders["client-keys"], "ClientKeysPage");
+const CreativeConsolePage = lazyNamed(pageLoaders["creative-console"], "CreativeConsolePage");
+const DashboardPage = lazyNamed(pageLoaders["dashboard"], "DashboardPage");
+const ApiDocsPage = lazyNamed(pageLoaders["docs"], "ApiDocsPage");
+const GalleryPage = lazyNamed(pageLoaders["gallery"], "GalleryPage");
+const MediaJobsPage = lazyNamed(pageLoaders["media-jobs"], "MediaJobsPage");
+const ModelsPage = lazyNamed(pageLoaders["models"], "ModelsPage");
+const QualityGuardPage = lazyNamed(pageLoaders["quality-guard"], "QualityGuardPage");
+const SettingsPage = lazyNamed(pageLoaders["settings"], "SettingsPage");
+
+// preloadRoute starts downloading the app shell and the page for pathname
+// while the session is still being restored, instead of after it.
+export function preloadRoute(pathname: string) {
+  const segment = pathname.split("/")[1] || "dashboard";
+  void loadAppShell().catch(() => undefined);
+  if (Object.hasOwn(pageLoaders, segment)) {
+    void pageLoaders[segment as keyof typeof pageLoaders]().catch(() => undefined);
+  }
+}
 
 function lazyNamed<T extends Record<K, ComponentType>, K extends keyof T>(loader: () => Promise<T>, exportName: K): LazyExoticComponent<T[K]> {
   return lazy(async () => ({ default: (await loader())[exportName] }));

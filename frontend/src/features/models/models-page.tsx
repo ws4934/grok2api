@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { AudioLines, CircleDollarSign, Clapperboard, Image as ImageIcon, MessagesSquare, MessageSquareText, Mic, MoreHorizontal, Paintbrush, Pencil, Plus, Radio, RefreshCw, Search, SquareTerminal, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -82,6 +82,7 @@ export function ModelsPage() {
   const modelsQuery = useQuery({
     queryKey: ["models", "grouped", page, pageSize, debouncedSearch, statusFilter, providerFilter, sort.field, sort.order],
     queryFn: () => listModelGroups({ page, pageSize, search: debouncedSearch, status: statusFilter, provider: providerFilter, sortBy: sort.field || undefined, sortOrder: sort.field ? sort.order : undefined }),
+    placeholderData: keepPreviousData,
   });
 
   const accountOptionsQuery = useQuery({

@@ -1,6 +1,8 @@
+import { useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
+import { preloadRoute } from "@/app/deferred-pages";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useAuth } from "@/shared/auth/use-auth";
@@ -8,6 +10,10 @@ import { useAuth } from "@/shared/auth/use-auth";
 export function AuthBoundary() {
   const { status, retryRestore } = useAuth();
   const location = useLocation();
+  const restoring = status === "restoring";
+  useEffect(() => {
+    if (restoring) preloadRoute(location.pathname);
+  }, [restoring, location.pathname]);
 
   if (status === "restoring") {
     return <RestoringScreen />;

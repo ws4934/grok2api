@@ -73,6 +73,7 @@ export function MediaJobsPage() {
     queryKey: ["media", "jobs", kind, page, pageSize, statusFilter, providerFilter, normalizedSearch, sort.field, sort.order],
     queryFn: () => listMediaJobs({ page, pageSize, kind, status: statusFilter, provider: providerFilter, search: normalizedSearch || undefined, sortBy: sort.field, sortOrder: sort.order }),
     refetchInterval: (query) => mediaJobsRefetchInterval(query.state.data?.items),
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[2] === kind ? previous : undefined,
   });
   const statsQuery = useQuery({
     queryKey: ["media", "jobs", "stats", kind],

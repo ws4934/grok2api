@@ -178,6 +178,8 @@ export function AccountsPage() {
       provider, page, pageSize, search: debouncedSearch, status: statusFilter, egress: egressFilter, ...filters,
       sortBy: sort.field, sortOrder: sort.order,
     }),
+    // Keep the previous rows while the next page loads, but not across providers: their columns differ.
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[1] === provider ? previous : undefined,
   });
 
   const summaryQuery = useQuery({

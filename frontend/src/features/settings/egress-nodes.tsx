@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, CircleAlert, CircleHelp, Eye, EyeOff, MoreHorizontal, Network, Pencil, Plus, Power, PowerOff, RefreshCw, Search, Trash2, Upload } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -72,6 +72,7 @@ export function EgressNodes({ title, clearanceMode }: { title: string; clearance
     }),
     staleTime: 15_000,
     refetchOnWindowFocus: true,
+    placeholderData: keepPreviousData,
   });
   const providers = useProviders().data;
   const scopes = [...grokEgressScopes, ...extensionEgressScopes(providers)];

@@ -55,6 +55,7 @@ export function GalleryPage() {
   const assetsQuery = useQuery({
     queryKey: ["media", "assets", kind, page, pageSize, normalizedSearch, filters],
     queryFn: () => listMediaAssets({ page, pageSize, kind, search: normalizedSearch, ...filters }),
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[2] === kind ? previous : undefined,
   });
   const statsQuery = useQuery({
     queryKey: ["media", "images", "stats"],
@@ -196,6 +197,8 @@ export function GalleryPage() {
             total={result.total}
             onPageChange={setPage}
             onPageSizeChange={(value) => { setPageSize(value); setPage(1); }}
+            // Tiles are not virtualized and each video tile fetches its own metadata.
+            pageSizeOptions={[20, 50, 100]}
           />
         ) : undefined}
       >

@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Copy, MoreHorizontal, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
@@ -119,6 +119,7 @@ export function ClientKeysPage() {
   const keysQuery = useQuery({
     queryKey: ["client-keys", page, pageSize, debouncedSearch, statusFilter, modelScopeFilter, sort.field, sort.order],
     queryFn: () => listClientKeys({ page, pageSize, search: debouncedSearch, status: statusFilter, modelScope: modelScopeFilter, sortBy: sort.field || undefined, sortOrder: sort.field ? sort.order : undefined }),
+    placeholderData: keepPreviousData,
   });
   const modelsQuery = useQuery({
     queryKey: ["models", "options", modelOptionsPage, debouncedModelOptionsSearch, modelProviderScope.join(","), modelTierScope.join(",")],
