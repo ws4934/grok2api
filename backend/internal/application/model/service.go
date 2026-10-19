@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,6 +23,14 @@ import (
 
 const defaultModelSyncWorkers = 25
 const syncFailurePersistTimeout = 5 * time.Second
+
+// Resolved routes are dropped by local and bus-delivered invalidation events;
+// the TTL only bounds staleness when a remote event is missed. The entry cap
+// bounds memory for arbitrary requested names.
+const (
+	routeCacheTTL        = 2 * time.Second
+	routeCacheMaxEntries = 1024
+)
 
 var maxModelBatchSize = repository.MaxPageSize * len(modeldomain.Capabilities())
 
@@ -76,6 +86,16 @@ type Service struct {
 	bulkPool  *batch.Pool
 	logger    *slog.Logger
 	syncAll   singleflight.Group
+
+	routeMu         sync.Mutex
+	routeCache      map[string]routeCacheEntry
+	routeGeneration uint64
+}
+
+type routeCacheEntry struct {
+	routes    []modeldomain.Route
+	err       error
+	expiresAt time.Time
 }
 
 func NewService(models repository.ModelRepository, accounts repository.AccountRepository, accountService *accountapp.Service, providers *provider.Registry) *Service {
@@ -249,8 +269,47 @@ func (s *Service) GetByPublicID(ctx context.Context, publicID string) (modeldoma
 	return s.models.GetByPublicID(ctx, publicID)
 }
 
+// GetByPublicIDCandidates resolves a public name on every request, so results
+// (including not-found, which alias resolution probes before the base name) are
+// cached until ApplyInvalidation or routeCacheTTL. Other errors are not cached.
 func (s *Service) GetByPublicIDCandidates(ctx context.Context, publicID string) ([]modeldomain.Route, error) {
-	return s.models.GetByPublicIDCandidates(ctx, publicID)
+	now := time.Now()
+	s.routeMu.Lock()
+	entry, ok := s.routeCache[publicID]
+	generation := s.routeGeneration
+	s.routeMu.Unlock()
+	if ok && now.Before(entry.expiresAt) {
+		return slices.Clone(entry.routes), entry.err
+	}
+	routes, err := s.models.GetByPublicIDCandidates(ctx, publicID)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+	s.routeMu.Lock()
+	// A lookup that overlapped an invalidation may have read the old state.
+	if s.routeGeneration == generation {
+		if s.routeCache == nil || len(s.routeCache) >= routeCacheMaxEntries {
+			s.routeCache = make(map[string]routeCacheEntry)
+		}
+		s.routeCache[publicID] = routeCacheEntry{routes: slices.Clone(routes), err: err, expiresAt: now.Add(routeCacheTTL)}
+	}
+	s.routeMu.Unlock()
+	return routes, err
+}
+
+// ApplyInvalidation drops resolved routes after any change to routes, aliases,
+// bindings, capabilities or an account's enabled/auth state (credential
+// refreshes reactivate accounts). Per-request health and quota events, billing
+// and egress updates cannot change route availability.
+func (s *Service) ApplyInvalidation(event repository.InvalidationEvent) {
+	switch event.Kind {
+	case repository.InvalidationRouteChanged, repository.InvalidationModelBindingChanged, repository.InvalidationAccountCapabilityChanged,
+		repository.InvalidationAccountStateChanged, repository.InvalidationAccountCredentialChanged:
+		s.routeMu.Lock()
+		s.routeCache = nil
+		s.routeGeneration++
+		s.routeMu.Unlock()
+	}
 }
 
 func (s *Service) GetByProviderUpstream(ctx context.Context, providerValue account.Provider, upstreamModel string) (modeldomain.Route, error) {

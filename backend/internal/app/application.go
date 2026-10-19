@@ -375,6 +375,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		selector.ApplyInvalidation(event)
 		clientKeyService.ApplyInvalidation(event)
 		pricingService.ApplyInvalidation(event)
+		modelService.ApplyInvalidation(event)
 	}, logger)
 	accountRepo.SetInvalidationObserver(invalidationService.Notify)
 	modelRepo.SetInvalidationObserver(invalidationService.Notify)
