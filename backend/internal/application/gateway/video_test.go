@@ -382,7 +382,8 @@ func TestVideoInputBudgetIsSharedAcrossKinds(t *testing.T) {
 	if err := service.validateVideoInputBudget(context.Background(), []string{reference}, "image", &budget); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.validateVideoInputReferences(context.Background(), []string{reference}, "image"); err != nil {
+	fresh := videoInputJSONBaseBytes
+	if err := service.validateVideoInputBudget(context.Background(), []string{reference}, "image", &fresh); err != nil {
 		t.Fatalf("a single 14 MiB input must fit its own budget: %v", err)
 	}
 	if err := service.validateVideoInputBudget(context.Background(), []string{reference}, "image", &budget); !errors.Is(err, ErrVideoInputTooLarge) {
@@ -548,13 +549,18 @@ func TestResolveVideoInputFileReferenceToDataURI(t *testing.T) {
 	store := &videoAssetStoreStub{inputID: inputID, inputData: raw}
 	service := &Service{mediaAssets: store}
 	reference := VideoInputFileReference(inputID)
-	if err := service.validateVideoInputReferences(context.Background(), []string{reference}, "image"); err != nil {
+	validate := func(references []string, kind string) error {
+		budget := videoInputJSONBaseBytes
+		return service.validateVideoInputBudget(context.Background(), references, kind, &budget)
+	}
+	if err := validate([]string{reference}, "image"); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.validateVideoInputReferences(context.Background(), []string{reference}, "video"); !errors.Is(err, ErrVideoInputUnavailable) {
+	if err := validate([]string{reference}, "video"); !errors.Is(err, ErrVideoInputUnavailable) {
 		t.Fatalf("image accepted as video input: %v", err)
 	}
-	resolved, err := service.resolveVideoInputReferences(context.Background(), []string{"https://example.com/a.png", reference}, "image")
+	budget := videoInputJSONBaseBytes
+	resolved, err := service.resolveVideoInputBudget(context.Background(), []string{"https://example.com/a.png", reference}, "image", &budget)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -562,11 +568,11 @@ func TestResolveVideoInputFileReferenceToDataURI(t *testing.T) {
 	if len(resolved) != 2 || resolved[0] != "https://example.com/a.png" || resolved[1] != want {
 		t.Fatalf("resolved=%#v", resolved)
 	}
-	if err := service.validateVideoInputReferences(context.Background(), []string{VideoInputFileReference("missing")}, "image"); !errors.Is(err, ErrVideoInputUnavailable) {
+	if err := validate([]string{VideoInputFileReference("missing")}, "image"); !errors.Is(err, ErrVideoInputUnavailable) {
 		t.Fatalf("missing input error=%v", err)
 	}
 	store.inputSize = 20 << 20
-	if err := service.validateVideoInputReferences(context.Background(), []string{reference, reference}, "image"); !errors.Is(err, ErrVideoInputTooLarge) {
+	if err := validate([]string{reference, reference}, "image"); !errors.Is(err, ErrVideoInputTooLarge) {
 		t.Fatalf("aggregate local input error=%v", err)
 	}
 }

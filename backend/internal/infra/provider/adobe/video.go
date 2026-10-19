@@ -29,6 +29,9 @@ func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) err
 	if !ok || !v.video {
 		return fmt.Errorf("%w: 未知的 Adobe 视频模型 %s", provider.ErrVideoParameterInvalid, options.UpstreamModel)
 	}
+	if options.ReferenceAudios > 0 {
+		return fmt.Errorf("%w: Adobe 视频不支持 reference_audios", provider.ErrVideoParameterInvalid)
+	}
 	if err := v.checkVideoInputs(options.HasImage, options.HasLastFrame, options.ReferenceImages, options.ReferenceVideos); err != nil {
 		return fmt.Errorf("%w: %s", provider.ErrVideoParameterInvalid, err.Error())
 	}
@@ -39,13 +42,19 @@ func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) err
 // 共用 frame 用途，上限 2 的模型才收尾帧；参考素材另受总数上限约束。
 func (v *modelVersion) checkVideoInputs(hasFrame, hasLastFrame bool, references, videos int) error {
 	frame, frameOK := v.refs["image:frame"]
+	frameLimit := frame.max
+	if limit := v.referenceBlobLimit(); limit > 0 && !v.patch.framesOutsidePool && (frameLimit == 0 || limit < frameLimit) {
+		frameLimit = limit // 帧也计入参考素材总数（Luma Ray 的总数上限是 1，只能单帧）
+	}
 	switch {
 	case hasFrame && !frameOK:
 		return &requestError{msg: v.slug + " 不支持首帧图 image"}
 	case !hasFrame && (frame.min > 0 || v.patch.requireFrame):
 		return &requestError{msg: v.slug + " 需要首帧图 image"}
-	case hasLastFrame && (!frameOK || (frame.max > 0 && frame.max < 2)):
+	case hasLastFrame && (!frameOK || (frameLimit > 0 && frameLimit < 2)):
 		return &requestError{msg: v.slug + " 不支持尾帧 last_frame"}
+	case v.patch.framesExclusive && (hasFrame || hasLastFrame) && references+videos > 0:
+		return &requestError{msg: v.slug + " 的首尾帧不能与参考图、参考视频同时使用"}
 	}
 	if references > 0 {
 		usage, limit := v.referenceUsage()

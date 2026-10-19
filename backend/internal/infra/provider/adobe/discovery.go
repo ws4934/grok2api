@@ -154,6 +154,12 @@ func newModelVersion(modelID, version string, raw discoveryVersion, common map[s
 		return useCase != "inpainting" && useCase != "outpainting"
 	})
 	v.refs, v.fileBytes, v.maxBlobs = referenceLimits(props)
+	for key, limit := range v.patch.usageMax {
+		if current, ok := v.refs[key]; ok && (current.max == 0 || limit < current.max) {
+			current.max = limit
+			v.refs[key] = current
+		}
+	}
 	if v.refs["video:source"].min > 0 || v.refs["video:general"].min > 0 {
 		return nil // 必须给源视频的版本
 	}

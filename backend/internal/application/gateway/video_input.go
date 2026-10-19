@@ -35,11 +35,6 @@ func (s *Service) acquireVideoInputSlot(ctx context.Context, references []string
 	}
 }
 
-func (s *Service) validateVideoInputReferences(ctx context.Context, references []string, expectedKind string) error {
-	budget := videoInputJSONBaseBytes
-	return s.validateVideoInputBudget(ctx, references, expectedKind, &budget)
-}
-
 // validateVideoInputBudget 校验一组同类输入，并把它们物化后的体积计入共享预算：同一
 // 任务的首尾帧、参考图、参考视频与源视频合计不超过 MaxInputJSONBytes。
 func (s *Service) validateVideoInputBudget(ctx context.Context, references []string, expectedKind string, budget *int64) error {
@@ -67,11 +62,6 @@ func (s *Service) validateVideoInputBudget(ctx context.Context, references []str
 		}
 	}
 	return nil
-}
-
-func (s *Service) resolveVideoInputReferences(ctx context.Context, references []string, expectedKind string) ([]string, error) {
-	budget := videoInputJSONBaseBytes
-	return s.resolveVideoInputBudget(ctx, references, expectedKind, &budget)
 }
 
 // resolveVideoInputBudget 把 file_id 引用物化成 data URI（其余原样保留），体积计入共享预算。

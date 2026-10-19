@@ -38,10 +38,16 @@ type patch struct {
 	// referenceVideos：schema 的 video:source 在该模型上是生成参考（Seedance、Gemini Omni）；
 	// Luma 的源视频是"修改视频"（编辑），不当参考视频用。
 	referenceVideos bool
-	// maxReferenceBlobs 覆盖 schema 的参考素材总数上限；framesOutsidePool 表示首尾帧不计入。
+	// maxReferenceBlobs 覆盖 schema 的参考素材总数上限；framesOutsidePool 表示首尾帧不计入
+	// （官网 keyFramesExcludedFromReferenceBlobsPool）。
 	maxReferenceBlobs int
 	framesOutsidePool bool
-	requireFrame      bool // 只做图生视频，必须带首帧（schema 没标 minItems）
+	// framesExclusive：首尾帧与任何参考素材（参考图、参考视频）互斥（官网
+	// referenceFramesAndReferenceImagesAreMutuallyExclusive，Seedance、Veo 3.1）。
+	framesExclusive bool
+	// usageMax 收紧 schema 的单项用途上限（官网 UI 的限制比 schema 严时）。
+	usageMax     map[string]int
+	requireFrame bool // 只做图生视频，必须带首帧（schema 没标 minItems）
 }
 
 type pixels struct{ width, height int }
@@ -111,25 +117,26 @@ var patches = map[string]patch{
 	"gpt-image/gpt-image-2.5-flare": gptImage25,
 	"gpt-image/gpt-image-2.5-prism": gptImage25,
 
-	"veo/3.1-generate":      {seeds: true, keyframeGeneral: true, styleUsage: "asset", referenceDuration: 8, referenceAspect: "16:9"},
-	"veo/3.1-fast-generate": {seeds: true, keyframeGeneral: true, styleUsage: "asset", noReferences: true},
-	"veo/3.1-lite-generate": {seeds: true, keyframeGeneral: true},
+	"veo/3.1-generate":      {seeds: true, keyframeGeneral: true, styleUsage: "asset", referenceDuration: 8, referenceAspect: "16:9", framesExclusive: true},
+	"veo/3.1-fast-generate": {seeds: true, keyframeGeneral: true, styleUsage: "asset", noReferences: true, framesExclusive: true},
+	"veo/3.1-lite-generate": {seeds: true, keyframeGeneral: true, framesExclusive: true},
 
 	"kling/kling_v2_5_turbo_pro_i2v": {seeds: true, keyframeGeneral: true, aspectInPayload: true, module: "image2video", requireFrame: true,
 		negativePrompt: "blur, distort, and low quality", sizes: px(1920, 1080, 1080, 1920, 1080, 1080)},
 	"kling/kling_v3": {name: "Kling 3.0", seeds: true, keyframeGeneral: true, aspectInPayload: true, resolutionInPayload: true,
 		defaultDuration: 5, sizes: klingSizes},
 	"kling/kling_v3_omni": {name: "Kling 3.0 Omni", seeds: true, keyframeGeneral: true, aspectInPayload: true, resolutionInPayload: true,
-		computedAspect: true, styleUsage: "style", defaultDuration: 5, sizes: klingSizes, maxReferenceBlobs: 4, framesOutsidePool: true},
+		computedAspect: true, styleUsage: "style", defaultDuration: 5, sizes: klingSizes},
 
 	"seedance/seedance_2.0": {seeds: true, styleUsage: "style", computedAspect: true, resolutions: []string{"480p", "720p", "1080p"},
-		referenceVideos: true, framesOutsidePool: true,
+		referenceVideos: true, framesExclusive: true,
 		extraSizes: append(append(append([]pixels{}, seedance480...), seedance720...), px(2520, 1080, 1920, 1080, 1440, 1080, 1080, 1080, 1080, 1440, 1080, 1920)...)},
 	"seedance/seedance_2.0_fast": {seeds: true, styleUsage: "style", computedAspect: true, resolutions: []string{"480p", "720p"},
-		referenceVideos: true, framesOutsidePool: true,
+		referenceVideos: true, framesExclusive: true,
 		extraSizes: append(append([]pixels{}, seedance480...), seedance720...)},
+	// 2.5 的 schema 写 30 张图 / 10 个视频 / 共 50 个，官网 UI（phase 1）只开放 9 / 3 / 共 12。
 	"seedance/seedance_2.5": {seeds: true, styleUsage: "style", explicitAuto: true, resolutionInPayload: true, autoWithFrame: true,
-		referenceVideos: true, framesOutsidePool: true},
+		referenceVideos: true, framesExclusive: true, maxReferenceBlobs: 12, usageMax: map[string]int{"image:style": 9, "video:source": 3}},
 
 	"gemini-omni/omni-flash": {seeds: true, styleUsage: "style", defaultDuration: 8,
 		referenceVideos: true, maxReferenceBlobs: 4, framesOutsidePool: true},

@@ -155,7 +155,8 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	}
 	routes, err = s.routesForVideoParameters(routes, provider.VideoRequestOptions{
 		Operation: operation, Resolution: input.Resolution, HasImage: strings.TrimSpace(input.ImageURL) != "", HasLastFrame: hasLastFrame,
-		ReferenceImages: len(input.ReferenceURLs), ReferenceVideos: len(input.ReferenceVideoURLs), Duration: input.Duration,
+		ReferenceImages: len(input.ReferenceURLs), ReferenceVideos: len(input.ReferenceVideoURLs), ReferenceAudios: len(input.ReferenceAudios),
+		Duration: input.Duration,
 	})
 	if err != nil {
 		return media.Job{}, err

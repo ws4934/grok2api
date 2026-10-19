@@ -584,6 +584,9 @@ func TestVideoInputsFollowSchema(t *testing.T) {
 	if err := check("sora2", false, 0); err == nil {
 		t.Error("removed model sora2 accepted")
 	}
+	if err := adapter.ValidateVideoRequest(provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: "veo/3.1-generate", ReferenceAudios: 1, Duration: 8}); err == nil {
+		t.Error("Adobe accepted reference_audios at validation time")
+	}
 	in := mustVersion(t, "kling-video-2.5-turbo").videoPlan("x", "16:9", "720p", 8, true, false)
 	if in.resolution != "1080p" {
 		t.Errorf("1080p-only model resolution = %q", in.resolution)
@@ -691,7 +694,8 @@ func intOf2(v any) int {
 
 // 尾帧：frame 上限 ≥2 的模型才收，作为 order 2 的 frame 发送。
 func TestVideoLastFrame(t *testing.T) {
-	for slug, ok := range map[string]bool{"veo-3.1": true, "veo-3.1-lite": true, "kling-3.0": true, "seedance-2.0": true, "gemini-omni-flash": false, "runway-gen-4.5": false} {
+	// Luma Ray 的参考素材总数上限是 1 且帧计入，只能单帧。
+	for slug, ok := range map[string]bool{"veo-3.1": true, "veo-3.1-lite": true, "kling-3.0": true, "seedance-2.0": true, "gemini-omni-flash": false, "runway-gen-4.5": false, "ray2": false, "ray3.14": false} {
 		if err := mustVersion(t, slug).checkVideoInputs(true, true, 0, 0); (err == nil) != ok {
 			t.Errorf("%s last frame accepted = %v, want %v (%v)", slug, err == nil, ok, err)
 		}
@@ -718,6 +722,9 @@ func TestVideoMIME(t *testing.T) {
 		want string
 	}{
 		"mp4": {mp4Header(), "video/mp4"}, "quicktime": {quicktime, "video/quicktime"}, "png": {[]byte("\x89PNG\r\n\x1a\n0000"), ""},
+		// HEIC 同样以 ftyp 开头，不能当成 MP4。
+		"heic": {append([]byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c', 0, 0, 0, 0, 'm', 'i', 'f', '1', 'h', 'e', 'i', 'c'}, make([]byte, 32)...), ""},
+		"webm": {append([]byte{0x1a, 0x45, 0xdf, 0xa3}, []byte("....webm............")...), ""},
 	} {
 		if got := videoMIME(tc.data); got != tc.want {
 			t.Errorf("%s: videoMIME = %q, want %q", name, got, tc.want)
@@ -736,9 +743,12 @@ func TestReferenceVideoLimits(t *testing.T) {
 	}{
 		{"seedance-2.0", false, 0, 3, true},
 		{"seedance-2.0", false, 0, 4, false},
-		{"seedance-2.0", true, 0, 3, true}, // 首帧不计入 Seedance 的参考素材池
-		{"seedance-2.5", false, 9, 10, true},
+		{"seedance-2.0", true, 0, 1, false}, // Seedance 的首尾帧与参考素材互斥（官网同样拦截）
+		{"seedance-2.5", false, 9, 3, true}, // 官网 UI 只开放 9 张图、3 个视频
+		{"seedance-2.5", false, 0, 4, false},
+		{"seedance-2.5", false, 10, 0, false},
 		{"gemini-omni-flash", false, 3, 1, true},
+		{"gemini-omni-flash", true, 3, 1, true},   // Omni 的首帧不计入参考素材池
 		{"gemini-omni-flash", false, 4, 1, false}, // 官网总数上限 4
 		{"gemini-omni-flash", false, 0, 2, false},
 		{"gemini-omni-flash-1.1", true, 8, 2, false}, // schema 总数上限 10，首帧计入

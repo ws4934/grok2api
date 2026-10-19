@@ -136,6 +136,7 @@ type VideoRequestOptions struct {
 	HasLastFrame    bool
 	ReferenceImages int
 	ReferenceVideos int
+	ReferenceAudios int
 	Duration        int
 }
 
