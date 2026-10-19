@@ -28,7 +28,7 @@ type patch struct {
 	sizes        []pixels // 替换 schema 的尺寸枚举
 	extraSizes   []pixels // 追加到 schema 的尺寸枚举
 	defaultSizes map[string]pixels
-	sizeRange    []tierSide // 按短边推导尺寸（gpt-image-2.5），受 maxSide / maxPixels 限制
+	sizeRange    []tierSide // 按短边推导尺寸（gpt-image），超出上限时按比例缩进上限
 	resolutions  []string   // 替换 schema 的分辨率枚举
 
 	defaultDuration   int
@@ -40,12 +40,13 @@ type patch struct {
 
 type pixels struct{ width, height int }
 
+// tierSide 是一个档位的短边；short 为 0 表示取上限内的最大尺寸（4K 档）。
 type tierSide struct {
 	label string
 	short int
 }
 
-// sizeRange 推导出的尺寸上限（官网 gpt-image-2.5 的 sizeRangeDerivation）。
+// gpt-image 的尺寸上限：schema 的宽高上限 3840，总像素上限取自官网 sizeRangeDerivation。
 const (
 	sizeRangeMaxSide   = 3840
 	sizeRangeMaxPixels = 8_294_400
@@ -70,7 +71,8 @@ var (
 		"21:9": {1584, 672}, "16:9": {1376, 768}, "5:4": {1152, 928}, "4:3": {1200, 896}, "3:2": {1264, 848},
 		"1:1": {1024, 1024}, "4:5": {928, 1152}, "3:4": {896, 1200}, "2:3": {848, 1264}, "9:16": {768, 1376},
 	}
-	gptImage25 = patch{supportsAuto: true, omitAuto: true, sizeRange: []tierSide{{"1K", 1024}, {"2K", 2048}}}
+	// 官网只开放 1K/2K；schema 允许到 3840，所以加上 4K 档（上限内最大尺寸）。
+	gptImage25 = patch{supportsAuto: true, omitAuto: true, sizeRange: []tierSide{{"1K", 1024}, {"2K", 2048}, {"4K", 0}}}
 	lumaRay    = patch{seeds: true, keyframeGeneral: true, resolutionInPayload: true, aspectInPayload: true}
 )
 
@@ -96,8 +98,10 @@ var patches = map[string]patch{
 		extraSizes: px(600, 448, 512, 512, 384, 688, 688, 384, 448, 600, 784, 336, 632, 424, 576, 464, 464, 576, 424, 632, 1536, 192, 1024, 256, 256, 1024, 192, 1536)},
 	"gemini-flash/nano-banana-2026-09": {seeds: true, omitAuto: true, excludeSize: true},
 
-	"gpt-image/1.5":                 {defaultSizes: map[string]pixels{"3:2": {1536, 1024}, "1:1": {1024, 1024}, "2:3": {1024, 1536}}},
-	"gpt-image/2":                   {supportsAuto: true, omitAuto: true, defaultSizes: gptImage2Sizes},
+	"gpt-image/1.5": {defaultSizes: map[string]pixels{"3:2": {1536, 1024}, "1:1": {1024, 1024}, "2:3": {1024, 1536}}},
+	// 1K 用官网的尺寸表；2K/4K 按 schema 上限推导（官网只开放 1K）。
+	"gpt-image/2": {supportsAuto: true, omitAuto: true, defaultSizes: gptImage2Sizes,
+		sizeRange: []tierSide{{"2K", 2048}, {"4K", 0}}},
 	"gpt-image/gpt-image-2.5-flare": gptImage25,
 	"gpt-image/gpt-image-2.5-prism": gptImage25,
 

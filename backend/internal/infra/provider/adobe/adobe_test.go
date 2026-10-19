@@ -607,8 +607,12 @@ func TestOfficialConstraintsFromReview(t *testing.T) {
 	if in := mustVersion(t, "veo-3.1").videoPlan("x", "9:16", "720p", 4, false, true); in.aspect != "16:9" || in.duration != 8 {
 		t.Errorf("veo-3.1 with references = %s %ds, want 16:9 8s", in.aspect, in.duration)
 	}
-	if _, err := mustVersion(t, "gpt-image-2.5-flare").imagePlan("x", "", "21:9", "2K", "", "", 1, 0, false); err == nil {
-		t.Error("gpt-image-2.5 accepted 21:9 at 2K (4784 px wide)")
+	// 官网公式在 21:9@2K 得到 4784 宽，超出 3840：按比例缩进上限而不是发越界尺寸。
+	flare := mustVersion(t, "gpt-image-2.5-flare")
+	if in, err := flare.imagePlan("x", "", "21:9", "2K", "", "", 1, 0, false); err != nil {
+		t.Error(err)
+	} else if size, _ := flare.pickSize(in.aspect, in.resolution); size != (pixels{3840, 1632}) {
+		t.Errorf("gpt-image-2.5 21:9@2K size = %v, want 3840x1632", size)
 	}
 	kling := mustVersion(t, "kling-3.0")
 	if body := kling.buildBody(kling.videoPlan("x", "16:9", "720p", 5, false, false)); body["generateAudio"] != false {
@@ -621,4 +625,42 @@ func TestOfficialConstraintsFromReview(t *testing.T) {
 	if in := mustVersion(t, "seedance-2.5").videoPlan("x", "16:9", "720p", 5, true, false); in.aspect != "auto" {
 		t.Errorf("seedance-2.5 with a first frame aspect = %q, want auto", in.aspect)
 	}
+}
+
+// 4K：Nano Banana 用 schema 的 4K 尺寸；gpt-image-2/2.5 取 schema 上限内的最大尺寸，
+// gpt-image-2 的 1K 仍用官网尺寸表。
+func TestImage4K(t *testing.T) {
+	cases := []struct {
+		slug, aspect, resolution string
+		want                     pixels
+	}{
+		{"nano-banana-pro", "16:9", "4K", pixels{5504, 3072}},
+		{"nano-banana-2", "1:1", "4K", pixels{4096, 4096}},
+		{"gpt-image-2", "16:9", "4K", pixels{3840, 2160}},
+		{"gpt-image-2", "1:1", "4K", pixels{2880, 2880}},
+		{"gpt-image-2", "16:9", "2K", pixels{3648, 2048}},
+		{"gpt-image-2", "16:9", "1K", pixels{1376, 768}},
+		{"gpt-image-2.5-sunburst", "9:16", "4K", pixels{2160, 3840}},
+		{"gpt-image-2.5-sunburst", "3:2", "4K", pixels{3520, 2336}},
+	}
+	for _, tc := range cases {
+		v := mustVersion(t, tc.slug)
+		in, err := v.imagePlan("x", "", tc.aspect, tc.resolution, "", "", 1, 0, false)
+		if err != nil {
+			t.Errorf("%s %s@%s: %v", tc.slug, tc.aspect, tc.resolution, err)
+			continue
+		}
+		body := v.buildBody(in)
+		if got := (pixels{intOf2(get(body, "size", "width")), intOf2(get(body, "size", "height"))}); got != tc.want {
+			t.Errorf("%s %s@%s size = %v, want %v", tc.slug, tc.aspect, tc.resolution, got, tc.want)
+		}
+	}
+	if _, err := mustVersion(t, "flux-2-pro").imagePlan("x", "", "", "4K", "", "", 1, 0, false); err == nil {
+		t.Error("flux-2-pro (max 1920) accepted 4K")
+	}
+}
+
+func intOf2(v any) int {
+	n, _ := v.(int)
+	return n
 }

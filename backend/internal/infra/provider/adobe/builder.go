@@ -186,6 +186,9 @@ func (v *modelVersion) pickSize(aspect, tier string) (pixels, bool) {
 	if aspect == "" || isAuto(aspect) {
 		return pixels{}, false
 	}
+	if p, ok := v.patch.defaultSizes[aspect]; ok && (len(v.patch.sizeRange) == 0 || strings.EqualFold(tierOf(p), tier)) {
+		return p, true
+	}
 	if sides := v.patch.sizeRange; len(sides) > 0 {
 		short := sides[0].short
 		for _, side := range sides {
@@ -197,15 +200,10 @@ func (v *modelVersion) pickSize(aspect, tier string) (pixels, bool) {
 		if w == 0 || h == 0 {
 			return pixels{}, false
 		}
-		ratio := float64(w) / float64(h)
-		if ratio >= 1 {
-			return pixels{round16(float64(short) * ratio), short}, true
-		}
-		return pixels{short, round16(float64(short) / ratio)}, true
+		return rangeSize(float64(w)/float64(h), short), true
 	}
 	if v.patch.defaultSizes != nil {
-		p, ok := v.patch.defaultSizes[aspect]
-		return p, ok
+		return pixels{}, false
 	}
 	sizes := v.sizes()
 	for _, size := range sizes {
@@ -245,6 +243,27 @@ func tierLinesOf(tier string) int {
 }
 
 func round16(value float64) int { return int(math.Round(value/16)) * 16 }
+
+// rangeSize 按官网规则由短边推导尺寸（16 的倍数）；short 为 0 或结果超出 gpt-image 的
+// 上限（边长 3840、总像素 8,294,400）时，取该比例在上限内的最大尺寸。
+func rangeSize(ratio float64, short int) pixels {
+	if short > 0 {
+		size := pixels{short, round16(float64(short) / ratio)}
+		if ratio >= 1 {
+			size = pixels{round16(float64(short) * ratio), short}
+		}
+		if max(size.width, size.height) <= sizeRangeMaxSide && size.width*size.height <= sizeRangeMaxPixels {
+			return size
+		}
+	}
+	w := math.Min(sizeRangeMaxSide, math.Sqrt(sizeRangeMaxPixels*ratio))
+	h := w / ratio
+	if h > sizeRangeMaxSide {
+		h = sizeRangeMaxSide
+		w = h * ratio
+	}
+	return pixels{int(w) / 16 * 16, int(h) / 16 * 16}
+}
 
 // tierOf 按短边给尺寸归档（官网 c(size)）。
 func tierOf(size pixels) string {
@@ -582,10 +601,6 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 		}
 	default:
 		in.resolution = v.defaultResolution(tiers)
-	}
-	if size, ok := v.pickSize(in.aspect, in.resolution); ok && len(v.patch.sizeRange) > 0 &&
-		(max(size.width, size.height) > sizeRangeMaxSide || size.width*size.height > sizeRangeMaxPixels) {
-		return in, &requestError{msg: fmt.Sprintf("%s 不支持 %s 比例的 %s（%dx%d 超出上限）", v.slug, in.aspect, in.resolution, size.width, size.height)}
 	}
 	return in, nil
 }

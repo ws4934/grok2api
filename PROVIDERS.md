@@ -224,7 +224,7 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
   - 图像：显式给出但模型不支持的 `aspect_ratio` / `resolution`、超过 schema 上限的 `n`、不支持的输入图 / 蒙版 / 透明背景直接 400；未给比例时按 `size` 取最接近的比例。不支持 `stream` / `partial_images`。
   - 视频：首帧图与参考图按 schema 的能力和数量校验；`duration` / `aspect_ratio` / `resolution` 就近对齐到模型支持的值（网关对未填参数会填默认值，如 8 秒、720p）。不支持 `reference_audios` 与视频编辑。
 - 输入图支持 Base64 data URI 与 `https` URL（经带 SSRF 防护的下载器，不走账号出口），只接受 PNG/JPEG/WebP。
-- 参考图用途按 schema 的弃用声明走替代用途（如 gpt-image 的输入图发 `source`）。Veo 3.1 带参考图时固定 16:9、8 秒，Veo 3.1 Fast 不接受参考图；`generateAudio` 按 schema 默认值（Kling 关闭，其余开启）。GPT Image 2 与官网一致只有 1K；gpt-image-2.5 超过 3840 边长或 8.29MP 的比例/档位组合直接 400。
+- 参考图用途按 schema 的弃用声明走替代用途（如 gpt-image 的输入图发 `source`）。Veo 3.1 带参考图时固定 16:9、8 秒，Veo 3.1 Fast 不接受参考图；`generateAudio` 按 schema 默认值（Kling 关闭，其余开启）。图像 4K：Nano Banana Pro / 2 / 2.1 按 schema 的 4K 尺寸（如 16:9 为 5504×3072）；GPT Image 2 / 2.5 的 4K 取 schema 上限内的最大尺寸（边长 ≤3840、总像素 ≤8,294,400，如 16:9 为 3840×2160、1:1 为 2880×2880），官网前端只开放到 1K/2K；推导尺寸超限时按比例缩进上限。Flux 2 最大 1920、其余模型 2K 以内，不支持 4K。
 - 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"；价格按上游模型（`modelId/版本`）存储。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口，所有 Adobe 路由都消费它。
 
 ### 失败处理
