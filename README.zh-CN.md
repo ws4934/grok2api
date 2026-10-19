@@ -13,7 +13,7 @@
 <p align="center">
   <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
   <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/chenyme/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
+  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -161,7 +161,7 @@ flowchart LR
 官方镜像支持 `linux/amd64` 和 `linux/arm64`。
 
 ```bash
-git clone https://github.com/chenyme/grok2api.git
+git clone https://github.com/ws4934/grok2api.git
 cd grok2api
 cp config.example.yaml config.yaml
 ```
@@ -493,6 +493,22 @@ docker network inspect grok2api_default \
 - `routing.autoAssignMaxNodeShare` / `routing.autoAssignMaxMigrationShare`：可选的大号池保护。`0`（默认）保持历史行为：不健康节点上的 auto 账号会一次性迁走，容量/再均衡仍最多 200 次。仅在隔离一个节点会把大量账号压到最后几个健康出口时，才设为 `0.05`–`1`。环境变量 `GROK2API_AUTO_ASSIGN_MAX_NODE_SHARE` 与 `GROK2API_AUTO_ASSIGN_MAX_MIGRATION_SHARE` 可覆盖 YAML。
 - Build 响应头超时和精确匹配的 403 失效规则支持热加载。
 - “同步最新版本”可应用已验证的 Grok Build 客户端版本和 User-Agent。
+
+### 在线更新
+
+发行版由 tag 触发构建。先更新 `VERSION`，再推送对应的 `vX.Y.Z` tag：`.github/workflows/release.yml` 会运行后端测试、构建前端、交叉编译 `linux/amd64` 与 `linux/arm64`，并发布包含 `grok2api_vX.Y.Z_linux_<arch>.tar.gz` 和 `checksums.txt` 的 GitHub Release；`.github/workflows/ghcr-image.yml` 会发布 `ghcr.io/ws4934/grok2api:vX.Y.Z` 与 `:latest`。
+
+```bash
+git tag v3.1.7
+git push origin v3.1.7
+```
+
+Fork 仓库需先启用 GitHub Actions。首个镜像发布后，请确认账号 GitHub Packages 中的 `grok2api` 包为公开，否则 `docker compose pull` 需要先执行 `docker login ghcr.io`。
+
+管理端可原地更新运行中的实例：下载当前架构的发行包，按 `checksums.txt` 校验 SHA-256，替换二进制与 `frontend/dist`，再由 Docker 的 `restart: unless-stopped`（`docker-compose.yml` 已配置）或 systemd 的 `Restart=always` 自动重启。上一版本会保留，可在同一页面回滚。
+
+- Docker：替换后的文件位于容器可写层。执行 `docker compose pull && docker compose up -d` 或以其他方式重建容器后，会切换为镜像内的版本；该 tag 的镜像发布后，镜像版本与在线更新的版本相同或更新。
+- 多实例：通过拉取新镜像并重新部署所有副本统一升级，不要逐个副本在线更新。
 
 ## 生产检查
 

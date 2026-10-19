@@ -13,7 +13,7 @@
 <p align="center">
   <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
   <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/chenyme/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
+  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -173,7 +173,7 @@ Each Provider keeps its own credentials, quota, health, cooldown, concurrency, a
 Official images support `linux/amd64` and `linux/arm64`.
 
 ```bash
-git clone https://github.com/chenyme/grok2api.git
+git clone https://github.com/ws4934/grok2api.git
 cd grok2api
 cp config.example.yaml config.yaml
 ```
@@ -534,6 +534,22 @@ Important optional settings:
 - `routing.autoAssignMaxNodeShare` / `routing.autoAssignMaxMigrationShare`: optional large-pool guards. `0` (default) keeps the historical unbounded first-pass evacuation and the existing 200-move ceiling for capacity/rebalance repair. Set `0.05`–`1` only when a quarantined node would otherwise dump thousands of auto accounts onto the last healthy exits. `GROK2API_AUTO_ASSIGN_MAX_NODE_SHARE` and `GROK2API_AUTO_ASSIGN_MAX_MIGRATION_SHARE` override the YAML when set.
 - Build response-header timeout and exact-match 403 invalidation rules are hot-reloadable.
 - **Sync latest version** applies the validated Grok Build client version and User-Agent.
+
+### Online update
+
+Releases are built from tags. Bump `VERSION`, then push the matching `vX.Y.Z` tag: `.github/workflows/release.yml` runs the backend tests, builds the frontend, cross-compiles `linux/amd64` and `linux/arm64`, and publishes a GitHub Release with `grok2api_vX.Y.Z_linux_<arch>.tar.gz` and `checksums.txt`; `.github/workflows/ghcr-image.yml` publishes `ghcr.io/ws4934/grok2api:vX.Y.Z` and `:latest`.
+
+```bash
+git tag v3.1.7
+git push origin v3.1.7
+```
+
+On a fork, enable GitHub Actions first. After the first image is published, check that the `grok2api` package in the account's GitHub Packages is public; otherwise `docker compose pull` needs `docker login ghcr.io`.
+
+The admin console can update a running instance in place: it downloads the archive for the current architecture, verifies its SHA-256 against `checksums.txt`, replaces the binary and `frontend/dist`, and restarts through Docker's `restart: unless-stopped` (set in `docker-compose.yml`) or a systemd unit with `Restart=always`. The previous version is kept, and the same page rolls back to it.
+
+- Docker: the replaced files live in the container's writable layer. `docker compose pull && docker compose up -d`, or any other recreation of the container, switches to the version inside the image; once the image for that tag is published, it is the same version or newer.
+- Multiple instances: update by pulling the new image and redeploying every replica instead of updating replicas in place.
 
 
 
