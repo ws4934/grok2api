@@ -1,0 +1,447 @@
+package inference
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+
+	"github.com/chenyme/grok2api/backend/internal/application/gateway"
+	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/pkg/mediafile"
+	"github.com/gin-gonic/gin"
+)
+
+type videoGenerationImage struct {
+	URL    string `json:"url"`
+	FileID string `json:"file_id"`
+}
+
+type videoGenerationAudio struct {
+	VoiceID string `json:"voice_id"`
+}
+
+type videoGenerationRequest struct {
+	Model           string                 `json:"model"`
+	Prompt          string                 `json:"prompt"`
+	User            *string                `json:"user"`
+	Duration        json.RawMessage        `json:"duration"`
+	AspectRatio     string                 `json:"aspect_ratio"`
+	Resolution      string                 `json:"resolution"`
+	Image           *videoGenerationImage  `json:"image"`
+	ReferenceImages []videoGenerationImage `json:"reference_images"`
+	ReferenceAudios []videoGenerationAudio `json:"reference_audios"`
+	Video           *videoGenerationImage  `json:"video"`
+	Output          json.RawMessage        `json:"output"`
+	StorageOptions  json.RawMessage        `json:"storage_options"`
+}
+
+func (h *Handler) generateVideo(c *gin.Context) {
+	h.handleVideoCreate(c, gatewayVideoOperationGenerate, "视频生成")
+}
+
+func (h *Handler) editVideo(c *gin.Context) {
+	h.handleVideoCreate(c, gatewayVideoOperationEdit, "视频编辑")
+}
+
+func (h *Handler) extendVideo(c *gin.Context) {
+	h.handleVideoCreate(c, gatewayVideoOperationExtend, "视频延长")
+}
+
+const (
+	gatewayVideoOperationGenerate = "generate"
+	gatewayVideoOperationEdit     = "edit"
+	gatewayVideoOperationExtend   = "extend"
+)
+
+func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, h.maxBodyBytes)
+	if !isJSONRequest(c) {
+		writeOpenAIError(c, http.StatusUnsupportedMediaType, "invalid_request", label+"仅支持 application/json")
+		return
+	}
+	var request videoGenerationRequest
+	if err := decodeSingleJSON(c.Request.Body, &request, true); err != nil {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+" JSON 请求无效: "+err.Error())
+		return
+	}
+	if hasJSONValue(request.Output) {
+		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 output.upload_url")
+		return
+	}
+	if hasJSONValue(request.StorageOptions) {
+		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 storage_options")
+		return
+	}
+	model := strings.TrimSpace(request.Model)
+	prompt := strings.TrimSpace(request.Prompt)
+	if model == "" {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"缺少有效 model")
+		return
+	}
+	parseVideoImage := func(input videoGenerationImage, field string) (string, bool) {
+		urlValue := strings.TrimSpace(input.URL)
+		fileID := strings.TrimSpace(input.FileID)
+		if (urlValue == "") == (fileID == "") {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", field+" 必须且只能提供 url 或 file_id")
+			return "", false
+		}
+		if fileID != "" {
+			if !mediadomain.IsInputAssetID(fileID) {
+				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", field+".file_id 无效")
+				return "", false
+			}
+			return gateway.VideoInputFileReference(fileID), true
+		}
+		return urlValue, true
+	}
+
+	duration := 0
+	aspectRatio := ""
+	resolution := ""
+	imageURL := ""
+	referenceURLs := []string{}
+	referenceAudios := []string{}
+	videoURL := ""
+
+	if operation == gatewayVideoOperationGenerate {
+		var err error
+		duration, err = parseVideoDuration(request.Duration)
+		if err != nil {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		aspectRatio = strings.TrimSpace(request.AspectRatio)
+		if aspectRatio == "" {
+			aspectRatio = "16:9"
+		}
+		if !validVideoAspectRatio(aspectRatio) {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "aspect_ratio 必须是 1:1、16:9、9:16、4:3、3:4、3:2 或 2:3")
+			return
+		}
+		resolution = strings.ToLower(strings.TrimSpace(request.Resolution))
+		if resolution == "" {
+			resolution = "720p"
+		}
+		if resolution != "480p" && resolution != "720p" && resolution != "1080p" {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "resolution 必须是 480p、720p 或 1080p")
+			return
+		}
+		if request.Image != nil {
+			value, ok := parseVideoImage(*request.Image, "image")
+			if !ok {
+				return
+			}
+			imageURL = value
+		}
+		referenceURLs = make([]string, 0, len(request.ReferenceImages))
+		for _, input := range request.ReferenceImages {
+			value, ok := parseVideoImage(input, "reference_images")
+			if !ok {
+				return
+			}
+			referenceURLs = append(referenceURLs, value)
+		}
+		referenceAudios = make([]string, 0, len(request.ReferenceAudios))
+		for i, input := range request.ReferenceAudios {
+			voiceID := strings.TrimSpace(input.VoiceID)
+			if voiceID == "" {
+				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("reference_audios[%d].voice_id 不能为空", i))
+				return
+			}
+			referenceAudios = append(referenceAudios, voiceID)
+		}
+		if len(referenceAudios) > 3 {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "reference_audios 最多 3 个")
+			return
+		}
+		if imageURL != "" && (len(referenceURLs) > 0 || len(referenceAudios) > 0) {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "image 不能与 reference_images/reference_audios 同时使用")
+			return
+		}
+		if len(referenceURLs) > mediadomain.MaxInputImages {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("reference_images 不能超过 %d 张", mediadomain.MaxInputImages))
+			return
+		}
+		hasReferenceMode := len(referenceURLs) > 0 || len(referenceAudios) > 0
+		if hasReferenceMode {
+			if prompt == "" {
+				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "参考图/参考音频视频必须提供 prompt")
+				return
+			}
+			if resolution == "1080p" {
+				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "参考图视频 resolution 最高 720p")
+				return
+			}
+		}
+		if prompt == "" && imageURL == "" && !hasReferenceMode {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "文本生视频必须提供 prompt；图片生视频可以省略 prompt")
+			return
+		}
+		if request.Video != nil {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "视频生成不支持 video 输入")
+			return
+		}
+	} else {
+		if prompt == "" {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"必须提供 prompt")
+			return
+		}
+		if request.Video == nil {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"必须提供 video")
+			return
+		}
+		value, ok := parseVideoImage(*request.Video, "video")
+		if !ok {
+			return
+		}
+		videoURL = value
+		if request.Image != nil || len(request.ReferenceImages) > 0 || len(request.ReferenceAudios) > 0 {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"不支持 image、reference_images 或 reference_audios")
+			return
+		}
+		if strings.TrimSpace(request.AspectRatio) != "" || strings.TrimSpace(request.Resolution) != "" {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"不支持 aspect_ratio 或 resolution")
+			return
+		}
+		if operation == gatewayVideoOperationEdit {
+			if hasJSONValue(request.Duration) {
+				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "视频编辑不支持 duration")
+				return
+			}
+		} else {
+			// extend: duration optional, default 6, range 2-10
+			if hasJSONValue(request.Duration) {
+				var err error
+				duration, err = parseVideoDuration(request.Duration)
+				if err != nil {
+					writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
+					return
+				}
+			} else {
+				duration = 6
+			}
+			if duration < 2 || duration > 10 {
+				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "视频延长 duration 必须在 2 到 10 秒之间")
+				return
+			}
+		}
+	}
+
+	clientKey, requestID, ok := requestIdentity(c)
+	if !ok {
+		return
+	}
+	var op provider.VideoOperation
+	switch operation {
+	case gatewayVideoOperationEdit:
+		op = provider.VideoOperationEdit
+	case gatewayVideoOperationExtend:
+		op = provider.VideoOperationExtend
+	default:
+		op = provider.VideoOperationGenerate
+	}
+	job, err := h.gateway.CreateVideo(c.Request.Context(), gateway.VideoInput{
+		RequestID: requestID, ClientKey: clientKey, PublicModel: model,
+		Operation: op,
+		Prompt:    prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
+		ImageURL: imageURL, ReferenceURLs: referenceURLs, ReferenceAudios: referenceAudios, VideoURL: videoURL,
+	})
+	if err != nil {
+		writeGatewayError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"request_id": job.ID})
+}
+
+func (h *Handler) getVideo(c *gin.Context) {
+	clientKey, _, ok := requestIdentity(c)
+	if !ok {
+		return
+	}
+	job, err := h.gateway.GetVideo(c.Request.Context(), strings.TrimSpace(c.Param("requestId")), clientKey)
+	if err != nil {
+		writeGatewayError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, videoGenerationResponse(job, h.videoPlaybackURL(job)))
+}
+
+func (h *Handler) publicURL(path string) string {
+	baseURL := h.publicAPIBaseURL
+	if h.publicBaseURL != nil {
+		baseURL = strings.TrimRight(strings.TrimSpace(h.publicBaseURL()), "/")
+	}
+	if baseURL == "" {
+		return path
+	}
+	return baseURL + path
+}
+
+func (h *Handler) videoContentURL(jobID string) string {
+	return h.publicURL("/v1/videos/" + url.PathEscape(jobID) + "/content")
+}
+
+// videoPlaybackURL prefers the stored asset served by the public media route, so the
+// returned link opens directly in browsers and players. /v1/videos/{id}/content needs
+// the client API key, which makes the URL unusable outside an authenticated client.
+// Images already return their public media URL; this keeps video consistent. Jobs
+// without a stored asset keep the protected content endpoint.
+func (h *Handler) videoPlaybackURL(job mediadomain.Job) string {
+	if assetID := strings.TrimSpace(job.ResultAssetID); assetID != "" {
+		return h.publicURL("/v1/media/videos/" + url.PathEscape(assetID))
+	}
+	return h.videoContentURL(job.ID)
+}
+
+func (h *Handler) getVideoContent(c *gin.Context) {
+	clientKey, _, ok := requestIdentity(c)
+	if !ok {
+		return
+	}
+	body, contentType, size, err := h.gateway.OpenVideoContent(c.Request.Context(), strings.TrimSpace(c.Param("requestId")), clientKey)
+	if err != nil {
+		writeGatewayError(c, err)
+		return
+	}
+	defer func() { _ = body.Close() }()
+	writeVideoContent(c, body, contentType, size, strings.TrimSpace(c.Param("requestId")))
+}
+
+func writeVideoContent(c *gin.Context, body io.Reader, contentType string, size int64, downloadName string) {
+	if size > maxMediaResponseTransferBytes {
+		writeOpenAIError(c, http.StatusBadGateway, "media_too_large", "上游媒体超过 2 GiB 安全上限")
+		return
+	}
+	contentType, ok := normalizeVideoResponseContentType(contentType)
+	if !ok {
+		writeOpenAIError(c, http.StatusBadGateway, "invalid_media_type", "上游视频服务返回了不受支持的内容类型")
+		return
+	}
+	// Clients that save the response need an extension to get a playable file.
+	c.Header("Content-Disposition", mediafile.VideoContentDisposition(downloadName, contentType))
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Content-Security-Policy", "default-src 'none'; sandbox")
+	c.Header("Referrer-Policy", "no-referrer")
+	if size >= 0 {
+		c.Header("Content-Length", strconv.FormatInt(size, 10))
+	} else {
+		c.Header("Trailer", mediaTransferErrorTrailer)
+	}
+	if err := writeMediaBody(c, body, contentType, http.StatusOK, maxMediaResponseTransferBytes); err != nil && size < 0 {
+		errorCode := "stream_interrupted"
+		if errors.Is(err, errResponseTransferLimit) {
+			errorCode = "response_too_large"
+		}
+		c.Header(mediaTransferErrorTrailer, errorCode)
+	}
+}
+
+func normalizeVideoResponseContentType(value string) (string, bool) {
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(value))
+	if err != nil {
+		return "", false
+	}
+	switch strings.ToLower(mediaType) {
+	case "video/mp4", "video/quicktime", "video/webm":
+		return strings.ToLower(mediaType), true
+	default:
+		return "", false
+	}
+}
+
+func parseVideoDuration(durationRaw json.RawMessage) (int, error) {
+	duration, hasDuration, err := parseOptionalVideoInteger(durationRaw)
+	if err != nil {
+		return 0, fmt.Errorf("duration 必须是整数或整数字符串")
+	}
+	value := 8
+	if hasDuration {
+		value = duration
+	}
+	if value < 1 || value > 15 {
+		return 0, fmt.Errorf("duration 必须在 1 到 15 秒之间")
+	}
+	return value, nil
+}
+
+func parseOptionalVideoInteger(raw json.RawMessage) (int, bool, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return 0, false, nil
+	}
+	var number int
+	if json.Unmarshal(raw, &number) != nil {
+		var text string
+		if json.Unmarshal(raw, &text) != nil {
+			return 0, true, errors.New("必须是整数或整数字符串")
+		}
+		parsed, err := strconv.Atoi(strings.TrimSpace(text))
+		if err != nil {
+			return 0, true, errors.New("必须是整数或整数字符串")
+		}
+		number = parsed
+	}
+	return number, true, nil
+}
+
+func hasJSONValue(value json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(value)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
+
+func validVideoAspectRatio(value string) bool {
+	switch value {
+	case "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3":
+		return true
+	default:
+		return false
+	}
+}
+
+func videoGenerationResponse(job mediadomain.Job, contentURLs ...string) gin.H {
+	switch job.Status {
+	case mediadomain.StatusCompleted:
+		videoURL := job.UpstreamURL
+		if len(contentURLs) > 0 && contentURLs[0] != "" {
+			videoURL = contentURLs[0]
+		}
+		video := gin.H{"url": videoURL, "respect_moderation": true}
+		operation := job.Operation
+		if operation == "" {
+			operation = mediadomain.VideoOperationGenerate
+		}
+		if operation == mediadomain.VideoOperationGenerate && job.Seconds > 0 {
+			video["duration"] = job.Seconds
+		}
+		return gin.H{
+			"status": "done", "model": job.Model, "progress": 100,
+			"video": video,
+		}
+	case mediadomain.StatusFailed, mediadomain.StatusUncertain, mediadomain.StatusCanceled:
+		return gin.H{
+			"status": "failed",
+			"error":  gin.H{"code": officialVideoErrorCode(job.ErrorCode), "message": job.ErrorMessage},
+		}
+	default:
+		return gin.H{"status": "pending", "model": job.Model, "progress": min(99, max(0, job.Progress))}
+	}
+}
+
+func officialVideoErrorCode(value string) string {
+	switch value {
+	case "account_unavailable", "provider_unavailable":
+		return "service_unavailable"
+	case "model_not_found":
+		return "invalid_argument"
+	default:
+		return "internal_error"
+	}
+}
