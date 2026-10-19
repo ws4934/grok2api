@@ -213,9 +213,8 @@ func (r *AccountRepository) HasQuotaWindows(ctx context.Context, accountID uint6
 	var count int64
 	query := r.db.db.WithContext(ctx).Model(&quotaWindowModel{}).Where("account_id = ? AND synced_at IS NOT NULL", accountID)
 	if account.Provider(providerRow.Provider) == account.ProviderConsole {
-		// Pre-usage Console releases stored one synthetic local chat window.
-		// Only the complete authoritative /usage snapshot counts as initialized,
-		// so re-import and startup migration replace that legacy state.
+		// Only the complete authoritative /usage snapshot counts as initialized;
+		// a partial or local window is replaced by the next sync.
 		query = query.Where("source = ? AND mode IN ?", account.QuotaSourceUpstream, []string{"console", "console_image", "console_video"}).Distinct("mode")
 		if err := query.Count(&count).Error; err != nil {
 			return false, err
