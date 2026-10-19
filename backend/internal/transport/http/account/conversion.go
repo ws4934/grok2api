@@ -39,10 +39,6 @@ func (h *Handler) convertWebToBuild(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "转换请求无效")
 		return
 	}
-	if request.All && len(request.IDs) > 0 {
-		response.Error(c, http.StatusBadRequest, "invalidRequest", "全部转换与指定账号不能同时提交")
-		return
-	}
 	if request.Strategy == "" {
 		request.Strategy = accountapp.BuildConversionMissing
 	}
@@ -50,17 +46,9 @@ func (h *Handler) convertWebToBuild(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "转换策略无效")
 		return
 	}
-	var ids []uint64
-	if !request.All {
-		var err error
-		ids, err = parseIDs(request.IDs)
-		if err != nil {
-			response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
-			return
-		}
-		if !h.validateProviderIDs(c, ids, string(accountdomain.ProviderWeb)) {
-			return
-		}
+	ids, ok := h.webAccountSelection(c, request.All, request.IDs, "转换")
+	if !ok {
+		return
 	}
 	h.streamWebToBuildConversion(c, request.All, ids, request.Strategy)
 }
@@ -71,10 +59,6 @@ func (h *Handler) syncWebToConsole(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "同步请求无效")
 		return
 	}
-	if request.All && len(request.IDs) > 0 {
-		response.Error(c, http.StatusBadRequest, "invalidRequest", "全部同步与指定账号不能同时提交")
-		return
-	}
 	if request.Strategy == "" {
 		request.Strategy = accountapp.WebConsoleSyncAll
 	}
@@ -82,19 +66,30 @@ func (h *Handler) syncWebToConsole(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "同步策略无效")
 		return
 	}
-	var ids []uint64
-	if !request.All {
-		var err error
-		ids, err = parseIDs(request.IDs)
-		if err != nil {
-			response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
-			return
-		}
-		if !h.validateProviderIDs(c, ids, string(accountdomain.ProviderWeb)) {
-			return
-		}
+	ids, ok := h.webAccountSelection(c, request.All, request.IDs, "同步")
+	if !ok {
+		return
 	}
 	h.streamWebToConsoleSync(c, request.All, ids, request.Strategy)
+}
+
+// webAccountSelection reads the Grok Web accounts a bulk action targets:
+// every one (all) or the listed IDs, never both. It writes the error response
+// and reports false when the selection is invalid.
+func (h *Handler) webAccountSelection(c *gin.Context, all bool, rawIDs []string, verb string) ([]uint64, bool) {
+	if all && len(rawIDs) > 0 {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "全部"+verb+"与指定账号不能同时提交")
+		return nil, false
+	}
+	if all {
+		return nil, true
+	}
+	ids, err := parseIDs(rawIDs)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
+		return nil, false
+	}
+	return ids, h.validateProviderIDs(c, ids, string(accountdomain.ProviderWeb))
 }
 
 func (h *Handler) runWebToConsoleSync(ctx context.Context, all bool, ids []uint64, strategy accountapp.WebConsoleSyncStrategy, progress accountapp.BatchProgressObserver, syncProgress func(completed, total int)) (accountapp.ImportResult, accountsyncapp.Result, error) {
