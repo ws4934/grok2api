@@ -51,16 +51,16 @@ func TestLostQuotaRefreshMarkerDoesNotLoop(t *testing.T) {
 	service := NewService(accounts, nil, nil, nil, provider.NewRegistry(adapter), nil, nil)
 	service.SetQuotaRefreshCoordinator(&lossyQuotaCoordinator{QuotaRefreshCoordinator: memory.NewQuotaRefreshCoordinator()})
 	service.QueueQuotaRefresh(credential.ID, "weekly")
-	request := <-service.quotaRefreshQueue
-	service.quotaRefreshMu.Lock()
-	state := service.quotaRefreshes[request.key]
+	request := <-service.quotaRefresh.requests
+	service.quotaRefresh.mu.Lock()
+	state := service.quotaRefresh.states[request.key]
 	state.queued, state.running = false, true
-	service.quotaRefreshMu.Unlock()
+	service.quotaRefresh.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	done := make(chan struct{})
-	go func() { service.runQuotaRefresh(ctx, request); close(done) }()
+	go func() { service.quotaRefresh.refresh(ctx, request); close(done) }()
 	select {
 	case <-done:
 	case <-ctx.Done():
@@ -227,11 +227,11 @@ func TestQueuedRefreshDropsUnroutableAccounts(t *testing.T) {
 	adapter := &quotaCountingAdapter{}
 	service := NewService(accounts, nil, nil, nil, provider.NewRegistry(adapter), nil, nil)
 	service.QueueQuotaRefresh(credential.ID, "weekly")
-	request := <-service.quotaRefreshQueue
-	service.runQuotaRefresh(context.Background(), request)
-	service.quotaRefreshMu.Lock()
-	state := service.quotaRefreshes[request.key]
-	service.quotaRefreshMu.Unlock()
+	request := <-service.quotaRefresh.requests
+	service.quotaRefresh.refresh(context.Background(), request)
+	service.quotaRefresh.mu.Lock()
+	state := service.quotaRefresh.states[request.key]
+	service.quotaRefresh.mu.Unlock()
 	if state != nil || adapter.modeCalls.Load() != 0 {
 		t.Fatalf("disabled account: state = %#v, syncs = %d", state, adapter.modeCalls.Load())
 	}

@@ -97,7 +97,6 @@ type Service struct {
 	refreshLock         repository.DistributedLock
 	concurrency         repository.ConcurrencyLimiter
 	quotaQueue          repository.QuotaRecoveryQueue
-	quotaRefreshState   repository.QuotaRefreshCoordinator
 	providers           *provider.Registry
 	cipher              *security.Cipher
 	refreshes           singleflight.Group
@@ -109,10 +108,7 @@ type Service struct {
 	refreshMu           sync.Mutex
 	lastRefreshAt       map[uint64]time.Time
 	observedModelShards [observedModelLockShards]observedModelShard
-	quotaRefreshMu      sync.Mutex
-	quotaRefreshes      map[string]*quotaRefreshState
-	quotaRefreshQueue   chan quotaRefreshRequest
-	quotaRefreshWake    chan struct{}
+	quotaRefresh        quotaRefreshQueue
 	conversionPool      *batch.Pool
 	syncPool            *batch.Pool
 	refreshPool         *batch.Pool
@@ -134,7 +130,7 @@ func (s *Service) SetQuotaRecoveryQueue(queue repository.QuotaRecoveryQueue) {
 }
 
 func (s *Service) SetQuotaRefreshCoordinator(value repository.QuotaRefreshCoordinator) {
-	s.quotaRefreshState = value
+	s.quotaRefresh.coordinator = value
 }
 
 // SetConcurrencyLimiter 让账号维护任务读取与推理路由相同的活动租约。
@@ -148,12 +144,10 @@ func (s *Service) SetObservedModelStore(value repository.ObservedModelStateRepos
 }
 
 func NewService(accounts repository.AccountRepository, audits repository.AuditRepository, deviceSessions repository.DeviceSessionRepository, sticky repository.StickySessionRepository, providers *provider.Registry, cipher *security.Cipher, refreshLock repository.DistributedLock) *Service {
-	return &Service{
+	s := &Service{
 		accounts: accounts, audits: audits, deviceSessions: deviceSessions, sticky: sticky,
 		providers: providers, cipher: cipher, refreshLock: refreshLock,
-		lastRefreshAt: make(map[uint64]time.Time), quotaRefreshes: make(map[string]*quotaRefreshState),
-		quotaRefreshQueue:     make(chan quotaRefreshRequest, quotaRefreshQueueSize),
-		quotaRefreshWake:      make(chan struct{}, 1),
+		lastRefreshAt:         make(map[uint64]time.Time),
 		credentialRefreshWake: make(chan struct{}, 1),
 		autoClean: AutoCleanConfig{
 			Enabled: false, Interval: 10 * time.Minute, MinAge: time.Hour, IncludeDisabled: false,
@@ -164,6 +158,17 @@ func NewService(accounts repository.AccountRepository, audits repository.AuditRe
 		logger: slog.Default(),
 		now:    func() time.Time { return time.Now().UTC() },
 	}
+	// Read s.now on every call so a replaced clock reaches the components too.
+	clock := func() time.Time { return s.now() }
+	s.quotaRefresh = quotaRefreshQueue{
+		states:   make(map[string]*quotaRefreshState),
+		requests: make(chan quotaRefreshRequest, quotaRefreshQueueSize),
+		wake:     make(chan struct{}, 1),
+		accounts: accounts, lock: refreshLock,
+		syncMode: s.syncQueuedQuota, isSnapshotMode: s.snapshotQuotaMode, isDeclaredMode: s.isDeclaredQuotaMode,
+		logger: s.logger, now: clock,
+	}
+	return s
 }
 
 func (s *Service) SetBulkPool(pool *batch.Pool) {
@@ -195,6 +200,7 @@ func (s *Service) SetDetectPool(pool *batch.Pool) {
 func (s *Service) SetLogger(logger *slog.Logger) {
 	if logger != nil {
 		s.logger = logger
+		s.quotaRefresh.logger = logger
 	}
 }
 

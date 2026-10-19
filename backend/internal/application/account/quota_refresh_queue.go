@@ -3,6 +3,7 @@ package account
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math/rand/v2"
 	"strconv"
 	"strings"
@@ -40,11 +41,75 @@ type QuotaRefreshStats struct {
 	Running int
 }
 
+// quotaRefreshAccounts is the account storage the quota refresh queue reads.
+type quotaRefreshAccounts interface {
+	Get(ctx context.Context, id uint64) (accountdomain.Credential, error)
+	GetQuotaWindows(ctx context.Context, accountIDs []uint64) (map[uint64][]accountdomain.QuotaWindow, error)
+}
+
+// quotaRefreshQueue coalesces background quota refreshes per account and mode,
+// runs them on a fixed worker set and retries failures with backoff. The
+// optional coordinator shares dirty generations across instances.
+type quotaRefreshQueue struct {
+	mu       sync.Mutex
+	states   map[string]*quotaRefreshState
+	requests chan quotaRefreshRequest
+	wake     chan struct{}
+
+	coordinator repository.QuotaRefreshCoordinator
+	accounts    quotaRefreshAccounts
+	lock        repository.DistributedLock
+	// syncMode refreshes one mode upstream; a nil error leaves nothing to retry.
+	syncMode       func(ctx context.Context, accountID uint64, mode string) error
+	isSnapshotMode func(mode string) bool
+	isDeclaredMode func(mode string) bool
+	logger         *slog.Logger
+	now            func() time.Time
+}
+
 func (s *Service) QuotaRefreshStats() QuotaRefreshStats {
-	s.quotaRefreshMu.Lock()
-	defer s.quotaRefreshMu.Unlock()
+	return s.quotaRefresh.stats()
+}
+
+// QueueQuotaRefresh asynchronously refreshes the remote quota window after a successful request.
+func (s *Service) QueueQuotaRefresh(id uint64, mode string) {
+	s.quotaRefresh.enqueue(id, mode)
+}
+
+// RunQuotaRefresh uses a fixed worker set to avoid unbounded goroutine creation.
+func (s *Service) RunQuotaRefresh(ctx context.Context) {
+	s.quotaRefresh.run(ctx)
+}
+
+// syncQueuedQuota refreshes one queued mode on the shared sync pool.
+func (s *Service) syncQueuedQuota(ctx context.Context, accountID uint64, mode string) error {
+	var refreshErr error
+	if err := s.syncPool.Do(ctx, func(workCtx context.Context) error {
+		if mode == accountdomain.QuotaGroupWebImagine {
+			var refreshed quotaRefreshResult
+			refreshed, refreshErr = s.refreshQuotaGroup(workCtx, accountID, mode)
+			if refreshErr == nil {
+				refreshErr = s.reconcileQuotaGroupWindows(workCtx, refreshed.Credential.Provider, accountID, refreshed.Modes, refreshed.Windows)
+			}
+		} else {
+			_, refreshErr = s.RefreshQuotaMode(workCtx, accountID, mode)
+			if errors.Is(refreshErr, accountdomain.ErrQuotaNotLimited) {
+				// The stored snapshot no longer limits this mode: nothing to retry.
+				refreshErr = nil
+			}
+		}
+		return refreshErr
+	}); err != nil {
+		refreshErr = err
+	}
+	return refreshErr
+}
+
+func (q *quotaRefreshQueue) stats() QuotaRefreshStats {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	result := QuotaRefreshStats{}
-	for _, state := range s.quotaRefreshes {
+	for _, state := range q.states {
 		if state == nil {
 			continue
 		}
@@ -61,44 +126,43 @@ func (s *Service) QuotaRefreshStats() QuotaRefreshStats {
 	return result
 }
 
-// QueueQuotaRefresh asynchronously refreshes the remote quota window after a successful request.
-func (s *Service) QueueQuotaRefresh(id uint64, mode string) {
+func (q *quotaRefreshQueue) enqueue(id uint64, mode string) {
 	mode = strings.TrimSpace(mode)
 	if isWebImagineQuotaMode(mode) {
 		mode = accountdomain.QuotaGroupWebImagine
 	}
-	if id == 0 || (!isConsoleUsageQuotaMode(mode) && mode != "weekly" && mode != accountdomain.QuotaGroupWebImagine && !isWebChatQuotaMode(mode) && !s.isDeclaredQuotaMode(mode)) {
+	if id == 0 || (!isConsoleUsageQuotaMode(mode) && mode != "weekly" && mode != accountdomain.QuotaGroupWebImagine && !isWebChatQuotaMode(mode) && !q.isDeclaredMode(mode)) {
 		return
 	}
 	key := strconv.FormatUint(id, 10) + ":" + mode
-	s.quotaRefreshMu.Lock()
-	state := s.quotaRefreshes[key]
-	now := s.now().UTC()
+	q.mu.Lock()
+	state := q.states[key]
+	now := q.now().UTC()
 	if state != nil && !state.pending && !state.queued && !state.running && !now.Before(state.nextAttemptAt) {
-		delete(s.quotaRefreshes, key)
+		delete(q.states, key)
 		state = nil
 	}
 	if state == nil {
 		state = &quotaRefreshState{}
-		s.quotaRefreshes[key] = state
+		q.states[key] = state
 	}
 	state.generation++
 	state.pending = true
-	enqueued := state.queued || state.running || now.Before(state.nextAttemptAt) || s.enqueueQuotaRefreshLocked(quotaRefreshRequest{key: key, accountID: id, mode: mode}, state)
-	s.quotaRefreshMu.Unlock()
+	enqueued := state.queued || state.running || now.Before(state.nextAttemptAt) || q.enqueueLocked(quotaRefreshRequest{key: key, accountID: id, mode: mode}, state)
+	q.mu.Unlock()
 	if !enqueued {
 		perfmetrics.Default.Add("quota_refresh_events", perfmetrics.Labels{Subsystem: "quota", Stage: "enqueue", Outcome: "queue_full"}, 1)
-		s.logger.Warn("quota_refresh_queue_full", "account_id", id, "mode", mode)
-		s.wakeQuotaRefreshRecovery()
+		q.logger.Warn("quota_refresh_queue_full", "account_id", id, "mode", mode)
+		q.wakeRecovery()
 	}
 }
 
-func (s *Service) enqueueQuotaRefreshLocked(request quotaRefreshRequest, state *quotaRefreshState) bool {
+func (q *quotaRefreshQueue) enqueueLocked(request quotaRefreshRequest, state *quotaRefreshState) bool {
 	if state == nil || state.queued || state.running {
 		return state != nil
 	}
 	select {
-	case s.quotaRefreshQueue <- request:
+	case q.requests <- request:
 		state.queued = true
 		return true
 	default:
@@ -106,15 +170,14 @@ func (s *Service) enqueueQuotaRefreshLocked(request quotaRefreshRequest, state *
 	}
 }
 
-func (s *Service) wakeQuotaRefreshRecovery() {
+func (q *quotaRefreshQueue) wakeRecovery() {
 	select {
-	case s.quotaRefreshWake <- struct{}{}:
+	case q.wake <- struct{}{}:
 	default:
 	}
 }
 
-// RunQuotaRefresh uses a fixed worker set to avoid unbounded goroutine creation.
-func (s *Service) RunQuotaRefresh(ctx context.Context) {
+func (q *quotaRefreshQueue) run(ctx context.Context) {
 	var workers sync.WaitGroup
 	workers.Add(managedTaskWorkerCeiling + 1)
 	for range managedTaskWorkerCeiling {
@@ -124,36 +187,36 @@ func (s *Service) RunQuotaRefresh(ctx context.Context) {
 				select {
 				case <-ctx.Done():
 					return
-				case request := <-s.quotaRefreshQueue:
-					s.quotaRefreshMu.Lock()
-					state := s.quotaRefreshes[request.key]
+				case request := <-q.requests:
+					q.mu.Lock()
+					state := q.states[request.key]
 					if state == nil || state.running {
-						s.quotaRefreshMu.Unlock()
+						q.mu.Unlock()
 						continue
 					}
 					state.queued = false
 					state.running = true
 					state.pending = false
-					s.quotaRefreshMu.Unlock()
+					q.mu.Unlock()
 					if err := batch.Do(ctx, func(workCtx context.Context) error {
-						s.runQuotaRefresh(workCtx, request)
+						q.refresh(workCtx, request)
 						return nil
 					}); err != nil {
-						s.quotaRefreshMu.Lock()
-						if state := s.quotaRefreshes[request.key]; state != nil {
+						q.mu.Lock()
+						if state := q.states[request.key]; state != nil {
 							state.running = false
 							state.pending = true
 							state.failures++
-							state.nextAttemptAt = s.now().UTC().Add(quotaRefreshRetryDelay(state.failures))
+							state.nextAttemptAt = q.now().UTC().Add(quotaRefreshRetryDelay(state.failures))
 						}
-						s.quotaRefreshMu.Unlock()
-						s.wakeQuotaRefreshRecovery()
+						q.mu.Unlock()
+						q.wakeRecovery()
 						if ctx.Err() == nil {
 							var panicErr *batch.PanicError
 							if errors.As(err, &panicErr) {
-								s.logger.Error("quota_refresh_worker_panicked", "account_id", request.accountID, "mode", request.mode, "error", panicErr, "stack", string(panicErr.Stack))
+								q.logger.Error("quota_refresh_worker_panicked", "account_id", request.accountID, "mode", request.mode, "error", panicErr, "stack", string(panicErr.Stack))
 							} else {
-								s.logger.Error("quota_refresh_worker_failed", "account_id", request.accountID, "mode", request.mode, "error", err)
+								q.logger.Error("quota_refresh_worker_failed", "account_id", request.accountID, "mode", request.mode, "error", err)
 							}
 						}
 					}
@@ -163,48 +226,48 @@ func (s *Service) RunQuotaRefresh(ctx context.Context) {
 	}
 	go func() {
 		defer workers.Done()
-		s.runQuotaRefreshRecovery(ctx)
+		q.runRecovery(ctx)
 	}()
 	workers.Wait()
 }
 
-func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRequest) {
+func (q *quotaRefreshQueue) refresh(parent context.Context, request quotaRefreshRequest) {
 	for {
-		s.quotaRefreshMu.Lock()
-		state := s.quotaRefreshes[request.key]
+		q.mu.Lock()
+		state := q.states[request.key]
 		if state == nil {
-			s.quotaRefreshMu.Unlock()
+			q.mu.Unlock()
 			return
 		}
 		localGeneration := state.generation
 		publishedGeneration := state.publishedGeneration
 		sharedGeneration := state.sharedGeneration
 		state.pending = false
-		s.quotaRefreshMu.Unlock()
+		q.mu.Unlock()
 
 		ctx, cancel := context.WithTimeout(parent, quotaRefreshTimeout)
-		if s.quotaRefreshState != nil && publishedGeneration < localGeneration {
-			generation, err := s.quotaRefreshState.MarkQuotaRefreshDirty(ctx, request.accountID, request.mode, quotaRefreshDirtyTTL)
+		if q.coordinator != nil && publishedGeneration < localGeneration {
+			generation, err := q.coordinator.MarkQuotaRefreshDirty(ctx, request.accountID, request.mode, quotaRefreshDirtyTTL)
 			if err != nil {
 				cancel()
-				s.deferQuotaRefresh(request.key)
+				q.deferRetry(request.key)
 				perfmetrics.Default.Add("quota_refresh_events", perfmetrics.Labels{Subsystem: "quota", Stage: "publish", Outcome: "failed"}, 1)
-				s.logger.Warn("quota_refresh_dirty_publish_failed", "account_id", request.accountID, "mode", request.mode, "error", err)
+				q.logger.Warn("quota_refresh_dirty_publish_failed", "account_id", request.accountID, "mode", request.mode, "error", err)
 				return
 			}
 			sharedGeneration = generation
-			s.quotaRefreshMu.Lock()
-			if current := s.quotaRefreshes[request.key]; current != nil && current.publishedGeneration < localGeneration {
+			q.mu.Lock()
+			if current := q.states[request.key]; current != nil && current.publishedGeneration < localGeneration {
 				current.publishedGeneration = localGeneration
 				current.sharedGeneration = generation
 			}
-			s.quotaRefreshMu.Unlock()
+			q.mu.Unlock()
 		}
-		if s.quotaRefreshState != nil && publishedGeneration >= localGeneration && sharedGeneration > 0 {
-			generation, dirty, err := s.quotaRefreshState.QuotaRefreshGeneration(ctx, request.accountID, request.mode)
+		if q.coordinator != nil && publishedGeneration >= localGeneration && sharedGeneration > 0 {
+			generation, dirty, err := q.coordinator.QuotaRefreshGeneration(ctx, request.accountID, request.mode)
 			if err != nil {
 				cancel()
-				s.deferQuotaRefresh(request.key)
+				q.deferRetry(request.key)
 				return
 			}
 			// A lower generation means the shared marker was lost (Redis
@@ -212,31 +275,31 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 			// matches and the refresh loops on the upstream without pause.
 			if generation != sharedGeneration {
 				sharedGeneration = generation
-				s.quotaRefreshMu.Lock()
-				if current := s.quotaRefreshes[request.key]; current != nil {
+				q.mu.Lock()
+				if current := q.states[request.key]; current != nil {
 					current.sharedGeneration = generation
 				}
-				s.quotaRefreshMu.Unlock()
+				q.mu.Unlock()
 			}
 			if !dirty && generation == sharedGeneration {
 				cancel()
-				s.quotaRefreshMu.Lock()
-				if current := s.quotaRefreshes[request.key]; current != nil && current.generation == localGeneration {
-					delete(s.quotaRefreshes, request.key)
+				q.mu.Lock()
+				if current := q.states[request.key]; current != nil && current.generation == localGeneration {
+					delete(q.states, request.key)
 				}
-				s.quotaRefreshMu.Unlock()
+				q.mu.Unlock()
 				return
 			}
 		}
 		// Background refreshes serve accounts the gateway can route to; a
 		// deleted, disabled or reauth-required account would be retried forever.
-		if credential, err := s.accounts.Get(ctx, request.accountID); errors.Is(err, repository.ErrNotFound) || (err == nil && (!credential.Enabled || credential.AuthStatus != accountdomain.AuthStatusActive)) {
+		if credential, err := q.accounts.Get(ctx, request.accountID); errors.Is(err, repository.ErrNotFound) || (err == nil && (!credential.Enabled || credential.AuthStatus != accountdomain.AuthStatusActive)) {
 			cancel()
-			s.quotaRefreshMu.Lock()
-			if current := s.quotaRefreshes[request.key]; current != nil && current.generation == localGeneration {
-				delete(s.quotaRefreshes, request.key)
+			q.mu.Lock()
+			if current := q.states[request.key]; current != nil && current.generation == localGeneration {
+				delete(q.states, request.key)
 			}
-			s.quotaRefreshMu.Unlock()
+			q.mu.Unlock()
 			return
 		}
 		refreshMode := request.mode
@@ -245,24 +308,24 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 		// Console, their refreshes share a per-account lock and a minimum
 		// interval, and right after a sync the local decrement already counts
 		// the request.
-		snapshotMode := !consoleMode && s.snapshotQuotaMode(request.mode)
+		snapshotMode := !consoleMode && q.isSnapshotMode(request.mode)
 		intervalMode := consoleMode || snapshotMode
 		minInterval := consoleQuotaRefreshMinInterval
 		if snapshotMode {
 			minInterval = snapshotQuotaRefreshMinInterval
 		}
 		skipUpstream := false
-		if windows, err := s.accounts.GetQuotaWindows(ctx, []uint64{request.accountID}); err == nil {
+		if windows, err := q.accounts.GetQuotaWindows(ctx, []uint64{request.accountID}); err == nil {
 			if consoleMode {
 				for _, window := range windows[request.accountID] {
-					if window.Mode == request.mode && window.SyncedAt != nil && s.now().UTC().Sub(window.SyncedAt.UTC()) < consoleQuotaRefreshMinInterval {
+					if window.Mode == request.mode && window.SyncedAt != nil && q.now().UTC().Sub(window.SyncedAt.UTC()) < consoleQuotaRefreshMinInterval {
 						skipUpstream = true
 						break
 					}
 				}
 			} else if snapshotMode {
 				for _, window := range windows[request.accountID] {
-					if window.SyncedAt != nil && s.now().UTC().Sub(window.SyncedAt.UTC()) < minInterval {
+					if window.SyncedAt != nil && q.now().UTC().Sub(window.SyncedAt.UTC()) < minInterval {
 						skipUpstream = true
 						break
 					}
@@ -282,7 +345,7 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 		var refreshErr error
 		acquired := true
 		var release func()
-		if !skipUpstream && s.refreshLock != nil {
+		if !skipUpstream && q.lock != nil {
 			lockKey := "quota-refresh:" + strconv.FormatUint(request.accountID, 10) + ":" + refreshMode
 			if consoleMode {
 				// Every Console mode reads the same /usage snapshot. Serialize all
@@ -291,27 +354,10 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 			} else if snapshotMode {
 				lockKey = "quota-refresh:" + strconv.FormatUint(request.accountID, 10) + ":snapshot"
 			}
-			release, acquired, refreshErr = s.refreshLock.Acquire(ctx, lockKey, quotaRefreshTimeout)
+			release, acquired, refreshErr = q.lock.Acquire(ctx, lockKey, quotaRefreshTimeout)
 		}
 		if !skipUpstream && refreshErr == nil && acquired {
-			if err := s.syncPool.Do(ctx, func(workCtx context.Context) error {
-				if refreshMode == accountdomain.QuotaGroupWebImagine {
-					var refreshed quotaRefreshResult
-					refreshed, refreshErr = s.refreshQuotaGroup(workCtx, request.accountID, refreshMode)
-					if refreshErr == nil {
-						refreshErr = s.reconcileQuotaGroupWindows(workCtx, refreshed.Credential.Provider, request.accountID, refreshed.Modes, refreshed.Windows)
-					}
-				} else {
-					_, refreshErr = s.RefreshQuotaMode(workCtx, request.accountID, refreshMode)
-					if errors.Is(refreshErr, accountdomain.ErrQuotaNotLimited) {
-						// The stored snapshot no longer limits this mode: nothing to retry.
-						refreshErr = nil
-					}
-				}
-				return refreshErr
-			}); err != nil {
-				refreshErr = err
-			}
+			refreshErr = q.syncMode(ctx, request.accountID, refreshMode)
 		}
 		if release != nil {
 			release()
@@ -319,64 +365,64 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 		cancel()
 		if refreshErr != nil || !acquired {
 			if refreshErr != nil && !errors.Is(refreshErr, context.Canceled) {
-				s.logger.Warn("quota_refresh_failed", "account_id", request.accountID, "mode", refreshMode, "error", refreshErr)
+				q.logger.Warn("quota_refresh_failed", "account_id", request.accountID, "mode", refreshMode, "error", refreshErr)
 			}
-			s.deferQuotaRefresh(request.key)
+			q.deferRetry(request.key)
 			perfmetrics.Default.Add("quota_refresh_events", perfmetrics.Labels{Subsystem: "quota", Stage: "refresh", Outcome: "retry"}, 1)
 			return
 		}
 
 		currentShared := sharedGeneration
-		sharedDirty := s.quotaRefreshState != nil
-		if s.quotaRefreshState != nil {
+		sharedDirty := q.coordinator != nil
+		if q.coordinator != nil {
 			generationCtx, generationCancel := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
 			var generationErr error
-			currentShared, sharedDirty, generationErr = s.quotaRefreshState.QuotaRefreshGeneration(generationCtx, request.accountID, request.mode)
+			currentShared, sharedDirty, generationErr = q.coordinator.QuotaRefreshGeneration(generationCtx, request.accountID, request.mode)
 			generationCancel()
 			if generationErr != nil {
-				s.deferQuotaRefresh(request.key)
+				q.deferRetry(request.key)
 				return
 			}
 		}
-		s.quotaRefreshMu.Lock()
-		state = s.quotaRefreshes[request.key]
+		q.mu.Lock()
+		state = q.states[request.key]
 		localChanged := state != nil && state.generation != localGeneration
-		s.quotaRefreshMu.Unlock()
-		if localChanged || (s.quotaRefreshState != nil && currentShared != sharedGeneration) {
+		q.mu.Unlock()
+		if localChanged || (q.coordinator != nil && currentShared != sharedGeneration) {
 			perfmetrics.Default.Add("quota_refresh_events", perfmetrics.Labels{Subsystem: "quota", Stage: "refresh", Outcome: "trailing"}, 1)
 			if intervalMode {
-				s.deferSuccessfulQuotaRefresh(request.key, true, minInterval)
+				q.deferSuccess(request.key, true, minInterval)
 				return
 			}
 			continue
 		}
-		if s.quotaRefreshState != nil && sharedDirty {
+		if q.coordinator != nil && sharedDirty {
 			clearCtx, clearCancel := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
-			cleared, clearErr := s.quotaRefreshState.ClearQuotaRefreshDirty(clearCtx, request.accountID, request.mode, sharedGeneration)
+			cleared, clearErr := q.coordinator.ClearQuotaRefreshDirty(clearCtx, request.accountID, request.mode, sharedGeneration)
 			clearCancel()
 			if clearErr != nil || !cleared {
 				if clearErr != nil {
-					s.logger.Warn("quota_refresh_dirty_clear_failed", "account_id", request.accountID, "mode", request.mode, "error", clearErr)
+					q.logger.Warn("quota_refresh_dirty_clear_failed", "account_id", request.accountID, "mode", request.mode, "error", clearErr)
 				}
 				if intervalMode {
-					s.deferSuccessfulQuotaRefresh(request.key, true, minInterval)
+					q.deferSuccess(request.key, true, minInterval)
 					return
 				}
 				continue
 			}
 		}
-		s.quotaRefreshMu.Lock()
-		state = s.quotaRefreshes[request.key]
+		q.mu.Lock()
+		state = q.states[request.key]
 		if state != nil && state.generation == localGeneration {
 			if intervalMode {
 				state.running = false
 				state.pending = false
 				state.failures = 0
-				state.nextAttemptAt = s.now().UTC().Add(minInterval)
+				state.nextAttemptAt = q.now().UTC().Add(minInterval)
 			} else {
-				delete(s.quotaRefreshes, request.key)
+				delete(q.states, request.key)
 			}
-			s.quotaRefreshMu.Unlock()
+			q.mu.Unlock()
 			perfmetrics.Default.Add("quota_refresh_events", perfmetrics.Labels{Subsystem: "quota", Stage: "refresh", Outcome: "success"}, 1)
 			return
 		}
@@ -384,37 +430,37 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 			state.running = false
 			state.pending = true
 			state.failures = 0
-			state.nextAttemptAt = s.now().UTC().Add(minInterval)
-			s.quotaRefreshMu.Unlock()
-			s.wakeQuotaRefreshRecovery()
+			state.nextAttemptAt = q.now().UTC().Add(minInterval)
+			q.mu.Unlock()
+			q.wakeRecovery()
 			return
 		}
-		s.quotaRefreshMu.Unlock()
+		q.mu.Unlock()
 	}
 }
 
-func (s *Service) deferQuotaRefresh(key string) {
-	s.quotaRefreshMu.Lock()
-	if state := s.quotaRefreshes[key]; state != nil {
+func (q *quotaRefreshQueue) deferRetry(key string) {
+	q.mu.Lock()
+	if state := q.states[key]; state != nil {
 		state.running = false
 		state.pending = true
 		state.failures++
-		state.nextAttemptAt = s.now().UTC().Add(quotaRefreshRetryDelay(state.failures))
+		state.nextAttemptAt = q.now().UTC().Add(quotaRefreshRetryDelay(state.failures))
 	}
-	s.quotaRefreshMu.Unlock()
-	s.wakeQuotaRefreshRecovery()
+	q.mu.Unlock()
+	q.wakeRecovery()
 }
 
-func (s *Service) deferSuccessfulQuotaRefresh(key string, pending bool, interval time.Duration) {
-	s.quotaRefreshMu.Lock()
-	if state := s.quotaRefreshes[key]; state != nil {
+func (q *quotaRefreshQueue) deferSuccess(key string, pending bool, interval time.Duration) {
+	q.mu.Lock()
+	if state := q.states[key]; state != nil {
 		state.running = false
 		state.pending = pending
 		state.failures = 0
-		state.nextAttemptAt = s.now().UTC().Add(interval)
+		state.nextAttemptAt = q.now().UTC().Add(interval)
 	}
-	s.quotaRefreshMu.Unlock()
-	s.wakeQuotaRefreshRecovery()
+	q.mu.Unlock()
+	q.wakeRecovery()
 }
 
 func quotaRefreshRetryDelay(failures int) time.Duration {
@@ -435,7 +481,7 @@ func quotaRefreshRetryDelay(failures int) time.Duration {
 	return half + time.Duration(rand.Int64N(int64(half)+1))
 }
 
-func (s *Service) runQuotaRefreshRecovery(ctx context.Context) {
+func (q *quotaRefreshQueue) runRecovery(ctx context.Context) {
 	retryTicker := time.NewTicker(quotaRefreshPollInterval)
 	sharedTicker := time.NewTicker(quotaRefreshSharedPoll)
 	defer retryTicker.Stop()
@@ -444,28 +490,28 @@ func (s *Service) runQuotaRefreshRecovery(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-s.quotaRefreshWake:
-			s.requeueQuotaRefreshes()
+		case <-q.wake:
+			q.requeue()
 		case <-retryTicker.C:
-			s.requeueQuotaRefreshes()
+			q.requeue()
 		case now := <-sharedTicker.C:
-			s.recoverSharedQuotaRefreshes(ctx, now.UTC())
-			s.requeueQuotaRefreshes()
+			q.recoverShared(ctx, now.UTC())
+			q.requeue()
 		}
 	}
 }
 
-func (s *Service) requeueQuotaRefreshes() {
-	now := s.now().UTC()
-	s.quotaRefreshMu.Lock()
-	for key, state := range s.quotaRefreshes {
+func (q *quotaRefreshQueue) requeue() {
+	now := q.now().UTC()
+	q.mu.Lock()
+	for key, state := range q.states {
 		if state == nil {
-			delete(s.quotaRefreshes, key)
+			delete(q.states, key)
 			continue
 		}
 		if !state.pending {
 			if !state.queued && !state.running && !now.Before(state.nextAttemptAt) {
-				delete(s.quotaRefreshes, key)
+				delete(q.states, key)
 			}
 			continue
 		}
@@ -480,40 +526,40 @@ func (s *Service) requeueQuotaRefreshes() {
 		if err != nil {
 			continue
 		}
-		if !s.enqueueQuotaRefreshLocked(quotaRefreshRequest{key: key, accountID: accountID, mode: key[separator+1:]}, state) {
+		if !q.enqueueLocked(quotaRefreshRequest{key: key, accountID: accountID, mode: key[separator+1:]}, state) {
 			break
 		}
 	}
-	s.quotaRefreshMu.Unlock()
+	q.mu.Unlock()
 }
 
-func (s *Service) recoverSharedQuotaRefreshes(parent context.Context, now time.Time) {
-	if s.quotaRefreshState == nil {
+func (q *quotaRefreshQueue) recoverShared(parent context.Context, now time.Time) {
+	if q.coordinator == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
-	values, err := s.quotaRefreshState.ListQuotaRefreshDirty(ctx, now, 100)
+	values, err := q.coordinator.ListQuotaRefreshDirty(ctx, now, 100)
 	cancel()
 	if err != nil {
-		s.logger.Warn("quota_refresh_dirty_list_failed", "error", err)
+		q.logger.Warn("quota_refresh_dirty_list_failed", "error", err)
 		return
 	}
-	s.quotaRefreshMu.Lock()
+	q.mu.Lock()
 	for _, value := range values {
 		key := strconv.FormatUint(value.AccountID, 10) + ":" + value.Mode
-		state := s.quotaRefreshes[key]
+		state := q.states[key]
 		if state == nil {
 			state = &quotaRefreshState{generation: 1, publishedGeneration: 1, sharedGeneration: value.Generation, pending: true}
-			s.quotaRefreshes[key] = state
+			q.states[key] = state
 		} else {
 			if value.Generation > state.sharedGeneration {
 				state.sharedGeneration = value.Generation
 			}
 			state.pending = true
 		}
-		if !state.queued && !state.running && !now.Before(state.nextAttemptAt) && !s.enqueueQuotaRefreshLocked(quotaRefreshRequest{key: key, accountID: value.AccountID, mode: value.Mode}, state) {
+		if !state.queued && !state.running && !now.Before(state.nextAttemptAt) && !q.enqueueLocked(quotaRefreshRequest{key: key, accountID: value.AccountID, mode: value.Mode}, state) {
 			break
 		}
 	}
-	s.quotaRefreshMu.Unlock()
+	q.mu.Unlock()
 }

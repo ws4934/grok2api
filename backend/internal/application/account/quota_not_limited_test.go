@@ -80,12 +80,12 @@ func TestBackgroundRefreshDoesNotRetryModeTheSnapshotNoLongerLimits(t *testing.T
 	service, _, _, id := newNotLimitedFixture(t)
 
 	service.QueueQuotaRefresh(id, "file_upload")
-	request := <-service.quotaRefreshQueue
-	service.runQuotaRefresh(context.Background(), request)
+	request := <-service.quotaRefresh.requests
+	service.quotaRefresh.refresh(context.Background(), request)
 
-	service.quotaRefreshMu.Lock()
-	state := service.quotaRefreshes[request.key]
-	service.quotaRefreshMu.Unlock()
+	service.quotaRefresh.mu.Lock()
+	state := service.quotaRefresh.states[request.key]
+	service.quotaRefresh.mu.Unlock()
 	// A snapshot provider keeps the state only to space its next sync.
 	if state != nil && (state.pending || state.failures > 0) {
 		t.Fatalf("refresh retained retry state: %#v", state)
