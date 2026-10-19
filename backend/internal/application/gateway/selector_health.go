@@ -57,14 +57,14 @@ func (s *Selector) markSuccess(ctx context.Context, credential account.Credentia
 	keepThinkingStrike := isMissingThinkingStrike(credential.LastError)
 	healthChanged := credential.FailureCount > 0 || credential.CooldownUntil != nil || credential.LastError != ""
 	touchLastUsed := healthChanged
-	s.selectionMu.Lock()
+	s.successMu.Lock()
 	if last := s.lastSuccessAt[credential.ID]; last.IsZero() || now.Sub(last) >= successPersistInterval {
 		touchLastUsed = true
 	}
 	if touchLastUsed {
 		s.lastSuccessAt[credential.ID] = now
 	}
-	s.selectionMu.Unlock()
+	s.successMu.Unlock()
 	if healthChanged {
 		lastError := ""
 		if keepThinkingStrike {
@@ -319,6 +319,14 @@ func (s *Selector) routingHealthSnapshot(provider account.Provider, now time.Tim
 		s.healthMu.Unlock()
 	}
 	return result
+}
+
+// healthCooldownUntil is applyHealthSnapshot's CooldownUntil without copying the credential.
+func healthCooldownUntil(value *account.Credential, overrides map[uint64]routingHealthOverride) *time.Time {
+	if override, ok := overrides[value.ID]; ok && override.provider == value.Provider {
+		return override.cooldownUntil
+	}
+	return value.CooldownUntil
 }
 
 func applyHealthSnapshot(value account.Credential, overrides map[uint64]routingHealthOverride) account.Credential {

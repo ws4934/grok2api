@@ -136,6 +136,7 @@ type Selector struct {
 	configMu               sync.RWMutex
 	candidateMu            sync.Mutex
 	selectionMu            sync.RWMutex
+	successMu              sync.Mutex
 	healthMu               sync.RWMutex
 	quotaMu                sync.RWMutex
 	staleLogMu             sync.Mutex
@@ -285,8 +286,8 @@ func (s *Selector) effectiveQuotaMode(candidate account.RoutingCandidate, fallba
 	return fallback
 }
 
-func candidateEgressLeaseCooling(candidate account.RoutingCandidate, credential account.Credential, now time.Time) bool {
-	block := candidate.EgressLeaseBlock
+func candidateEgressLeaseCooling(candidate *account.RoutingCandidate, now time.Time) bool {
+	block, credential := candidate.EgressLeaseBlock, &candidate.Credential
 	return block != nil && block.AccountID == credential.ID && block.NodeID != 0 &&
 		(credential.EgressNodeID == 0 || credential.EgressNodeID == block.NodeID) && now.Before(block.CooldownUntil)
 }
@@ -297,10 +298,21 @@ func candidateEgressLeaseCooling(candidate account.RoutingCandidate, credential 
 // enabled catalog feature, while unknown/manual routes and remote-catalog
 // providers retain the persisted snapshot semantics.
 func (s *Selector) candidateSupportsModel(provider account.Provider, upstreamModel, quotaMode string, candidate account.RoutingCandidate) bool {
+	return catalogSupportsModel(s.catalogTierOrder(provider, upstreamModel, quotaMode), &candidate)
+}
+
+// catalogTierOrder is the provider-wide half of candidateSupportsModel, resolved
+// once per request: the static-catalog tier order, or nil.
+func (s *Selector) catalogTierOrder(provider account.Provider, upstreamModel, quotaMode string) []account.WebTier {
 	if s.staticCatalog(provider) {
-		if order := s.resolveTierOrder(provider, upstreamModel, quotaMode); len(order) > 0 {
-			return webTierInOrder(order, candidate.Credential.WebTier)
-		}
+		return s.resolveTierOrder(provider, upstreamModel, quotaMode)
+	}
+	return nil
+}
+
+func catalogSupportsModel(order []account.WebTier, candidate *account.RoutingCandidate) bool {
+	if len(order) > 0 {
+		return webTierInOrder(order, candidate.Credential.WebTier)
 	}
 	return !candidate.ModelCapabilityKnown || candidate.SupportsModel
 }

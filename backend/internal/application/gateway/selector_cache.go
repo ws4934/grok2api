@@ -405,7 +405,10 @@ func (s *Selector) evictCandidate(provider account.Provider, accountID uint64) {
 			if snapshot.byAccount != nil {
 				byAccount := make(map[uint64]int, len(values))
 				for idx, candidate := range values {
-					byAccount[candidate.Credential.ID] = idx
+					// Keep the first position, as newCandidateSnapshot does.
+					if _, exists := byAccount[candidate.Credential.ID]; !exists {
+						byAccount[candidate.Credential.ID] = idx
+					}
 				}
 				snapshot.byAccount = byAccount
 			}

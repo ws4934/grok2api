@@ -54,7 +54,6 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 	if err != nil {
 		return nil, err
 	}
-	quotaConsumed := s.quotaConsumptionSnapshot(provider)
 	healthOverrides := s.routingHealthSnapshot(provider, now)
 	// 仅保留候选下标，避免每个请求复制包含凭据、计费和额度结构的完整账号切片。
 	normalCandidates := make([]int, 0, len(values))
@@ -65,19 +64,24 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 	modelCoolingCandidates := 0
 	quotaCandidates := 0
 	var earliestRetry time.Time
-	for index, candidate := range values {
-		value := applyHealthSnapshot(candidate.Credential, healthOverrides)
-		if forcedEgressNodeID != 0 && value.EgressNodeID != forcedEgressNodeID {
+	// Candidates are read in place and provider-wide checks resolved once.
+	allTiers := accountScope.Tiers == clientkeydomain.TierScopeAll || s.tierExempt(provider)
+	catalogOrder := s.catalogTierOrder(provider, upstreamModel, quotaMode)
+	s.quotaMu.RLock()
+	quotaConsumed := s.quotaConsumptionSnapshot(provider)
+	for index := range values {
+		candidate := &values[index]
+		if forcedEgressNodeID != 0 && candidate.Credential.EgressNodeID != forcedEgressNodeID {
 			continue
 		}
-		if !s.accountScopeAllowsCandidate(provider, accountScope, candidate) {
+		if !allTiers && !s.accountScopeAllowsCandidate(provider, accountScope, *candidate) {
 			continue
 		}
-		if excluded[value.ID] || value.AuthStatus != account.AuthStatusActive {
+		if excluded[candidate.Credential.ID] || candidate.Credential.AuthStatus != account.AuthStatusActive {
 			continue
 		}
 		consideredCandidates++
-		if !s.candidateSupportsModel(provider, upstreamModel, quotaMode, candidate) {
+		if !catalogSupportsModel(catalogOrder, candidate) {
 			continue
 		}
 		supportedCandidates++
@@ -86,14 +90,14 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 			earliestRetry = earlierFuture(earliestRetry, candidate.ModelQuotaBlock.CooldownUntil, now)
 			continue
 		}
-		if candidateEgressLeaseCooling(candidate, value, now) {
+		if candidateEgressLeaseCooling(candidate, now) {
 			coolingCandidates++
 			earliestRetry = earlierFuture(earliestRetry, candidate.EgressLeaseBlock.CooldownUntil, now)
 			continue
 		}
-		if value.CooldownUntil != nil && now.Before(*value.CooldownUntil) {
+		if cooldownUntil := healthCooldownUntil(&candidate.Credential, healthOverrides); cooldownUntil != nil && now.Before(*cooldownUntil) {
 			coolingCandidates++
-			earliestRetry = earlierFuture(earliestRetry, *value.CooldownUntil, now)
+			earliestRetry = earlierFuture(earliestRetry, *cooldownUntil, now)
 			continue
 		}
 		quotaRecovery := candidate.QuotaRecovery
@@ -108,11 +112,11 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 			}
 			continue
 		}
-		if candidate.Billing != nil && candidate.Billing.IsExhausted(value.MinimumRemaining) {
+		if candidate.Billing != nil && candidate.Billing.IsExhausted(candidate.Credential.MinimumRemaining) {
 			quotaCandidates++
 			continue
 		}
-		if quotaWindowExhausted(candidate, quotaConsumed) {
+		if quotaWindowExhausted(*candidate, quotaConsumed) {
 			quotaCandidates++
 			if candidate.QuotaWindow.ResetAt != nil {
 				earliestRetry = earlierFuture(earliestRetry, *candidate.QuotaWindow.ResetAt, now)
@@ -121,6 +125,7 @@ func (s *Selector) acquire(ctx context.Context, provider account.Provider, model
 		}
 		normalCandidates = append(normalCandidates, index)
 	}
+	s.quotaMu.RUnlock()
 	materialFailures := credentialMaterialFailureTracker{}
 	if len(normalCandidates) == 0 && len(probeCandidates) == 0 {
 		reason := SelectionNoAccounts
@@ -338,9 +343,8 @@ func stickySessionKey(value string) string {
 
 func routingCandidateByID(values []account.RoutingCandidate, indexes []int, accountID uint64) (account.RoutingCandidate, bool) {
 	for _, index := range indexes {
-		candidate := values[index]
-		if candidate.Credential.ID == accountID {
-			return candidate, true
+		if values[index].Credential.ID == accountID {
+			return values[index], true
 		}
 	}
 	return account.RoutingCandidate{}, false
@@ -377,86 +381,108 @@ func (s *Selector) acquirePinned(ctx context.Context, provider account.Provider,
 	if err != nil {
 		return nil, err
 	}
-	quotaConsumed := s.quotaConsumptionSnapshot(provider)
 	healthOverrides := s.routingHealthSnapshot(provider, now)
-	for _, candidate := range values {
-		value := applyHealthSnapshot(candidate.Credential, healthOverrides)
-		if value.ID != accountID {
-			continue
+	index, found := s.pinnedCandidateIndex(candidateCacheKey{provider: provider, modelRouteID: modelRouteID, upstreamModel: upstreamModel, quotaMode: quotaMode, includeBotFlagged: true}, values, accountID)
+	if !found {
+		return nil, pinnedUnavailableError(accountID, "")
+	}
+	candidate := values[index]
+	value := applyHealthSnapshot(candidate.Credential, healthOverrides)
+	if !s.accountScopeAllowsCandidate(provider, accountScope, candidate) {
+		if accountScope.IsRestricted() {
+			return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts, Scope: accountScope, AccountID: accountID, AccountName: value.Name}
 		}
-		if !s.accountScopeAllowsCandidate(provider, accountScope, candidate) {
-			if accountScope.IsRestricted() {
-				return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts, Scope: accountScope, AccountID: accountID, AccountName: value.Name}
-			}
-			return nil, pinnedUnavailableError(accountID, value.Name)
+		return nil, pinnedUnavailableError(accountID, value.Name)
+	}
+	if !value.Enabled || value.AuthStatus != account.AuthStatusActive {
+		return nil, pinnedUnavailableError(accountID, value.Name)
+	}
+	if inference {
+		if !s.candidateSupportsModel(provider, upstreamModel, quotaMode, candidate) {
+			return nil, &SelectionUnavailableError{Reason: SelectionUnsupportedModel}
 		}
-		if !value.Enabled || value.AuthStatus != account.AuthStatusActive {
-			return nil, pinnedUnavailableError(accountID, value.Name)
+		if candidate.ModelQuotaBlock != nil && now.Before(candidate.ModelQuotaBlock.CooldownUntil) {
+			return nil, &SelectionUnavailableError{Reason: SelectionModelCooling, RetryAfter: retryDelay(now, candidate.ModelQuotaBlock.CooldownUntil)}
 		}
-		if inference {
-			if !s.candidateSupportsModel(provider, upstreamModel, quotaMode, candidate) {
-				return nil, &SelectionUnavailableError{Reason: SelectionUnsupportedModel}
-			}
-			if candidate.ModelQuotaBlock != nil && now.Before(candidate.ModelQuotaBlock.CooldownUntil) {
-				return nil, &SelectionUnavailableError{Reason: SelectionModelCooling, RetryAfter: retryDelay(now, candidate.ModelQuotaBlock.CooldownUntil)}
-			}
-			if !ignoreEgressLeaseBlock && candidateEgressLeaseCooling(candidate, value, now) {
-				return nil, &SelectionUnavailableError{Reason: SelectionCooling, RetryAfter: retryDelay(now, candidate.EgressLeaseBlock.CooldownUntil)}
-			}
-			if value.CooldownUntil != nil && now.Before(*value.CooldownUntil) {
-				return nil, &SelectionUnavailableError{Reason: SelectionCooling, RetryAfter: retryDelay(now, *value.CooldownUntil)}
-			}
-			if recovery := candidate.QuotaRecovery; recovery != nil && recovery.Status != account.QuotaRecoveryStatusActive {
-				if recovery.NextProbeAt == nil || now.Before(*recovery.NextProbeAt) {
-					var retryAfter time.Duration
-					if recovery.NextProbeAt != nil {
-						retryAfter = retryDelay(now, *recovery.NextProbeAt)
-					}
-					return nil, &SelectionUnavailableError{Reason: SelectionQuotaExhausted, RetryAfter: retryAfter}
-				}
-				lease, err := s.acquirePinnedCapacity(ctx, value, nil)
-				if err != nil {
-					if errors.Is(err, errRoutingCredentialStale) {
-						return nil, pinnedUnavailableError(accountID, value.Name)
-					}
-					return nil, err
-				}
-				claimed, err := s.accounts.ClaimQuotaProbe(ctx, value.ID, now, now.Add(quotaProbeLease))
-				if err != nil || !claimed {
-					lease.Release()
-					if err != nil {
-						return nil, err
-					}
-					return nil, fmt.Errorf("绑定的上游账号恢复探测已被占用")
-				}
-				lease.QuotaProbe = true
-				lease.QuotaProbeKind = recovery.Kind
-				lease.Billing = candidate.Billing
-				return lease, nil
-			}
-			if candidate.Billing != nil && candidate.Billing.IsExhausted(value.MinimumRemaining) {
-				return nil, &SelectionUnavailableError{Reason: SelectionQuotaExhausted}
-			}
-			if quotaWindowExhausted(candidate, quotaConsumed) {
+		if !ignoreEgressLeaseBlock && candidateEgressLeaseCooling(&candidate, now) {
+			return nil, &SelectionUnavailableError{Reason: SelectionCooling, RetryAfter: retryDelay(now, candidate.EgressLeaseBlock.CooldownUntil)}
+		}
+		if value.CooldownUntil != nil && now.Before(*value.CooldownUntil) {
+			return nil, &SelectionUnavailableError{Reason: SelectionCooling, RetryAfter: retryDelay(now, *value.CooldownUntil)}
+		}
+		if recovery := candidate.QuotaRecovery; recovery != nil && recovery.Status != account.QuotaRecoveryStatusActive {
+			if recovery.NextProbeAt == nil || now.Before(*recovery.NextProbeAt) {
 				var retryAfter time.Duration
-				if candidate.QuotaWindow.ResetAt != nil {
-					retryAfter = retryDelay(now, *candidate.QuotaWindow.ResetAt)
+				if recovery.NextProbeAt != nil {
+					retryAfter = retryDelay(now, *recovery.NextProbeAt)
 				}
 				return nil, &SelectionUnavailableError{Reason: SelectionQuotaExhausted, RetryAfter: retryAfter}
 			}
-		}
-		lease, err := s.acquirePinnedCapacity(ctx, value, nil)
-		if err != nil {
-			if errors.Is(err, errRoutingCredentialStale) {
-				return nil, pinnedUnavailableError(accountID, value.Name)
+			lease, err := s.acquirePinnedCapacity(ctx, value, nil)
+			if err != nil {
+				if errors.Is(err, errRoutingCredentialStale) {
+					return nil, pinnedUnavailableError(accountID, value.Name)
+				}
+				return nil, err
 			}
-			return nil, err
+			claimed, err := s.accounts.ClaimQuotaProbe(ctx, value.ID, now, now.Add(quotaProbeLease))
+			if err != nil || !claimed {
+				lease.Release()
+				if err != nil {
+					return nil, err
+				}
+				return nil, fmt.Errorf("绑定的上游账号恢复探测已被占用")
+			}
+			lease.QuotaProbe = true
+			lease.QuotaProbeKind = recovery.Kind
+			lease.Billing = candidate.Billing
+			return lease, nil
 		}
-		lease.Billing = candidate.Billing
-		lease.QuotaMode = s.effectiveQuotaMode(candidate, quotaMode)
-		return lease, nil
+		if candidate.Billing != nil && candidate.Billing.IsExhausted(value.MinimumRemaining) {
+			return nil, &SelectionUnavailableError{Reason: SelectionQuotaExhausted}
+		}
+		s.quotaMu.RLock()
+		quotaExhausted := quotaWindowExhausted(candidate, s.quotaConsumptionSnapshot(provider))
+		s.quotaMu.RUnlock()
+		if quotaExhausted {
+			var retryAfter time.Duration
+			if candidate.QuotaWindow.ResetAt != nil {
+				retryAfter = retryDelay(now, *candidate.QuotaWindow.ResetAt)
+			}
+			return nil, &SelectionUnavailableError{Reason: SelectionQuotaExhausted, RetryAfter: retryAfter}
+		}
 	}
-	return nil, pinnedUnavailableError(accountID, "")
+	lease, err = s.acquirePinnedCapacity(ctx, value, nil)
+	if err != nil {
+		if errors.Is(err, errRoutingCredentialStale) {
+			return nil, pinnedUnavailableError(accountID, value.Name)
+		}
+		return nil, err
+	}
+	lease.Billing = candidate.Billing
+	lease.QuotaMode = s.effectiveQuotaMode(candidate, quotaMode)
+	return lease, nil
+}
+
+// pinnedCandidateIndex finds accountID through the cached snapshot's byAccount
+// index when values is that snapshot, and by a linear scan otherwise.
+func (s *Selector) pinnedCandidateIndex(key candidateCacheKey, values []account.RoutingCandidate, accountID uint64) (int, bool) {
+	if len(values) > 0 {
+		s.candidateMu.Lock()
+		snapshot, cached := s.candidates[key]
+		s.candidateMu.Unlock()
+		// Published snapshots and their byAccount maps are never mutated in place.
+		if cached && snapshot.byAccount != nil && len(snapshot.values) == len(values) && &snapshot.values[0] == &values[0] {
+			index, ok := snapshot.byAccount[accountID]
+			return index, ok
+		}
+	}
+	for index := range values {
+		if values[index].Credential.ID == accountID {
+			return index, true
+		}
+	}
+	return 0, false
 }
 
 func pinnedUnavailableError(accountID uint64, name string) *SelectionUnavailableError {

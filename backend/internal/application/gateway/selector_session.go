@@ -20,7 +20,6 @@ type selectionSession struct {
 	quotaMode        string
 	stickyKey        string
 	values           []account.RoutingCandidate
-	quotaConsumed    map[accountQuotaConsumptionKey]int
 	normalCandidates []int
 	probeCandidates  []int
 	normalPlan       *candidatePlan
@@ -46,7 +45,6 @@ func (s *Selector) beginSelectionSessionForKey(ctx context.Context, provider acc
 	if err != nil {
 		return nil, err
 	}
-	quotaConsumed := s.quotaConsumptionSnapshot(provider)
 	healthOverrides := s.routingHealthSnapshot(provider, now)
 
 	session = &selectionSession{
@@ -57,7 +55,6 @@ func (s *Selector) beginSelectionSessionForKey(ctx context.Context, provider acc
 		quotaMode:       quotaMode,
 		stickyKey:       stickySessionKey(affinityKey),
 		values:          values,
-		quotaConsumed:   quotaConsumed,
 		staleCandidates: make(map[uint64]bool),
 	}
 	consideredCandidates := 0
@@ -67,16 +64,22 @@ func (s *Selector) beginSelectionSessionForKey(ctx context.Context, provider acc
 	quotaCandidates := 0
 	var earliestRetry time.Time
 
-	for index, candidate := range values {
-		value := applyHealthSnapshot(candidate.Credential, healthOverrides)
-		if !s.accountScopeAllowsCandidate(provider, accountScope, candidate) {
+	// Candidates are read in place and provider-wide checks resolved once: a
+	// RoutingCandidate is ~760 bytes and this loop visits the whole pool.
+	allTiers := accountScope.Tiers == clientkeydomain.TierScopeAll || s.tierExempt(provider)
+	catalogOrder := s.catalogTierOrder(provider, upstreamModel, quotaMode)
+	s.quotaMu.RLock()
+	quotaConsumed := s.quotaConsumptionSnapshot(provider)
+	for index := range values {
+		candidate := &values[index]
+		if !allTiers && !s.accountScopeAllowsCandidate(provider, accountScope, *candidate) {
 			continue
 		}
-		if excluded[value.ID] || value.AuthStatus != account.AuthStatusActive {
+		if excluded[candidate.Credential.ID] || candidate.Credential.AuthStatus != account.AuthStatusActive {
 			continue
 		}
 		consideredCandidates++
-		if !s.candidateSupportsModel(provider, upstreamModel, quotaMode, candidate) {
+		if !catalogSupportsModel(catalogOrder, candidate) {
 			continue
 		}
 		supportedCandidates++
@@ -85,14 +88,14 @@ func (s *Selector) beginSelectionSessionForKey(ctx context.Context, provider acc
 			earliestRetry = earlierFuture(earliestRetry, candidate.ModelQuotaBlock.CooldownUntil, now)
 			continue
 		}
-		if candidateEgressLeaseCooling(candidate, value, now) {
+		if candidateEgressLeaseCooling(candidate, now) {
 			coolingCandidates++
 			earliestRetry = earlierFuture(earliestRetry, candidate.EgressLeaseBlock.CooldownUntil, now)
 			continue
 		}
-		if value.CooldownUntil != nil && now.Before(*value.CooldownUntil) {
+		if cooldownUntil := healthCooldownUntil(&candidate.Credential, healthOverrides); cooldownUntil != nil && now.Before(*cooldownUntil) {
 			coolingCandidates++
-			earliestRetry = earlierFuture(earliestRetry, *value.CooldownUntil, now)
+			earliestRetry = earlierFuture(earliestRetry, *cooldownUntil, now)
 			continue
 		}
 		if recovery := candidate.QuotaRecovery; recovery != nil && recovery.Status != account.QuotaRecoveryStatusActive {
@@ -106,11 +109,11 @@ func (s *Selector) beginSelectionSessionForKey(ctx context.Context, provider acc
 			}
 			continue
 		}
-		if candidate.Billing != nil && candidate.Billing.IsExhausted(value.MinimumRemaining) {
+		if candidate.Billing != nil && candidate.Billing.IsExhausted(candidate.Credential.MinimumRemaining) {
 			quotaCandidates++
 			continue
 		}
-		if quotaWindowExhausted(candidate, quotaConsumed) {
+		if quotaWindowExhausted(*candidate, quotaConsumed) {
 			quotaCandidates++
 			if candidate.QuotaWindow.ResetAt != nil {
 				earliestRetry = earlierFuture(earliestRetry, *candidate.QuotaWindow.ResetAt, now)
@@ -119,6 +122,7 @@ func (s *Selector) beginSelectionSessionForKey(ctx context.Context, provider acc
 		}
 		session.normalCandidates = append(session.normalCandidates, index)
 	}
+	s.quotaMu.RUnlock()
 
 	if len(session.normalCandidates) > 0 || (allowQuotaProbe && len(session.probeCandidates) > 0) {
 		return session, nil
@@ -236,10 +240,10 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 		}
 		if ok && !session.candidateExcluded(excluded, stickyID) {
 			for _, index := range session.normalCandidates {
-				candidate := session.values[index]
-				if candidate.Credential.ID != stickyID {
+				if session.values[index].Credential.ID != stickyID {
 					continue
 				}
+				candidate := session.values[index]
 				lease, err := session.selector.acquirePinnedCapacity(ctx, candidate.Credential, &session.materialFailures)
 				if err != nil {
 					if errors.Is(err, errRoutingCredentialStale) {

@@ -60,8 +60,8 @@ func (p *candidatePlan) Next() (account.RoutingCandidate, bool) {
 }
 
 func candidateScoreBetter(values []account.RoutingCandidate, leftScore, rightScore candidateScore) bool {
-	leftCandidate, rightCandidate := values[leftScore.index], values[rightScore.index]
-	left, right := leftCandidate.Credential, rightCandidate.Credential
+	leftCandidate, rightCandidate := &values[leftScore.index], &values[rightScore.index]
+	left, right := &leftCandidate.Credential, &rightCandidate.Credential
 	leftSupports, rightSupports := leftCandidate.SupportsModel, rightCandidate.SupportsModel
 	leftKnown, rightKnown := leftCandidate.ModelCapabilityKnown, rightCandidate.ModelCapabilityKnown
 	if leftScore.webCatalogSupport {
@@ -128,6 +128,7 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 	inFlight := make([]int, length)
 	// Every candidate of a plan belongs to one provider.
 	catalogTiers := len(tierOrder) > 0 && len(values) > 0 && s.staticCatalog(values[0].Credential.Provider)
+	quotaSnapshots := len(values) > 0 && s.quotaSnapshotProvider(values[0].Credential.Provider)
 	if concurrencyHints == nil {
 		keys := make([]string, length)
 		for position := range length {
@@ -176,14 +177,13 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 		}
 	}
 
-	s.selectionMu.RLock()
 	scores := make([]candidateScore, 0, length)
 	for position := range length {
 		index := position
 		if indexes != nil {
 			index = indexes[position]
 		}
-		candidate := values[index]
+		candidate := &values[index]
 		limit := candidate.Credential.MaxConcurrent
 		if limit <= 0 {
 			limit = account.DefaultMaxConcurrent
@@ -197,14 +197,14 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 			index: index, tier: tierOrderRank(tierOrder, candidate.Credential.WebTier),
 			webCatalogSupport: catalogTiers && webTierInOrder(tierOrder, candidate.Credential.WebTier),
 			preferFreeBuild:   preferFreeBuild && candidate.IsKnownFreeBuild(),
-			inFlight:          inFlight[position], lastSelected: s.lastSelectedAt[candidate.Credential.ID],
+			inFlight:          inFlight[position],
 		}
 		// 只有真实上游快照能够证明账号具备该模式额度。历史默认值和
 		// 本地预测值都属于未知能力，只保留为路由兜底。
 		if candidate.QuotaWindow != nil && candidate.QuotaWindow.Source == account.QuotaSourceUpstream {
 			score.quotaKnown = true
 			score.quotaAvailable = candidate.QuotaWindow.Remaining > 0
-		} else if s.quotaUnlimited(candidate) {
+		} else if quotaSnapshots && quotaSyncedWithoutWindow(candidate) {
 			score.quotaKnown, score.quotaAvailable = true, true
 		}
 		if candidate.Billing != nil {
@@ -212,6 +212,11 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 			score.billingFresh = now.Sub(candidate.Billing.SyncedAt) <= 30*time.Minute
 		}
 		scores = append(scores, score)
+	}
+	// Claims write lastSelectedAt under selectionMu, so hold it only for the reads.
+	s.selectionMu.RLock()
+	for position := range scores {
+		scores[position].lastSelected = s.lastSelectedAt[values[scores[position].index].Credential.ID]
 	}
 	s.selectionMu.RUnlock()
 	plan := &candidatePlan{values: values, scores: scores}

@@ -20,11 +20,6 @@ type quotaConsumptionKey struct {
 	mode      string
 }
 
-type accountQuotaConsumptionKey struct {
-	accountID uint64
-	mode      string
-}
-
 func (s *Selector) MarkFreeQuotaExhausted(ctx context.Context, credential account.Credential, used, limit int64) {
 	now := time.Now().UTC()
 	nextProbeAt := now.Add(defaultFreeQuotaRecoveryPause)
@@ -113,41 +108,39 @@ func (s *Selector) ConsumeQuota(provider account.Provider, accountID uint64, mod
 	s.quotaMu.Unlock()
 }
 
-func (s *Selector) quotaConsumptionSnapshot(provider account.Provider) map[accountQuotaConsumptionKey]int {
-	s.quotaMu.RLock()
-	if len(s.quotaConsumed) == 0 {
-		s.quotaMu.RUnlock()
-		return nil
-	}
-	result := make(map[accountQuotaConsumptionKey]int)
-	for key, amount := range s.quotaConsumed {
-		if key.provider == provider {
-			result[accountQuotaConsumptionKey{accountID: key.accountID, mode: key.mode}] = amount
-		}
-	}
-	s.quotaMu.RUnlock()
-	return result
+// quotaConsumption reads a provider's local quota deltas in place instead of
+// copying the whole map per request. Hold quotaMu for reading while using it.
+type quotaConsumption struct {
+	values   map[quotaConsumptionKey]int
+	provider account.Provider
 }
 
-// quotaUnlimited reports an account whose last complete quota snapshot listed
-// no window for the requested mode, e.g. ChatGPT Plus has no message limit. It
+func (s *Selector) quotaConsumptionSnapshot(provider account.Provider) quotaConsumption {
+	return quotaConsumption{values: s.quotaConsumed, provider: provider}
+}
+
+// quotaSnapshotProvider reports a provider whose last complete quota snapshot
+// lists every limited mode: a synced account without a window for the
+// requested mode is unlimited (e.g. ChatGPT Plus has no message limit). It
 // ranks as known to have quota, not as an unknown fallback; concurrency limits
 // and in-flight balancing still apply.
-func (s *Selector) quotaUnlimited(candidate account.RoutingCandidate) bool {
-	if candidate.QuotaWindow != nil || candidate.Credential.QuotaSyncedAt == nil {
-		return false
-	}
+func (s *Selector) quotaSnapshotProvider(provider account.Provider) bool {
 	snapshots, ok := s.tierOrders.(interface {
 		QuotaSnapshotProvider(account.Provider) bool
 	})
-	return ok && snapshots.QuotaSnapshotProvider(candidate.Credential.Provider)
+	return ok && snapshots.QuotaSnapshotProvider(provider)
 }
 
-func quotaWindowExhausted(candidate account.RoutingCandidate, consumed map[accountQuotaConsumptionKey]int) bool {
+// quotaSyncedWithoutWindow is the per-account half of quotaSnapshotProvider.
+func quotaSyncedWithoutWindow(candidate *account.RoutingCandidate) bool {
+	return candidate.QuotaWindow == nil && candidate.Credential.QuotaSyncedAt != nil
+}
+
+func quotaWindowExhausted(candidate account.RoutingCandidate, consumed quotaConsumption) bool {
 	if candidate.QuotaWindow == nil {
 		return false
 	}
-	remaining := candidate.QuotaWindow.Remaining - consumed[accountQuotaConsumptionKey{accountID: candidate.Credential.ID, mode: candidate.QuotaWindow.Mode}]
+	remaining := candidate.QuotaWindow.Remaining - consumed.values[quotaConsumptionKey{provider: consumed.provider, accountID: candidate.Credential.ID, mode: candidate.QuotaWindow.Mode}]
 	return remaining <= 0
 }
 

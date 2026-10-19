@@ -57,6 +57,10 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 	candidatesScanned := 0
 	fullPlannerOnly := false
 	preferFreeBuild := s.preferFreeBuildEnabled()
+	var unlimited func(*account.RoutingCandidate) bool
+	if s.quotaSnapshotProvider(request.provider) {
+		unlimited = quotaSyncedWithoutWindow
+	}
 	for {
 		now := time.Now().UTC()
 		if fullPlannerOnly {
@@ -85,7 +89,7 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 			}
 		} else {
 			concurrencyHints := make(map[int]int, min(len(indexes), request.windowSize*segmentedWindowsBeforeFullFallback))
-			cohorts := segmentedCandidateCohorts(values, indexes, now, tierOrder, s.staticCatalog(request.provider), preferFreeBuild, s.quotaUnlimited, request.cursor, request.windowSize, segmentedWindowsBeforeFullFallback)
+			cohorts := segmentedCandidateCohorts(values, indexes, now, tierOrder, s.staticCatalog(request.provider), preferFreeBuild, unlimited, request.cursor, request.windowSize, segmentedWindowsBeforeFullFallback)
 			roundWindows := 0
 			fallbackToFull := false
 			for cohortIndex, bucket := range cohorts {
@@ -190,12 +194,12 @@ func (s *Selector) claimSegmentedPlan(ctx context.Context, plan *candidatePlan, 
 // catalogTiers marks tierOrder as a static-catalog entitlement (see candidateSupportsModel).
 // unlimited, when set, reports an account whose synced snapshot does not limit
 // the requested mode.
-func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, catalogTiers, preferFreeBuild bool, unlimited func(account.RoutingCandidate) bool, cursor uint64, windowSize, maxWindows int) []segmentedSelectorCohortBucket {
+func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, catalogTiers, preferFreeBuild bool, unlimited func(*account.RoutingCandidate) bool, cursor uint64, windowSize, maxWindows int) []segmentedSelectorCohortBucket {
 	if windowSize <= 0 || maxWindows <= 0 {
 		return nil
 	}
 	cohortFor := func(index int) segmentedSelectorCohort {
-		candidate := values[index]
+		candidate := &values[index]
 		supportsModel, capabilityKnown := candidate.SupportsModel, candidate.ModelCapabilityKnown
 		if catalogTiers && len(tierOrder) > 0 && webTierInOrder(tierOrder, candidate.Credential.WebTier) {
 			supportsModel, capabilityKnown = true, true
@@ -216,46 +220,64 @@ func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int,
 		}
 		return cohort
 	}
-	counts := make(map[segmentedSelectorCohort]int)
-	countCandidate := func(index int) { counts[cohortFor(index)]++ }
+	length := len(indexes)
 	if indexes == nil {
-		for index := range values {
-			countCandidate(index)
-		}
-	} else {
-		for _, index := range indexes {
-			countCandidate(index)
-		}
+		length = len(values)
 	}
-	ordered := make([]segmentedSelectorCohort, 0, len(counts))
-	for cohort := range counts {
-		ordered = append(ordered, cohort)
+	// Classify every candidate once; the fill pass reuses its cohort ID.
+	cohortIDs := make(map[segmentedSelectorCohort]int)
+	var cohorts []segmentedSelectorCohort
+	var counts []int
+	candidateCohorts := make([]int32, length)
+	for position := range length {
+		index := position
+		if indexes != nil {
+			index = indexes[position]
+		}
+		cohort := cohortFor(index)
+		id, exists := cohortIDs[cohort]
+		if !exists {
+			id = len(cohorts)
+			cohortIDs[cohort] = id
+			cohorts = append(cohorts, cohort)
+			counts = append(counts, 0)
+		}
+		counts[id]++
+		candidateCohorts[position] = int32(id)
+	}
+	ordered := make([]int, len(cohorts))
+	for id := range ordered {
+		ordered[id] = id
 	}
 	sort.Slice(ordered, func(left, right int) bool {
-		return segmentedSelectorCohortBetter(ordered[left], ordered[right])
+		return segmentedSelectorCohortBetter(cohorts[ordered[left]], cohorts[ordered[right]])
 	})
 
 	remainingWindows := maxWindows
-	selections := make(map[segmentedSelectorCohort]*segmentedCohortSelection)
+	selections := make([]*segmentedCohortSelection, len(cohorts))
 	result := make([]segmentedSelectorCohortBucket, 0, min(len(ordered), maxWindows))
-	for _, cohort := range ordered {
+	for _, id := range ordered {
 		if remainingWindows == 0 {
 			break
 		}
-		count := counts[cohort]
+		count := counts[id]
 		take := min(count, remainingWindows*windowSize)
 		windows := (take + windowSize - 1) / windowSize
 		remainingWindows -= windows
 		selection := &segmentedCohortSelection{
 			count: count, start: int(cursor % uint64(count)), take: take, indexes: make([]int, take),
 		}
-		selections[cohort] = selection
-		result = append(result, segmentedSelectorCohortBucket{cohort: cohort, indexes: selection.indexes})
+		selections[id] = selection
+		result = append(result, segmentedSelectorCohortBucket{cohort: cohorts[id], indexes: selection.indexes})
 	}
-	fillCandidate := func(index int) {
-		selection := selections[cohortFor(index)]
+	for position := range length {
+		selection := selections[candidateCohorts[position]]
 		if selection == nil {
-			return
+			continue
+		}
+		index := position
+		if indexes != nil {
+			index = indexes[position]
 		}
 		position := selection.seen
 		selection.seen++
@@ -265,15 +287,6 @@ func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int,
 		}
 		if relative < selection.take {
 			selection.indexes[relative] = index
-		}
-	}
-	if indexes == nil {
-		for index := range values {
-			fillCandidate(index)
-		}
-	} else {
-		for _, index := range indexes {
-			fillCandidate(index)
 		}
 	}
 	return result
