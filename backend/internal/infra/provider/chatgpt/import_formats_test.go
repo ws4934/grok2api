@@ -83,3 +83,28 @@ func TestRefreshUsesIssuingClient(t *testing.T) {
 		})
 	}
 }
+
+// The account list shows which client issued each credential and whether it renews.
+func TestCredentialMetadataNamesIssuingClient(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	a, _ := newTestAdapter(t, server)
+	for name, test := range map[string]struct {
+		c           credentials
+		kind        string
+		unsupported bool
+	}{
+		"codex":                  {credentials{AccessToken: "AT", RefreshToken: "RT", ClientProfile: codexProfile}, "codex", false},
+		"platform":               {credentials{AccessToken: "AT", RefreshToken: "RT", ClientProfile: oauthProfile}, "platform", false},
+		"stored without profile": {credentials{AccessToken: testJWT(map[string]any{"client_id": oauthClientID}), RefreshToken: "RT"}, "platform", false},
+		"access token only":      {credentials{AccessToken: "AT"}, "accessToken", false},
+		"other client":           {credentials{AccessToken: testJWT(map[string]any{"client_id": "app_other"}), RefreshToken: "RT"}, "otherClient", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := a.CredentialMetadata(testCredential(t, a, test.c))
+			if got.CredentialKind != test.kind || got.RefreshUnsupported != test.unsupported {
+				t.Fatalf("metadata = %+v", got)
+			}
+		})
+	}
+}

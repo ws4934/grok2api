@@ -569,3 +569,14 @@ func TestAccountSyncPipelineUsesFinalQueuedTotal(t *testing.T) {
 		}
 	}
 }
+
+// A refresh token the provider cannot renew is not shown as auto-renewable.
+func TestAccountResponseShowsCredentialKind(t *testing.T) {
+	credential := accountdomain.Credential{Provider: accountdomain.ProviderChatGPT, EncryptedRefreshToken: "encrypted"}
+	if got := newAccountResponse(accountapp.View{Credential: credential, CredentialKind: "codex"}); !got.Refreshable || got.CredentialKind != "codex" {
+		t.Fatalf("response = %+v", got)
+	}
+	if got := newAccountResponse(accountapp.View{Credential: credential, CredentialKind: "otherClient", RefreshUnsupported: true}); got.Refreshable {
+		t.Fatal("a refresh token of an unsupported client is shown as renewable")
+	}
+}

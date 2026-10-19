@@ -1108,6 +1108,12 @@ export function AccountsPage() {
                     <TableCell className="text-center whitespace-nowrap"><AccountStatus account={account} blockingQuotaMode={ui.blockingQuotaMode} /></TableCell>
                     <TableCell className={refreshable ? undefined : "px-6"}><QuotaCell account={account} locale={i18n.language} quotaModes={catalogEntry?.quotaModes ?? []} /></TableCell>
                     {refreshable ? <TableCell className="whitespace-nowrap pl-4 text-xs">
+                      {account.credentialKind ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild><span tabIndex={0} className="block cursor-help text-muted-foreground">{t(`accountCredential.kinds.${account.credentialKind}`, { defaultValue: account.credentialKind })}</span></TooltipTrigger>
+                          <TooltipContent>{t(`accountCredential.kindHints.${account.credentialKind}`, { defaultValue: account.credentialKind })}</TooltipContent>
+                        </Tooltip>
+                      ) : null}
                       {account.refreshable ? (
                         <Tooltip>
                           <TooltipTrigger asChild><span tabIndex={0} className="cursor-help font-medium text-emerald-700 dark:text-emerald-300">{t("accountCredential.autoRefresh")}</span></TooltipTrigger>

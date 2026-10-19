@@ -83,6 +83,8 @@ export type AccountDTO = {
   authStatus: "active" | "reauthRequired";
   expiresAt?: string;
   refreshable: boolean;
+  /** How the credential was issued, e.g. the OAuth client; absent when the provider does not tell. */
+  credentialKind?: string;
   cloudflareCookieConfigured: boolean;
   buildSuperEntitled: boolean;
   buildRouteMode: BuildRouteMode;
@@ -197,7 +199,7 @@ const linkedAccountValidator = hasShape({ id: isString, provider: isString, name
 const accountValidator = hasShape({
   id: isString, provider: isString, authType: isString, webTier: isOptional(isOneOf("auto", "basic", "super", "heavy")),
   webTierSyncedAt: isOptional(isString), nsfwEnabledAt: isOptional(isString), termsAcceptedAt: isOptional(isString), name: isString, email: isOptional(isString), userId: isOptional(isString), teamId: isOptional(isString), plan: isOptional(isString),
-  enabled: isBoolean, authStatus: isOneOf("active", "reauthRequired"), expiresAt: isOptional(isString), refreshable: isBoolean, cloudflareCookieConfigured: isBoolean,
+  enabled: isBoolean, authStatus: isOneOf("active", "reauthRequired"), expiresAt: isOptional(isString), refreshable: isBoolean, credentialKind: isOptional(isString), cloudflareCookieConfigured: isBoolean,
   buildSuperEntitled: isBoolean, buildRouteMode: isOneOf("auto", "build", "xai"), buildBotFlagged: isBoolean, buildBotFlagSource: isOptional(isNumber), modelSyncFailed: isOptional(isBoolean), refreshDueAt: isOptional(isString), lastRefreshAt: isOptional(isString), refreshFailureCount: isNumber,
   egressNodeId: isOptional(isString), egressAssignmentMode: isOptional(isOneOf("manual", "auto")),
   lastRefreshErrorStatus: isOptional(isNumber), lastRefreshErrorCode: isOptional(isString), lastRefreshErrorMessage: isOptional(isString), lastRefreshErrorResponse: isOptional(isString), priority: isNumber, maxConcurrent: isNumber, minimumRemaining: isNumber,

@@ -859,6 +859,11 @@ type CredentialMetadata struct {
 	BuildBotFlagged bool
 	// BuildBotFlagSource is the numeric bot_flag_source/bfs claim (1 or 2), or 0 when unset.
 	BuildBotFlagSource int
+	// CredentialKind names how the credential was issued, e.g. the OAuth client;
+	// empty when the provider does not tell.
+	CredentialKind string
+	// RefreshUnsupported: the stored refresh token cannot be renewed.
+	RefreshUnsupported bool
 }
 
 type CredentialMetadataAdapter interface {

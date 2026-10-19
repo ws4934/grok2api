@@ -594,6 +594,24 @@ func (a *Adapter) identity(ctx context.Context, credential account.Credential, c
 	return out, err
 }
 
+// CredentialMetadata names the OAuth client that issued the credential.
+func (a *Adapter) CredentialMetadata(credential account.Credential) provider.CredentialMetadata {
+	c, err := a.decrypt(credential)
+	if err != nil {
+		return provider.CredentialMetadata{}
+	}
+	switch {
+	case c.ClientProfile == codexProfile:
+		return provider.CredentialMetadata{CredentialKind: "codex"}
+	case c.ClientProfile == oauthProfile:
+		return provider.CredentialMetadata{CredentialKind: "platform"}
+	case c.RefreshToken == "":
+		return provider.CredentialMetadata{CredentialKind: "accessToken"}
+	default:
+		return provider.CredentialMetadata{CredentialKind: "otherClient", RefreshUnsupported: true}
+	}
+}
+
 func (a *Adapter) SyncAccountIdentity(ctx context.Context, credential account.Credential) (provider.AccountIdentity, error) {
 	c, err := a.decrypt(credential)
 	if err != nil {

@@ -202,6 +202,8 @@ type View struct {
 	QuotaWindows       []accountdomain.QuotaWindow
 	BuildBotFlagged    bool
 	BuildBotFlagSource int
+	CredentialKind     string
+	RefreshUnsupported bool
 	// EnabledChanged is request-scoped update metadata. It is not persisted or
 	// serialized directly; the HTTP layer uses it to avoid warning when a PATCH
 	// merely repeats the account's existing enabled value.
@@ -619,7 +621,7 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 	views := make([]View, 0, len(values))
 	for _, value := range values {
 		metadata := s.buildBotFlagMetadata(value)
-		view := View{Credential: value, BuildBotFlagged: metadata.BuildBotFlagged, BuildBotFlagSource: metadata.BuildBotFlagSource}
+		view := View{Credential: value, BuildBotFlagged: metadata.BuildBotFlagged, BuildBotFlagSource: metadata.BuildBotFlagSource, CredentialKind: metadata.CredentialKind, RefreshUnsupported: metadata.RefreshUnsupported}
 		if billing, ok := billings[value.ID]; ok {
 			view.Billing = &billing
 		}
@@ -1053,7 +1055,7 @@ func (s *Service) Get(ctx context.Context, id uint64) (View, error) {
 		return View{}, mapRepositoryError(err)
 	}
 	metadata := s.buildBotFlagMetadata(value)
-	view := View{Credential: value, BuildBotFlagged: metadata.BuildBotFlagged, BuildBotFlagSource: metadata.BuildBotFlagSource}
+	view := View{Credential: value, BuildBotFlagged: metadata.BuildBotFlagged, BuildBotFlagSource: metadata.BuildBotFlagSource, CredentialKind: metadata.CredentialKind, RefreshUnsupported: metadata.RefreshUnsupported}
 	if billing, err := s.accounts.GetBilling(ctx, id); err == nil {
 		view.Billing = &billing
 	} else if !errors.Is(err, repository.ErrNotFound) {
