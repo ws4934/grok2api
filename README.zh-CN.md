@@ -16,10 +16,6 @@
   <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
-<p align="center">
-  <a href="https://trendshift.io/repositories/19868?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-19868" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/19868" alt="chenyme%2Fgrok2api | Trendshift" width="250" height="55"/></a>
-</p>
-
 > [!NOTE]
 > 本项目仅供技术研究与学习交流。使用时请务必遵循 Grok、OpenAI 官方的使用条款及当地法律法规，否则一切后果自负！
 
