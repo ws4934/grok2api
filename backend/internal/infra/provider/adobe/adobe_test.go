@@ -566,12 +566,45 @@ func TestNormalizeVideoRequest(t *testing.T) {
 		{"veo references", provider.VideoRequestOptions{UpstreamModel: "veo/3.1-generate", ReferenceImages: 1, AspectRatio: "9:16", Duration: 4}, "16:9", "720p", 8},
 		{"seedance 2.5 frame", provider.VideoRequestOptions{UpstreamModel: "seedance/seedance_2.5", HasImage: true, AspectRatio: "16:9", Duration: 30}, "auto", "720p", 30},
 		{"seedance 2.0 auto", provider.VideoRequestOptions{UpstreamModel: "seedance/seedance_2.0", AspectRatio: "auto"}, "auto", "720p", 4},
+		// 编辑的时长跟随源视频；Seedance 编辑、延长只有 auto 比例与 480p/720p。
+		{"seedance edit", provider.VideoRequestOptions{Operation: provider.VideoOperationEdit, UpstreamModel: "seedance/seedance_2.5", AspectRatio: "9:16", Resolution: "1080p"}, "auto", "720p", 0},
+		{"seedance extend default", provider.VideoRequestOptions{Operation: provider.VideoOperationExtend, UpstreamModel: "seedance/seedance_2.5"}, "auto", "720p", 4},
+		{"seedance extend snaps", provider.VideoRequestOptions{Operation: provider.VideoOperationExtend, UpstreamModel: "seedance/seedance_2.5", Resolution: "480p", Duration: 40}, "auto", "480p", 30},
+		{"kling omni edit", provider.VideoRequestOptions{Operation: provider.VideoOperationEdit, UpstreamModel: "kling/kling_v3_omni", AspectRatio: "9:16", Resolution: "1080p"}, "9:16", "1080p", 0},
 	} {
-		test.in.Operation = provider.VideoOperationGenerate
+		if test.in.Operation == "" {
+			test.in.Operation = provider.VideoOperationGenerate
+		}
 		got, err := a.NormalizeVideoRequest(test.in)
 		if err != nil || got.AspectRatio != test.aspect || got.Resolution != test.tier || got.Duration != test.duration {
 			t.Errorf("%s = %s %s %ds (%v), want %s %s %ds", test.name, got.AspectRatio, got.Resolution, got.Duration, err, test.aspect, test.tier, test.duration)
 		}
+	}
+}
+
+// 编辑、延长只开放给表里挂了对应版本的模型；编辑传时长直接拒绝。
+func TestVideoEditAndExtendSupport(t *testing.T) {
+	a := &Adapter{}
+	for _, test := range []struct {
+		upstream  string
+		operation provider.VideoOperation
+		supported bool
+	}{
+		{"seedance/seedance_2.5", provider.VideoOperationEdit, true},
+		{"seedance/seedance_2.5", provider.VideoOperationExtend, true},
+		{"kling/kling_v3_omni", provider.VideoOperationEdit, true},
+		{"kling/kling_v3_omni", provider.VideoOperationExtend, false},
+		{"kling/kling_v3", provider.VideoOperationEdit, false},
+		{"seedance/seedance_2.0", provider.VideoOperationEdit, false},
+		{"veo/3.1-generate", provider.VideoOperationExtend, false},
+	} {
+		err := a.ValidateVideoRequest(provider.VideoRequestOptions{Operation: test.operation, UpstreamModel: test.upstream})
+		if test.supported != (err == nil) || (!test.supported && !errors.Is(err, provider.ErrVideoOperationUnsupported)) {
+			t.Errorf("%s %s: err = %v, want supported=%v", test.upstream, test.operation, err, test.supported)
+		}
+	}
+	if _, err := a.NormalizeVideoRequest(provider.VideoRequestOptions{Operation: provider.VideoOperationEdit, UpstreamModel: "seedance/seedance_2.5", Duration: 5}); !errors.Is(err, provider.ErrVideoParameterInvalid) {
+		t.Fatalf("edit with duration err = %v", err)
 	}
 }
 
@@ -651,6 +684,39 @@ func TestBuildBodyMatchesOfficialClient(t *testing.T) {
 	body = seedance.buildBody(in)
 	if _, ok := body["size"]; ok || body["resolution"] != "720p" || get(body, "generationSettings", "aspectRatio") != "auto" {
 		t.Fatalf("seedance-2.5 body = %v", body)
+	}
+
+	// 编辑：源视频以 source 用途引用，submodule 换成 ff-video-editor，不发时长。
+	in = seedance.edit.videoPlan("make it snow", "", "", 0, false, false)
+	in.videos = []string{"video1"}
+	body = seedance.edit.buildBody(in)
+	if body["modelVersion"] != "seedance_2.5_editing" || body["resolution"] != "720p" || get(body, "generationSettings", "aspectRatio") != "auto" ||
+		get(body, "generationMetadata", "submodule") != "ff-video-editor" || get(body, "generationMetadata", "module") != "text2video" ||
+		get(body["referenceBlobs"].([]any)[0].(map[string]any), "usage") != "source" || body["seeds"] == nil {
+		t.Fatalf("seedance-2.5 edit body = %v", body)
+	}
+	if _, ok := body["duration"]; ok {
+		t.Fatalf("seedance-2.5 edit sends duration: %v", body)
+	}
+	in = seedance.extend.videoPlan("keep going", "", "", 12, false, false)
+	in.videos = []string{"video1"}
+	if body = seedance.extend.buildBody(in); body["modelVersion"] != "seedance_2.5_extension" || body["duration"] != 12 {
+		t.Fatalf("seedance-2.5 extend body = %v", body)
+	}
+
+	// Kling Omni 编辑：size 与 modelSpecificPayload 同生成，保留原音轨，不发时长、generateAudio、generationSettings。
+	in = kling.edit.videoPlan("make it night", "9:16", "720p", 0, false, false)
+	in.videos = []string{"video1"}
+	body = kling.edit.buildBody(in)
+	if body["modelVersion"] != "kling_v3_omni_v2v_edit" || body["keepAudio"] != true || body["resolution"] != "720p" ||
+		get(body, "size", "width") != 720 || get(body, "modelSpecificPayload", "aspect_ratio") != "9:16" ||
+		get(body, "generationMetadata", "submodule") != "ff-video-editor" || body["seeds"] == nil {
+		t.Fatalf("kling-3.0-omni edit body = %v", body)
+	}
+	for _, key := range []string{"duration", "generateAudio", "generationSettings"} {
+		if _, ok := body[key]; ok {
+			t.Fatalf("kling-3.0-omni edit sends %s: %v", key, body)
+		}
 	}
 }
 
@@ -838,6 +904,29 @@ func TestReferenceVideoLimits(t *testing.T) {
 		if (err == nil) != tc.ok {
 			t.Errorf("%s frame=%v refs=%d videos=%d: err=%v, want ok=%v", tc.slug, tc.frame, tc.refs, tc.clips, err, tc.ok)
 		}
+	}
+}
+
+// 端到端：编辑的源视频上传后以 source 用途提交到编辑版本。
+func TestGenerateVideoEditSubmitsSourceVideo(t *testing.T) {
+	previous := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = previous })
+	fake, adapter, credential := newFakeAdobe(t)
+	clip := "data:video/mp4;base64," + base64.StdEncoding.EncodeToString(mp4Header())
+	result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Model: "seedance/seedance_2.5", Operation: provider.VideoOperationEdit, Prompt: "make it snow",
+		AspectRatio: "auto", Resolution: "480p", VideoURL: clip,
+	})
+	if err != nil || !strings.HasSuffix(result.URL, "/out.mp4") {
+		t.Fatalf("GenerateVideo = %+v, %v", result, err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	refs, _ := fake.videoBody["referenceBlobs"].([]any)
+	if len(fake.uploads) != 1 || fake.uploads[0] != "/storage/video video/mp4" || len(refs) != 1 ||
+		get(refs[0].(map[string]any), "usage") != "source" || fake.videoBody["modelVersion"] != "seedance_2.5_editing" || fake.videoBody["resolution"] != "480p" {
+		t.Fatalf("uploads = %v, submitted body = %v", fake.uploads, fake.videoBody)
 	}
 }
 

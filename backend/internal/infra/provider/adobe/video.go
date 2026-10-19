@@ -1,6 +1,7 @@
 package adobe
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,13 +20,35 @@ type videoCheckpoint struct {
 	Submitting bool   `json:"submitting,omitempty"`
 }
 
+// forOperation 是该操作实际提交的版本：生成用模型本身，编辑、延长用表里挂的版本；
+// 不支持的操作返回 nil。
+func (v *modelVersion) forOperation(operation provider.VideoOperation) *modelVersion {
+	switch operation {
+	case provider.VideoOperationGenerate:
+		return v
+	case provider.VideoOperationEdit:
+		return v.edit
+	case provider.VideoOperationExtend:
+		return v.extend
+	}
+	return nil
+}
+
 // NormalizeVideoRequest 选定实际生成（也用于计费和任务记录）的比例、分辨率与时长：
 // 没传的用模型默认值，传了但模型不支持的就近对齐；参考图模式下 Veo 固定 16:9、8 秒。
-// 未知模型原样返回，由随后的 ValidateVideoRequest 拒绝。
+// 编辑的时长跟随源视频，传了 duration 直接拒绝。未知模型或不支持的操作原样返回，
+// 由随后的 ValidateVideoRequest 拒绝。
 func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
-	v, ok := lookup(options.UpstreamModel)
-	if !ok || !v.video || options.Operation != provider.VideoOperationGenerate {
+	base, ok := lookup(options.UpstreamModel)
+	if !ok || !base.video {
 		return options, nil
+	}
+	v := base.forOperation(options.Operation)
+	if v == nil {
+		return options, nil
+	}
+	if options.Operation == provider.VideoOperationEdit && options.Duration != 0 {
+		return options, fmt.Errorf("%w: %s 的视频编辑时长跟随源视频，不支持 duration", provider.ErrVideoParameterInvalid, base.slug)
 	}
 	in := v.videoPlan("", options.AspectRatio, options.Resolution, options.Duration, options.HasImage, options.ReferenceImages > 0)
 	options.AspectRatio, options.Resolution = in.aspect, in.resolution
@@ -33,15 +56,19 @@ func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (p
 	return options, nil
 }
 
-// ValidateVideoRequest 按模型表校验视频请求：首帧图、参考图的支持与数量。
-// 时长、比例、分辨率由 NormalizeVideoRequest 对齐，不在这里拒绝。
+// ValidateVideoRequest 按模型表校验视频请求：编辑、延长看模型有没有对应版本（源视频
+// 之外的输入由网关拒绝）；生成看首帧图、参考图的支持与数量。时长、比例、分辨率由
+// NormalizeVideoRequest 对齐，不在这里拒绝。
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
-	if options.Operation != provider.VideoOperationGenerate {
-		return provider.ErrVideoOperationUnsupported
-	}
 	v, ok := lookup(options.UpstreamModel)
 	if !ok || !v.video {
 		return fmt.Errorf("%w: 未知的 Adobe 视频模型 %s", provider.ErrVideoParameterInvalid, options.UpstreamModel)
+	}
+	if options.Operation != provider.VideoOperationGenerate {
+		if v.forOperation(options.Operation) == nil {
+			return provider.ErrVideoOperationUnsupported
+		}
+		return nil
 	}
 	if options.ReferenceAudios > 0 {
 		return fmt.Errorf("%w: Adobe 视频不支持 reference_audios", provider.ErrVideoParameterInvalid)
@@ -114,6 +141,10 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		if !ok || !found.video {
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, &requestError{msg: "未知的 Adobe 视频模型：" + request.Model})
 		}
+		operation := cmp.Or(request.Operation, provider.VideoOperationGenerate)
+		if found = found.forOperation(operation); found == nil {
+			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, &requestError{msg: fmt.Sprintf("Adobe 模型 %s 不支持该视频操作（%s）", request.Model, operation)})
+		}
 		hasFrame := strings.TrimSpace(request.ImageURL) != ""
 		if err := found.checkVideoInputs(hasFrame, strings.TrimSpace(request.LastFrameURL) != "", len(request.ReferenceURLs), len(request.ReferenceVideoURLs)); err != nil {
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
@@ -159,6 +190,7 @@ func (a *Adapter) createVideo(ctx context.Context, c *client, v *modelVersion, r
 		{[]string{request.ImageURL, request.LastFrameURL}, "image", &in.frames},
 		{request.ReferenceURLs, "image", &in.references},
 		{request.ReferenceVideoURLs, "video", &in.videos},
+		{[]string{request.VideoURL}, "video", &in.videos}, // 编辑、延长的源视频
 	}
 	for _, group := range uploads {
 		for _, ref := range group.refs {

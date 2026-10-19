@@ -2753,14 +2753,11 @@
     "kling/kling_o3_standard_v2v_edit",
     "kling/kling_o3_standard_v2v_reference",
     "kling/kling_v3_omni_v2v_create",
-    "kling/kling_v3_omni_v2v_edit",
     "kling/kling_v3_pro_i2v",
     "kling/kling_v3_pro_t2v",
     "kling/kling_v3_standard_i2v",
     "kling/kling_v3_standard_t2v",
-    "kling/kling_v3_v2v_edit",
-    "seedance/seedance_2.5_editing",
-    "seedance/seedance_2.5_extension"
+    "kling/kling_v3_v2v_edit"
   ],
   "versions": {
     "gemini-flash/nano-banana-2": {
@@ -4835,6 +4832,150 @@
         "raw"
       ]
     },
+    "kling/kling_v3_omni_v2v_edit": {
+      "acModelFamilyDisplayName": "Kling Video",
+      "acModelFamilyId": "kling_video",
+      "bksGenerationModel": "firefly_3p:external:kling_o3_v2v_edit",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing",
+        "style_reference"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Kling Video",
+      "modelDisplayName": "Kling Video O3 V2V Edit",
+      "outputModality": [
+        "video"
+      ],
+      "releaseReadiness": "alpha",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "keepAudio": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": true,
+            "description": "Whether to keep the original audio from the reference video",
+            "title": "Keep Audio"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "description": "The prompt used for generation or editing.",
+            "maxLength": 2500,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg"
+                ],
+                "maxFileSizeBytes": 10485760,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "description": "A reference blob whose colour, style, and overall theme guide the look of the generated video.",
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "usageType": "style"
+                  },
+                  {
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              },
+              {
+                "maxFileSizeBytes": 209715200,
+                "mediaType": "video",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 1,
+                    "minItems": 1,
+                    "usageType": "source"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "default": "720p",
+                "enum": [
+                  "720p",
+                  "1080p"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Video resolution tier: '1080p' routes to the pro tier, '720p' to standard. ",
+            "title": "Resolution"
+          },
+          "shotType": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ShotType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "customize",
+            "deprecated": true,
+            "description": "Deprecated; shotType is ignored and will be removed."
+          },
+          "size": {
+            "$ref": "#/$defs/size"
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "sanitizeInputReferences": true,
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
     "seedance/seedance_2.0": {
       "acModelFamilyDisplayName": "Seedance",
       "acModelFamilyId": "seedance",
@@ -5422,6 +5563,375 @@
                     "maxItems": 10,
                     "minItems": 0,
                     "usageType": "source"
+                  }
+                ]
+              },
+              {
+                "maxFileSizeBytes": 15728640,
+                "mediaType": "audio",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 10,
+                    "minItems": 0,
+                    "usageType": "source"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "default": "720p",
+                "enum": [
+                  "480p",
+                  "720p"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Output resolution. Seedance 2.5 supports 480p and 720p; defaults to 720p.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId"
+        ],
+        "type": "object"
+      },
+      "sanitizeInputReferences": true,
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "seedance/seedance_2.5_editing": {
+      "acModelFamilyDisplayName": "Seedance",
+      "acModelFamilyId": "seedance",
+      "bksGenerationModel": "firefly_3p:external:seedance_2_5_editing",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Seedance",
+      "modelDisplayName": "Seedance 2.5 Video Editing",
+      "outputModality": [
+        "video"
+      ],
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "generateAudio": {
+            "$ref": "#/$defs/generateAudio"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "auto",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "auto"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 1,
+            "description": "Number of outputs to generate",
+            "title": "N"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The prompt used for generation or editing.",
+            "title": "Prompt"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 50,
+            "x-capabilities": [
+              {
+                "maxFileSizeBytes": 209715200,
+                "mediaType": "video",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 10,
+                    "minItems": 1,
+                    "usageType": "source"
+                  }
+                ]
+              },
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ],
+                "maxFileSizeBytes": 31457280,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "description": "A reference blob whose colour, style, and overall theme guide the look of the generated video.",
+                    "maxItems": 30,
+                    "minItems": 0,
+                    "usageType": "style"
+                  },
+                  {
+                    "maxItems": 30,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              },
+              {
+                "maxFileSizeBytes": 15728640,
+                "mediaType": "audio",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 10,
+                    "minItems": 0,
+                    "usageType": "source"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "default": "720p",
+                "enum": [
+                  "480p",
+                  "720p"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Output resolution. Seedance 2.5 supports 480p and 720p; defaults to 720p.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId"
+        ],
+        "type": "object"
+      },
+      "sanitizeInputReferences": true,
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "seedance/seedance_2.5_extension": {
+      "acModelFamilyDisplayName": "Seedance",
+      "acModelFamilyId": "seedance",
+      "bksGenerationModel": "firefly_3p:external:seedance_2_5_extension",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Seedance",
+      "modelDisplayName": "Seedance 2.5 Video Extension",
+      "outputModality": [
+        "video"
+      ],
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "maximum": 30,
+                "minimum": 4,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "generateAudio": {
+            "$ref": "#/$defs/generateAudio"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "auto",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "auto"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 1,
+            "description": "Number of outputs to generate",
+            "title": "N"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The prompt used for generation or editing.",
+            "title": "Prompt"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 50,
+            "x-capabilities": [
+              {
+                "maxFileSizeBytes": 209715200,
+                "mediaType": "video",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 10,
+                    "minItems": 1,
+                    "usageType": "source"
+                  }
+                ]
+              },
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ],
+                "maxFileSizeBytes": 31457280,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "description": "A reference blob whose colour, style, and overall theme guide the look of the generated video.",
+                    "maxItems": 30,
+                    "minItems": 0,
+                    "usageType": "style"
+                  },
+                  {
+                    "maxItems": 30,
+                    "minItems": 0,
+                    "usageType": "element"
                   }
                 ]
               },

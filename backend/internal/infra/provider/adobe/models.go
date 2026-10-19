@@ -57,6 +57,7 @@ type modelVersion struct {
 	autoWithFrame       bool // 带首帧时比例强制 auto（Seedance 2.5）
 
 	module         string // generationMetadata.module 覆盖
+	submodule      string // generationMetadata.submodule 覆盖（编辑、延长版本是 ff-video-editor）
 	negativePrompt string // modelSpecificPayload.negative_prompt
 
 	defaultSizes map[string]pixels // 按比例固定的 1K 尺寸（gpt-image-2）
@@ -71,6 +72,10 @@ type modelVersion struct {
 	// referenceFramesAndReferenceImagesAreMutuallyExclusive，Seedance、Veo 3.1）。
 	framesExclusive bool
 	requireFrame    bool // 只做图生视频，必须带首帧（schema 没标 minItems）
+
+	// edit / extend：/v1/videos/edits 与 /v1/videos/extensions 实际提交的版本（官网带
+	// 编辑视频时按 editReferenceVideoVersions 换版本）；nil 表示不支持该操作。
+	edit, extend *modelVersion
 }
 
 // usageLimit 是一种输入用途的数量限制；max 为 0 表示不限。
@@ -106,6 +111,15 @@ func (v *modelVersion) has(field string) bool { return slices.Contains(v.fields,
 // with 复制一个家族基底并改几项。
 func with(base modelVersion, apply func(*modelVersion)) *modelVersion {
 	apply(&base)
+	return &base
+}
+
+// editVersion 由生成版本派生编辑、延长版本：输入只有一个源视频（video:source），
+// generationMetadata.submodule 是官网编辑时的 ff-video-editor。
+func editVersion(base modelVersion, version string) *modelVersion {
+	base.version, base.submodule = version, "ff-video-editor"
+	base.refs, base.maxBlobs = map[string]usageLimit{"video:source": {1, 1}}, 0
+	base.edit, base.extend = nil, nil
 	return &base
 }
 
@@ -205,6 +219,11 @@ var models = []*modelVersion{
 		m.maxDuration = 30
 		m.fileBytes = map[string]int64{"image": 30 * mib, "video": 200 * mib}
 		m.computedAspect, m.explicitAuto, m.resolutionInPayload, m.autoWithFrame = false, true, true, true
+		// 官网给 2.5 加编辑视频时换成 _editing；_extension 官网未开放，按 schema 接。两者比例
+		// 只有 auto；编辑的时长跟随源视频，不发 duration。
+		m.edit, m.extend = editVersion(*m, "seedance_2.5_editing"), editVersion(*m, "seedance_2.5_extension")
+		m.edit.aspects, m.extend.aspects = []string{"auto"}, []string{"auto"}
+		m.edit.fields = slices.DeleteFunc(slices.Clone(m.fields), func(f string) bool { return f == "duration" })
 	}),
 
 	with(kling30, func(m *modelVersion) { m.slug = "kling-3.0" }),
@@ -212,6 +231,11 @@ var models = []*modelVersion{
 		m.slug, m.version = "kling-3.0-omni", "kling_v3_omni"
 		m.refs = map[string]usageLimit{"image:frame": {0, 2}, "image:style": {0, 3}}
 		m.maxBlobs, m.styleUsage, m.computedAspect = 0, "style", true
+		// 官网给 Omni 加编辑视频（不带参考图）时换成 v2v_edit：schema 不收时长与
+		// generateAudio，多一个 keepAudio。
+		m.edit = editVersion(*m, "kling_v3_omni_v2v_edit")
+		m.edit.fields = []string{"resolution", "size", "modelSpecificPayload", "referenceBlobs", "keepAudio"}
+		m.edit.fileBytes = map[string]int64{"video": 200 * mib}
 	}),
 	{
 		slug: "kling-video-2.5-turbo", modelID: "kling", version: "kling_v2_5_turbo_pro_i2v", video: true,

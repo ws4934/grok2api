@@ -84,6 +84,9 @@ type SwaggerImageEditRequest struct {
 // last_frame（尾帧）必须同时提供 image，目前仅 Adobe 支持首尾帧的模型接受。
 // reference_videos（参考视频，url 或 file_id，MP4/QuickTime，最多 10 个）需提供 prompt，
 // 目前仅 Adobe 的 Seedance 接受（不能与首尾帧同用）。
+// 编辑与延长（/v1/videos/edits、/v1/videos/extensions）需 prompt 与 video：Grok 走 Console
+// 的 grok-imagine-video（编辑不收 duration、比例、分辨率；延长 2–10 秒，默认 6）；Adobe 的
+// seedance-2.5 支持编辑与延长（延长 4–30 秒），kling-3.0-omni 支持编辑。
 type SwaggerVideoGenerationRequest struct {
 	Model            string                    `json:"model" example:"grok-imagine-video"`
 	Prompt           string                    `json:"prompt" example:"A cinematic tracking shot in the rain"`

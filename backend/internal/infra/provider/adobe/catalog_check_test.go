@@ -58,16 +58,16 @@ func TestCatalogMatchesDiscovery(t *testing.T) {
 		t.Fatalf("discovery 不是预期的 JSON：%v", err)
 	}
 
-	families := map[string]bool{}
-	for _, m := range models {
-		families[m.modelID] = true
+	families, known := map[string]bool{}, map[string]bool{}
+	for _, m := range catalogVersions() {
+		families[m.modelID], known[m.upstream()] = true, true
 	}
 	live := map[string]map[string]any{} // "modelId/modelVersion" → 版本条目
 	for _, m := range doc.Models {
 		for _, ver := range slices.Sorted(maps.Keys(m.ModelVersions)) {
 			key, v := m.ModelID+"/"+ver, m.ModelVersions[ver]
 			live[key] = v
-			if families[m.ModelID] && v["enabled"] == true && v["isDeprecated"] != true && byUpstream[key] == nil && !slices.Contains(reviewed.Skipped, key) {
+			if families[m.ModelID] && v["enabled"] == true && v["isDeprecated"] != true && !known[key] && !slices.Contains(reviewed.Skipped, key) {
 				t.Errorf("新版本 %s（%v）：核对后加进 models.go，或记进 skipped", key, v["modelDisplayName"])
 			}
 		}
@@ -83,7 +83,7 @@ func TestCatalogMatchesDiscovery(t *testing.T) {
 			t.Errorf("%s 另有 %d 处改动未列出", name, len(diffs)-20)
 		}
 	}
-	for _, m := range models {
+	for _, m := range catalogVersions() {
 		key := m.upstream()
 		v, ok := live[key]
 		switch {
@@ -100,6 +100,20 @@ func TestCatalogMatchesDiscovery(t *testing.T) {
 		}
 	}
 	report("commonRequestSchema", reviewed.CommonRequestSchema, doc.CommonRequestSchema)
+}
+
+// catalogVersions 是目录里的全部上游版本：模型本身，加上它们的编辑、延长版本。
+func catalogVersions() []*modelVersion {
+	var out []*modelVersion
+	for _, v := range models {
+		out = append(out, v)
+		for _, op := range []*modelVersion{v.edit, v.extend} {
+			if op != nil {
+				out = append(out, op)
+			}
+		}
+	}
+	return out
 }
 
 // loadDiscovery 读 src 指向的 discovery 响应文件；src 为 "1" 时在线拉取。

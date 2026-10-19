@@ -337,6 +337,9 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 	if v.has("resolution") && in.resolution != "" {
 		body["resolution"] = in.resolution
 	}
+	if v.has("keepAudio") {
+		body["keepAudio"] = true // 官网默认保留源视频的音轨
+	}
 
 	auto := isAuto(in.aspect)
 	explicitAuto := v.explicitAuto && auto
@@ -406,6 +409,9 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 	}
 	if v.module != "" {
 		module = v.module
+	}
+	if v.submodule != "" {
+		submodule = v.submodule
 	}
 	body["generationMetadata"] = map[string]any{"module": module, "submodule": submodule}
 	for key := range body {
@@ -535,8 +541,8 @@ func (v *modelVersion) videoPlan(prompt, aspect, resolution string, duration int
 	options := withoutAuto(v.aspects)
 	if w, h := parsePair(aspect); w > 0 && h > 0 && len(options) > 0 {
 		in.aspect = closestRatio(w, h, options)
-	} else if isAuto(aspect) && slices.ContainsFunc(v.aspects, isAuto) {
-		in.aspect = "auto"
+	} else if (isAuto(aspect) || len(options) == 0) && slices.ContainsFunc(v.aspects, isAuto) {
+		in.aspect = "auto" // 只有 auto 的模型（Seedance 编辑、延长）不论传什么都取 auto
 	} else {
 		in.aspect = v.defaultAspect(options)
 	}
