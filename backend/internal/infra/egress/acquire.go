@@ -262,6 +262,9 @@ func (m *Manager) leaseForNodeWithOptions(ctx context.Context, scope domain.Scop
 	if scope != domain.ScopeBuild && userAgent == "" {
 		userAgent = DefaultUserAgent
 	}
+	if account := userAgentFromContext(ctx); account != "" && scope != domain.ScopeBuild {
+		userAgent = account
+	}
 	clearanceKey := ""
 	// Manual mode may prefer account-bound cookies. Managed mode always enters
 	// the FlareSolverr lifecycle so stale imported cookies cannot bypass refresh.

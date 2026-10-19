@@ -79,6 +79,35 @@ func TestExtensionLeaseBuildsBrowserClientOnFirstRequest(t *testing.T) {
 	}
 }
 
+// An account-bound User-Agent replaces the node's, and each identity gets its
+// own browser client (the TLS fingerprint follows the User-Agent).
+func TestExtensionLeaseFollowsAccountUserAgent(t *testing.T) {
+	domain.SetExtensionScopes([]domain.Scope{"adobe"})
+	t.Cleanup(func() { domain.SetExtensionScopes(nil) })
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	manager := NewManager(egressRepositoryTestStub{}, nil)
+	for _, agent := range []string{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/144.0.0.0 Safari/537.36", "Mozilla/5.0 (Macintosh) Chrome/146.0.0.0 Safari/537.36"} {
+		lease, err := manager.AcquireCredential(WithUserAgent(context.Background(), agent), "adobe", accountdomain.Credential{ID: 7, Provider: "adobe"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+		response, err := lease.Do(request)
+		lease.Release()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if lease.UserAgent != agent {
+			t.Fatalf("lease user agent = %q, want %q", lease.UserAgent, agent)
+		}
+	}
+	if len(manager.clients) != 2 {
+		t.Fatalf("cached clients = %d, want one per identity", len(manager.clients))
+	}
+}
+
 func TestExtensionScopeFallsBackToItsFixedNode(t *testing.T) {
 	domain.SetExtensionScopes([]domain.Scope{"chatgpt"})
 	t.Cleanup(func() { domain.SetExtensionScopes(nil) })

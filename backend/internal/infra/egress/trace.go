@@ -133,6 +133,26 @@ func WithAccountIdentity(ctx context.Context, identity string) context.Context {
 	return context.WithValue(ctx, accountContextKey{}, strings.TrimSpace(identity))
 }
 
+type userAgentContextKey struct{}
+
+// WithUserAgent gives the next lease an account-bound browser identity: the
+// lease's User-Agent, and the TLS fingerprint its client picks from it, then
+// follow the account instead of the egress node.
+func WithUserAgent(ctx context.Context, userAgent string) context.Context {
+	if ctx == nil || strings.TrimSpace(userAgent) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, userAgentContextKey{}, strings.TrimSpace(userAgent))
+}
+
+func userAgentFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	value, _ := ctx.Value(userAgentContextKey{}).(string)
+	return value
+}
+
 func accountFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
