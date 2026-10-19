@@ -77,6 +77,17 @@ type imageExecution func(context.Context, accountdomain.Provider, accountdomain.
 
 // GenerateImage 选择支持图片生成的路由和账号，并返回可统一审计的上游响应。
 func (s *Service) GenerateImage(ctx context.Context, input ImageGenerationInput) (*Result, error) {
+	if s.fansOutImages(ctx, input.PublicModel, input.Count, input.Streaming) {
+		return s.fanOutImages(ctx, input.Count, func(ctx context.Context, extra bool) (*Result, error) {
+			single := input
+			single.Count = 1
+			return s.generateImage(ctx, single, extra)
+		})
+	}
+	return s.generateImage(ctx, input, false)
+}
+
+func (s *Service) generateImage(ctx context.Context, input ImageGenerationInput, extra bool) (*Result, error) {
 	options := provider.ImageRequestOptions{
 		Count: input.Count, Size: input.Size, AspectRatio: input.AspectRatio, Resolution: input.Resolution, Quality: input.Quality,
 		ResponseFormat: input.ResponseFormat, OutputFormat: input.OutputFormat, Background: input.Background,
@@ -96,11 +107,22 @@ func (s *Service) GenerateImage(ctx context.Context, input ImageGenerationInput)
 			ResponseFormat: input.ResponseFormat, Streaming: input.Streaming, PartialImages: input.PartialImages,
 			OutputFormat: input.OutputFormat, Background: input.Background,
 		})
-	}, options, input.Method, input.Path, input.Headers)
+	}, options, input.Method, input.Path, input.Headers, extra)
 }
 
 // EditImage 选择支持图片编辑的路由和账号，并返回可统一审计的上游响应。
 func (s *Service) EditImage(ctx context.Context, input ImageEditInput) (*Result, error) {
+	if s.fansOutImages(ctx, input.PublicModel, input.Count, input.Streaming) {
+		return s.fanOutImages(ctx, input.Count, func(ctx context.Context, extra bool) (*Result, error) {
+			single := input
+			single.Count = 1
+			return s.editImage(ctx, single, extra)
+		})
+	}
+	return s.editImage(ctx, input, false)
+}
+
+func (s *Service) editImage(ctx context.Context, input ImageEditInput, extra bool) (*Result, error) {
 	options := provider.ImageRequestOptions{
 		Edit: true, Count: input.Count, InputImages: len(input.ImageURLs), HasMask: input.MaskURL != "",
 		Size: input.Size, AspectRatio: input.AspectRatio, Resolution: input.Resolution, Quality: input.Quality,
@@ -122,7 +144,7 @@ func (s *Service) EditImage(ctx context.Context, input ImageEditInput) (*Result,
 			Streaming: input.Streaming, PartialImages: input.PartialImages,
 			OutputFormat: input.OutputFormat, Background: input.Background, MaskURL: input.MaskURL,
 		})
-	}, options, input.Method, input.Path, input.Headers)
+	}, options, input.Method, input.Path, input.Headers, extra)
 }
 
 func (s *Service) executeImage(
@@ -139,6 +161,9 @@ func (s *Service) executeImage(
 	method string,
 	path string,
 	headers map[string][]string,
+	// extra marks an additional image of a fanned-out request: it gives up
+	// without an audit when no account is free (errImageAccountsBusy).
+	extra bool,
 ) (*Result, error) {
 	ctx, egressTrace := infraegress.WithTrace(ctx)
 	startedAt := time.Now()
@@ -167,6 +192,9 @@ func (s *Service) executeImage(
 		return err == nil
 	}
 	route, preselectedSession, err := s.selectSchedulableMediaRoute(ctx, routes, key, capability, true, supportsRequest)
+	if err != nil && extra {
+		return nil, errImageAccountsBusy
+	}
 	if err != nil {
 		// Preserve the established failure-audit path when every eligible target
 		// is currently unschedulable. The request loop will reproduce the
@@ -250,6 +278,9 @@ func (s *Service) executeImage(
 			lease, err = selection.Acquire(ctx, excluded, false)
 		}
 		if err != nil {
+			if extra && attempt == 0 {
+				return nil, errImageAccountsBusy
+			}
 			errorCode := "upstream_unavailable"
 			var selectionFailure *SelectionUnavailableError
 			if errors.As(err, &selectionFailure) {

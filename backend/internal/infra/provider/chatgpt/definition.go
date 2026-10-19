@@ -50,7 +50,7 @@ func (a *Adapter) Definition() provider.Definition {
 			AuthType: account.AuthTypeOAuth, Import: true, Refresh: true, RedirectOAuth: true,
 		},
 		Conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true},
-		Media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, TTS: true, STT: true},
+		Media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, TTS: true, STT: true, SingleImagePerRequest: true},
 		Inference:    provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true},
 	}
 }

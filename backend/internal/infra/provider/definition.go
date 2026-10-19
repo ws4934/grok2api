@@ -70,6 +70,9 @@ type MediaSurface struct {
 	// ImageGenerationModelPriced: image generation picks the product by model
 	// and forwards no resolution or quality, so neither selects a price tier.
 	ImageGenerationModelPriced bool
+	// SingleImagePerRequest: one upstream request draws one image, so the
+	// gateway spreads a multi-image request over accounts.
+	SingleImagePerRequest bool
 }
 
 // CredentialSurface 描述号池凭据的接入和维护方式。
