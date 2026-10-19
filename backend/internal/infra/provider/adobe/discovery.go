@@ -35,28 +35,31 @@ type usageLimit struct{ min, max int }
 
 // modelVersion 是目录里一个可调用的上游模型版本。
 type modelVersion struct {
-	slug        string // 对外模型名与路由 upstream_model，例如 "veo-3.1"
-	modelID     string // 上游 modelId，例如 "veo"
-	version     string // 上游 modelVersion，例如 "3.1-generate"
-	displayName string
-	video       bool
-	editOnly    bool                  // 只做局部重绘/扩图（inpainting/outpainting），没有纯生成路由
-	props       map[string]any        // 已归一化的 requestSchema.properties
-	refs        map[string]usageLimit // "image:frame" 这类 mediaType:usageType
-	patch       patch
+	slug     string // 对外模型名，例如 "veo-3.1"
+	modelID  string // 上游 modelId，例如 "veo"
+	version  string // 上游 modelVersion，例如 "3.1-generate"
+	video    bool
+	editOnly bool                  // 只做局部重绘/扩图（inpainting/outpainting），没有纯生成路由
+	props    map[string]any        // 已归一化的 requestSchema.properties
+	refs     map[string]usageLimit // "image:frame" 这类 mediaType:usageType
+	patch    patch
 }
+
+// upstream 是路由的 upstream_model（也是价格的键）："modelId/modelVersion"。它不随
+// Adobe 改显示名而变，所以改名只会改对外名（旧名留作别名），路由、绑定与价格都保留。
+func (v *modelVersion) upstream() string { return v.modelID + "/" + v.version }
 
 // catalog 是一次 discovery 解析出的可用模型集合。
 type catalog struct {
-	versions []*modelVersion
-	bySlug   map[string]*modelVersion
+	versions   []*modelVersion
+	byUpstream map[string]*modelVersion
 }
 
-func (c *catalog) lookup(slug string) (*modelVersion, bool) {
+func (c *catalog) lookup(upstream string) (*modelVersion, bool) {
 	if c == nil {
 		return nil, false
 	}
-	v, ok := c.bySlug[strings.TrimSpace(slug)]
+	v, ok := c.byUpstream[strings.TrimSpace(upstream)]
 	return v, ok
 }
 
@@ -93,7 +96,8 @@ func parseDiscovery(data []byte) (*catalog, error) {
 	if err := json.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("adobe discovery: %w", err)
 	}
-	c := &catalog{bySlug: map[string]*modelVersion{}}
+	c := &catalog{byUpstream: map[string]*modelVersion{}}
+	slugs := map[string]bool{}
 	for _, model := range doc.Models {
 		keys := make([]string, 0, len(model.ModelVersions))
 		for key := range model.ModelVersions {
@@ -106,10 +110,11 @@ func parseDiscovery(data []byte) (*catalog, error) {
 			if v == nil {
 				continue
 			}
-			if _, dup := c.bySlug[v.slug]; dup {
+			if slugs[v.slug] {
 				continue // 同名重复条目（如 flux/1.1 与 fluxPro/1.1）只保留第一个
 			}
-			c.bySlug[v.slug] = v
+			slugs[v.slug] = true
+			c.byUpstream[v.upstream()] = v
 			c.versions = append(c.versions, v)
 		}
 	}
@@ -140,7 +145,7 @@ func newModelVersion(modelID, version string, raw discoveryVersion, common map[s
 	if props == nil {
 		return nil
 	}
-	v := &modelVersion{modelID: modelID, version: version, displayName: raw.ModelDisplayName, video: modality == "video", props: props, patch: patches[key]}
+	v := &modelVersion{modelID: modelID, version: version, video: modality == "video", props: props, patch: patches[key]}
 	v.editOnly = len(raw.InputMediaUseCase) > 0 && !slices.ContainsFunc(raw.InputMediaUseCase, func(useCase string) bool {
 		return useCase != "inpainting" && useCase != "outpainting"
 	})
@@ -276,7 +281,9 @@ func lookupRef(common map[string]any, ref string) (map[string]any, bool) {
 	return target, ok
 }
 
-// referenceLimits 读 referenceBlobs 的 x-capabilities：每种 mediaType:usageType 的数量限制。
+// referenceLimits 读 referenceBlobs 的 x-capabilities：每种 mediaType:usageType 的数量
+// 限制。标了 deprecated 的用途跳过，由 schema 给出的 replacement 用途接替（例如
+// gpt-image 的 subject → source、Runway 的 general → frame）。
 func referenceLimits(props map[string]any) map[string]usageLimit {
 	limits := map[string]usageLimit{}
 	blobs, ok := field(props, "referenceBlobs")
@@ -296,7 +303,7 @@ func referenceLimits(props map[string]any) map[string]usageLimit {
 		for _, u := range constraints {
 			constraint, _ := u.(map[string]any)
 			usage, _ := constraint["usageType"].(string)
-			if media == "" || usage == "" {
+			if deprecated, _ := constraint["deprecated"].(bool); media == "" || usage == "" || deprecated {
 				continue
 			}
 			limits[media+":"+usage] = usageLimit{min: intOf(constraint["minItems"]), max: intOf(constraint["maxItems"])}
@@ -382,7 +389,7 @@ func (c *catalog) routes() []modeldomain.Route {
 	values := make([]modeldomain.Route, 0, len(c.versions)*2)
 	add := func(v *modelVersion, capability modeldomain.Capability) {
 		publicID, _ := modeldomain.NormalizePublicID(account.ProviderAdobe, v.slug)
-		values = append(values, modeldomain.Route{PublicID: publicID, Provider: account.ProviderAdobe, UpstreamModel: v.slug, Capability: capability, Origin: modeldomain.OriginCatalog, Enabled: true})
+		values = append(values, modeldomain.Route{PublicID: publicID, Provider: account.ProviderAdobe, UpstreamModel: v.upstream(), Capability: capability, Origin: modeldomain.OriginCatalog, Enabled: true})
 	}
 	for _, v := range c.versions {
 		switch {
@@ -399,9 +406,6 @@ func (c *catalog) routes() []modeldomain.Route {
 	}
 	return values
 }
-
-// Routes 返回当前目录的路由。
-func (a *Adapter) Routes() []modeldomain.Route { return a.catalog.Load().routes() }
 
 // RefreshCatalog 拉取线上 discovery 并替换内存目录，返回新路由。结果为空或比当前
 // 目录少一半以上时视为异常，保留原目录。

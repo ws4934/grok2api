@@ -46,7 +46,7 @@ func (v *modelVersion) checkVideoInputs(hasFrame bool, references int) error {
 	}
 	if references > 0 {
 		usage, limit := v.referenceUsage()
-		if usage == "" {
+		if usage == "" || v.patch.noReferences {
 			return &requestError{msg: v.slug + " 不支持 reference_images"}
 		}
 		if limit > 0 && references > limit {
@@ -108,7 +108,7 @@ func (a *Adapter) createVideo(ctx context.Context, c *client, v *modelVersion, r
 	if c.rc.token == "" {
 		return "", preSubmitFailure(errNoToken)
 	}
-	in := v.videoPlan(request.Prompt, request.AspectRatio, request.Resolution, request.Duration, len(request.ReferenceURLs) > 0)
+	in := v.videoPlan(request.Prompt, request.AspectRatio, request.Resolution, request.Duration, strings.TrimSpace(request.ImageURL) != "", len(request.ReferenceURLs) > 0)
 	if ref := strings.TrimSpace(request.ImageURL); ref != "" {
 		id, err := a.uploadImage(ctx, c, ref)
 		if err != nil {

@@ -13,7 +13,6 @@ type patch struct {
 	styleUsage string
 
 	resolutionInPayload bool // 分辨率写进 modelSpecificPayload.resolution
-	resolutionTopLevel  bool // 与 resolutionInPayload 搭配：改写顶层 resolution
 	aspectInPayload     bool // 比例写进 modelSpecificPayload.aspect_ratio
 	computedAspect      bool // generationSettings.aspectRatio 用由尺寸算出的比例
 	aspectInSpecific    bool // 比例写进 modelSpecificPayload.aspectRatio
@@ -21,7 +20,7 @@ type patch struct {
 	omitAuto            bool // auto 比例时不发尺寸与比例
 	explicitAuto        bool // auto 比例时发 generationSettings.aspectRatio="auto"
 	excludeSize         bool
-	excludeDuration     bool
+	autoWithFrame       bool // 带首帧时比例强制 auto（Seedance 2.5）
 
 	module         string // generationMetadata.module 覆盖
 	negativePrompt string // modelSpecificPayload.negative_prompt
@@ -29,12 +28,14 @@ type patch struct {
 	sizes        []pixels // 替换 schema 的尺寸枚举
 	extraSizes   []pixels // 追加到 schema 的尺寸枚举
 	defaultSizes map[string]pixels
-	sizeRange    []tierSide // 按短边推导尺寸（gpt-image-2.5）
+	sizeRange    []tierSide // 按短边推导尺寸（gpt-image-2.5），受 maxSide / maxPixels 限制
 	resolutions  []string   // 替换 schema 的分辨率枚举
 
 	defaultDuration   int
-	referenceDuration int  // 带参考图时强制的时长（Veo 3.1）
-	requireFrame      bool // 只做图生视频，必须带首帧（schema 没标 minItems）
+	referenceDuration int    // 带参考图时强制的时长（Veo 3.1）
+	referenceAspect   string // 带参考图时强制的比例（Veo 3.1 只支持横屏参考生成）
+	noReferences      bool   // 官网不给该版本开参考图（Veo 3.1 Fast）
+	requireFrame      bool   // 只做图生视频，必须带首帧（schema 没标 minItems）
 }
 
 type pixels struct{ width, height int }
@@ -43,6 +44,12 @@ type tierSide struct {
 	label string
 	short int
 }
+
+// sizeRange 推导出的尺寸上限（官网 gpt-image-2.5 的 sizeRangeDerivation）。
+const (
+	sizeRangeMaxSide   = 3840
+	sizeRangeMaxPixels = 8_294_400
+)
 
 func px(values ...int) []pixels {
 	out := make([]pixels, 0, len(values)/2)
@@ -94,8 +101,8 @@ var patches = map[string]patch{
 	"gpt-image/gpt-image-2.5-flare": gptImage25,
 	"gpt-image/gpt-image-2.5-prism": gptImage25,
 
-	"veo/3.1-generate":      {seeds: true, keyframeGeneral: true, styleUsage: "asset", referenceDuration: 8},
-	"veo/3.1-fast-generate": {seeds: true, keyframeGeneral: true, styleUsage: "asset"},
+	"veo/3.1-generate":      {seeds: true, keyframeGeneral: true, styleUsage: "asset", referenceDuration: 8, referenceAspect: "16:9"},
+	"veo/3.1-fast-generate": {seeds: true, keyframeGeneral: true, styleUsage: "asset", noReferences: true},
 	"veo/3.1-lite-generate": {seeds: true, keyframeGeneral: true},
 
 	"kling/kling_v2_5_turbo_pro_i2v": {seeds: true, keyframeGeneral: true, aspectInPayload: true, module: "image2video", requireFrame: true,
@@ -109,7 +116,7 @@ var patches = map[string]patch{
 		extraSizes: append(append(append([]pixels{}, seedance480...), seedance720...), px(2520, 1080, 1920, 1080, 1440, 1080, 1080, 1080, 1080, 1440, 1080, 1920)...)},
 	"seedance/seedance_2.0_fast": {seeds: true, styleUsage: "style", computedAspect: true, resolutions: []string{"480p", "720p"},
 		extraSizes: append(append([]pixels{}, seedance480...), seedance720...)},
-	"seedance/seedance_2.5": {seeds: true, styleUsage: "style", explicitAuto: true, resolutionInPayload: true, resolutionTopLevel: true},
+	"seedance/seedance_2.5": {seeds: true, styleUsage: "style", explicitAuto: true, resolutionInPayload: true, autoWithFrame: true},
 
 	"gemini-omni/omni-flash":     {seeds: true, styleUsage: "style", defaultDuration: 8},
 	"gemini-omni/omni-flash-1.1": {seeds: true, defaultDuration: 8},

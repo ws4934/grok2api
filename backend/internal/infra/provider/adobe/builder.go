@@ -213,7 +213,11 @@ func (v *modelVersion) pickSize(aspect, tier string) (pixels, bool) {
 			return size, true
 		}
 	}
-	// 档位里没有这个比例（如 Runway 的 4:3 只有 832 短边）：取同比例里最接近档位的尺寸。
+	// 视频档位里没有这个比例（如 Runway 的 4:3 只有 832 短边）：取同比例里最接近档位的
+	// 尺寸。图像不这样做：官网在该档位没有尺寸时只发比例。
+	if !v.video {
+		return pixels{}, false
+	}
 	best, found := pixels{}, false
 	for _, size := range sizes {
 		if aspectCode(size) == aspect && (!found || abs(tierLines(size)-tierLinesOf(tier)) < abs(tierLines(best)-tierLinesOf(tier))) {
@@ -311,7 +315,7 @@ func formatResolution(size pixels) string {
 // chooseDuration 把时长对齐到 schema 的枚举或范围；模型不收时长时返回 false。
 func (v *modelVersion) chooseDuration(requested int) (int, bool) {
 	schema, ok := field(v.props, "duration")
-	if !ok || v.patch.excludeDuration {
+	if !ok {
 		return 0, false
 	}
 	if requested <= 0 {
@@ -397,8 +401,10 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 	if duration, ok := v.chooseDuration(in.duration); ok {
 		body["duration"] = duration
 	}
-	if v.has("generateAudio") {
-		body["generateAudio"] = true
+	if audio, ok := field(v.props, "generateAudio"); ok {
+		// schema 写了默认值就照办（Kling 为 false）；没写的保持开启，与 OpenAI 风格视频接口一致。
+		on, hasDefault := audio["default"].(bool)
+		body["generateAudio"] = on || !hasDefault
 	}
 	if v.has("resolution") && in.resolution != "" {
 		body["resolution"] = in.resolution
@@ -429,11 +435,7 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 			if res == "" {
 				res = formatResolution(size)
 			}
-			if v.patch.resolutionTopLevel {
-				body["resolution"] = res
-			} else {
-				specific["resolution"] = res
-			}
+			specific["resolution"] = res
 		}
 		code := in.aspect
 		if code == "" || auto {
@@ -581,15 +583,25 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 	default:
 		in.resolution = v.defaultResolution(tiers)
 	}
+	if size, ok := v.pickSize(in.aspect, in.resolution); ok && len(v.patch.sizeRange) > 0 &&
+		(max(size.width, size.height) > sizeRangeMaxSide || size.width*size.height > sizeRangeMaxPixels) {
+		return in, &requestError{msg: fmt.Sprintf("%s 不支持 %s 比例的 %s（%dx%d 超出上限）", v.slug, in.aspect, in.resolution, size.width, size.height)}
+	}
 	return in, nil
 }
 
 // videoPlan 选定视频的比例、分辨率与时长：网关会给未填的参数填默认值，所以这里
 // 就近对齐而不是拒绝；参考图的支持与数量已在 ValidateVideoRequest 校验。
-func (v *modelVersion) videoPlan(prompt, aspect, resolution string, duration int, hasRefs bool) genInput {
+func (v *modelVersion) videoPlan(prompt, aspect, resolution string, duration int, hasFrame, hasRefs bool) genInput {
 	in := genInput{prompt: prompt, count: 1, duration: duration}
 	if hasRefs && v.patch.referenceDuration > 0 {
 		in.duration = v.patch.referenceDuration
+	}
+	switch {
+	case hasRefs && v.patch.referenceAspect != "":
+		aspect = v.patch.referenceAspect
+	case hasFrame && v.patch.autoWithFrame:
+		aspect = "auto"
 	}
 	options := withoutAuto(v.aspectOptions())
 	if w, h := parsePair(aspect); w > 0 && h > 0 && len(options) > 0 {

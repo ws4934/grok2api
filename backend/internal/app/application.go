@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -35,7 +34,6 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/buildinfo"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
-	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	inframedia "github.com/chenyme/grok2api/backend/internal/infra/media"
@@ -331,13 +329,10 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		return nil, fmt.Errorf("初始化 ChatGPT 图片模型: %w", err)
 	}
 	// Adobe 目录由后台任务按线上 discovery 替换（见 refreshAdobeCatalog）；启动时只用
-	// 内嵌快照补齐缺失的路由，不删除：重启不能抹掉线上新增模型的路由及其绑定。
+	// 内嵌快照补齐缺失的路由，不删除：重启不能抹掉线上新增模型的路由及其绑定。补齐
+	// 失败（例如管理员把模型改名后旧名成了别名）不影响启动，后台对账会修正。
 	if err := modelRepo.UpsertRoutes(ctx, adobe.SnapshotRoutes()); err != nil {
-		if runtimeStore != nil {
-			_ = runtimeStore.Close()
-		}
-		database.Close()
-		return nil, fmt.Errorf("初始化 Adobe 模型目录: %w", err)
+		logger.Warn("adobe_model_catalog_seed_failed", "error", err)
 	}
 	accountSyncService := accountsyncapp.NewService(logger, accountService, accountService, accountService, modelService)
 	accountSyncService.SetBulkPool(importPool)
@@ -1023,24 +1018,14 @@ func minDuration(left, right time.Duration) time.Duration {
 }
 
 // refreshAdobeCatalog 拉取 Adobe 官方 discovery 并让路由跟随它：新增模型自动登记，
-// 下架模型的路由删除。目录没变化时不写库（ReplaceProviderRoutes 每次都会广播失效）。
-// 拉取失败时内存与数据库都保留上一次的结果。
+// 下架模型的路由删除。每次都与数据库对账（每天一次，开销可忽略），其他实例或旧版本
+// 写坏的路由也能自愈。拉取失败时内存与数据库都保留上一次的结果。
 func (a *Application) refreshAdobeCatalog() func(context.Context) error {
-	var applied []modeldomain.Route // 只在本 goroutine 使用；进程重启后首次成功总会对账一次
 	return func(ctx context.Context) error {
 		routes, err := a.adobe.RefreshCatalog(ctx)
 		if err != nil {
 			return err
 		}
-		if applied != nil && slices.EqualFunc(routes, applied, func(x, y modeldomain.Route) bool {
-			return x.PublicID == y.PublicID && x.UpstreamModel == y.UpstreamModel && x.Capability == y.Capability
-		}) {
-			return nil
-		}
-		if err := a.modelRepo.ReplaceProviderRoutes(ctx, account.ProviderAdobe, routes); err != nil {
-			return err
-		}
-		applied = routes
-		return nil
+		return a.modelRepo.ReplaceProviderRoutes(ctx, account.ProviderAdobe, routes)
 	}
 }

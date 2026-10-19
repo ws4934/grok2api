@@ -218,13 +218,14 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 
 - **自动登记**：后台启动时拉取一次，之后每天一次（失败时 1 小时后重试）。新上线的图像/视频模型自动出现，下架（`isDeprecated`）或禁用的模型路由自动删除；结果为空或比当前少一半以上时视为异常，保留上次结果。程序内嵌一份快照（`backend/internal/infra/provider/adobe/discovery.json`），启动即可用，拉取失败时兜底；快照只补齐缺失路由、不删除。
 - **筛选**：只收图像/视频生成模型；跳过放大/降噪类（Topaz）、视频编辑/延长版本、Kling 按模式拆分的版本（统一用合并版 `kling-3.0` / `kling-3.0-omni`）。
-- **命名**：按官方显示名生成，例如 `veo-3.1`、`veo-3.1-fast`、`kling-3.0-omni`、`seedance-2.0`、`gpt-image-2.5-flare`、`ray3.14`、`flux-kontext-pro`；Gemini 系列用 `nano-banana-pro`（Gemini 3）、`nano-banana-2`（Gemini 3.1）、`nano-banana-2.1`。完整清单见管理端模型页或 `/v1/models`。
+- **命名**：按官方显示名生成，例如 `veo-3.1`、`veo-3.1-fast`、`kling-3.0-omni`、`seedance-2.0`、`gpt-image-2.5-flare`、`ray3.14`、`flux-kontext-pro`；Gemini 系列用 `nano-banana-pro`（Gemini 3）、`nano-banana-2`（Gemini 3.1）、`nano-banana-2.1`。完整清单见管理端模型页或 `/v1/models`。路由的上游模型是 Adobe 的 `modelId/版本`（如 `veo/3.1-generate`），Adobe 改显示名时只改对外名（旧名留作别名），路由、绑定与价格都保留。
 - **请求体**：按模型 schema 填字段，再按官网前端的按模型规则放置比例、分辨率与参考图用途（首帧 `frame`、参考图 `subject` / `style` / `asset` / `general`、蒙版 `mask`），最后丢弃 schema 之外的字段。
 - **参数校验**：
   - 图像：显式给出但模型不支持的 `aspect_ratio` / `resolution`、超过 schema 上限的 `n`、不支持的输入图 / 蒙版 / 透明背景直接 400；未给比例时按 `size` 取最接近的比例。不支持 `stream` / `partial_images`。
   - 视频：首帧图与参考图按 schema 的能力和数量校验；`duration` / `aspect_ratio` / `resolution` 就近对齐到模型支持的值（网关对未填参数会填默认值，如 8 秒、720p）。不支持 `reference_audios` 与视频编辑。
 - 输入图支持 Base64 data URI 与 `https` URL（经带 SSRF 防护的下载器，不走账号出口），只接受 PNG/JPEG/WebP。
-- 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"；价格按模型名存储，模型名不变价格就保留。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口，所有 Adobe 路由都消费它。
+- 参考图用途按 schema 的弃用声明走替代用途（如 gpt-image 的输入图发 `source`）。Veo 3.1 带参考图时固定 16:9、8 秒，Veo 3.1 Fast 不接受参考图；`generateAudio` 按 schema 默认值（Kling 关闭，其余开启）。GPT Image 2 与官网一致只有 1K；gpt-image-2.5 超过 3840 边长或 8.29MP 的比例/档位组合直接 400。
+- 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"；价格按上游模型（`modelId/版本`）存储。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口，所有 Adobe 路由都消费它。
 
 ### 失败处理
 

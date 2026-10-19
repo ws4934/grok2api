@@ -301,7 +301,7 @@ func TestSubmitImageCheckpointSemantics(t *testing.T) {
 		fake, adapter, credential := newFakeAdobe(t)
 		fake.submitStatus = tc.submitStatus
 		var saves []provider.ImageCheckpoint
-		cp, err := adapter.SubmitImage(context.Background(), provider.ImageJobRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"}, func(cp provider.ImageCheckpoint) error {
+		cp, err := adapter.SubmitImage(context.Background(), provider.ImageJobRequest{Credential: credential, Model: "gpt-image/2", Prompt: "cat"}, func(cp provider.ImageCheckpoint) error {
 			saves = append(saves, cp)
 			return nil
 		})
@@ -326,7 +326,7 @@ func TestSubmitImageCheckpointSemantics(t *testing.T) {
 func TestGenerateImageRejectionsBecomeResponses(t *testing.T) {
 	fake, adapter, credential := newFakeAdobe(t)
 	fake.submitStatus = http.StatusUnauthorized
-	response, err := adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"})
+	response, err := adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image/2", Prompt: "cat"})
 	if err != nil || response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("401 submit => response %v err %v", response, err)
 	}
@@ -334,19 +334,19 @@ func TestGenerateImageRejectionsBecomeResponses(t *testing.T) {
 	// 403 等网关不处理的拒绝保持为错误，账号照常降权。
 	fake, adapter, credential = newFakeAdobe(t)
 	fake.submitStatus = http.StatusForbidden
-	if response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"}); err == nil {
+	if response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image/2", Prompt: "cat"}); err == nil {
 		t.Fatalf("403 submit => response %v, want error", response)
 	}
 
 	fake, adapter, credential = newFakeAdobe(t)
 	fake.mintDown = true
-	response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"})
+	response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image/2", Prompt: "cat"})
 	if err != nil || response.StatusCode != http.StatusServiceUnavailable || fake.submits.Load() != 0 {
 		t.Fatalf("mint down => response %v err %v submits %d", response, err, fake.submits.Load())
 	}
 
 	fake, adapter, credential = newFakeAdobe(t)
-	response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"})
+	response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image/2", Prompt: "cat"})
 	if err != nil || response.StatusCode != http.StatusOK || response.QuotaUnits != 1 {
 		t.Fatalf("success => response %+v err %v", response, err)
 	}
@@ -397,10 +397,14 @@ func TestSyncQuotaModeNeverInventsEmptyWindow(t *testing.T) {
 
 func TestSnapshotCatalogMatchesOfficialModels(t *testing.T) {
 	c := mustSnapshot()
+	slugs := map[string]bool{}
+	for _, v := range c.versions {
+		slugs[v.slug] = true
+	}
 	for _, slug := range []string{"nano-banana-pro", "nano-banana-2", "nano-banana-2.1", "gpt-image-1", "gpt-image-1.5", "gpt-image-2",
 		"gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "veo-3.1", "veo-3.1-fast", "veo-3.1-lite", "kling-3.0", "kling-3.0-omni",
 		"seedance-2.0", "seedance-2.0-fast", "seedance-2.5", "gemini-omni-flash", "ray3.14", "flux-kontext-pro"} {
-		if _, ok := c.lookup(slug); !ok {
+		if !slugs[slug] {
 			t.Errorf("catalog lacks %s", slug)
 		}
 	}
@@ -413,7 +417,10 @@ func TestSnapshotCatalogMatchesOfficialModels(t *testing.T) {
 	}
 	caps := map[string][]modeldomain.Capability{}
 	for _, route := range c.routes() {
-		caps[route.UpstreamModel] = append(caps[route.UpstreamModel], route.Capability)
+		caps[strings.TrimPrefix(route.PublicID, "adobe/")] = append(caps[strings.TrimPrefix(route.PublicID, "adobe/")], route.Capability)
+		if route.UpstreamModel == "" || !strings.Contains(route.UpstreamModel, "/") {
+			t.Errorf("route %s upstream %q is not modelId/version", route.PublicID, route.UpstreamModel)
+		}
 	}
 	if got := caps["flux-1.1-pro-fill"]; len(got) != 1 || got[0] != modeldomain.CapabilityImageEdit {
 		t.Errorf("inpainting-only model capabilities = %v, want image_edit only", got)
@@ -425,11 +432,13 @@ func TestSnapshotCatalogMatchesOfficialModels(t *testing.T) {
 
 func mustVersion(t *testing.T, slug string) *modelVersion {
 	t.Helper()
-	v, ok := mustSnapshot().lookup(slug)
-	if !ok {
-		t.Fatalf("catalog lacks %s", slug)
+	for _, v := range mustSnapshot().versions {
+		if v.slug == slug {
+			return v
+		}
 	}
-	return v
+	t.Fatalf("catalog lacks %s", slug)
+	return nil
 }
 
 func get(body map[string]any, path ...string) any {
@@ -468,12 +477,12 @@ func TestBuildBodyMatchesOfficialClient(t *testing.T) {
 	in.references = []string{"img1"}
 	body = gpt.buildBody(in)
 	if _, ok := body["size"]; ok || get(body, "generationSettings", "detailLevel") != 5 || get(body, "generationSettings", "aspectRatio") != nil ||
-		get(body["referenceBlobs"].([]any)[0].(map[string]any), "usage") != "subject" {
+		get(body["referenceBlobs"].([]any)[0].(map[string]any), "usage") != "source" {
 		t.Fatalf("gpt-image-2 auto body = %v", body)
 	}
 
 	veo := mustVersion(t, "veo-3.1")
-	in = veo.videoPlan("a cat", "16:9", "1080p", 8, false)
+	in = veo.videoPlan("a cat", "16:9", "1080p", 8, true, false)
 	in.frames = []string{"frame1"}
 	body = veo.buildBody(in)
 	if body["duration"] != 8 || body["generateAudio"] != true || body["resolution"] != "1080p" || get(body, "size", "width") != 1920 ||
@@ -483,7 +492,7 @@ func TestBuildBodyMatchesOfficialClient(t *testing.T) {
 	}
 
 	kling := mustVersion(t, "kling-3.0-omni")
-	in = kling.videoPlan("run", "16:9", "1080p", 10, false)
+	in = kling.videoPlan("run", "16:9", "1080p", 10, true, false)
 	in.frames = []string{"frame1"}
 	body = kling.buildBody(in)
 	if body["modelVersion"] != "kling_v3_omni" || body["duration"] != 10 || body["resolution"] != "1080p" || get(body, "size", "width") != 1920 ||
@@ -493,7 +502,7 @@ func TestBuildBodyMatchesOfficialClient(t *testing.T) {
 	}
 
 	seedance := mustVersion(t, "seedance-2.5")
-	in = seedance.videoPlan("wave", "auto", "720p", 8, false)
+	in = seedance.videoPlan("wave", "auto", "720p", 8, false, false)
 	body = seedance.buildBody(in)
 	if _, ok := body["size"]; ok || body["resolution"] != "720p" || get(body, "generationSettings", "aspectRatio") != "auto" {
 		t.Fatalf("seedance-2.5 body = %v", body)
@@ -527,8 +536,14 @@ func TestImagePlanRejectsUnsupportedParameters(t *testing.T) {
 // 视频的首帧/参考图按 schema 能力校验，时长与分辨率就近对齐（网关默认 8 秒、720p）。
 func TestVideoInputsFollowSchema(t *testing.T) {
 	adapter := NewAdapter(Config{}, nil, nil, nil, nil)
-	check := func(model string, hasImage bool, refs int) error {
-		return adapter.ValidateVideoRequest(provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: model, HasImage: hasImage, ReferenceImages: refs, Duration: 8, Resolution: "720p"})
+	check := func(slug string, hasImage bool, refs int) error {
+		upstream := slug
+		for _, v := range mustSnapshot().versions {
+			if v.slug == slug {
+				upstream = v.upstream()
+			}
+		}
+		return adapter.ValidateVideoRequest(provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: upstream, HasImage: hasImage, ReferenceImages: refs, Duration: 8, Resolution: "720p"})
 	}
 	if err := check("kling-3.0", false, 2); err == nil {
 		t.Error("kling-3.0 accepted reference images")
@@ -545,11 +560,11 @@ func TestVideoInputsFollowSchema(t *testing.T) {
 	if err := check("sora2", false, 0); err == nil {
 		t.Error("removed model sora2 accepted")
 	}
-	in := mustVersion(t, "kling-video-2.5-turbo").videoPlan("x", "16:9", "720p", 8, false)
+	in := mustVersion(t, "kling-video-2.5-turbo").videoPlan("x", "16:9", "720p", 8, true, false)
 	if in.resolution != "1080p" {
 		t.Errorf("1080p-only model resolution = %q", in.resolution)
 	}
-	if body := mustVersion(t, "gemini-omni-flash").buildBody(mustVersion(t, "gemini-omni-flash").videoPlan("x", "16:9", "1080p", 15, false)); body["duration"] != 10 || body["resolution"] != "720p" {
+	if body := mustVersion(t, "gemini-omni-flash").buildBody(mustVersion(t, "gemini-omni-flash").videoPlan("x", "16:9", "1080p", 15, false, false)); body["duration"] != 10 || body["resolution"] != "720p" {
 		t.Errorf("omni-flash duration/resolution = %v / %v", body["duration"], body["resolution"])
 	}
 }
@@ -565,14 +580,45 @@ func TestRefreshCatalogSwapsAndGuardsShrink(t *testing.T) {
 	t.Cleanup(func() { discoveryURL = previous })
 	_, adapter, _ := newFakeAdobe(t)
 	routes, err := adapter.RefreshCatalog(context.Background())
-	if err != nil || len(routes) == 0 || len(routes) != len(adapter.Routes()) {
+	if err != nil || len(routes) == 0 || len(routes) != len(adapter.catalog.Load().routes()) {
 		t.Fatalf("refresh = %d routes, %v", len(routes), err)
 	}
 	payload = []byte(`{"models":[],"commonRequestSchema":{}}`)
 	if _, err := adapter.RefreshCatalog(context.Background()); err == nil {
 		t.Fatal("an empty discovery must not replace the catalog")
 	}
-	if len(adapter.Routes()) != len(routes) {
+	if len(adapter.catalog.Load().routes()) != len(routes) {
 		t.Fatal("a rejected refresh changed the catalog")
+	}
+}
+
+// 审查修复：deprecated 用途走 replacement；Veo 参考图约束；gpt-image-2.5 尺寸上限；
+// 音频默认值跟随 schema；Seedance 2.5 带首帧时比例为 auto。
+func TestOfficialConstraintsFromReview(t *testing.T) {
+	if usage, _ := mustVersion(t, "runway-gen-4-video").referenceUsage(); usage != "" {
+		t.Errorf("runway general is deprecated (now frame), reference usage = %q", usage)
+	}
+	if usage, _ := mustVersion(t, "flux-1.1-pro").referenceUsage(); usage != "style" {
+		t.Errorf("flux-1.1-pro reference usage = %q, want style", usage)
+	}
+	if err := mustVersion(t, "veo-3.1-fast").checkVideoInputs(false, 1); err == nil {
+		t.Error("veo-3.1-fast accepted reference images")
+	}
+	if in := mustVersion(t, "veo-3.1").videoPlan("x", "9:16", "720p", 4, false, true); in.aspect != "16:9" || in.duration != 8 {
+		t.Errorf("veo-3.1 with references = %s %ds, want 16:9 8s", in.aspect, in.duration)
+	}
+	if _, err := mustVersion(t, "gpt-image-2.5-flare").imagePlan("x", "", "21:9", "2K", "", "", 1, 0, false); err == nil {
+		t.Error("gpt-image-2.5 accepted 21:9 at 2K (4784 px wide)")
+	}
+	kling := mustVersion(t, "kling-3.0")
+	if body := kling.buildBody(kling.videoPlan("x", "16:9", "720p", 5, false, false)); body["generateAudio"] != false {
+		t.Errorf("kling-3.0 generateAudio = %v, want schema default false", body["generateAudio"])
+	}
+	veo := mustVersion(t, "veo-3.1")
+	if body := veo.buildBody(veo.videoPlan("x", "16:9", "720p", 8, false, false)); body["generateAudio"] != true {
+		t.Errorf("veo-3.1 generateAudio = %v, want true", body["generateAudio"])
+	}
+	if in := mustVersion(t, "seedance-2.5").videoPlan("x", "16:9", "720p", 5, true, false); in.aspect != "auto" {
+		t.Errorf("seedance-2.5 with a first frame aspect = %q, want auto", in.aspect)
 	}
 }
