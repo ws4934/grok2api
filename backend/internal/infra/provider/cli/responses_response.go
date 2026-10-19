@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
 const (
@@ -41,8 +43,9 @@ func (c *responsesToolCompatibility) normalizeResponseJSON(body []byte) ([]byte,
 // Grok control-event filtering always apply.
 func (c *responsesToolCompatibility) normalizeResponseStream(source io.ReadCloser) io.ReadCloser {
 	reader, writer := io.Pipe()
+	stream := provider.NewStreamPipeReadCloser(reader, source)
 	go func() {
-		defer source.Close()
+		defer stream.CloseSource()
 		err := consumeCompatibleSSE(source, func(event compatibleSSEEvent) error {
 			if isPrivateBuildControlEvent(event) {
 				return nil
@@ -86,7 +89,7 @@ func (c *responsesToolCompatibility) normalizeResponseStream(source io.ReadClose
 		})
 		_ = writer.CloseWithError(err)
 	}()
-	return reader
+	return stream
 }
 
 func isPrivateBuildControlEvent(event compatibleSSEEvent) bool {

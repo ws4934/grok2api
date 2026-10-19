@@ -13,14 +13,16 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	inferencedomain "github.com/chenyme/grok2api/backend/internal/domain/inference"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/toolemu"
 )
 
 func (a *Adapter) streamOpenAIResponse(ctx context.Context, source io.ReadCloser, lease *infraegress.Lease, credential account.Credential, responseID, model, operation, prompt string, previous *inferencedomain.WebResponseState, tools toolemu.Config, parallelTools bool, options conversation.ResponseOptions) io.ReadCloser {
 	reader, writer := io.Pipe()
+	stream := provider.NewStreamPipeReadCloser(reader, source)
 	go func() {
-		defer source.Close()
+		defer stream.CloseSource()
 		defer lease.Release()
 		parsed := &parsedChat{
 			ResponseID: responseID, InputTokens: estimateTokens(prompt), Tools: tools.ResponseTools,
@@ -216,7 +218,7 @@ func (a *Adapter) streamOpenAIResponse(ctx context.Context, source io.ReadCloser
 		}
 		_ = writer.Close()
 	}()
-	return reader
+	return stream
 }
 
 func writeWebStreamDelta(writer io.Writer, stream *webMessagesStream, operation, responseID, model, kind, delta string) error {

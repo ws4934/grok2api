@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 )
 
@@ -39,9 +39,9 @@ func ConvertResponseStreamWithOptions(source io.ReadCloser, operation string, op
 		return guardResponseStream(source)
 	}
 	reader, writer := io.Pipe()
-	stream := newStreamPipeReadCloser(reader, source)
+	stream := provider.NewStreamPipeReadCloser(reader, source)
 	go func() {
-		defer stream.closeSource()
+		defer stream.CloseSource()
 		converter := newStreamConverter(writer, operation, options)
 		err := consumeSSE(source, converter.handle)
 		if err == nil {
@@ -98,35 +98,6 @@ type streamRepeatTracker struct {
 	contentRepeatCount int
 	lastReasonDelta    string
 	reasonRepeatCount  int
-}
-
-// streamPipeReadCloser ensures a downstream cancellation immediately closes the
-// upstream body, including while the forwarding goroutine is blocked in Read.
-type streamPipeReadCloser struct {
-	*io.PipeReader
-	source    io.ReadCloser
-	closeOnce sync.Once
-	closeErr  error
-}
-
-func newStreamPipeReadCloser(reader *io.PipeReader, source io.ReadCloser) *streamPipeReadCloser {
-	return &streamPipeReadCloser{PipeReader: reader, source: source}
-}
-
-func (r *streamPipeReadCloser) Close() error {
-	readerErr := r.PipeReader.Close()
-	sourceErr := r.closeSource()
-	if readerErr != nil {
-		return readerErr
-	}
-	return sourceErr
-}
-
-func (r *streamPipeReadCloser) closeSource() error {
-	r.closeOnce.Do(func() {
-		r.closeErr = r.source.Close()
-	})
-	return r.closeErr
 }
 
 type streamTool struct {
@@ -1038,9 +1009,9 @@ func (t *streamRepeatTracker) trackReasoning(delta, message string) error {
 // 解析事件并在检测到循环时关闭上游。
 func guardResponseStream(source io.ReadCloser) io.ReadCloser {
 	reader, writer := io.Pipe()
-	stream := newStreamPipeReadCloser(reader, source)
+	stream := provider.NewStreamPipeReadCloser(reader, source)
 	go func() {
-		defer stream.closeSource()
+		defer stream.CloseSource()
 		tracker := streamRepeatTracker{}
 		err := consumeSSE(io.TeeReader(source, writer), func(event string, data []byte) error {
 			typeName, root, ok := parseSSEEvent(event, data)

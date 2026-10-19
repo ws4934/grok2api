@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
 // buildXSearchResponseFilter hides internal custom_tool_call items emitted while xAI executes native x_search.
@@ -60,8 +62,9 @@ func filterBuildPromptCacheResponse(response *http.Response, streaming bool, rou
 
 func (f *buildXSearchResponseFilter) stream(source io.ReadCloser) io.ReadCloser {
 	reader, writer := io.Pipe()
+	stream := provider.NewStreamPipeReadCloser(reader, source)
 	go func() {
-		defer source.Close()
+		defer stream.CloseSource()
 		err := consumeCompatibleSSE(source, func(event compatibleSSEEvent) error {
 			if !event.HasData() {
 				return event.writeTo(writer)
@@ -82,7 +85,7 @@ func (f *buildXSearchResponseFilter) stream(source io.ReadCloser) io.ReadCloser 
 		})
 		_ = writer.CloseWithError(err)
 	}()
-	return reader
+	return stream
 }
 
 func (f *buildXSearchResponseFilter) filterJSON(body []byte) ([]byte, error) {

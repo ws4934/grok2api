@@ -44,3 +44,35 @@ func (c *completionReadCloser) Close() error {
 	})
 	return closeErr
 }
+
+// StreamPipeReadCloser is the read side of a pipe fed by a goroutine copying
+// from source. Close also closes source, so a copier blocked in source.Read
+// returns instead of holding the upstream until its next event.
+type StreamPipeReadCloser struct {
+	*io.PipeReader
+	source    io.ReadCloser
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func NewStreamPipeReadCloser(reader *io.PipeReader, source io.ReadCloser) *StreamPipeReadCloser {
+	return &StreamPipeReadCloser{PipeReader: reader, source: source}
+}
+
+func (r *StreamPipeReadCloser) Close() error {
+	readerErr := r.PipeReader.Close()
+	sourceErr := r.CloseSource()
+	if readerErr != nil {
+		return readerErr
+	}
+	return sourceErr
+}
+
+// CloseSource closes source once. Copiers defer it instead of source.Close so
+// their close never races the downstream Close.
+func (r *StreamPipeReadCloser) CloseSource() error {
+	r.closeOnce.Do(func() {
+		r.closeErr = r.source.Close()
+	})
+	return r.closeErr
+}
