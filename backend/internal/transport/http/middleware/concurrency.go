@@ -1,8 +1,10 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -52,5 +54,25 @@ func (g *ConcurrencyGate) Middleware() gin.HandlerFunc {
 			g.mu.Unlock()
 		}()
 		c.Next()
+	}
+}
+
+// WaitIdle blocks until no gated request is running or ctx ends. Shutdown uses
+// it for hijacked WebSocket handlers, which http.Server.Shutdown does not track.
+func (g *ConcurrencyGate) WaitIdle(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		g.mu.Lock()
+		active := g.active
+		g.mu.Unlock()
+		if active == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }

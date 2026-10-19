@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -69,6 +70,7 @@ type Application struct {
 	logger          *slog.Logger
 	database        *relational.Database
 	server          *http.Server
+	inferenceGate   *httpmiddleware.ConcurrencyGate
 	audits          *auditapp.Service
 	responses       repository.ResponseRepository
 	cleanupLock     repository.DistributedLock
@@ -482,7 +484,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	router := httpserver.New(httpserver.Dependencies{Providers: providerCatalog, Pricing: pricingService, Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
 	server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 	return &Application{chatgpt: chatgptAdapter,
-		logger: logger, database: database, server: server,
+		logger: logger, database: database, server: server, inferenceGate: inferenceConcurrency,
 		audits: auditService, responses: responseRepo, cleanupLock: refreshLock, runtime: runtimeStore,
 		settingsBus: settingsBus, invalidationBus: invalidationBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService, invalidations: invalidationService,
 		accountRepo: accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, egress: egressManager, egressOps: egressService, startup: startup,
@@ -607,6 +609,8 @@ func (a *Application) Run(ctx context.Context) error {
 		cancelBackground()
 		background.Wait()
 	}()
+	cancelRequests := cancelableRequests(a.server)
+	defer cancelRequests()
 	errCh := make(chan error, 1)
 	go func() {
 		a.logger.Info("server_started", "listen", a.server.Addr)
@@ -760,9 +764,10 @@ func (a *Application) Run(ctx context.Context) error {
 	a.queueDueWebQuotaRefresh(runCtx)
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := a.server.Shutdown(shutdownCtx); err != nil {
+		// The deferred audit close and the caller's storage close run after
+		// this, so every handler must have returned and finalized first. The
+		// drain period covers the gateway's 5s finalization budget.
+		if err := drainServer(a.server, cancelRequests, a.inferenceGate, 10*time.Second, 10*time.Second); err != nil {
 			return fmt.Errorf("关闭 HTTP 服务: %w", err)
 		}
 		return nil
@@ -772,6 +777,38 @@ func (a *Application) Run(ctx context.Context) error {
 		}
 		return err
 	}
+}
+
+// cancelableRequests derives every request context of server from one context
+// and returns its cancel, so shutdown can end streams that outlive the grace
+// period through their normal cancellation path.
+func cancelableRequests(server *http.Server) context.CancelFunc {
+	requestCtx, cancel := context.WithCancel(context.Background())
+	server.BaseContext = func(net.Listener) context.Context { return requestCtx }
+	return cancel
+}
+
+// drainServer gives requests the grace period to finish, then cancels every
+// request context and waits up to drain for the handlers to return, including
+// hijacked WebSockets that Shutdown never waits for. Only handlers that are
+// still running after that make it an error.
+func drainServer(server *http.Server, cancelRequests context.CancelFunc, gate *httpmiddleware.ConcurrencyGate, grace, drain time.Duration) error {
+	graceCtx, cancelGrace := context.WithTimeout(context.Background(), grace)
+	defer cancelGrace()
+	err := server.Shutdown(graceCtx)
+	cancelRequests()
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), drain)
+	defer cancelDrain()
+	if errors.Is(err, context.DeadlineExceeded) {
+		err = server.Shutdown(drainCtx)
+	}
+	if err == nil {
+		err = gate.WaitIdle(drainCtx)
+	}
+	if err != nil {
+		return errors.Join(err, server.Close())
+	}
+	return nil
 }
 
 func (a *Application) cleanupExpiredResponses(ctx context.Context, now time.Time) error {
