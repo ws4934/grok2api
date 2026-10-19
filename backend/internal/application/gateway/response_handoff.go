@@ -2,6 +2,9 @@ package gateway
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -10,6 +13,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	inferencedomain "github.com/chenyme/grok2api/backend/internal/domain/inference"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	neterrorpkg "github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 )
 
 // responseQualityFallback is the single successful no-thinking stream that
@@ -22,6 +26,143 @@ type responseQualityFallback struct {
 	credential        accountdomain.Credential
 	usage             Usage
 	upstreamStartedAt time.Time
+}
+
+// acceptSuccess records a 2xx upstream response, applies the quality hold and
+// invalidates accounts whose primary endpoint denied access before a recovered
+// response.
+func (a *responseAttempt) acceptSuccess(t *responseTry) attemptStep {
+	s, ctx, credential := a.s, a.ctx, t.credential
+	s.selector.markSuccess(ctx, credential, t.lease.QuotaProbe)
+	if a.qualityHoldEnabled {
+		if step := a.holdQuality(t); step != attemptProceed {
+			return step
+		}
+	}
+	if diagnostic := t.response.RecoveredPrimaryFailure; diagnostic != nil {
+		recoveredFailure := newHTTPUpstreamFailure(diagnostic.StatusCode, diagnostic.Body, credential.ID, credential.Name)
+		if recoveredFailure.AccountBlocked || (a.failurePolicy.AuthenticatedForbidden && s.shouldInvalidateBuildForbidden(recoveredFailure)) {
+			reason := fmt.Sprintf("%s primary endpoint denied account access", credential.Provider)
+			if !s.markReauthRequired(ctx, a.input.RequestID, credential, reason) {
+				s.selector.MarkModelAccessDenied(ctx, credential, a.route.UpstreamModel, 0)
+			}
+		}
+	}
+	return attemptProceed
+}
+
+// holdQuality peeks a held stream for missing reasoning and delivers it,
+// keeps it as the fail_open fallback, retries another account, or rejects the
+// request.
+func (a *responseAttempt) holdQuality(t *responseTry) attemptStep {
+	s, ctx, requestID, holdCfg, lease, credential := a.s, a.ctx, a.input.RequestID, a.holdCfg, t.lease, t.credential
+	replay, verdict, peekUsage, _, peekErr := peekQualityStream(ctx, t.response.Body, qualityProtocolForOperation(a.operation), holdCfg)
+	if peekErr != nil {
+		return a.qualityPeekFailed(t, replay, peekErr)
+	}
+	t.response.Body = replay
+	hasNextAccount := a.qualityCrossAccountReplay && a.attemptPolicy.hasNext(t.attempt) && a.qualityAccountAttempts < holdCfg.MaxAttempts
+	if hasNextAccount {
+		hasNextAccount = a.selection != nil && a.selection.hasAvailableCandidate(a.excluded, !a.quotaProbeAttempted)
+	}
+	commit := CommitQualityHold(verdict, a.qualityAccountAttempts-1, holdCfg.MaxAttempts, hasNextAccount, holdCfg.OnExhausted)
+	if verdict == QualityWithhold {
+		s.applyMissingThinkingPenalty(ctx, requestID, credential, holdCfg.AccountCooldown, holdCfg.AutoDisable)
+	}
+	deferFailOpenAudit := commit.Action == QualityActionRetry && holdCfg.OnExhausted == qualityRetryFailOpen
+	if commit.Audit && !deferFailOpenAudit {
+		s.recordQualityDegraded(ctx, a.auditBase, credential, peekUsage, a.startedAt, a.egressTrace, a.route.Provider)
+		a.failureAttempts.captureQualityDegraded(credential, a.responseStartedAt)
+	}
+	switch commit.Action {
+	case QualityActionRetry:
+		if deferFailOpenAudit {
+			a.discardFallback(true)
+			a.fallback = &responseQualityFallback{response: t.response, lease: lease, credential: credential, usage: peekUsage, upstreamStartedAt: a.responseStartedAt}
+			lease.completeSelectorObservation(true)
+			lease.Release()
+		} else {
+			_ = t.response.Body.Close()
+			lease.Release()
+		}
+		a.lastErr = errQualityDegraded
+		a.lastFailure = qualityDegradedFailure(credential)
+		s.logger.Info("quality_degraded_retry", "request_id", requestID, "account_id", credential.ID, "quality_attempt", a.qualityAccountAttempts, "output_tokens", peekUsage.OutputTokens)
+		return attemptNext
+	case QualityActionReject:
+		_ = t.response.Body.Close()
+		lease.Release()
+		a.lastErr = errQualityDegraded
+		a.lastFailure = qualityDegradedFailure(credential)
+		s.logger.Info("quality_degraded_rejected", "request_id", requestID, "account_id", credential.ID)
+		return attemptStop
+	case QualityActionDeliverLast:
+		a.discardFallback(true)
+		s.logger.Info("quality_degraded_deliver_last", "request_id", requestID, "account_id", credential.ID, "quality_attempt", a.qualityAccountAttempts, "output_tokens", peekUsage.OutputTokens)
+	case QualityActionDeliver:
+		a.discardFallback(true)
+	}
+	if !commit.KeepBody {
+		_ = t.response.Body.Close()
+		lease.Release()
+		return attemptStop
+	}
+	return attemptProceed
+}
+
+// qualityPeekFailed records a held stream that failed while it was peeked and
+// decides whether another account may be tried.
+func (a *responseAttempt) qualityPeekFailed(t *responseTry, replay io.ReadCloser, peekErr error) attemptStep {
+	s, ctx, requestID, holdCfg, credential := a.s, a.ctx, a.input.RequestID, a.holdCfg, t.credential
+	if replay != nil {
+		_ = replay.Close()
+	} else {
+		_ = t.response.Body.Close()
+	}
+	t.lease.Release()
+	a.lastErr = peekErr
+	if isClientRequestCancel(ctx, peekErr) {
+		a.lastFailure = a.canceledFailure(credential, peekErr)
+		return attemptStop
+	}
+	a.lastFailure = newTransportUpstreamFailure(peekErr, credential.ID, credential.Name)
+	if neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) || neterrorpkg.IsUpstreamStreamIdleTimeout(context.Cause(ctx)) || errors.Is(peekErr, errQualityEmptyStream) {
+		logPrefix := "quality_peek_idle"
+		if errors.Is(peekErr, errQualityEmptyStream) {
+			logPrefix = "quality_peek_empty"
+		}
+		writeCtx, writeCancel := context.WithTimeout(context.WithoutCancel(ctx), finalizationTimeout)
+		if markErr := s.selector.MarkFailureAfterSuccess(writeCtx, credential, http.StatusGatewayTimeout, holdCfg.IdleAccountCooldown); markErr != nil {
+			s.logger.Warn(logPrefix+"_cooldown_failed", "request_id", requestID, "account_id", credential.ID, "error", markErr)
+		} else {
+			s.logger.Warn(logPrefix+"_retry", "request_id", requestID, "account_id", credential.ID, "cooldown", holdCfg.IdleAccountCooldown)
+		}
+		writeCancel()
+	}
+	if !a.qualityCrossAccountReplay || shouldStopForNonAccountFingerprint(a.failureFingerprints, a.lastFailure) {
+		return attemptStop
+	}
+	if isBuildTransientRetryError(peekErr) {
+		a.transientRetry++
+	}
+	return attemptNext
+}
+
+// qualityDegradedFailure is the 503 recorded for a response without reasoning.
+func qualityDegradedFailure(credential accountdomain.Credential) *UpstreamFailure {
+	return &UpstreamFailure{
+		HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
+		PublicMessage: "上游响应缺少推理", AccountID: credential.ID, AccountName: credential.Name,
+		Cause: errQualityDegraded,
+	}
+}
+
+// handOffFallback delivers the retained fail_open stream.
+func (a *responseAttempt) handOffFallback() *Result {
+	selected := a.fallback
+	a.fallback = nil
+	a.s.logger.Info("quality_degraded_fallback", "request_id", a.input.RequestID, "account_id", selected.credential.ID, "quality_attempts", a.qualityAccountAttempts)
+	return a.handOff(selected.response, selected.lease, selected.credential, selected.upstreamStartedAt)
 }
 
 // discardFallback closes the retained fail_open stream, optionally auditing it

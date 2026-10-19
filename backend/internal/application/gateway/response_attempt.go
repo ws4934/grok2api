@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -61,11 +62,20 @@ type responseAttempt struct {
 	quotaMode                 string
 	failurePolicy             provider.FailurePolicy
 
-	failureAttempts    *failureAttemptRecorder
-	normalizedMetadata *provider.NormalizedRequestMetadata
-	responseStartedAt  time.Time
-	transientRetry     int
-	fallback           *responseQualityFallback
+	excluded              map[uint64]bool
+	failureFingerprints   map[string]int
+	authRecoveryAttempted map[uint64]bool
+	// Count accounts that actually reached the upstream. Credential-only skips
+	// do not consume the quality retry budget; refreshes stay on the same account.
+	qualityAccountAttempts int
+	quotaProbeAttempted    bool
+	lastErr                error
+	lastFailure            *UpstreamFailure
+	failureAttempts        *failureAttemptRecorder
+	normalizedMetadata     *provider.NormalizedRequestMetadata
+	responseStartedAt      time.Time
+	transientRetry         int
+	fallback               *responseQualityFallback
 }
 
 // newResponseAttempt resolves the route, the previous Response ownership and
@@ -247,6 +257,9 @@ func (a *responseAttempt) prepare(modelNotAllowed bool) error {
 			return err
 		}
 	}
+	a.excluded = make(map[uint64]bool)
+	a.failureFingerprints = make(map[string]int)
+	a.authRecoveryAttempted = make(map[uint64]bool)
 	a.quotaMode = s.providers.QuotaMode(route.Provider, route.UpstreamModel)
 	a.failurePolicy = s.providers.Failure(route.Provider)
 	a.failureAttempts = newFailureAttemptRecorder(http.MethodPost, a.path)
@@ -336,4 +349,240 @@ func (a *responseAttempt) forward(lease *accountLease, credential accountdomain.
 	err = a.failureAttempts.captureResponse(credential, started, response, err)
 	a.timing.markUpstream(time.Since(started))
 	return response, err
+}
+
+// attemptStep tells the attempt loop how to go on after one phase of a pass.
+type attemptStep int
+
+const (
+	// attemptProceed keeps handling the current response.
+	attemptProceed attemptStep = iota
+	// attemptNext moves on to the next account attempt.
+	attemptNext
+	// attemptRepeat moves on to another account without consuming an attempt.
+	attemptRepeat
+	// attemptStop ends the attempt loop.
+	attemptStop
+	// attemptReplay handles the response of a replay with a refreshed credential.
+	attemptReplay
+)
+
+// responseTry is one pass of the attempt loop: the leased account, the
+// credential sent upstream and the response being handled. A credential
+// refresh replaces credential and response in place.
+type responseTry struct {
+	attempt    int
+	lease      *accountLease
+	credential accountdomain.Credential
+	response   *provider.Response
+}
+
+// try runs one pass of the attempt loop. A non-nil Result is the response to
+// deliver; otherwise the step tells the loop how to go on.
+func (a *responseAttempt) try(attempt int) (*Result, attemptStep) {
+	lease, ok := a.acquireLease()
+	if !ok {
+		return nil, attemptStop
+	}
+	a.excluded[lease.Credential.ID] = true
+	if step := a.skipTeamModelRateLimited(lease); step != attemptProceed {
+		return nil, step
+	}
+	if step := a.applyQuotaProbe(lease); step != attemptProceed {
+		return nil, step
+	}
+	credential, err := a.ensureCredential(lease.Credential, false)
+	if err != nil {
+		lease.Release()
+		a.lastErr = err
+		a.lastFailure = newCredentialUpstreamFailure(err, lease.Credential.ID, lease.Credential.Name)
+		return nil, attemptNext
+	}
+	if a.qualityHoldEnabled {
+		a.qualityAccountAttempts++
+	}
+	response, err := a.forward(lease, credential, lease.Billing)
+	if err != nil {
+		return nil, a.handleForwardError(lease, credential, err)
+	}
+	return a.handleResponse(&responseTry{attempt: attempt, lease: lease, credential: credential, response: response})
+}
+
+// acquireLease leases the next account. A selection failure is recorded and
+// ends the attempt loop.
+func (a *responseAttempt) acquireLease() (*accountLease, bool) {
+	s, ctx, input, route := a.s, a.ctx, a.input, a.route
+	var lease *accountLease
+	var err error
+	selectionStarted := time.Now()
+	if input.ForcedAccountID != 0 {
+		if input.ForcedEgressNodeID == 0 {
+			err = &SelectionUnavailableError{Reason: SelectionNoAccounts}
+		} else {
+			lease, err = s.selector.AcquirePinnedForQualityProbe(ctx, route.Provider, input.ForcedAccountID, route.ID, route.UpstreamModel, a.quotaMode, a.accountScope)
+			// An unbound account can still have reached the observed node through
+			// runtime pool selection. The Provider request below carries the forced
+			// node explicitly; only a conflicting concrete binding is invalid.
+			if err == nil && lease.Credential.EgressNodeID != 0 && lease.Credential.EgressNodeID != input.ForcedEgressNodeID {
+				lease.Release()
+				lease = nil
+				err = &SelectionUnavailableError{Reason: SelectionNoAccounts}
+			}
+		}
+	} else if a.ownership != nil {
+		lease, err = s.selector.AcquirePinnedForKey(ctx, route.Provider, a.ownership.AccountID, route.ID, route.UpstreamModel, a.quotaMode, true, a.accountScope)
+	} else if input.ForcedEgressNodeID != 0 {
+		lease, err = s.selector.AcquireForKeyOnEgressNode(ctx, route.Provider, route.ID, route.UpstreamModel, a.quotaMode, a.affinityKey, a.excluded, !a.quotaProbeAttempted, a.accountScope, input.ForcedEgressNodeID)
+	} else {
+		if a.selection == nil {
+			a.selection, err = s.selector.beginSelectionSessionForKey(ctx, route.Provider, route.ID, route.UpstreamModel, a.quotaMode, a.affinityKey, a.excluded, !a.quotaProbeAttempted, a.accountScope)
+		}
+		if err == nil {
+			lease, err = a.selection.Acquire(ctx, a.excluded, !a.quotaProbeAttempted)
+		}
+	}
+	a.timing.markSelection(time.Since(selectionStarted))
+	if err != nil {
+		if a.lastFailure == nil {
+			a.lastErr = err
+		}
+		pinnedID := uint64(0)
+		if a.ownership != nil {
+			pinnedID = a.ownership.AccountID
+		} else if input.ForcedAccountID != 0 {
+			pinnedID = input.ForcedAccountID
+		}
+		a.failureAttempts.captureSelectionFailure(pinnedID, "", err)
+		return nil, false
+	}
+	return lease, true
+}
+
+// skipTeamModelRateLimited releases a lease whose team and model are inside a
+// recorded rate-limit window and records the cached 429.
+func (a *responseAttempt) skipTeamModelRateLimited(lease *accountLease) attemptStep {
+	s, route := a.s, a.route
+	limited, ok := s.activeTeamModelRateLimit(lease.Credential, route.UpstreamModel, time.Now().UTC())
+	if !ok {
+		return attemptProceed
+	}
+	lease.Release()
+	a.lastFailure = &UpstreamFailure{
+		HTTPStatus: http.StatusTooManyRequests, Code: "upstream_rate_limited", PublicMessage: "上游请求频率受限",
+		AccountID: lease.Credential.ID, AccountName: lease.Credential.Name,
+		Fingerprint: "429:team_model_rate_limit", RetryAfter: time.Until(limited.Until),
+	}
+	a.lastErr = fmt.Errorf("上游 Team 与模型请求频率受限")
+	s.logger.Warn("upstream_team_model_rate_limit_active", "request_id", a.input.RequestID, "account_id", lease.Credential.ID, "provider", route.Provider, "model", route.UpstreamModel, "team_fingerprint", limited.TeamFingerprint, "retry_after", a.lastFailure.RetryAfter.Round(time.Second))
+	// Stored Responses are pinned to one account. Return the cached 429
+	// immediately instead of spinning until the cooldown expires or
+	// replaying the request on the same account.
+	if a.ownership != nil || a.input.ForcedAccountID != 0 {
+		return attemptStop
+	}
+	return attemptRepeat
+}
+
+// applyQuotaProbe notes a quota probe lease and, for a paid quota recovery,
+// confirms that the quota recovered before the lease is used.
+func (a *responseAttempt) applyQuotaProbe(lease *accountLease) attemptStep {
+	if lease.QuotaProbe {
+		a.quotaProbeAttempted = true
+	}
+	if lease.QuotaProbeKind != accountdomain.QuotaRecoveryKindPaid {
+		return attemptProceed
+	}
+	recovered, probeErr := a.s.accounts.ProbePaidQuota(a.ctx, lease.Credential)
+	a.s.selector.MarkQuotaStateChanged(lease.Credential.Provider, lease.Credential.ID)
+	if probeErr != nil || !recovered {
+		lease.Release()
+		a.lastErr = firstError(probeErr, fmt.Errorf("付费额度尚未恢复"))
+		return attemptNext
+	}
+	lease.QuotaProbe = false
+	lease.QuotaProbeKind = ""
+	lease.Billing = nil
+	return attemptProceed
+}
+
+// handleResponse classifies an upstream response until it is delivered or the
+// pass ends. A replay with a refreshed credential is classified again.
+func (a *responseAttempt) handleResponse(t *responseTry) (*Result, attemptStep) {
+	s := a.s
+	for {
+		if t.response.ModelCatalogChanged {
+			s.queueAccountModelSync(t.credential.ID)
+		}
+		if t.response.StatusCode == http.StatusUnauthorized {
+			if step := a.recoverUnauthorized(t); step != attemptProceed {
+				return nil, step
+			}
+		}
+		egressForbidden := s.providers.RetryForbiddenAsEgress(t.credential.Provider) && t.response.StatusCode == http.StatusForbidden
+		finalEgressForbidden := egressForbidden && (t.attempt > 0 || !a.attemptPolicy.hasNext(t.attempt))
+		if t.response.StatusCode == http.StatusForbidden {
+			if step := a.classifyForbidden(t, egressForbidden, finalEgressForbidden); step != attemptProceed {
+				return nil, step
+			}
+		}
+		// A terminal 403 is already prepared as the response for the client.
+		if !isTerminalRequestForbidden(a.failurePolicy, a.lastFailure) && isRetryableResponse(t.response, a.failurePolicy) && !finalEgressForbidden {
+			if step := a.handleRetryableResponse(t); step != attemptReplay {
+				return nil, step
+			}
+			continue
+		}
+		if t.response.StatusCode >= 200 && t.response.StatusCode < 300 {
+			if step := a.acceptSuccess(t); step != attemptProceed {
+				return nil, step
+			}
+		}
+		if a.fallback != nil && a.holdCfg.OnExhausted == qualityRetryFailOpen {
+			_ = t.response.Body.Close()
+			t.lease.completeSelectorObservation(false)
+			t.lease.Release()
+			return a.handOffFallback(), attemptStop
+		}
+		return a.handOff(t.response, t.lease, t.credential, a.responseStartedAt), attemptStop
+	}
+}
+
+// finish ends a request whose attempts produced no deliverable response: it
+// delivers the retained fail_open stream, or audits and returns the last
+// failure.
+func (a *responseAttempt) finish() (*Result, error) {
+	s := a.s
+	if a.fallback != nil {
+		if a.ctx.Err() == nil && a.holdCfg.OnExhausted == qualityRetryFailOpen {
+			return a.handOffFallback(), nil
+		}
+		a.discardFallback(true)
+	}
+	if a.lastFailure != nil {
+		record := a.auditBase
+		record.StatusCode = a.lastFailure.HTTPStatus
+		record.ErrorCode = a.lastFailure.AuditCode()
+		record.Attempts = a.failureAttempts.snapshot()
+		s.persistFailureAudit(record, a.startedAt, a.egressTrace, &accountdomain.Credential{ID: a.lastFailure.AccountID, Name: a.lastFailure.AccountName})
+		return nil, a.lastFailure
+	}
+	if a.lastErr == nil {
+		a.lastErr = ErrNoAvailableAccount
+	}
+	record := a.auditBase
+	record.StatusCode = http.StatusServiceUnavailable
+	record.ErrorCode = "upstream_unavailable"
+	failedAccount := accountdomain.Credential{}
+	var selectionFailure *SelectionUnavailableError
+	if errors.As(a.lastErr, &selectionFailure) {
+		record.StatusCode = selectionFailure.HTTPStatus()
+		record.ErrorCode = selectionFailure.Code()
+		failedAccount = accountdomain.Credential{ID: selectionFailure.AccountID, Name: selectionFailure.AccountName}
+	}
+	if failedAccount.ID == 0 && a.ownership != nil {
+		failedAccount.ID = a.ownership.AccountID
+	}
+	record.Attempts = a.failureAttempts.snapshot()
+	s.persistFailureAudit(record, a.startedAt, a.egressTrace, &failedAccount)
+	return nil, fmt.Errorf("%w: %w", ErrNoAvailableAccount, a.lastErr)
 }
