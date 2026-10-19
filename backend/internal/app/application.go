@@ -58,7 +58,7 @@ import (
 const (
 	responseOwnershipCleanupBatchSize = 1000
 	webResponseStateCleanupBatchSize  = 50
-	responseCleanupMaxBatches         = 100
+	responseCleanupBatchPause         = 10 * time.Millisecond
 	responseCleanupInterval           = 5 * time.Minute
 	responseCleanupBudget             = 30 * time.Second
 	responseCleanupLockTTL            = 2 * time.Minute
@@ -825,7 +825,8 @@ func (a *Application) cleanupExpiredResponses(ctx context.Context, now time.Time
 		defer release()
 	}
 	var totalOwnership, totalWebState int64
-	for range responseCleanupMaxBatches {
+	// Delete batches until one comes back short or the budget runs out.
+	for {
 		if err := cleanupCtx.Err(); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -847,9 +848,12 @@ func (a *Application) cleanupExpiredResponses(ctx context.Context, now time.Time
 			a.recordResponseCleanup(totalOwnership, totalWebState, false)
 			return nil
 		}
+		// Pause so request-path writers can take the SQLite write lock between batches.
+		select {
+		case <-cleanupCtx.Done():
+		case <-time.After(responseCleanupBatchPause):
+		}
 	}
-	a.recordResponseCleanup(totalOwnership, totalWebState, true)
-	return nil
 }
 
 func (a *Application) recordResponseCleanup(ownershipDeleted, webStateDeleted int64, backlog bool) {
