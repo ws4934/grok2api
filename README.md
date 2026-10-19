@@ -13,51 +13,15 @@
 <p align="center">
   <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
   <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64-2496ED?logo=docker&logoColor=white" /></a>
+  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
 <p align="center">
   <a href="https://trendshift.io/repositories/19868?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-19868" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/19868" alt="chenyme%2Fgrok2api | Trendshift" width="250" height="55"/></a>
 </p>
 
-> [!TIP]
-> Check out [DEEIX-AI / DEEIX-Chat](https://github.com/DEEIX-AI/DEEIX-Chat), a lightweight, integrated AI platform for model routing, chat, files, tools, billing, identity, and operations.
-
 > [!NOTE]
 > This project is for technical research and learning purposes only. Please comply with the official terms of use of Grok and OpenAI and local laws when using it; otherwise, you will be solely responsible for all consequences!
-
-
-
-## Sponsors
-
-> [Want to sponsor this project?](mailto:chenyme03@gmail.com)
-
-
-<table>
-<tr>
-<td width="200" align="center" valign="middle"><a href="https://go.apimart.ai/gh-grok2api"><img src="frontend/public/sponner/api-mart.jpg" alt="APIMart" width="180"></a></td>
-<td valign="middle">Thanks to APIMart for sponsoring this project! APIMart is a low-cost API platform for AI image &amp; video generation — GPT-Image-2 from $0.006/image, 160+ images per dollar. One async API covers both image and video: submit a task, get an ID, fetch results via polling or callback. Batch tens of thousands of images without timeouts, switch models without changing code. Pay-as-you-go with no monthly fee — <a href="https://go.apimart.ai/gh-grok2api">sign up here</a> to get started.</td>
-</tr>
-<tr>
-<td width="200" align="center" valign="middle"><a href="https://www.packyapi.com/register"><img src="frontend/public/sponner/packycode.png" alt="PackyCode" width="180"></a></td>
-<td valign="middle">PackyCode is a stable and professional API relay for Claude Code, Codex, Gemini, and leading Chinese models. With fast unified access, full-stack observability, risk controls, elastic scaling, and cost optimization, it delivers a smooth developer experience. <a href="https://www.packyapi.com/register">Sign up here</a> to bring production-ready AI into your workflows.</td>
-</tr>
-<tr>
-<td width="200" align="center" valign="middle"><a href="https://github.com/DEEIX-AI/DEEIX-Chat"><img src="frontend/public/sponner/deeix-chat_deeix-ai.png" alt="DEEIX AI / DEEIX Chat" width="160"></a></td>
-<td valign="middle">DEEIX-Chat is an open-source, self-hostable AI Chat platform for individuals, teams, and enterprises that need stable, long-term, unified access to multiple models. It brings models, conversations, files, tool calling, and administration together in one deployable and extensible system. Click <a href="https://github.com/DEEIX-AI/DEEIX-Chat">here</a> to start deploying.</td>
-</tr>
-<tr>
-<td width="200" align="center" valign="middle"><a href="https://www.right.codes/register"><img src="frontend/public/sponner/rightcode.jpg" alt="RightCode" width="160"></a></td>
-<td valign="middle">Right Code is an enterprise-grade AI Agent distribution platform that primarily provides stable access services for Claude Code, Codex, Gemini, and other models. It supports invoicing and dedicated one-to-one assistance for enterprises and teams. Thanks to Right Code for providing token support. Click <a href="https://www.right.codes/register">here</a> to register and get started.</td>
-</tr>
-<tr>
-<td width="200" align="center" valign="middle"><a href="https://www.rapidproxy.io/?ref=grok2api"><img src="frontend/public/sponner/rapid-proxy.jpg" alt="RapidProxy" width="180"></a></td>
-<td valign="middle">RapidProxy is a data collection proxy solution built for developers, providing stable and reliable residential proxy services. With 90M+ global residential IPs and 200+ country coverage, intelligent rotation, and precise geo-targeting, it helps projects such as web scraping, AI data training, SEO monitoring, and e-commerce data analysis break through access restrictions and improve data collection efficiency. It supports mainstream automation frameworks such as Playwright, Selenium, and Puppeteer, with prices as low as $0.65/GB — <a href="https://www.rapidproxy.io/?ref=grok2api">start your free test now</a>.</td>
-</tr>
-</table>
-
-<br>
-
 
 ## Overview
 
@@ -170,7 +134,29 @@ Each Provider keeps its own credentials, quota, health, cooldown, concurrency, a
 
 ## Quick start
 
-Images are published for `linux/amd64` only.
+Images are published for `linux/amd64` and `linux/arm64`.
+
+### One-command install
+
+On a server with Docker (including the Compose v2 plugin), run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ws4934/grok2api/main/scripts/install.sh | sh
+```
+
+The script downloads `docker-compose.yml` and the config template, generates `jwtSecret`, `credentialEncryptionKey`, and an admin password, pulls the image, starts it, and prints the URL and admin account once it is ready. It installs to `/opt/grok2api` as root, `~/grok2api` otherwise.
+
+Optional environment variables (put them before `sh`, e.g. `curl ... | GROK2API_PORT=127.0.0.1:8000 sh`):
+
+| Variable | Meaning |
+| :-- | :-- |
+| `GROK2API_DIR` | Install directory |
+| `GROK2API_PORT` | Published port, default `8000`; use `127.0.0.1:8000` to listen on the host only |
+| `GROK2API_ADMIN_PASSWORD` | Admin password for a first install, random by default |
+
+Running the script again upgrades: it pulls the latest image and restarts, keeping the existing `config.yaml` and `docker-compose.yml`. Back up `config.yaml`; its `credentialEncryptionKey` cannot change once accounts are stored.
+
+### Manual deployment
 
 ```bash
 git clone https://github.com/ws4934/grok2api.git
@@ -537,11 +523,11 @@ Important optional settings:
 
 ### Online update
 
-Releases are built from tags. Bump `VERSION`, then push the matching `vX.Y.Z` tag: `.github/workflows/release.yml` runs the backend tests, builds the frontend, builds `linux/amd64`, and publishes a GitHub Release with `grok2api_vX.Y.Z_linux_amd64.tar.gz` and `checksums.txt`; `.github/workflows/ghcr-image.yml` publishes `ghcr.io/ws4934/grok2api:vX.Y.Z` and `:latest`.
+Releases are built from tags. Bump `VERSION`, then push the matching `vX.Y.Z` tag: `.github/workflows/release.yml` runs the backend tests, builds the frontend, cross-compiles `linux/amd64` and `linux/arm64`, and publishes a GitHub Release with `grok2api_vX.Y.Z_linux_<arch>.tar.gz` and `checksums.txt`; `.github/workflows/ghcr-image.yml` publishes `ghcr.io/ws4934/grok2api:vX.Y.Z` and `:latest`.
 
 ```bash
-git tag v3.1.7
-git push origin v3.1.7
+git tag v3.2.1
+git push origin v3.2.1
 ```
 
 On a fork, enable GitHub Actions first. After the first image is published, check that the `grok2api` package in the account's GitHub Packages is public; otherwise `docker compose pull` needs `docker login ghcr.io`.

@@ -13,47 +13,15 @@
 <p align="center">
   <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
   <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64-2496ED?logo=docker&logoColor=white" /></a>
+  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
 <p align="center">
   <a href="https://trendshift.io/repositories/19868?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-19868" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/19868" alt="chenyme%2Fgrok2api | Trendshift" width="250" height="55"/></a>
 </p>
 
-> [!TIP]
-> 推荐个人新项目 [DEEIX-AI / DEEIX-Chat](https://github.com/DEEIX-AI/DEEIX-Chat)：面向多模型路由、对话、文件、工具、计费与运维的一体化轻量 AI 平台。
-
 > [!NOTE]
 > 本项目仅供技术研究与学习交流。使用时请务必遵循 Grok、OpenAI 官方的使用条款及当地法律法规，否则一切后果自负！
-
-## 赞助商
-
-> [希望赞助这个项目？](mailto:chenyme03@gmail.com)
-
-<table>
-<tr>
-<td width="200" align="center" valign="middle"><a href="https://go.apimart.ai/gh-grok2api"><img src="frontend/public/sponner/api-mart.jpg" alt="APIMart" width="180"></a></td>
-<td valign="middle">感谢 APIMart 赞助了本项目！APIMart 是专注 AI 图片/视频生成的低价 API 平台，GPT-Image-2 低至 $0.006/张，1 美元可出图 160+ 张。图片、视频一套异步 API 通吃，提交任务拿 ID、回调取结果，跑批万张不超时、换模型不改代码。按量付费、无月费，通过此 <a href="https://go.apimart.ai/gh-grok2api">注册链接</a> 注册即可开用。</td>
-</tr>
-<tr>
-<td width="200" align="center" valign="middle"><a href="https://www.packyapi.com/register"><img src="frontend/public/sponner/packycode.png" alt="PackyCode" width="180"></a></td>
-<td valign="middle">PackyCode 是稳定专业的 API 中转服务商，支持 Claude Code、Codex、Gemini 及多种国模，提供统一高速入口、全栈可观测、风控与弹性扩容。<a href="https://www.packyapi.com/register">点此注册</a>，轻松将大模型接入业务流程。</td>
-</tr>
-<tr>
-<td width="200" align="center" valign="middle"><a href="https://github.com/DEEIX-AI/DEEIX-Chat"><img src="frontend/public/sponner/deeix-chat_deeix-ai.png" alt="DEEIX AI / DEEIX Chat" width="160"></a></td>
-<td valign="middle">DEEIX-Chat 是一款开源可部署的 AI Chat 平台，面向需要长期、稳定、统一使用多模型能力的个人、团队与企业，将模型、对话、文件、工具调用与后台管理整合为一套可部署、可扩展的系统。点击 <a href="https://github.com/DEEIX-AI/DEEIX-Chat">此处</a> 开始部署！</td>
-</tr>
-<tr>
-<td width="200" align="center" valign="middle"><a href="https://www.right.codes/register"><img src="frontend/public/sponner/rightcode.jpg" alt="RightCode" width="160"></a></td>
-<td valign="middle">Right Code 是一个企业级 AI Agent 分发平台，主要提供稳定的 Claude Code、Codex、Gemini 等模型的中转服务。充值即可开票，企业、团队用户一对一对接。感谢 Right Code 提供的 Tokens 支持，点击 <a href="https://www.right.codes/register">此处</a> 注册并开始使用！</td>
-</tr>
-<tr>
-<td width="200" align="center" valign="middle"><a href="https://www.rapidproxy.io/?ref=grok2api"><img src="frontend/public/sponner/rapid-proxy.jpg" alt="RapidProxy" width="180"></a></td>
-<td valign="middle">RapidProxy 是面向开发者的数据采集代理方案，提供稳定可靠的住宅代理服务。拥有 9000 万+ 全球住宅 IP，覆盖 200+ 个国家和地区，支持智能轮换与精准地域定位，帮助网页抓取、AI 数据训练、SEO 监控、电商数据分析等项目突破访问限制、提升采集效率。支持 Playwright、Selenium、Puppeteer 等主流自动化框架，价格低至 $0.65/GB，<a href="https://www.rapidproxy.io/?ref=grok2api">立即免费测试</a>。</td>
-</tr>
-</table>
-
-<br>
 
 ## 项目简介
 
@@ -158,7 +126,29 @@ flowchart LR
 
 ## 快速部署
 
-镜像只发布 `linux/amd64`。
+镜像发布 `linux/amd64` 和 `linux/arm64`。
+
+### 一键安装
+
+服务器已安装 Docker（含 Compose v2 插件）时，执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ws4934/grok2api/main/scripts/install.sh | sh
+```
+
+脚本会下载 `docker-compose.yml` 与配置模板，生成 `jwtSecret`、`credentialEncryptionKey` 和管理员密码，拉取镜像并启动，就绪后打印访问地址和管理员账号。默认安装到 `/opt/grok2api`（root）或 `~/grok2api`。
+
+可选环境变量（写在 `sh` 前，例如 `curl ... | GROK2API_PORT=127.0.0.1:8000 sh`）：
+
+| 变量 | 说明 |
+| :-- | :-- |
+| `GROK2API_DIR` | 安装目录 |
+| `GROK2API_PORT` | 对外端口，默认 `8000`；只在本机监听可设为 `127.0.0.1:8000` |
+| `GROK2API_ADMIN_PASSWORD` | 首次安装的管理员密码，默认随机生成 |
+
+再次运行脚本即升级：拉取最新镜像并重启，已有的 `config.yaml` 和 `docker-compose.yml` 保持不变。请备份 `config.yaml`，其中的 `credentialEncryptionKey` 写入账号后不能更换。
+
+### 手动部署
 
 ```bash
 git clone https://github.com/ws4934/grok2api.git
@@ -496,11 +486,11 @@ docker network inspect grok2api_default \
 
 ### 在线更新
 
-发行版由 tag 触发构建。先更新 `VERSION`，再推送对应的 `vX.Y.Z` tag：`.github/workflows/release.yml` 会运行后端测试、构建前端、构建 `linux/amd64`，并发布包含 `grok2api_vX.Y.Z_linux_amd64.tar.gz` 和 `checksums.txt` 的 GitHub Release；`.github/workflows/ghcr-image.yml` 会发布 `ghcr.io/ws4934/grok2api:vX.Y.Z` 与 `:latest`。
+发行版由 tag 触发构建。先更新 `VERSION`，再推送对应的 `vX.Y.Z` tag：`.github/workflows/release.yml` 会运行后端测试、构建前端、交叉编译 `linux/amd64` 与 `linux/arm64`，并发布包含 `grok2api_vX.Y.Z_linux_<arch>.tar.gz` 和 `checksums.txt` 的 GitHub Release；`.github/workflows/ghcr-image.yml` 会发布 `ghcr.io/ws4934/grok2api:vX.Y.Z` 与 `:latest`。
 
 ```bash
-git tag v3.1.7
-git push origin v3.1.7
+git tag v3.2.1
+git push origin v3.2.1
 ```
 
 Fork 仓库需先启用 GitHub Actions。首个镜像发布后，请确认账号 GitHub Packages 中的 `grok2api` 包为公开，否则 `docker compose pull` 需要先执行 `docker login ghcr.io`。
