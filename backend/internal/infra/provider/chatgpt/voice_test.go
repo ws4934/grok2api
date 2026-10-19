@@ -262,4 +262,13 @@ func TestVoiceListIsCachedPerAccount(t *testing.T) {
 	if upstream.voiceLists != 1 || !strings.HasSuffix(upstream.synthesize, "voice=glimmer") {
 		t.Fatalf("voice lists = %d, synthesize = %s", upstream.voiceLists, upstream.synthesize)
 	}
+	// Listing the voices (GET /v1/tts/voices) uses the same cache.
+	for range 2 {
+		if voices, err := a.ListTTSVoices(context.Background(), credential); err != nil || len(voices) == 0 {
+			t.Fatalf("voices = %v, %v", voices, err)
+		}
+	}
+	if upstream.voiceLists != 1 {
+		t.Fatalf("voice lists after listing = %d", upstream.voiceLists)
+	}
 }

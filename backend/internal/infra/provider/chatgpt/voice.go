@@ -219,10 +219,8 @@ func (a *Adapter) hideConversation(ctx context.Context, w wireAccount, id string
 // speechVoice resolves a voice by ID or display name from the account's
 // cached list. Other names, such as OpenAI's alloy, use the selected voice.
 func (a *Adapter) speechVoice(ctx context.Context, w wireAccount, accountID uint64, requested string) (string, error) {
-	a.catalogMu.Lock()
-	cached, ok := a.voiceLists[accountID]
-	a.catalogMu.Unlock()
-	if !ok || time.Since(cached.fetchedAt) > voiceListTTL {
+	cached, ok := a.cachedVoices(accountID)
+	if !ok {
 		var err error
 		if cached, err = a.voices(ctx, w, accountID); err != nil {
 			return "", err
@@ -242,6 +240,14 @@ func findVoice(voices []provider.VoiceInfo, requested string) (provider.VoiceInf
 		}
 	}
 	return provider.VoiceInfo{}, false
+}
+
+// cachedVoices returns the account's voice list while it is fresh.
+func (a *Adapter) cachedVoices(accountID uint64) (voiceList, bool) {
+	a.catalogMu.Lock()
+	defer a.catalogMu.Unlock()
+	cached, ok := a.voiceLists[accountID]
+	return cached, ok && time.Since(cached.fetchedAt) <= voiceListTTL
 }
 
 // voices fetches the account's read aloud voices and the selected one and caches them.
@@ -267,6 +273,9 @@ func (a *Adapter) voices(ctx context.Context, w wireAccount, accountID uint64) (
 }
 
 func (a *Adapter) ListTTSVoices(ctx context.Context, credential account.Credential) ([]provider.VoiceInfo, error) {
+	if cached, ok := a.cachedVoices(credential.ID); ok {
+		return cached.voices, nil
+	}
 	c, err := a.decrypt(credential)
 	if err != nil {
 		return nil, err

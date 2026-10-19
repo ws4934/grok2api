@@ -131,7 +131,35 @@ type openAIImageReference struct {
 	Height   int
 }
 
+var (
+	bootstrapScriptPattern = regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+)["']`)
+	bootstrapBuildPattern  = regexp.MustCompile(`data-build=["']([^"']+)["']`)
+)
+
+// sessionBrowser returns the cached browser that serves account's chatgpt.com
+// calls on ctx's egress, or nil off chatgpt.com.
+func (o *OpenAIImage) sessionBrowser(ctx context.Context, account wireAccount) *browserHTTP {
+	if !strings.HasPrefix(o.BaseURL, "https://chatgpt.com") {
+		return nil
+	}
+	o.browserMu.Lock()
+	defer o.browserMu.Unlock()
+	b, err := accountBrowser(o.browsers, o.BaseURL, environmentFrom(ctx).ProxyURL, account.Token, account.Fields, o.RequestTimeout)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// bootstrap loads the page once per browser session (bootstrapTTL) for its
+// Sentinel scripts and build.
 func (o *OpenAIImage) bootstrap(ctx context.Context, account wireAccount) ([]string, string, error) {
+	session := o.sessionBrowser(ctx, account)
+	if session != nil {
+		if scripts, build, ok := session.bootstrapped(); ok {
+			return scripts, build, nil
+		}
+	}
 	response, err := o.do(ctx, http.MethodGet, "/", account, nil, nil, false)
 	if err != nil {
 		return nil, "", err
@@ -145,8 +173,7 @@ func (o *OpenAIImage) bootstrap(ctx context.Context, account wireAccount) ([]str
 		return nil, "", err
 	}
 	sources := []string{}
-	re := regexp.MustCompile(`(?i)<script[^>]+src=["']([^"']+)["']`)
-	for _, match := range re.FindAllStringSubmatch(string(raw), -1) {
+	for _, match := range bootstrapScriptPattern.FindAllStringSubmatch(string(raw), -1) {
 		if len(match) < 2 {
 			continue
 		}
@@ -159,8 +186,11 @@ func (o *OpenAIImage) bootstrap(ctx context.Context, account wireAccount) ([]str
 		sources = []string{"https://chatgpt.com/backend-api/sentinel/sdk.js"}
 	}
 	build := ""
-	if match := regexp.MustCompile(`data-build=["']([^"']+)["']`).FindStringSubmatch(string(raw)); len(match) == 2 {
+	if match := bootstrapBuildPattern.FindStringSubmatch(string(raw)); len(match) == 2 {
 		build = match[1]
+	}
+	if session != nil {
+		session.rememberBootstrap(sources, build)
 	}
 	return sources, build, nil
 }
@@ -369,11 +399,27 @@ func (o *OpenAIImage) start(ctx context.Context, account wireAccount, requiremen
 	return conversationID, uniqueStrings(fileIDs), nil
 }
 
+// imagePollInterval spaces the image result polls; imagePollMissing is how
+// many consecutive 404s mean the conversation is gone rather than not ready.
+var (
+	imagePollInterval = 5 * time.Second
+	imagePollMissing  = 12
+)
+
 func (o *OpenAIImage) pollConversation(ctx context.Context, account wireAccount, conversationID string) ([]string, error) {
 	deadline := o.imagePollDeadline(ctx)
 	var lastErr error
+	missing := 0
 	for time.Now().Before(deadline) {
 		value, err := o.pollConversationOnce(ctx, account, conversationID)
+		var upstream *upstreamError
+		if errors.As(err, &upstream) && upstream.Status == http.StatusNotFound {
+			if missing++; missing >= imagePollMissing {
+				return nil, err
+			}
+		} else {
+			missing = 0
+		}
 		if err == nil {
 			id := ""
 			ids := []string{}
@@ -393,7 +439,7 @@ func (o *OpenAIImage) pollConversation(ctx context.Context, account wireAccount,
 		} else {
 			lastErr = err
 		}
-		wait := 5 * time.Second
+		wait := imagePollInterval
 		if remaining := time.Until(deadline); remaining < wait {
 			wait = remaining
 		}

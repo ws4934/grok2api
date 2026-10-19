@@ -4,6 +4,7 @@ package chatgpt
 import (
 	"io"
 	stdhttp "net/http"
+	"sync"
 	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
@@ -17,6 +18,32 @@ type browserHTTP struct {
 	client   tlsclient.HttpClient
 	lastUsed time.Time
 	profile  browserprofile.Profile
+
+	// The page bootstrap (Sentinel scripts and build) of this browser session;
+	// its cookies stay in the client's jar.
+	bootMu      sync.Mutex
+	bootAt      time.Time
+	bootScripts []string
+	bootBuild   string
+}
+
+// bootstrapTTL is how long a browser session reuses its page bootstrap, as a
+// browser tab keeps the page it loaded.
+const bootstrapTTL = 15 * time.Minute
+
+func (c *browserHTTP) bootstrapped() ([]string, string, bool) {
+	c.bootMu.Lock()
+	defer c.bootMu.Unlock()
+	if c.bootAt.IsZero() || time.Since(c.bootAt) > bootstrapTTL {
+		return nil, "", false
+	}
+	return c.bootScripts, c.bootBuild, true
+}
+
+func (c *browserHTTP) rememberBootstrap(scripts []string, build string) {
+	c.bootMu.Lock()
+	defer c.bootMu.Unlock()
+	c.bootAt, c.bootScripts, c.bootBuild = time.Now(), scripts, build
 }
 
 func newBrowserHTTP(origin, proxyURL string, timeout time.Duration, profile browserprofile.Profile, savedCookies any) (*browserHTTP, error) {
