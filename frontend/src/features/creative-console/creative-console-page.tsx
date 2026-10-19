@@ -123,6 +123,12 @@ const basicImageQualities = ["auto", "low", "medium", "high"] as const;
 const videoResolutions = ["480p", "720p", "1080p"] as const;
 const videoDurations = ["6", "10", "15"] as const;
 const videoExtendDurations = ["2", "4", "6", "8", "10"] as const;
+// Adobe Seedance 2.5 extends by 4–30 s.
+const adobeVideoExtendDurations = ["4", "6", "8", "10", "15", "20", "30"] as const;
+// Routes that serve /videos/edits and /videos/extensions, written as the admin model
+// list shows them ("<namespace>/<upstream>"); mirrors each provider's ValidateVideoRequest.
+const videoEditUpstreams = ["Console/grok-imagine-video", "adobe/seedance/seedance_2.5", "adobe/kling/kling_v3_omni"];
+const videoExtendUpstreams = ["Console/grok-imagine-video", "adobe/seedance/seedance_2.5"];
 const chatHistoryMaxSessions = 50;
 const chatHistoryMaxBytes = 4 * 1024 * 1024;
 const composerClassName = "overflow-hidden rounded-2xl bg-secondary/45 ring-1 ring-transparent transition-colors focus-within:bg-secondary/60 focus-within:ring-ring";
@@ -163,8 +169,8 @@ export function CreativeConsolePage() {
     chat: uniqueModelsByPublicID(permittedModels.filter((model) => model.capability === "chat" || model.capability === "responses")),
     image: uniqueModelsByPublicID(permittedModels.filter((model) => model.capability === "image")),
     // Keep every route target for VideoPanel. It presents one row per public ID,
-    // but edit/extend eligibility depends on whether any aggregated target is
-    // Console/grok-imagine-video, not on the public name chosen by the operator.
+    // but edit/extend eligibility depends on whether any aggregated target serves
+    // the operation, not on the public name chosen by the operator.
     video: permittedModels.filter((model) => model.capability === "video"),
     // Keep capability-specific routes for VoicePanel so TTS/STT can filter correctly.
     voice: permittedModels.filter((model) => model.capability === "tts" || model.capability === "stt" || model.capability === "realtime"),
@@ -1147,16 +1153,24 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const videoSelectionVersionRef = useRef(0);
 
   const generateModels = useMemo(() => uniqueModelsByPublicID(modelOptions.filter((item) => item.capability === "video")), [modelOptions]);
-  const editModels = useMemo(() => {
-    const eligiblePublicIDs = new Set(modelOptions
-      .filter((item) => item.capability === "video" && item.provider === "grok_console" && item.upstreamModel === "grok-imagine-video")
-      .map((item) => item.publicId));
-    return generateModels.filter((item) => eligiblePublicIDs.has(item.publicId));
+  const operationModels = useMemo(() => {
+    const eligible = (upstreams: string[]) => {
+      const publicIDs = new Set(modelOptions
+        .filter((item) => item.capability === "video" && upstreams.includes(item.upstreamModel))
+        .map((item) => item.publicId));
+      return generateModels.filter((item) => publicIDs.has(item.publicId));
+    };
+    return { edit: eligible(videoEditUpstreams), extend: eligible(videoExtendUpstreams) };
   }, [generateModels, modelOptions]);
-  const activeModels = action === "generate" ? generateModels : editModels;
+  const activeModels = action === "generate" ? generateModels : operationModels[action];
   const activeModel = activeModels.some((item) => item.publicId === model)
     ? model
     : activeModels[0]?.publicId ?? "";
+  // Grok extends by 2–10 s; a public model without a Grok target is served by Adobe.
+  const extendDurations: readonly string[] = modelOptions.some((item) => item.publicId === activeModel && item.upstreamModel === "Console/grok-imagine-video")
+    ? videoExtendDurations
+    : adobeVideoExtendDurations;
+  const selectedExtendDuration = extendDurations.includes(extendDuration) ? extendDuration : "6";
 
   useEffect(() => {
     if (activeModel && activeModel !== model) onModelChange(activeModel);
@@ -1232,7 +1246,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
         prompt: prompt.trim(),
         videoURL,
         videoFileID,
-        duration: Number(extendDuration),
+        duration: Number(selectedExtendDuration),
       });
     },
     onSuccess: (requestId, recordId) => patchRecord(recordId, { status: "generating", requestId }),
@@ -1319,10 +1333,6 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       if (isReferenceMode && !prompt.trim()) return;
     } else {
       if (!prompt.trim() || (!sourceVideoURL.trim() && !sourceVideoFileID)) return;
-      if (action === "extend") {
-        const value = Number(extendDuration);
-        if (!Number.isFinite(value) || value < 2 || value > 10) return;
-      }
     }
     const record: VideoHistoryRecord = {
       id: createCreativeMessageId(),
@@ -1332,7 +1342,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       model: activeModel,
       params: action === "generate"
         ? { duration: Number(duration), aspectRatio, resolution: selectedVideoResolution }
-        : action === "extend" ? { duration: Number(extendDuration) } : {},
+        : action === "extend" ? { duration: Number(selectedExtendDuration) } : {},
       status: "submitting",
     };
     updateRecords((current) => [record, ...current]);
@@ -1358,7 +1368,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const canSubmit = Boolean(apiKey && activeModel && !createMutation.isPending && !uploadMutation.isPending && !videoUploadMutation.isPending
     && (action === "generate"
       ? ((prompt.trim() || hasFirstFrame || isReferenceMode) && (!isReferenceMode || prompt.trim()) && validDuration(duration) && !(hasFirstFrame && isReferenceMode))
-      : prompt.trim() && (sourceVideoURL.trim() || sourceVideoFileID) && (action !== "extend" || (Number(extendDuration) >= 2 && Number(extendDuration) <= 10))));
+      : prompt.trim() && (sourceVideoURL.trim() || sourceVideoFileID)));
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -1555,7 +1565,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                 </>
               ) : null}
               {action === "extend" ? (
-                <CompactSelect value={extendDuration} options={videoExtendDurations} onChange={setExtendDuration} ariaLabel={t("creativeConsole.extendDuration")} suffix="s" icon={<Clock3 />} />
+                <CompactSelect value={selectedExtendDuration} options={extendDurations} onChange={setExtendDuration} ariaLabel={t("creativeConsole.extendDuration")} suffix="s" icon={<Clock3 />} />
               ) : null}
             </div>
             <Button type="submit" size="icon" aria-label={submitLabel} disabled={!canSubmit}>
