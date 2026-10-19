@@ -189,6 +189,7 @@ const endpoints: Record<string, EndpointDefinition> = {
       { name: "aspect_ratio", descriptionKey: "docs.reference.fieldAspectRatio" },
       { name: "resolution", descriptionKey: "docs.reference.fieldVideoResolution" },
       { name: "image", descriptionKey: "docs.reference.fieldVideoImage" },
+      { name: "last_frame", descriptionKey: "docs.reference.fieldVideoLastFrame" },
       { name: "reference_images", descriptionKey: "docs.reference.fieldReferenceImages" },
       { name: "reference_audios", descriptionKey: "docs.reference.fieldReferenceAudios" },
     ],

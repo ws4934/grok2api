@@ -63,12 +63,12 @@ func (s *Service) validateVideoInputReferences(ctx context.Context, references [
 	return nil
 }
 
-func (s *Service) resolveVideoInputParts(ctx context.Context, inputJSON string) (string, []string, error) {
-	imageURL, referenceURLs := decodeVideoInputParts(inputJSON)
-	all := videoInputReferences(imageURL, referenceURLs)
+func (s *Service) resolveVideoInputParts(ctx context.Context, inputJSON string) (string, string, []string, error) {
+	imageURL, lastFrameURL, referenceURLs, _, _ := decodeVideoInputDetailed(inputJSON)
+	all := videoInputReferences(imageURL, lastFrameURL, referenceURLs)
 	resolved, err := s.resolveVideoInputReferences(ctx, all, "image")
 	if err != nil {
-		return "", nil, err
+		return "", "", nil, err
 	}
 	// Map resolved URLs back while preserving empty/non-empty slots by original order.
 	next := 0
@@ -85,13 +85,14 @@ func (s *Service) resolveVideoInputParts(ctx context.Context, inputJSON string) 
 		return value
 	}
 	outImage := take(imageURL)
+	outLastFrame := take(lastFrameURL)
 	outRefs := make([]string, 0, len(referenceURLs))
 	for _, raw := range referenceURLs {
 		if value := take(raw); value != "" {
 			outRefs = append(outRefs, value)
 		}
 	}
-	return outImage, outRefs, nil
+	return outImage, outLastFrame, outRefs, nil
 }
 
 func (s *Service) resolveVideoInputReferences(ctx context.Context, references []string, expectedKind string) ([]string, error) {
@@ -156,10 +157,10 @@ func addVideoReferenceBytes(total *int64, referenceBytes int64) bool {
 }
 
 func encodeVideoInput(imageURL string, referenceURLs []string) (string, error) {
-	return encodeVideoInputFull(provider.VideoOperationGenerate, imageURL, referenceURLs, nil, "")
+	return encodeVideoInputFull(provider.VideoOperationGenerate, imageURL, "", referenceURLs, nil, "")
 }
 
-func encodeVideoInputFull(operation provider.VideoOperation, imageURL string, referenceURLs []string, referenceAudios []string, videoURL string) (string, error) {
+func encodeVideoInputFull(operation provider.VideoOperation, imageURL, lastFrameURL string, referenceURLs []string, referenceAudios []string, videoURL string) (string, error) {
 	payload := map[string]any{}
 	if operation == "" {
 		operation = provider.VideoOperationGenerate
@@ -169,6 +170,9 @@ func encodeVideoInputFull(operation provider.VideoOperation, imageURL string, re
 	}
 	if value := strings.TrimSpace(imageURL); value != "" {
 		payload["image_url"] = value
+	}
+	if value := strings.TrimSpace(lastFrameURL); value != "" {
+		payload["last_frame_url"] = value
 	}
 	refs := make([]string, 0, len(referenceURLs))
 	for _, raw := range referenceURLs {
@@ -188,7 +192,7 @@ func encodeVideoInputFull(operation provider.VideoOperation, imageURL string, re
 	}
 	// Keep a combined image_urls field for older readers/tools that only
 	// understand the pre-split shape. New workers prefer image_url/reference_urls.
-	combined := videoInputReferences(imageURL, referenceURLs)
+	combined := videoInputReferences(imageURL, "", referenceURLs)
 	if len(combined) > 0 {
 		payload["image_urls"] = combined
 	}
@@ -202,29 +206,23 @@ func encodeVideoInputFull(operation provider.VideoOperation, imageURL string, re
 	return string(data), nil
 }
 
+// decodeVideoInput 返回任务引用的全部输入（首帧、尾帧、参考图、视频），用于占用
+// 物化名额与任务结束后回收临时输入。
 func decodeVideoInput(value string) []string {
-	imageURL, refs, videoURL := decodeVideoInputFull(value)
-	values := videoInputReferences(imageURL, refs)
+	imageURL, lastFrameURL, refs, _, videoURL := decodeVideoInputDetailed(value)
+	values := videoInputReferences(imageURL, lastFrameURL, refs)
 	if v := strings.TrimSpace(videoURL); v != "" {
 		values = append(values, v)
 	}
 	return values
 }
 
-func decodeVideoInputParts(value string) (string, []string) {
-	imageURL, refs, _ := decodeVideoInputFull(value)
-	return imageURL, refs
-}
-
-func decodeVideoInputFull(value string) (string, []string, string) {
-	imageURL, refs, _, videoURL := decodeVideoInputDetailed(value)
-	return imageURL, refs, videoURL
-}
-
-func decodeVideoInputDetailed(value string) (string, []string, []string, string) {
+// decodeVideoInputDetailed 返回 首帧、尾帧、参考图、参考音频、视频。
+func decodeVideoInputDetailed(value string) (string, string, []string, []string, string) {
 	var input struct {
 		Operation       string   `json:"operation"`
 		ImageURL        string   `json:"image_url"`
+		LastFrameURL    string   `json:"last_frame_url"`
 		ReferenceURLs   []string `json:"reference_urls"`
 		ReferenceAudios []string `json:"reference_audios"`
 		ImageURLs       []string `json:"image_urls"`
@@ -240,7 +238,7 @@ func decodeVideoInputDetailed(value string) (string, []string, []string, string)
 				refs = append(refs, v)
 			}
 		}
-		return strings.TrimSpace(input.ImageURL), refs, audios, videoURL
+		return strings.TrimSpace(input.ImageURL), strings.TrimSpace(input.LastFrameURL), refs, audios, videoURL
 	}
 	// Legacy jobs stored a flat image_urls list. Preserve historical mapping:
 	// one URL was treated as the first-frame image; multiple URLs were references.
@@ -252,11 +250,11 @@ func decodeVideoInputDetailed(value string) (string, []string, []string, string)
 	}
 	switch len(legacy) {
 	case 0:
-		return "", nil, nil, ""
+		return "", "", nil, nil, ""
 	case 1:
-		return legacy[0], nil, nil, ""
+		return legacy[0], "", nil, nil, ""
 	default:
-		return "", legacy, nil, ""
+		return "", "", legacy, nil, ""
 	}
 }
 
@@ -275,26 +273,34 @@ func decodeVideoOperation(value string) provider.VideoOperation {
 	}
 }
 
-func (s *Service) resolveVideoJobInputs(ctx context.Context, operation provider.VideoOperation, inputJSON string) (string, []string, []string, string, error) {
-	_, _, referenceAudios, videoURL := decodeVideoInputDetailed(inputJSON)
-	resolvedImage, resolvedRefs, err := s.resolveVideoInputParts(ctx, inputJSON)
+// videoJobInputs 是任务执行时解析好的输入（file_id 已换成 data URI）。
+type videoJobInputs struct {
+	imageURL, lastFrameURL, videoURL string
+	referenceURLs, referenceAudios   []string
+}
+
+func (s *Service) resolveVideoJobInputs(ctx context.Context, operation provider.VideoOperation, inputJSON string) (videoJobInputs, error) {
+	_, _, _, referenceAudios, videoURL := decodeVideoInputDetailed(inputJSON)
+	resolvedImage, resolvedLastFrame, resolvedRefs, err := s.resolveVideoInputParts(ctx, inputJSON)
 	if err != nil {
-		return "", nil, nil, "", err
+		return videoJobInputs{}, err
 	}
+	inputs := videoJobInputs{imageURL: resolvedImage, lastFrameURL: resolvedLastFrame, referenceURLs: resolvedRefs, referenceAudios: referenceAudios}
 	if strings.TrimSpace(videoURL) == "" {
-		return resolvedImage, resolvedRefs, referenceAudios, "", nil
+		return inputs, nil
 	}
 	if operation == provider.VideoOperationGenerate {
-		return "", nil, nil, "", ErrVideoInputUnavailable
+		return videoJobInputs{}, ErrVideoInputUnavailable
 	}
 	resolvedVideos, err := s.resolveVideoInputReferences(ctx, []string{videoURL}, "video")
 	if err != nil {
-		return "", nil, nil, "", err
+		return videoJobInputs{}, err
 	}
 	if len(resolvedVideos) == 0 {
-		return "", nil, nil, "", ErrVideoInputUnavailable
+		return videoJobInputs{}, ErrVideoInputUnavailable
 	}
-	return resolvedImage, resolvedRefs, referenceAudios, resolvedVideos[0], nil
+	inputs.videoURL = resolvedVideos[0]
+	return inputs, nil
 }
 
 func validateVideoReferenceAudios(values []string) error {
@@ -319,10 +325,13 @@ func normalizeVideoReferenceAudios(values []string) []string {
 	return out
 }
 
-func videoInputReferences(imageURL string, referenceURLs []string) []string {
-	values := make([]string, 0, 1+len(referenceURLs))
-	if v := strings.TrimSpace(imageURL); v != "" {
-		values = append(values, v)
+// videoInputReferences 按 首帧、尾帧、参考图 的顺序列出图像输入（解析时按此顺序回填）。
+func videoInputReferences(imageURL, lastFrameURL string, referenceURLs []string) []string {
+	values := make([]string, 0, 2+len(referenceURLs))
+	for _, raw := range []string{imageURL, lastFrameURL} {
+		if v := strings.TrimSpace(raw); v != "" {
+			values = append(values, v)
+		}
 	}
 	for _, raw := range referenceURLs {
 		if v := strings.TrimSpace(raw); v != "" {

@@ -1937,3 +1937,27 @@ func TestEditAndExtendVideoRequestValidation(t *testing.T) {
 		t.Fatalf("extend bad duration status = %d body = %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestLastFrameRequestValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{maxBodyBytes: 1 << 20}
+	router := gin.New()
+	handler.Register(router.Group("/v1"))
+	post := func(path, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		return recorder
+	}
+	if rec := post("/v1/videos/generations", `{"model":"adobe/veo-3.1","prompt":"x","last_frame":{"url":"https://example.com/b.png"}}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "首帧") {
+		t.Fatalf("last frame without image status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := post("/v1/videos/edits", `{"model":"grok-imagine-video","prompt":"x","video":{"url":"https://example.com/v.mp4"},"last_frame":{"url":"https://example.com/b.png"}}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "last_frame") {
+		t.Fatalf("edit with last frame status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// 参数合法时进入鉴权（测试里没有 client key → 401）。
+	if rec := post("/v1/videos/generations", `{"model":"adobe/veo-3.1","prompt":"x","image":{"url":"https://example.com/a.png"},"last_frame":{"url":"https://example.com/b.png"}}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("valid first+last frame status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

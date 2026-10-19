@@ -979,11 +979,11 @@ func (s *Service) RetryMediaJob(ctx context.Context, id, idempotencyKey string) 
 			ResponseModel: job.Params.ResponseModel, ResponseBackground: job.Params.ResponseBackground, IdempotencyKey: idempotencyKey,
 		})
 	}
-	imageURL, referenceURLs, referenceAudios, videoURL := decodeVideoInputDetailed(inputJSON)
+	imageURL, lastFrameURL, referenceURLs, referenceAudios, videoURL := decodeVideoInputDetailed(inputJSON)
 	return s.CreateVideo(ctx, VideoInput{
 		RequestID: job.RequestID, ClientKey: key, PublicModel: job.Model, Operation: job.Operation, Prompt: job.Prompt,
-		Duration: job.Seconds, AspectRatio: job.Size, Resolution: job.Quality, ImageURL: imageURL, ReferenceURLs: referenceURLs,
-		ReferenceAudios: referenceAudios, VideoURL: videoURL, IdempotencyKey: idempotencyKey,
+		Duration: job.Seconds, AspectRatio: job.Size, Resolution: job.Quality, ImageURL: imageURL, LastFrameURL: lastFrameURL,
+		ReferenceURLs: referenceURLs, ReferenceAudios: referenceAudios, VideoURL: videoURL, IdempotencyKey: idempotencyKey,
 	})
 }
 

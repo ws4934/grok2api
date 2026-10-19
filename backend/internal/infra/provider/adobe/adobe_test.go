@@ -601,7 +601,7 @@ func TestOfficialConstraintsFromReview(t *testing.T) {
 	if usage, _ := mustVersion(t, "flux-1.1-pro").referenceUsage(); usage != "style" {
 		t.Errorf("flux-1.1-pro reference usage = %q, want style", usage)
 	}
-	if err := mustVersion(t, "veo-3.1-fast").checkVideoInputs(false, 1); err == nil {
+	if err := mustVersion(t, "veo-3.1-fast").checkVideoInputs(false, false, 1); err == nil {
 		t.Error("veo-3.1-fast accepted reference images")
 	}
 	if in := mustVersion(t, "veo-3.1").videoPlan("x", "9:16", "720p", 4, false, true); in.aspect != "16:9" || in.duration != 8 {
@@ -663,4 +663,20 @@ func TestImage4K(t *testing.T) {
 func intOf2(v any) int {
 	n, _ := v.(int)
 	return n
+}
+
+// 尾帧：frame 上限 ≥2 的模型才收，作为 order 2 的 frame 发送。
+func TestVideoLastFrame(t *testing.T) {
+	for slug, ok := range map[string]bool{"veo-3.1": true, "veo-3.1-lite": true, "kling-3.0": true, "seedance-2.0": true, "gemini-omni-flash": false, "runway-gen-4.5": false} {
+		if err := mustVersion(t, slug).checkVideoInputs(true, true, 0); (err == nil) != ok {
+			t.Errorf("%s last frame accepted = %v, want %v (%v)", slug, err == nil, ok, err)
+		}
+	}
+	veo := mustVersion(t, "veo-3.1")
+	in := veo.videoPlan("x", "16:9", "720p", 8, true, false)
+	in.frames = []string{"first", "last"}
+	refs, _ := veo.buildBody(in)["referenceBlobs"].([]any)
+	if len(refs) != 2 || get(refs[1].(map[string]any), "order") != 2 || get(refs[1].(map[string]any), "usage") != "frame" {
+		t.Fatalf("frames = %v", refs)
+	}
 }

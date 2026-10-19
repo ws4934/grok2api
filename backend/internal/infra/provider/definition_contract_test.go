@@ -1,6 +1,7 @@
 package provider_test
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -91,7 +92,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			capabilities: []modeldomain.Capability{modeldomain.CapabilityImage, modeldomain.CapabilityImageEdit, modeldomain.CapabilityVideo},
 			credential:   provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true},
 			conversation: provider.ConversationSurface{},
-			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true},
+			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true, VideoLastFrame: true},
 			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated},
 		},
 	}
@@ -139,5 +140,21 @@ func TestProviderDefinitionRejectsInconsistentMediaCapability(t *testing.T) {
 	}
 	if err := definition.Validate(); err == nil {
 		t.Fatal("inconsistent media declaration was accepted")
+	}
+}
+
+// 尾帧只交给声明了 Media.VideoLastFrame 的 Provider；其余渠道在注册表层直接拒绝。
+func TestRegistryRejectsLastFrameForProvidersWithoutSupport(t *testing.T) {
+	registry := provider.NewRegistry(
+		webprovider.NewAdapter(webprovider.Config{}, nil, nil, nil, nil),
+		adobeprovider.NewAdapter(adobeprovider.Config{}, nil, nil, nil, nil),
+	)
+	options := provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: "grok-imagine-video", HasImage: true, HasLastFrame: true, Duration: 6, Resolution: "720p"}
+	if err := registry.ValidateVideoRequest(account.ProviderWeb, options); !errors.Is(err, provider.ErrVideoParameterInvalid) {
+		t.Fatalf("web last frame err = %v", err)
+	}
+	options.UpstreamModel = "veo/3.1-generate"
+	if err := registry.ValidateVideoRequest(account.ProviderAdobe, options); err != nil {
+		t.Fatalf("adobe veo last frame err = %v", err)
 	}
 }

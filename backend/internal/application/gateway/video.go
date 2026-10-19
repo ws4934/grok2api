@@ -46,6 +46,8 @@ type VideoInput struct {
 	Resolution  string
 	// ImageURL is the optional first-frame image (official "image").
 	ImageURL string
+	// LastFrameURL is the optional last-frame image; it requires ImageURL.
+	LastFrameURL string
 	// ReferenceURLs are style/content references (official "reference_images").
 	ReferenceURLs []string
 	// ReferenceAudios are preset voice_ids for reference-to-video.
@@ -71,6 +73,10 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	}
 	if len(input.Prompt) > 100000 {
 		return media.Job{}, fmt.Errorf("prompt 过长")
+	}
+	hasLastFrame := strings.TrimSpace(input.LastFrameURL) != ""
+	if hasLastFrame && (operation != provider.VideoOperationGenerate || strings.TrimSpace(input.ImageURL) == "") {
+		return media.Job{}, fmt.Errorf("last_frame 只能用于视频生成，且必须同时提供 image（首帧）")
 	}
 	if operation == provider.VideoOperationGenerate {
 		hasImage := strings.TrimSpace(input.ImageURL) != ""
@@ -134,11 +140,11 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err != nil {
 		return media.Job{}, err
 	}
-	routes, err = s.routesForVideoParameters(routes, operation, input.Resolution, strings.TrimSpace(input.ImageURL) != "", len(input.ReferenceURLs), input.Duration)
+	routes, err = s.routesForVideoParameters(routes, operation, input.Resolution, strings.TrimSpace(input.ImageURL) != "", hasLastFrame, len(input.ReferenceURLs), input.Duration)
 	if err != nil {
 		return media.Job{}, err
 	}
-	allRefs := videoInputReferences(input.ImageURL, input.ReferenceURLs)
+	allRefs := videoInputReferences(input.ImageURL, input.LastFrameURL, input.ReferenceURLs)
 	if err := s.validateVideoInputReferences(ctx, allRefs, "image"); err != nil {
 		return media.Job{}, err
 	}
@@ -147,7 +153,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 			return media.Job{}, err
 		}
 	}
-	inputJSON, err := encodeVideoInputFull(operation, input.ImageURL, input.ReferenceURLs, input.ReferenceAudios, input.VideoURL)
+	inputJSON, err := encodeVideoInputFull(operation, input.ImageURL, input.LastFrameURL, input.ReferenceURLs, input.ReferenceAudios, input.VideoURL)
 	if err != nil {
 		return media.Job{}, err
 	}
@@ -219,14 +225,14 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 // Callers must first apply capability, client-key, and Provider eligibility:
 // the same public model may aggregate Console, Build, and Web routes with
 // different input contracts.
-func (s *Service) routesForVideoParameters(routes []model.Route, operation provider.VideoOperation, resolution string, hasImage bool, referenceCount, duration int) ([]model.Route, error) {
+func (s *Service) routesForVideoParameters(routes []model.Route, operation provider.VideoOperation, resolution string, hasImage, hasLastFrame bool, referenceCount, duration int) ([]model.Route, error) {
 	if len(routes) == 0 {
 		return routes, nil
 	}
 	compatible := make([]model.Route, 0, len(routes))
 	var firstErr error
 	for _, candidate := range routes {
-		if err := s.validateVideoRouteParameters(candidate.Provider, operation, candidate.UpstreamModel, resolution, hasImage, referenceCount, duration); err != nil {
+		if err := s.validateVideoRouteParameters(candidate.Provider, operation, candidate.UpstreamModel, resolution, hasImage, hasLastFrame, referenceCount, duration); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -244,10 +250,10 @@ func (s *Service) routesForVideoParameters(routes []model.Route, operation provi
 // the request. /v1/videos/generations is asynchronous, so a request the
 // upstream must fail is rejected here instead of as a failed job; the adapter
 // keeps the same checks at its outbound boundary.
-func (s *Service) validateVideoRouteParameters(providerValue account.Provider, operation provider.VideoOperation, upstreamModel, resolution string, hasImage bool, referenceCount, duration int) error {
+func (s *Service) validateVideoRouteParameters(providerValue account.Provider, operation provider.VideoOperation, upstreamModel, resolution string, hasImage, hasLastFrame bool, referenceCount, duration int) error {
 	return s.providers.ValidateVideoRequest(providerValue, provider.VideoRequestOptions{
 		Operation: operation, UpstreamModel: upstreamModel, Resolution: resolution,
-		HasImage: hasImage, ReferenceImages: referenceCount, Duration: duration,
+		HasImage: hasImage, HasLastFrame: hasLastFrame, ReferenceImages: referenceCount, Duration: duration,
 	})
 }
 

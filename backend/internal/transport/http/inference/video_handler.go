@@ -36,6 +36,7 @@ type videoGenerationRequest struct {
 	AspectRatio     string                 `json:"aspect_ratio"`
 	Resolution      string                 `json:"resolution"`
 	Image           *videoGenerationImage  `json:"image"`
+	LastFrame       *videoGenerationImage  `json:"last_frame"`
 	ReferenceImages []videoGenerationImage `json:"reference_images"`
 	ReferenceAudios []videoGenerationAudio `json:"reference_audios"`
 	Video           *videoGenerationImage  `json:"video"`
@@ -107,6 +108,7 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 	aspectRatio := ""
 	resolution := ""
 	imageURL := ""
+	lastFrameURL := ""
 	referenceURLs := []string{}
 	referenceAudios := []string{}
 	videoURL := ""
@@ -140,6 +142,17 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 				return
 			}
 			imageURL = value
+		}
+		if request.LastFrame != nil {
+			if request.Image == nil {
+				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "last_frame（尾帧）必须同时提供 image（首帧）")
+				return
+			}
+			value, ok := parseVideoImage(*request.LastFrame, "last_frame")
+			if !ok {
+				return
+			}
+			lastFrameURL = value
 		}
 		referenceURLs = make([]string, 0, len(request.ReferenceImages))
 		for _, input := range request.ReferenceImages {
@@ -203,8 +216,8 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 			return
 		}
 		videoURL = value
-		if request.Image != nil || len(request.ReferenceImages) > 0 || len(request.ReferenceAudios) > 0 {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"不支持 image、reference_images 或 reference_audios")
+		if request.Image != nil || request.LastFrame != nil || len(request.ReferenceImages) > 0 || len(request.ReferenceAudios) > 0 {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"不支持 image、last_frame、reference_images 或 reference_audios")
 			return
 		}
 		if strings.TrimSpace(request.AspectRatio) != "" || strings.TrimSpace(request.Resolution) != "" {
@@ -252,7 +265,7 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 		RequestID: requestID, ClientKey: clientKey, PublicModel: model,
 		Operation: op,
 		Prompt:    prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
-		ImageURL: imageURL, ReferenceURLs: referenceURLs, ReferenceAudios: referenceAudios, VideoURL: videoURL,
+		ImageURL: imageURL, LastFrameURL: lastFrameURL, ReferenceURLs: referenceURLs, ReferenceAudios: referenceAudios, VideoURL: videoURL,
 	})
 	if err != nil {
 		writeGatewayError(c, err)

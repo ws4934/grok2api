@@ -73,6 +73,9 @@ type MediaSurface struct {
 	// SingleImagePerRequest: one upstream request draws one image, so the
 	// gateway spreads a multi-image request over accounts.
 	SingleImagePerRequest bool
+	// VideoLastFrame: video generation accepts a last-frame image next to the
+	// first frame; the registry rejects last frames for every other provider.
+	VideoLastFrame bool
 }
 
 // CredentialSurface 描述号池凭据的接入和维护方式。

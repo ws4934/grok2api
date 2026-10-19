@@ -133,6 +133,7 @@ type VideoRequestOptions struct {
 	UpstreamModel   string
 	Resolution      string
 	HasImage        bool
+	HasLastFrame    bool
 	ReferenceImages int
 	Duration        int
 }
@@ -183,6 +184,8 @@ type VideoRequest struct {
 	Resolution  string
 	// ImageURL is the optional first-frame image (official "image" field).
 	ImageURL string
+	// LastFrameURL is the optional last-frame image; it requires ImageURL.
+	LastFrameURL string
 	// ReferenceURLs are style/content references (official "reference_images").
 	// A single reference must stay in reference_images and must not be coerced to image.
 	// Official docs forbid combining image with reference_images.
@@ -244,8 +247,14 @@ type VideoContentDownloader interface {
 }
 
 // ValidateVideoRequest applies the provider's video validation; providers
-// without a validator accept generation only.
+// without a validator accept generation only. A last frame needs a provider
+// that declares Media.VideoLastFrame.
 func (r *Registry) ValidateVideoRequest(value account.Provider, options VideoRequestOptions) error {
+	if options.HasLastFrame {
+		if definition, ok := r.Definition(value); !ok || !definition.Media.VideoLastFrame {
+			return fmt.Errorf("%w: 该模型不支持 last_frame", ErrVideoParameterInvalid)
+		}
+	}
 	if validator, ok := adapterAs[VideoRequestValidator](r, value); ok {
 		return validator.ValidateVideoRequest(options)
 	}

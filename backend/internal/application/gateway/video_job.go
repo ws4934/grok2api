@@ -43,7 +43,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	if operation == "" {
 		operation = decodeVideoOperation(job.InputJSON)
 	}
-	imageURL, referenceURLs, referenceAudios, videoURL, err := s.resolveVideoJobInputs(ctx, operation, job.InputJSON)
+	inputs, err := s.resolveVideoJobInputs(ctx, operation, job.InputJSON)
 	if err != nil {
 		s.failVideoJob(parent, job, "input_unavailable", err, 0, nil)
 		return
@@ -167,7 +167,8 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			Credential: lease.Credential, Billing: lease.Billing, JobID: job.ID, Model: route.UpstreamModel,
 			Operation: operation,
 			Prompt:    job.Prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
-			ImageURL: imageURL, ReferenceURLs: referenceURLs, ReferenceAudios: referenceAudios, VideoURL: videoURL,
+			ImageURL: inputs.imageURL, LastFrameURL: inputs.lastFrameURL, ReferenceURLs: inputs.referenceURLs,
+			ReferenceAudios: inputs.referenceAudios, VideoURL: inputs.videoURL,
 			Checkpoint: job.Checkpoint,
 			SaveCheckpoint: func(value string) error {
 				job.Checkpoint, job.Submitted, job.UpdatedAt = value, value != "", time.Now().UTC()
@@ -299,7 +300,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	defer lease.Release()
 
 	// Provider 已消费请求体，尽早释放 Base64 物化名额和大字符串。
-	referenceURLs = nil
+	inputs = videoJobInputs{}
 	releaseInputSlot()
 
 	now := time.Now().UTC()
