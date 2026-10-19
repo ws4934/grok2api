@@ -3,6 +3,7 @@ package relational
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -12,17 +13,15 @@ import (
 	"gorm.io/gorm"
 )
 
-type degradeTotalsRow struct {
-	Hits         int64   `gorm:"column:hits"`
-	Accounts     int64   `gorm:"column:accounts"`
-	StillEnabled int64   `gorm:"column:still_enabled"`
-	Disabled     int64   `gorm:"column:disabled"`
-	Deleted      int64   `gorm:"column:deleted"`
-	Hard         int64   `gorm:"column:hard"`
-	Soft         int64   `gorm:"column:soft"`
-	Burst        int64   `gorm:"column:burst"`
-	Thinking     int64   `gorm:"column:thinking"`
-	MaxTPS       float64 `gorm:"column:max_tps"`
+// degradeRow 是一次读出的分类行，总数、节点和时间桶都在 Go 里由它汇总。
+type degradeRow struct {
+	BucketIndex int     `gorm:"column:bucket_index"`
+	AccountID   *uint64 `gorm:"column:account_id"`
+	NodeName    string  `gorm:"column:egress_node_name"`
+	TPS         float64 `gorm:"column:tps"`
+	Class       string  `gorm:"column:degrade_class"`
+	Found       bool    `gorm:"column:found"`
+	Enabled     bool    `gorm:"column:enabled"`
 }
 
 type degradeAccountRow struct {
@@ -39,6 +38,7 @@ type degradeAccountRow struct {
 	Enabled            bool             `gorm:"column:enabled"`
 	Found              bool             `gorm:"column:found"`
 	BuildBotFlagSource int              `gorm:"column:build_bot_flag_source"`
+	TotalAccounts      int64            `gorm:"column:total_accounts"`
 }
 
 type degradeAccountLeaseRow struct {
@@ -88,24 +88,6 @@ func parseDegradeTimestamp(input any) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("invalid degrade timestamp")
 }
 
-type degradeNodeRow struct {
-	Name     string  `gorm:"column:name"`
-	Hits     int64   `gorm:"column:hits"`
-	Accounts int64   `gorm:"column:accounts"`
-	MaxTPS   float64 `gorm:"column:max_tps"`
-}
-
-type degradeBucketRow struct {
-	Index  int   `gorm:"column:bucket_index"`
-	Count  int64 `gorm:"column:count"`
-	Severe int64 `gorm:"column:severe"`
-}
-
-type degradeAccountNodeRow struct {
-	AccountID uint64 `gorm:"column:account_id"`
-	Name      string `gorm:"column:name"`
-}
-
 type degradeEventRow struct {
 	ID             uint64    `gorm:"column:id"`
 	RequestID      string    `gorm:"column:request_id"`
@@ -133,42 +115,111 @@ func (r *AuditRepository) SummarizeDegrade(ctx context.Context, input repository
 	var result repository.DegradeSummaryResult
 	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		classified := r.degradeClassifiedQuery(tx, input)
-		var totals degradeTotalsRow
+		// 分类行只读一次；按节点名排序，节点顺序因此沿用数据库的排序规则。
+		bucketSQL, bucketArgs := "-1", []any(nil)
+		if len(input.Buckets) > 0 {
+			bucketSQL, bucketArgs = degradeBucketCase(input.Buckets)
+		}
+		var rows []degradeRow
 		if err := tx.Table("(?) AS d", classified).
-			Select(`COUNT(*) AS hits,
-				COUNT(DISTINCT d.account_id) AS accounts,
-				COUNT(DISTINCT CASE WHEN p.id IS NOT NULL AND p.enabled = TRUE THEN d.account_id END) AS still_enabled,
-				COUNT(DISTINCT CASE WHEN p.id IS NOT NULL AND p.enabled = FALSE THEN d.account_id END) AS disabled,
-				COUNT(DISTINCT CASE WHEN p.id IS NULL THEN d.account_id END) AS deleted,
-				COALESCE(SUM(CASE WHEN d.degrade_class = 'hard_tps' THEN 1 ELSE 0 END), 0) AS hard,
-				COALESCE(SUM(CASE WHEN d.degrade_class = 'soft_tps' THEN 1 ELSE 0 END), 0) AS soft,
-				COALESCE(SUM(CASE WHEN d.degrade_class = 'buffered_burst' THEN 1 ELSE 0 END), 0) AS burst,
-				COALESCE(SUM(CASE WHEN d.degrade_class = 'missing_thinking' THEN 1 ELSE 0 END), 0) AS thinking,
-				COALESCE(MAX(d.tps), 0) AS max_tps`).
+			Select(bucketSQL+" AS bucket_index, d.account_id, d.egress_node_name, d.tps, d.degrade_class, p.id IS NOT NULL AS found, COALESCE(p.enabled, FALSE) AS enabled", bucketArgs...).
 			Joins("LEFT JOIN provider_accounts p ON p.id = d.account_id").
-			Scan(&totals).Error; err != nil {
+			Order("COALESCE(NULLIF(d.egress_node_name, ''), '?')").
+			Scan(&rows).Error; err != nil {
 			return err
 		}
-		result.Totals = repository.DegradeTotals{
-			Hits: totals.Hits, Accounts: totals.Accounts, StillEnabled: totals.StillEnabled,
-			Disabled: totals.Disabled, Deleted: totals.Deleted, Hard: totals.Hard, Soft: totals.Soft,
-			Burst: totals.Burst, Thinking: totals.Thinking, MaxTPS: totals.MaxTPS,
+		accountStates := make(map[uint64]degradeRow)
+		nodeIndexes := make(map[string]int)
+		var nodeAccounts []map[uint64]struct{}
+		result.Nodes = make([]repository.DegradeNode, 0)
+		var bucketCounts []repository.DegradeBucket
+		if len(input.Buckets) > 0 {
+			bucketCounts = make([]repository.DegradeBucket, len(input.Buckets))
+		}
+		totals := &result.Totals
+		for _, row := range rows {
+			totals.Hits++
+			switch row.Class {
+			case audit.DegradeClassHard:
+				totals.Hard++
+			case audit.DegradeClassSoft:
+				totals.Soft++
+			case audit.DegradeClassBurst:
+				totals.Burst++
+			case audit.DegradeClassThinking:
+				totals.Thinking++
+			}
+			totals.MaxTPS = max(totals.MaxTPS, row.TPS)
+			name := degradeNodeName(row.NodeName)
+			index, ok := nodeIndexes[name]
+			if !ok {
+				index = len(result.Nodes)
+				nodeIndexes[name] = index
+				result.Nodes = append(result.Nodes, repository.DegradeNode{Name: name})
+				nodeAccounts = append(nodeAccounts, make(map[uint64]struct{}))
+			}
+			result.Nodes[index].Hits++
+			result.Nodes[index].MaxTPS = max(result.Nodes[index].MaxTPS, row.TPS)
+			if row.AccountID != nil {
+				accountStates[*row.AccountID] = row
+				nodeAccounts[index][*row.AccountID] = struct{}{}
+			}
+			if row.BucketIndex >= 0 && row.BucketIndex < len(bucketCounts) {
+				bucketCounts[row.BucketIndex].Count++
+				if row.Class == audit.DegradeClassHard || row.Class == audit.DegradeClassBurst || row.Class == audit.DegradeClassThinking {
+					bucketCounts[row.BucketIndex].Severe++
+				}
+			}
+		}
+		totals.Accounts = int64(len(accountStates))
+		for _, row := range accountStates {
+			switch {
+			case !row.Found:
+				totals.Deleted++
+			case row.Enabled:
+				totals.StillEnabled++
+			default:
+				totals.Disabled++
+			}
+		}
+		for index := range result.Nodes {
+			result.Nodes[index].Accounts = int64(len(nodeAccounts[index]))
+		}
+		sort.SliceStable(result.Nodes, func(left, right int) bool { return result.Nodes[left].Hits > result.Nodes[right].Hits })
+		if bucketCounts != nil {
+			result.Buckets = make([]repository.DegradeBucket, 0, len(bucketCounts))
+			for index, bucket := range bucketCounts {
+				if bucket.Count > 0 {
+					bucket.Index = index
+					result.Buckets = append(result.Buckets, bucket)
+				}
+			}
 		}
 
-		accountQuery := r.degradeAccountAggregate(tx, classified, input)
-		if err := tx.Table("(?) AS filtered_accounts", accountQuery).Count(&result.AccountTotal).Error; err != nil {
-			return err
+		// 账号列表的搜索和筛选留在 SQL 里；总数用窗口函数随分页一起取，只有页码越界时才另行计数。
+		var accountRows []degradeAccountRow
+		accountPage := func(offset int) error {
+			return r.degradeAccountAggregate(tx, classified, input).Order("hits DESC, max_tps DESC, id ASC").
+				Offset(offset).Limit(input.AccountLimit).Scan(&accountRows).Error
 		}
 		accountOffset := input.AccountOffset
-		if result.AccountTotal > 0 && int64(accountOffset) >= result.AccountTotal {
-			accountOffset = int((result.AccountTotal-1)/int64(input.AccountLimit)) * input.AccountLimit
-		}
-		result.AccountOffset = accountOffset
-		var accountRows []degradeAccountRow
-		if err := accountQuery.Order("hits DESC, max_tps DESC, id ASC").
-			Offset(accountOffset).Limit(input.AccountLimit).Scan(&accountRows).Error; err != nil {
+		if err := accountPage(accountOffset); err != nil {
 			return err
 		}
+		if len(accountRows) > 0 {
+			result.AccountTotal = accountRows[0].TotalAccounts
+		} else if accountOffset > 0 {
+			if err := tx.Table("(?) AS filtered_accounts", r.degradeAccountAggregate(tx, classified, input)).Count(&result.AccountTotal).Error; err != nil {
+				return err
+			}
+			if result.AccountTotal > 0 {
+				accountOffset = int((result.AccountTotal-1)/int64(input.AccountLimit)) * input.AccountLimit
+				if err := accountPage(accountOffset); err != nil {
+					return err
+				}
+			}
+		}
+		result.AccountOffset = accountOffset
 		accountIDs := make([]uint64, 0, len(accountRows))
 		accountsByID := make(map[uint64]*repository.DegradeAccount, len(accountRows))
 		result.Accounts = make([]repository.DegradeAccount, 0, len(accountRows))
@@ -195,45 +246,17 @@ func (r *AuditRepository) SummarizeDegrade(ctx context.Context, input repository
 					account.LeaseCooldownUntil = &cooldownUntil
 				}
 			}
-
-			var nodeRows []degradeAccountNodeRow
-			if err := tx.Table("(?) AS d", classified).
-				Select("d.account_id, COALESCE(NULLIF(d.egress_node_name, ''), '?') AS name").
-				Where("d.account_id IN ?", accountIDs).
-				Group("d.account_id, COALESCE(NULLIF(d.egress_node_name, ''), '?')").
-				Order("d.account_id ASC, name ASC").Scan(&nodeRows).Error; err != nil {
-				return err
-			}
-			for _, row := range nodeRows {
-				if account := accountsByID[row.AccountID]; account != nil {
-					account.Nodes = append(account.Nodes, row.Name)
+			// 行已按节点名排序，同一账号的同名节点相邻出现。
+			for _, row := range rows {
+				if row.AccountID == nil {
+					continue
 				}
-			}
-		}
-
-		var nodeRows []degradeNodeRow
-		if err := tx.Table("(?) AS d", classified).
-			Select("COALESCE(NULLIF(d.egress_node_name, ''), '?') AS name, COUNT(*) AS hits, COUNT(DISTINCT d.account_id) AS accounts, COALESCE(MAX(d.tps), 0) AS max_tps").
-			Group("COALESCE(NULLIF(d.egress_node_name, ''), '?')").Order("hits DESC, name ASC").Scan(&nodeRows).Error; err != nil {
-			return err
-		}
-		result.Nodes = make([]repository.DegradeNode, 0, len(nodeRows))
-		for _, row := range nodeRows {
-			result.Nodes = append(result.Nodes, repository.DegradeNode{Name: row.Name, Hits: row.Hits, Accounts: row.Accounts, MaxTPS: row.MaxTPS})
-		}
-
-		if len(input.Buckets) > 0 {
-			caseSQL, caseArgs := degradeBucketCase(input.Buckets)
-			bucketed := tx.Table("(?) AS d", classified).Select(caseSQL+" AS bucket_index, d.degrade_class", caseArgs...)
-			var bucketRows []degradeBucketRow
-			if err := tx.Table("(?) AS b", bucketed).
-				Select("b.bucket_index, COUNT(*) AS count, COALESCE(SUM(CASE WHEN b.degrade_class IN ('hard_tps', 'buffered_burst', 'missing_thinking') THEN 1 ELSE 0 END), 0) AS severe").
-				Where("b.bucket_index >= 0").Group("b.bucket_index").Order("b.bucket_index ASC").Scan(&bucketRows).Error; err != nil {
-				return err
-			}
-			result.Buckets = make([]repository.DegradeBucket, 0, len(bucketRows))
-			for _, row := range bucketRows {
-				result.Buckets = append(result.Buckets, repository.DegradeBucket{Index: row.Index, Count: row.Count, Severe: row.Severe})
+				if account := accountsByID[*row.AccountID]; account != nil {
+					name := degradeNodeName(row.NodeName)
+					if count := len(account.Nodes); count == 0 || account.Nodes[count-1] != name {
+						account.Nodes = append(account.Nodes, name)
+					}
+				}
 			}
 		}
 
@@ -254,6 +277,13 @@ func (r *AuditRepository) SummarizeDegrade(ctx context.Context, input repository
 		return nil
 	}, reportTxOptions(r.db.dialect))
 	return result, err
+}
+
+func degradeNodeName(name string) string {
+	if name == "" {
+		return "?"
+	}
+	return name
 }
 
 func (r *AuditRepository) degradeClassifiedQuery(tx *gorm.DB, input repository.DegradeSummaryQuery) *gorm.DB {
@@ -304,7 +334,8 @@ func (r *AuditRepository) degradeAccountAggregate(tx *gorm.DB, classified *gorm.
 			MAX(d.created_at) AS last_seen,
 			COALESCE(p.enabled, FALSE) AS enabled,
 			CASE WHEN p.id IS NULL THEN FALSE ELSE TRUE END AS found,
-			COALESCE(c.build_bot_flag_source, 0) AS build_bot_flag_source`).
+			COALESCE(c.build_bot_flag_source, 0) AS build_bot_flag_source,
+			COUNT(*) OVER () AS total_accounts`).
 		Joins("LEFT JOIN provider_accounts p ON p.id = d.account_id").
 		Joins("LEFT JOIN account_credentials c ON c.account_id = d.account_id").
 		Where("d.account_id IS NOT NULL").

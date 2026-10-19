@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -117,12 +118,31 @@ type degradeBucketSpec struct {
 }
 
 func (s *Service) DegradeSummary(ctx context.Context, window string, thresholds DegradeThresholds, filter DegradeAccountFilter) (DegradeSummary, error) {
+	return s.degradeSummary(ctx, window, thresholds, filter, true)
+}
+
+// DegradeSummaryFresh 绕过短缓存，供管理员显式刷新或停用账号后读取最新数据。
+func (s *Service) DegradeSummaryFresh(ctx context.Context, window string, thresholds DegradeThresholds, filter DegradeAccountFilter) (DegradeSummary, error) {
+	return s.degradeSummary(ctx, window, thresholds, filter, false)
+}
+
+func (s *Service) degradeSummary(ctx context.Context, window string, thresholds DegradeThresholds, filter DegradeAccountFilter, useCache bool) (DegradeSummary, error) {
 	window, start, end, err := resolveDegradeWindow(window, s.now().UTC())
 	if err != nil {
 		return DegradeSummary{}, err
 	}
 	thresholds = normalizeDegradeThresholds(thresholds)
 	filter = normalizeDegradeAccountFilter(filter)
+	if !useCache {
+		return s.loadDegradeSummary(ctx, window, start, end, thresholds, filter)
+	}
+	cacheKey := fmt.Sprintf("%s\x00%#v\x00%#v", window, thresholds, filter)
+	return s.degradeCache.Load(ctx, cacheKey, end, func() (DegradeSummary, error) {
+		return s.loadDegradeSummary(ctx, window, start, end, thresholds, filter)
+	})
+}
+
+func (s *Service) loadDegradeSummary(ctx context.Context, window string, start, end time.Time, thresholds DegradeThresholds, filter DegradeAccountFilter) (DegradeSummary, error) {
 	bucketSpecs := degradeBucketSpecs(window, start, end)
 	bucketRanges := make([]repository.DegradeBucketRange, 0, len(bucketSpecs))
 	for _, spec := range bucketSpecs {

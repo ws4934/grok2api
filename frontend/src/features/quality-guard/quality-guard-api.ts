@@ -310,6 +310,7 @@ export function getDegradeAccounts(input: {
   minHits?: number;
   page: number;
   pageSize: number;
+  refresh?: boolean;
 }): Promise<DegradeSummaryDTO> {
   const query = new URLSearchParams({ window: input.window, page: String(input.page), pageSize: String(input.pageSize) });
   if (input.softTPS) query.set("softTPS", String(input.softTPS));
@@ -320,5 +321,6 @@ export function getDegradeAccounts(input: {
   if (input.status) query.set("status", input.status);
   if (input.class) query.set("class", input.class);
   if (input.minHits && input.minHits > 1) query.set("minHits", String(input.minHits));
+  if (input.refresh) query.set("refresh", "1");
   return apiRequest(`/api/admin/v1/request-audits/degrade-accounts?${query}`, {}, decodeDegradeSummary);
 }

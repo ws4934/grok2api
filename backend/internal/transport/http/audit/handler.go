@@ -387,7 +387,11 @@ func (h *Handler) degradeAccounts(c *gin.Context) {
 	minHits, _ := strconv.Atoi(c.Query("minHits"))
 	page, _ := strconv.Atoi(c.Query("page"))
 	pageSize, _ := strconv.Atoi(c.Query("pageSize"))
-	result, err := h.service.DegradeSummary(
+	load := h.service.DegradeSummary
+	if c.Query("refresh") == "1" {
+		load = h.service.DegradeSummaryFresh
+	}
+	result, err := load(
 		c.Request.Context(), c.DefaultQuery("window", "24h"),
 		auditapp.DegradeThresholds{SoftTPS: softTPS, HardTPS: hardTPS, MinGenMS: minGenMS, FailClosed: failClosed},
 		auditapp.DegradeAccountFilter{

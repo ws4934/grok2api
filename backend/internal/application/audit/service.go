@@ -75,6 +75,7 @@ const (
 	auditWriteRetryMax       = 5 * time.Second
 	auditDefaultCommitDelay  = 5 * time.Millisecond
 	auditSummaryTTL          = 10 * time.Second
+	degradeSummaryTTL        = 15 * time.Second
 	requestMethodLimit       = 16
 	requestPathLimit         = 2048
 	requestHeaderNameLimit   = 256
@@ -110,6 +111,7 @@ type Service struct {
 	dropped              atomic.Uint64
 	now                  func() time.Time
 	summaryCache         *resultcache.Cache[string, SummaryResult]
+	degradeCache         *resultcache.Cache[string, DegradeSummary]
 	ledgerMu             sync.Mutex
 	ledgerConfig         LedgerConfig
 	ledgerFailures       int
@@ -132,6 +134,7 @@ func NewService(audits repository.AuditRepository, logger *slog.Logger, bufferSi
 		audits: audits, logger: logger, queue: make(chan auditWriteRequest, bufferSize),
 		configChanged: make(chan struct{}, 1), queueSpace: make(chan struct{}, bufferSize), stop: make(chan struct{}), done: make(chan struct{}),
 		now: time.Now, summaryCache: resultcache.New[string, SummaryResult](64, auditSummaryTTL),
+		degradeCache: resultcache.New[string, DegradeSummary](64, degradeSummaryTTL),
 		ledgerConfig: defaultLedgerConfig(),
 	}
 	service.UpdateConfig(batchSize, flushInterval)

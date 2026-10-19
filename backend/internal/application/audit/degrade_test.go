@@ -12,7 +12,36 @@ import (
 	auditdomain "github.com/chenyme/grok2api/backend/internal/domain/audit"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
+	"github.com/chenyme/grok2api/backend/internal/repository"
 )
+
+type degradeCountingRepository struct {
+	repository.AuditRepository
+	calls int
+}
+
+func (r *degradeCountingRepository) SummarizeDegrade(context.Context, repository.DegradeSummaryQuery) (repository.DegradeSummaryResult, error) {
+	r.calls++
+	return repository.DegradeSummaryResult{}, nil
+}
+
+func TestDegradeSummaryCachesUntilFreshRead(t *testing.T) {
+	repo := &degradeCountingRepository{}
+	service := NewService(repo, slog.Default(), 8, 4, time.Second)
+	service.now = func() time.Time { return time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC) }
+	ctx := context.Background()
+	for _, filter := range []DegradeAccountFilter{{}, {}, {Search: "other"}} {
+		if _, err := service.DegradeSummary(ctx, "24h", DegradeThresholds{}, filter); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := service.DegradeSummaryFresh(ctx, "24h", DegradeThresholds{}, DegradeAccountFilter{}); err != nil {
+		t.Fatal(err)
+	}
+	if repo.calls != 3 {
+		t.Fatalf("degrade calls = %d, want 3", repo.calls)
+	}
+}
 
 func TestDegradeSummaryClassifiesStreamingAnomalies(t *testing.T) {
 	ctx := context.Background()
@@ -193,6 +222,13 @@ func TestDegradeSummaryPaginatesAccountsInRepository(t *testing.T) {
 	}
 	if summary.AccountPage.Total != 3 || summary.AccountPage.HasMore || len(summary.Accounts) != 1 {
 		t.Fatalf("page=%#v accounts=%#v", summary.AccountPage, summary.Accounts)
+	}
+	summary, err = service.DegradeSummary(ctx, "1h", DegradeThresholds{}, DegradeAccountFilter{Page: 5, PageSize: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.AccountPage.Page != 2 || summary.AccountPage.Total != 3 || len(summary.Accounts) != 1 {
+		t.Fatalf("out-of-range page=%#v accounts=%#v", summary.AccountPage, summary.Accounts)
 	}
 }
 

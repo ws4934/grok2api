@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -543,6 +544,73 @@ func TestAuditRepositoryStreamFailureKeepsHTTPStatusAndFiltersAsOther(t *testing
 	}
 	if len(items) != 1 || items[0].RequestID != "healthy" {
 		t.Fatalf("success filter items = %#v", items)
+	}
+}
+
+// SummarizeDegrade aggregates the classified rows in Go; totals, node order
+// (hits, then name), per-account nodes, buckets and the clamped last page must
+// match the SQL aggregation they replaced.
+func TestSummarizeDegradeAggregatesClassifiedRows(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDatabase(t)
+	enabled := &accountModel{IdentityKey: testIdentityKey("degrade-enabled"), Provider: "grok_build", Name: "enabled", SourceKey: "degrade-enabled", Enabled: true, AuthStatus: "active", MaxConcurrent: 1}
+	disabled := &accountModel{IdentityKey: testIdentityKey("degrade-disabled"), Provider: "grok_build", Name: "disabled", SourceKey: "degrade-disabled", Enabled: false, AuthStatus: "active", MaxConcurrent: 1}
+	for _, value := range []*accountModel{enabled, disabled} {
+		if err := database.db.WithContext(ctx).Create(value).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	firstToken := int64(100)
+	record := func(accountID *uint64, node string, outputTokens int64, errorCode string, age time.Duration) audit.Record {
+		return audit.Record{RequestID: fmt.Sprintf("degrade-%s", age), ClientKeyID: 1, ModelRouteID: 1, Provider: "grok_build", AccountID: accountID, EgressNodeName: node,
+			StatusCode: 200, Streaming: true, OutputTokens: outputTokens, FirstTokenMS: &firstToken, DurationMS: 1100, ErrorCode: errorCode, CreatedAt: now.Add(-age)}
+	}
+	deleted := uint64(999)
+	hard, soft := int64(2000), int64(600) // 2000 and 600 tokens/s over a 1s generation window
+	records := []audit.Record{
+		record(&enabled.ID, "b", hard, "", 10*time.Minute),
+		record(&enabled.ID, "", hard, "", 20*time.Minute),
+		record(&enabled.ID, "?", soft, "", 70*time.Minute),
+		record(&disabled.ID, "a", soft, "", 80*time.Minute),
+		record(&disabled.ID, "b", soft, "", 90*time.Minute),
+		record(&deleted, "a", 10, audit.ErrorQualityDegraded, 100*time.Minute),
+		record(nil, "b", hard, "", 110*time.Minute),
+	}
+	if err := NewAuditRepository(database).CreateBatch(ctx, records); err != nil {
+		t.Fatal(err)
+	}
+	query := repositorypkg.DegradeSummaryQuery{
+		Start: now.Add(-2 * time.Hour), End: now, SoftTPS: 500, HardTPS: 1000, MinGenerationMS: 1000, MinOutputTokens: 32,
+		Buckets: []repositorypkg.DegradeBucketRange{{Start: now.Add(-2 * time.Hour), End: now.Add(-time.Hour)}, {Start: now.Add(-time.Hour), End: now}},
+	}
+	result, err := NewAuditRepository(database).SummarizeDegrade(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (repositorypkg.DegradeTotals{Hits: 7, Accounts: 3, StillEnabled: 1, Disabled: 1, Deleted: 1, Hard: 3, Soft: 3, Thinking: 1, MaxTPS: 2000}); result.Totals != want {
+		t.Fatalf("totals = %+v, want %+v", result.Totals, want)
+	}
+	if want := []repositorypkg.DegradeNode{{Name: "b", Hits: 3, Accounts: 2, MaxTPS: 2000}, {Name: "?", Hits: 2, Accounts: 1, MaxTPS: 2000}, {Name: "a", Hits: 2, Accounts: 2, MaxTPS: 600}}; !reflect.DeepEqual(result.Nodes, want) {
+		t.Fatalf("nodes = %+v, want %+v", result.Nodes, want)
+	}
+	if want := []repositorypkg.DegradeBucket{{Index: 0, Count: 5, Severe: 2}, {Index: 1, Count: 2, Severe: 2}}; !reflect.DeepEqual(result.Buckets, want) {
+		t.Fatalf("buckets = %+v, want %+v", result.Buckets, want)
+	}
+	nodes := make([][]string, 0, len(result.Accounts))
+	for _, account := range result.Accounts {
+		nodes = append(nodes, account.Nodes)
+	}
+	if result.AccountTotal != 3 || !reflect.DeepEqual(nodes, [][]string{{"?", "b"}, {"a", "b"}, {"a"}}) {
+		t.Fatalf("accounts = %+v (total %d)", result.Accounts, result.AccountTotal)
+	}
+	query.AccountOffset, query.AccountLimit = 10, 2
+	result, err = NewAuditRepository(database).SummarizeDegrade(ctx, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AccountOffset != 2 || result.AccountTotal != 3 || len(result.Accounts) != 1 || result.Accounts[0].ID != deleted {
+		t.Fatalf("clamped page = offset %d total %d accounts %+v", result.AccountOffset, result.AccountTotal, result.Accounts)
 	}
 }
 

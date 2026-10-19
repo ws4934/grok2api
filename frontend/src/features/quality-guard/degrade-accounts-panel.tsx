@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Gauge, PowerOff, RefreshCw, Search, Users } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 
@@ -32,16 +32,22 @@ export function DegradeAccountsPanel({ softTPS, hardTPS, failClosed, minGenMs }:
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const forceRefresh = useRef(false);
 
   const query = useQuery({
     queryKey: ["quality-guard-degrade-accounts", period, softTPS, hardTPS, failClosed, minGenMs, debouncedSearch, status, cls, hitsMin, page, pageSize],
     queryFn: () => getDegradeAccounts({
       window: period, softTPS, hardTPS, failClosed, minGenMs, search: debouncedSearch || undefined,
       status: status === "all" ? undefined : status, class: cls === "all" ? undefined : cls,
-      minHits: hitsMin, page, pageSize,
+      minHits: hitsMin, page, pageSize, refresh: forceRefresh.current,
     }),
     refetchInterval: 15_000,
   });
+  // The server caches this report briefly; explicit refreshes and mutes read past that cache.
+  const readFresh = (run: () => Promise<unknown>) => {
+    forceRefresh.current = true;
+    void run().finally(() => { forceRefresh.current = false; });
+  };
 
   const data = query.data;
   const rows = useMemo(() => data?.accounts ?? [], [data?.accounts]);
@@ -54,7 +60,7 @@ export function DegradeAccountsPanel({ softTPS, hardTPS, failClosed, minGenMs }:
     onMutate: () => toast.loading(t("qualityGuard.degrade.muting"), { id: MUTE_TOAST_ID }),
     onSuccess: (_, ids) => {
       setSelected(new Set());
-      void queryClient.invalidateQueries({ queryKey: ["quality-guard-degrade-accounts"] });
+      readFresh(() => queryClient.invalidateQueries({ queryKey: ["quality-guard-degrade-accounts"] }));
       void queryClient.invalidateQueries({ queryKey: ["accounts"] });
       toast.success(t("qualityGuard.degrade.muted", { count: ids.length }), { id: MUTE_TOAST_ID });
     },
@@ -115,7 +121,7 @@ export function DegradeAccountsPanel({ softTPS, hardTPS, failClosed, minGenMs }:
             }}>
               <PowerOff />{selectedRows.length ? t("qualityGuard.degrade.muteSelectedCount", { count: selectedRows.length }) : t("qualityGuard.degrade.muteSelected")}
             </Button>
-            <Button type="button" variant="ghost" size="icon" className="size-8" onClick={() => void query.refetch()} disabled={query.isFetching} aria-label={t("common.refresh")}>
+            <Button type="button" variant="ghost" size="icon" className="size-8" onClick={() => readFresh(() => query.refetch())} disabled={query.isFetching} aria-label={t("common.refresh")}>
               <RefreshCw className={cn("size-4", query.isFetching && "animate-spin")} />
             </Button>
           </div>
