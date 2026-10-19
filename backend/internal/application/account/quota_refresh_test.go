@@ -159,7 +159,7 @@ func TestQuotaRefreshFailureUsesBoundedExponentialBackoff(t *testing.T) {
 	for failure := 1; failure <= 10; failure++ {
 		service.deferQuotaRefresh("1:console")
 		state := service.quotaRefreshes["1:console"]
-		maximum := quotaRefreshBackoffBase * time.Duration(1<<min(failure-1, 6))
+		maximum := quotaRefreshBackoffBase * time.Duration(1<<min(failure-1, 10))
 		if maximum > quotaRefreshBackoffMax {
 			maximum = quotaRefreshBackoffMax
 		}

@@ -150,6 +150,9 @@ type ProfileSurface struct {
 	DefaultMaxConcurrent int
 	// QuotaModes lists the quota window modes shown for the provider's accounts.
 	QuotaModes []string
+	// DisplayQuotaModes are shown modes that no route consumes (ChatGPT's Codex
+	// 5-hour and weekly windows); they get no recovery probes of their own.
+	DisplayQuotaModes []string
 	// OfficialPricing bills the provider with the official xAI price list
 	// (domain/audit/pricing.go) when no custom price exists.
 	OfficialPricing bool
@@ -184,6 +187,7 @@ func (d Definition) Clone() Definition {
 	d.ModelCapabilities = append([]modeldomain.Capability(nil), d.ModelCapabilities...)
 	d.Profile.EgressScopes = append([]egressdomain.Scope(nil), d.Profile.EgressScopes...)
 	d.Profile.QuotaModes = append([]string(nil), d.Profile.QuotaModes...)
+	d.Profile.DisplayQuotaModes = append([]string(nil), d.Profile.DisplayQuotaModes...)
 	return d
 }
 

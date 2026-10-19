@@ -479,19 +479,19 @@ func (a *Adapter) exchange(ctx context.Context, credential account.Credential, b
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	var v struct {
-		Access      string `json:"access_token"`
-		Refresh     string `json:"refresh_token"`
-		ID          string `json:"id_token"`
-		Expires     int64  `json:"expires_in"`
-		Error       string `json:"error"`
-		Description string `json:"error_description"`
+		Access      string          `json:"access_token"`
+		Refresh     string          `json:"refresh_token"`
+		ID          string          `json:"id_token"`
+		Expires     int64           `json:"expires_in"`
+		Error       json.RawMessage `json:"error"`
+		Description string          `json:"error_description"`
 	}
 	decodeErr := json.Unmarshal(data, &v)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || decodeErr != nil || v.Access == "" {
 		if isCloudflareChallenge(resp.StatusCode, resp.Header, string(data)) {
 			a.report(ctx, lease, &upstreamError{Status: resp.StatusCode, Challenge: true})
 		}
-		message := v.Description
+		code, message := oauthError(v.Error, v.Description)
 		if len(message) > 512 {
 			// Cut on a rune boundary: PostgreSQL rejects invalid UTF-8.
 			message = strings.ToValidUTF8(message[:512], "")
@@ -499,7 +499,7 @@ func (a *Adapter) exchange(ctx context.Context, credential account.Credential, b
 		if message == "" {
 			message = "OAuth token endpoint rejected the exchange"
 		}
-		return old, &provider.CredentialRefreshError{Status: resp.StatusCode, Code: v.Error, Message: message, Permanent: provider.IsPermanentCredentialRefreshErrorCode(v.Error)}
+		return old, &provider.CredentialRefreshError{Status: resp.StatusCode, Code: code, Message: message, Permanent: provider.IsPermanentCredentialRefreshErrorCode(code)}
 	}
 	a.report(ctx, lease, nil)
 	next := old
@@ -521,6 +521,20 @@ func (a *Adapter) exchange(ctx context.Context, credential account.Credential, b
 		next.ExpiresAt = time.Now().UTC().Add(time.Duration(v.Expires) * time.Second)
 	}
 	return next, nil
+}
+
+// oauthError reads both OAuth error shapes: {"error":"code","error_description":"…"}
+// and OpenAI's {"error":{"code":"…","message":"…"}}.
+func oauthError(raw json.RawMessage, description string) (string, string) {
+	var code string
+	if json.Unmarshal(raw, &code) == nil {
+		return code, description
+	}
+	var nested struct{ Code, Message string }
+	if json.Unmarshal(raw, &nested) == nil {
+		return nested.Code, firstNonEmptyString([]string{description, nested.Message}, "")
+	}
+	return "", description
 }
 
 func tokenClaims(token string) map[string]any {

@@ -3,9 +3,12 @@ package chatgpt
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
 // A sub2api export lists every platform; only its OpenAI OAuth accounts are
@@ -133,5 +136,27 @@ func TestCredentialMetadataNamesIssuingClient(t *testing.T) {
 				t.Fatalf("metadata = %+v", got)
 			}
 		})
+	}
+}
+
+// OpenAI answers token errors as {"error":{"code":…}}; a spent refresh token
+// must read as permanent, or it is retried every 15 minutes forever.
+func TestOAuthErrorReadsOpenAIShape(t *testing.T) {
+	for body, want := range map[string]string{
+		`{"error":{"message":"Your refresh token has already been used.","type":"invalid_request_error","code":"refresh_token_reused"}}`: "refresh_token_reused",
+		`{"error":"invalid_grant","error_description":"expired"}`:                                                                        "invalid_grant",
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(body))
+		}))
+		a, _ := newTestAdapter(t, server)
+		credential := testCredential(t, a, credentials{AccessToken: "AT", RefreshToken: "RT", ClientProfile: oauthProfile})
+		_, err := a.RefreshCredential(context.Background(), credential)
+		server.Close()
+		var refreshErr *provider.CredentialRefreshError
+		if !errors.As(err, &refreshErr) || refreshErr.Code != want || !refreshErr.Permanent || refreshErr.Message == "" {
+			t.Fatalf("%s: err = %+v", body, err)
+		}
 	}
 }

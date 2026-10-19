@@ -75,8 +75,13 @@ const (
 	quotaRefreshPollInterval                      = 500 * time.Millisecond
 	quotaRefreshSharedPoll                        = time.Second
 	quotaRefreshBackoffBase                       = time.Second
-	quotaRefreshBackoffMax                        = time.Minute
-	consoleQuotaRefreshMinInterval                = 30 * time.Second
+	// A refresh that keeps failing backs off to 15 minutes; the 30-minute stale
+	// catch-up still resyncs the account later.
+	quotaRefreshBackoffMax         = 15 * time.Minute
+	consoleQuotaRefreshMinInterval = 30 * time.Second
+	// snapshotQuotaRefreshMinInterval spaces the request-driven syncs of a
+	// snapshot provider (ChatGPT: conversation/init plus Codex usage).
+	snapshotQuotaRefreshMinInterval               = 2 * time.Minute
 	unknownRemoteQuotaProbeDelay    time.Duration = 5 * time.Minute
 	consolePredictedQuotaProbeDelay time.Duration = 24 * time.Hour
 	observedModelPersistInterval                  = 30 * time.Minute
@@ -2294,6 +2299,15 @@ type ensureCredentialOptions struct {
 	bypassCooldown     bool
 	respectSchedule    bool
 	retryPermanentOnce bool
+	// waitFailedRenewal: after a failed renewal, wait for its scheduled retry.
+	waitFailedRenewal bool
+}
+
+// RenewRejectedCredential renews a credential the upstream just rejected
+// (401). After a failed renewal it waits for the scheduled retry instead of
+// spending another OAuth call on every rejected request.
+func (s *Service) RenewRejectedCredential(ctx context.Context, value accountdomain.Credential) (accountdomain.Credential, error) {
+	return s.ensureCredential(ctx, value, ensureCredentialOptions{force: true, waitFailedRenewal: true})
 }
 
 func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Credential, options ensureCredentialOptions) (accountdomain.Credential, error) {
@@ -2346,6 +2360,11 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 		if options.force && !options.bypassCooldown && s.credentialRefreshCoolingDown(latest, currentTime) {
 			return latest, nil
 		}
+		if options.waitFailedRenewal {
+			if err := refreshDeferred(latest, currentTime); err != nil {
+				return nil, err
+			}
+		}
 		release, err := s.acquireRefreshLock(ctx, latest.ID)
 		if err != nil {
 			return nil, err
@@ -2368,6 +2387,11 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 			}
 			if options.force && !options.bypassCooldown && s.credentialRefreshCoolingDown(latest, currentTime) {
 				return latest, nil
+			}
+			if options.waitFailedRenewal {
+				if err := refreshDeferred(latest, currentTime); err != nil {
+					return nil, err
+				}
 			}
 			if latest.EncryptedAccessToken != "" && latest.EncryptedAccessToken != value.EncryptedAccessToken {
 				return latest, nil
@@ -2474,6 +2498,26 @@ func (s *Service) refreshCoolingDown(accountID uint64, now time.Time) bool {
 	defer s.refreshMu.Unlock()
 	last := s.lastRefreshAt[accountID]
 	return !last.IsZero() && now.Sub(last) < forcedRefreshMinInterval
+}
+
+// ErrCredentialRefreshDeferred: a renewal after an upstream 401 waits out the
+// backoff of a failed one; each 401 would otherwise spend another OAuth call.
+var ErrCredentialRefreshDeferred = errors.New("凭据续期失败，等待下次重试")
+
+// CredentialRefreshDeferredError carries when the next renewal attempt is due.
+type CredentialRefreshDeferredError struct{ Until time.Time }
+
+func (e *CredentialRefreshDeferredError) Error() string {
+	return fmt.Sprintf("%v（%s）", ErrCredentialRefreshDeferred, e.Until.UTC().Format(time.RFC3339))
+}
+
+func (e *CredentialRefreshDeferredError) Unwrap() error { return ErrCredentialRefreshDeferred }
+
+func refreshDeferred(credential accountdomain.Credential, now time.Time) error {
+	if credential.RefreshFailureCount == 0 || credential.RefreshDueAt == nil || !credential.RefreshDueAt.After(now) {
+		return nil
+	}
+	return &CredentialRefreshDeferredError{Until: *credential.RefreshDueAt}
 }
 
 func (s *Service) credentialRefreshCoolingDown(credential accountdomain.Credential, now time.Time) bool {
@@ -2949,6 +2993,15 @@ func (s *Service) ReconcileRateLimit(ctx context.Context, id uint64, mode string
 		}
 		return RateLimitReconcileAvailable, nil
 	}
+	windows, err := s.accounts.GetQuotaWindows(ctx, []uint64{id})
+	if err != nil {
+		return RateLimitReconcileInconclusive, err
+	}
+	if _, ok := quotaWindowByMode(windows[id], mode); !ok {
+		// No window limits this mode (a Plus account has no message limit):
+		// the 429 is a rate limit the caller cools down, not a spent quota.
+		return RateLimitReconcileInconclusive, nil
+	}
 	var resetAt *time.Time
 	if retryAfter > 0 {
 		value := s.now().Add(retryAfter)
@@ -3206,7 +3259,7 @@ func (s *Service) reconcileQuotaGroupWindows(ctx context.Context, providerValue 
 }
 
 func (s *Service) reconcileQuotaRecoveryWindow(ctx context.Context, providerValue accountdomain.Provider, accountID uint64, window accountdomain.QuotaWindow) error {
-	if s.quotaQueue == nil || !quotaWindowControlsRouting(providerValue, window.Mode) {
+	if s.quotaQueue == nil || !s.quotaWindowControlsRouting(providerValue, window.Mode) {
 		return nil
 	}
 	if dueAt := quotaRecoveryDueAt(window, s.now(), window.Remaining == 0); dueAt != nil {
@@ -3390,7 +3443,10 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 				s.deferQuotaRefresh(request.key)
 				return
 			}
-			if generation > sharedGeneration {
+			// A lower generation means the shared marker was lost (Redis
+			// restart, eviction or TTL): adopt it, or the post-sync check never
+			// matches and the refresh loops on the upstream without pause.
+			if generation != sharedGeneration {
 				sharedGeneration = generation
 				s.quotaRefreshMu.Lock()
 				if current := s.quotaRefreshes[request.key]; current != nil {
@@ -3408,13 +3464,41 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 				return
 			}
 		}
+		// Background refreshes serve accounts the gateway can route to; a
+		// deleted, disabled or reauth-required account would be retried forever.
+		if credential, err := s.accounts.Get(ctx, request.accountID); errors.Is(err, repository.ErrNotFound) || (err == nil && (!credential.Enabled || credential.AuthStatus != accountdomain.AuthStatusActive)) {
+			cancel()
+			s.quotaRefreshMu.Lock()
+			if current := s.quotaRefreshes[request.key]; current != nil && current.generation == localGeneration {
+				delete(s.quotaRefreshes, request.key)
+			}
+			s.quotaRefreshMu.Unlock()
+			return
+		}
 		refreshMode := request.mode
 		consoleMode := isConsoleUsageQuotaMode(request.mode)
+		// Snapshot providers (ChatGPT) read every window in one call: like
+		// Console, their refreshes share a per-account lock and a minimum
+		// interval, and right after a sync the local decrement already counts
+		// the request.
+		snapshotMode := !consoleMode && s.snapshotQuotaMode(request.mode)
+		intervalMode := consoleMode || snapshotMode
+		minInterval := consoleQuotaRefreshMinInterval
+		if snapshotMode {
+			minInterval = snapshotQuotaRefreshMinInterval
+		}
 		skipUpstream := false
 		if windows, err := s.accounts.GetQuotaWindows(ctx, []uint64{request.accountID}); err == nil {
 			if consoleMode {
 				for _, window := range windows[request.accountID] {
 					if window.Mode == request.mode && window.SyncedAt != nil && s.now().UTC().Sub(window.SyncedAt.UTC()) < consoleQuotaRefreshMinInterval {
+						skipUpstream = true
+						break
+					}
+				}
+			} else if snapshotMode {
+				for _, window := range windows[request.accountID] {
+					if window.SyncedAt != nil && s.now().UTC().Sub(window.SyncedAt.UTC()) < minInterval {
 						skipUpstream = true
 						break
 					}
@@ -3440,6 +3524,8 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 				// Every Console mode reads the same /usage snapshot. Serialize all
 				// three kinds across instances to avoid duplicate upstream probes.
 				lockKey = consoleQuotaRefreshLockKey(request.accountID)
+			} else if snapshotMode {
+				lockKey = "quota-refresh:" + strconv.FormatUint(request.accountID, 10) + ":snapshot"
 			}
 			release, acquired, refreshErr = s.refreshLock.Acquire(ctx, lockKey, quotaRefreshTimeout)
 		}
@@ -3494,8 +3580,8 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 		s.quotaRefreshMu.Unlock()
 		if localChanged || (s.quotaRefreshState != nil && currentShared != sharedGeneration) {
 			perfmetrics.Default.Add("quota_refresh_events", perfmetrics.Labels{Subsystem: "quota", Stage: "refresh", Outcome: "trailing"}, 1)
-			if consoleMode {
-				s.deferSuccessfulQuotaRefresh(request.key, true)
+			if intervalMode {
+				s.deferSuccessfulQuotaRefresh(request.key, true, minInterval)
 				return
 			}
 			continue
@@ -3508,8 +3594,8 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 				if clearErr != nil {
 					s.logger.Warn("quota_refresh_dirty_clear_failed", "account_id", request.accountID, "mode", request.mode, "error", clearErr)
 				}
-				if consoleMode {
-					s.deferSuccessfulQuotaRefresh(request.key, true)
+				if intervalMode {
+					s.deferSuccessfulQuotaRefresh(request.key, true, minInterval)
 					return
 				}
 				continue
@@ -3518,11 +3604,11 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 		s.quotaRefreshMu.Lock()
 		state = s.quotaRefreshes[request.key]
 		if state != nil && state.generation == localGeneration {
-			if consoleMode {
+			if intervalMode {
 				state.running = false
 				state.pending = false
 				state.failures = 0
-				state.nextAttemptAt = s.now().UTC().Add(consoleQuotaRefreshMinInterval)
+				state.nextAttemptAt = s.now().UTC().Add(minInterval)
 			} else {
 				delete(s.quotaRefreshes, request.key)
 			}
@@ -3530,11 +3616,11 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 			perfmetrics.Default.Add("quota_refresh_events", perfmetrics.Labels{Subsystem: "quota", Stage: "refresh", Outcome: "success"}, 1)
 			return
 		}
-		if consoleMode && state != nil {
+		if intervalMode && state != nil {
 			state.running = false
 			state.pending = true
 			state.failures = 0
-			state.nextAttemptAt = s.now().UTC().Add(consoleQuotaRefreshMinInterval)
+			state.nextAttemptAt = s.now().UTC().Add(minInterval)
 			s.quotaRefreshMu.Unlock()
 			s.wakeQuotaRefreshRecovery()
 			return
@@ -3555,13 +3641,13 @@ func (s *Service) deferQuotaRefresh(key string) {
 	s.wakeQuotaRefreshRecovery()
 }
 
-func (s *Service) deferSuccessfulQuotaRefresh(key string, pending bool) {
+func (s *Service) deferSuccessfulQuotaRefresh(key string, pending bool, interval time.Duration) {
 	s.quotaRefreshMu.Lock()
 	if state := s.quotaRefreshes[key]; state != nil {
 		state.running = false
 		state.pending = pending
 		state.failures = 0
-		state.nextAttemptAt = s.now().UTC().Add(consoleQuotaRefreshMinInterval)
+		state.nextAttemptAt = s.now().UTC().Add(interval)
 	}
 	s.quotaRefreshMu.Unlock()
 	s.wakeQuotaRefreshRecovery()
@@ -3571,7 +3657,7 @@ func quotaRefreshRetryDelay(failures int) time.Duration {
 	if failures < 1 {
 		failures = 1
 	}
-	shift := min(failures-1, 6)
+	shift := min(failures-1, 10)
 	delay := quotaRefreshBackoffBase * time.Duration(1<<shift)
 	if delay > quotaRefreshBackoffMax {
 		delay = quotaRefreshBackoffMax
@@ -3693,6 +3779,27 @@ func (s *Service) ListDueQuotaWindows(ctx context.Context, now time.Time, limit 
 	return s.accounts.ListDueQuotaWindows(ctx, now, limit)
 }
 
+// snapshotQuotaMode reports a mode of a provider whose quota sync reads every
+// window in one call (QuotaModeSyncReadsSnapshot).
+func (s *Service) snapshotQuotaMode(mode string) bool {
+	if s.providers == nil {
+		return false
+	}
+	for _, value := range s.providers.Providers() {
+		definition, ok := s.providers.Definition(value)
+		if !ok || !slices.Contains(definition.Profile.QuotaModes, mode) {
+			continue
+		}
+		adapter, ok := s.providers.Quota(value)
+		if !ok {
+			return false
+		}
+		_, snapshot := adapter.(quotaModeSnapshotAdapter)
+		return snapshot
+	}
+	return false
+}
+
 // isDeclaredQuotaMode reports whether any registered provider lists mode in its Definition.
 func (s *Service) isDeclaredQuotaMode(mode string) bool {
 	if s.providers == nil {
@@ -3729,8 +3836,16 @@ func isWebImagineQuotaMode(mode string) bool {
 	return accountdomain.IsWebImagineQuotaMode(mode)
 }
 
-func quotaWindowControlsRouting(providerValue accountdomain.Provider, mode string) bool {
-	return providerValue != accountdomain.ProviderConsole || isConsoleUsageQuotaMode(mode)
+func (s *Service) quotaWindowControlsRouting(providerValue accountdomain.Provider, mode string) bool {
+	if providerValue == accountdomain.ProviderConsole {
+		return isConsoleUsageQuotaMode(mode)
+	}
+	if s.providers != nil {
+		if definition, ok := s.providers.Definition(providerValue); ok && slices.Contains(definition.Profile.DisplayQuotaModes, mode) {
+			return false
+		}
+	}
+	return true
 }
 
 // SyncAllBilling 尽力刷新全部启用账号，单个账号失败不阻断其他账号。

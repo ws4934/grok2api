@@ -30,7 +30,8 @@ func (a *Adapter) Definition() provider.Definition {
 		Profile: provider.ProfileSurface{
 			Name: "ChatGPT", ShortName: "ChatGPT", TierExempt: true,
 			EgressScopes: []egressdomain.Scope{scope}, DefaultMaxConcurrent: 1,
-			QuotaModes: []string{quotaModeReason, quotaModeImage, quotaModeUpload, quotaModeCodex5Hour, quotaModeCodexWeekly, quotaModeCodex},
+			QuotaModes:        []string{quotaModeReason, quotaModeImage, quotaModeUpload, quotaModeCodex5Hour, quotaModeCodexWeekly, quotaModeCodex},
+			DisplayQuotaModes: []string{quotaModeCodex5Hour, quotaModeCodexWeekly},
 			// Windows carry their reset time and every request refreshes its
 			// window, so idle accounts need only an occasional sync.
 			QuotaStaleAfter: 6 * time.Hour,

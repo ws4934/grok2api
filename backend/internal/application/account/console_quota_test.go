@@ -64,8 +64,9 @@ func TestCompleteConsoleUsageSnapshotRejectsLegacyAndPartialWindows(t *testing.T
 }
 
 func TestConsoleQuotaWindowsControlTheirMatchingRoutes(t *testing.T) {
+	service := NewService(nil, nil, nil, nil, nil, nil, nil)
 	for _, mode := range []string{"console", "console_image", "console_video"} {
-		if !quotaWindowControlsRouting(accountdomain.ProviderConsole, mode) {
+		if !service.quotaWindowControlsRouting(accountdomain.ProviderConsole, mode) {
 			t.Fatalf("%s must control its matching Console route", mode)
 		}
 		window := accountdomain.QuotaWindow{Mode: mode, Remaining: 0, Source: accountdomain.QuotaSourceUpstream}
@@ -73,10 +74,10 @@ func TestConsoleQuotaWindowsControlTheirMatchingRoutes(t *testing.T) {
 			t.Fatalf("%s must schedule a predicted recovery probe", mode)
 		}
 	}
-	if quotaWindowControlsRouting(accountdomain.ProviderConsole, "unknown") {
+	if service.quotaWindowControlsRouting(accountdomain.ProviderConsole, "unknown") {
 		t.Fatal("unknown Console quota mode must not control routing")
 	}
-	if !quotaWindowControlsRouting(accountdomain.ProviderWeb, "weekly") {
+	if !service.quotaWindowControlsRouting(accountdomain.ProviderWeb, "weekly") {
 		t.Fatal("Web quota behavior must remain unchanged")
 	}
 }

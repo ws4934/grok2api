@@ -1072,7 +1072,14 @@ func (s *Service) createResponseAt(ctx context.Context, input Input, path string
 	}
 	ensureCredential := func(credential accountdomain.Credential, force bool) (accountdomain.Credential, error) {
 		started := time.Now()
-		result, err := s.accounts.EnsureCredential(ctx, credential, force)
+		var result accountdomain.Credential
+		var err error
+		if force {
+			// Called only after the upstream rejected the credential.
+			result, err = s.accounts.RenewRejectedCredential(ctx, credential)
+		} else {
+			result, err = s.accounts.EnsureCredential(ctx, credential, false)
+		}
 		failureAttempts.captureCredentialFailure(credential, started, force, err)
 		timing.markCredential(time.Since(started))
 		return result, err
@@ -1389,6 +1396,7 @@ attemptLoop:
 				if errors.Is(refreshErr, accountapp.ErrCredentialRefreshPermanent) {
 					s.markCredentialRejectedAfterPermanentRefresh(ctx, credential)
 				}
+				s.selector.MarkRefreshDeferred(ctx, credential, refreshErr)
 				lease.Release()
 				lastErr = firstError(refreshErr, err)
 				if refreshErr != nil {
@@ -1412,7 +1420,7 @@ attemptLoop:
 			}
 			if response.StatusCode == http.StatusUnauthorized {
 				body, _ := readRetryableBody(response.Body)
-				_ = s.accounts.MarkReauthRequired(ctx, credential.ID, "Grok Build OAuth credential rejected after refresh")
+				_ = s.accounts.MarkReauthRequired(ctx, credential.ID, fmt.Sprintf("%s OAuth credential rejected after refresh", credential.Provider))
 				s.selector.MarkQuotaStateChanged(credential.Provider, credential.ID)
 				lease.Release()
 				lastErr = fmt.Errorf("刷新后上游仍返回 401")
@@ -1505,6 +1513,7 @@ attemptLoop:
 				authRecoveryAttempted[credential.ID] = true
 				refreshed, refreshErr := ensureCredential(credential, true)
 				if refreshErr != nil {
+					s.selector.MarkRefreshDeferred(ctx, credential, refreshErr)
 					lease.Release()
 					lastErr = refreshErr
 					lastFailure = newCredentialUpstreamFailure(refreshErr, credential.ID, credential.Name)
@@ -1997,11 +2006,12 @@ func (s *Service) forwardOwnedResponse(ctx context.Context, input ResourceInput,
 			lease.Release()
 			return nil, fmt.Errorf("%w: %w", ErrResponseAccountUnavailable, accountapp.ErrCredentialRefreshPermanent)
 		}
-		refreshed, refreshErr := s.accounts.EnsureCredential(ctx, credential, true)
+		refreshed, refreshErr := s.accounts.RenewRejectedCredential(ctx, credential)
 		if refreshErr != nil {
 			if errors.Is(refreshErr, accountapp.ErrCredentialRefreshPermanent) {
 				s.markCredentialRejectedAfterPermanentRefresh(ctx, credential)
 			}
+			s.selector.MarkRefreshDeferred(ctx, credential, refreshErr)
 			lease.Release()
 			return nil, refreshErr
 		}

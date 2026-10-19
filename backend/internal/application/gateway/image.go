@@ -355,10 +355,11 @@ func (s *Service) executeImage(
 				continue
 			}
 			authRetried[credential.ID] = true
-			if _, refreshErr := s.accounts.EnsureCredential(ctx, credential, true); refreshErr != nil {
+			if _, refreshErr := s.accounts.RenewRejectedCredential(ctx, credential); refreshErr != nil {
 				if errors.Is(refreshErr, accountapp.ErrCredentialRefreshPermanent) {
 					s.markCredentialRejectedAfterPermanentRefresh(ctx, credential)
 				}
+				s.selector.MarkRefreshDeferred(ctx, credential, refreshErr)
 				continue
 			}
 			delete(excluded, credential.ID)

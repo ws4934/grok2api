@@ -37,7 +37,7 @@ func TestChatGPTCredentialRefreshIsRescheduledAtStartup(t *testing.T) {
 			t.Fatalf("%s: %+v %v", provider, stored.RefreshDueAt, err)
 		}
 		lead := expiresAt.Sub(*stored.RefreshDueAt)
-		if provider == account.ProviderChatGPT && (lead < 24*time.Hour || lead > 24*time.Hour+3*time.Minute) {
+		if provider == account.ProviderChatGPT && (lead < 24*time.Hour || lead > 30*time.Hour) {
 			t.Fatalf("chatgpt lead = %v", lead)
 		}
 		if provider == account.ProviderBuild && !stored.RefreshDueAt.Equal(oldDue) {

@@ -86,7 +86,8 @@ func TestBackgroundRefreshDoesNotRetryModeTheSnapshotNoLongerLimits(t *testing.T
 	service.quotaRefreshMu.Lock()
 	state := service.quotaRefreshes[request.key]
 	service.quotaRefreshMu.Unlock()
-	if state != nil {
+	// A snapshot provider keeps the state only to space its next sync.
+	if state != nil && (state.pending || state.failures > 0) {
 		t.Fatalf("refresh retained retry state: %#v", state)
 	}
 }

@@ -233,7 +233,9 @@ func (a *Adapter) codexQuotaWindows(ctx context.Context, credential account.Cred
 		defer resp.Body.Close()
 		return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&usage)
 	})
-	closed := []account.QuotaWindow{{AccountID: credential.ID, Mode: quotaModeCodex, Total: 100, UsagePercent: 100, SyncedAt: &now, Source: account.QuotaSourceUpstream, UpdatedAt: now}}
+	// A closed route is probed again after the stale interval, not every few minutes.
+	reopen := now.Add(6 * time.Hour)
+	closed := []account.QuotaWindow{{AccountID: credential.ID, Mode: quotaModeCodex, Total: 100, UsagePercent: 100, ResetAt: &reopen, SyncedAt: &now, Source: account.QuotaSourceUpstream, UpdatedAt: now}}
 	var upstream *upstreamError
 	if errors.As(err, &upstream) && !upstream.Challenge && upstream.Status >= 400 && upstream.Status < 500 && upstream.Status != http.StatusTooManyRequests {
 		// Codex refuses this login: close the Codex routes until the next sync.

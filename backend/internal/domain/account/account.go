@@ -317,7 +317,8 @@ func (p Provider) CredentialRefreshLead() time.Duration {
 	return 5 * time.Minute
 }
 
-// CredentialRefreshDueAt 将账号稳定地分散到续期提前量之前 0~3 分钟，避免同批导入账号同时刷新。
+// CredentialRefreshDueAt 将账号稳定地分散到续期提前量之前，避免同批导入账号同时刷新：
+// 分散范围取 3 分钟与提前量四分之一中的较大者（ChatGPT 提前 24 小时，分散到 6 小时内）。
 // 提前量取 Provider 的 CredentialRefreshLead，但不超过剩余有效期的一半（至少 5 分钟），
 // 短期令牌因此不会被连续续期。
 func CredentialRefreshDueAt(provider Provider, accountID uint64, expiresAt, now time.Time) time.Time {
@@ -325,10 +326,11 @@ func CredentialRefreshDueAt(provider Provider, accountID uint64, expiresAt, now 
 		return time.Time{}
 	}
 	lead := max(5*time.Minute, min(provider.CredentialRefreshLead(), expiresAt.Sub(now)/2))
+	spread := max(181*time.Second, lead/4)
 	var identity [8]byte
 	binary.BigEndian.PutUint64(identity[:], accountID)
 	digest := sha256.Sum256(identity[:])
-	jitterSeconds := binary.BigEndian.Uint16(digest[:2]) % 181
+	jitterSeconds := binary.BigEndian.Uint32(digest[:4]) % uint32(spread/time.Second)
 	return expiresAt.UTC().Add(-lead - time.Duration(jitterSeconds)*time.Second)
 }
 

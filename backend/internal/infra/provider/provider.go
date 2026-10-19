@@ -302,6 +302,7 @@ func IsPermanentCredentialRefreshErrorCode(code string) bool {
 		"revoked_token",
 		"token_revoked",
 		"missing_refresh_token",
+		"refresh_token_invalidated",
 		"unsupported_client_profile":
 		return true
 	default:

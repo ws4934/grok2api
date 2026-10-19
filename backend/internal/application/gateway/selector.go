@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/pkg/resultcache"
@@ -1300,6 +1301,15 @@ func (s *Selector) disableAccount(ctx context.Context, credential account.Creden
 		_ = s.sticky.DeleteByAccount(ctx, credential.ID)
 	}
 	return nil
+}
+
+// MarkRefreshDeferred rests an account whose credential renewal is waiting
+// out a failed attempt, so requests stop landing on a token the upstream rejects.
+func (s *Selector) MarkRefreshDeferred(ctx context.Context, credential account.Credential, err error) {
+	var deferred *accountapp.CredentialRefreshDeferredError
+	if errors.As(err, &deferred) {
+		s.MarkFailure(ctx, credential, http.StatusUnauthorized, time.Until(deferred.Until))
+	}
 }
 
 func (s *Selector) MarkFailure(ctx context.Context, credential account.Credential, status int, retryAfter time.Duration) {
