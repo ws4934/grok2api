@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/repository"
+	"gorm.io/gorm"
 )
 
 func TestDashboardRepositorySnapshot(t *testing.T) {
@@ -324,5 +327,54 @@ func testDashboardWindow(boundaries []time.Time) repository.DashboardSnapshotWin
 	return repository.DashboardSnapshotWindow{
 		BucketBoundaries:   boundaries,
 		ActivityBoundaries: boundaries,
+	}
+}
+
+// Reports read inside a read-only transaction: with _txlock=immediate a plain
+// transaction would hold SQLite's write lock and stall audit writes.
+func TestReportsDoNotBlockSQLiteWriters(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDatabase(t)
+	var hold atomic.Value
+	hold.Store(func() {})
+	// Scan runs through the row callbacks; hold the report after its first read.
+	if err := database.db.Callback().Row().After("gorm:row").Register("test:hold_report", func(*gorm.DB) { hold.Load().(func())() }); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	reports := []struct {
+		name string
+		run  func() error
+	}{
+		{"dashboard", func() error {
+			boundaries := testDashboardBoundaries(now.Truncate(time.Hour).Add(-time.Hour), time.Hour, 2)
+			_, err := NewDashboardRepository(database).Snapshot(ctx, testDashboardWindow(boundaries), now)
+			return err
+		}},
+		{"degrade", func() error {
+			_, err := NewAuditRepository(database).SummarizeDegrade(ctx, repository.DegradeSummaryQuery{Start: now.Add(-time.Hour), End: now, SoftTPS: 500, HardTPS: 1000})
+			return err
+		}},
+	}
+	for _, report := range reports {
+		entered, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		hold.Store(func() { once.Do(func() { close(entered); <-release }) })
+		done := make(chan error, 1)
+		go func() { done <- report.run() }()
+		select {
+		case <-entered:
+		case err := <-done:
+			t.Fatalf("%s report finished before it was held open: %v", report.name, err)
+		}
+		writeErr := database.db.WithContext(ctx).Create(&requestAuditModel{RequestID: "write-during-" + report.name, ClientKeyID: 1, ModelRouteID: 1, Provider: "grok_build", Operation: "responses", UsageSource: "upstream", StatusCode: 200, CreatedAt: now}).Error
+		hold.Store(func() {})
+		close(release)
+		if err := <-done; err != nil {
+			t.Fatalf("%s report: %v", report.name, err)
+		}
+		if writeErr != nil {
+			t.Errorf("audit write while the %s report was open: %v", report.name, writeErr)
+		}
 	}
 }

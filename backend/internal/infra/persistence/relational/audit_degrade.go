@@ -252,7 +252,7 @@ func (r *AuditRepository) SummarizeDegrade(ctx context.Context, input repository
 			})
 		}
 		return nil
-	})
+	}, reportTxOptions(r.db.dialect))
 	return result, err
 }
 

@@ -2,6 +2,7 @@ package relational
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -34,7 +35,16 @@ const dashboardUsageAggregateSelect = `
 
 const dashboardTopModelsLimit = 10
 
-// Snapshot 在同一数据库事务内读取资源计数和指定区间的审计聚合。
+// reportTxOptions 让报表在只读事务里读：SQLite 驱动对只读事务发普通 BEGIN，不像 _txlock=immediate
+// 那样占住写锁；PostgreSQL 用可重复读，让多条聚合看到同一快照。
+func reportTxOptions(dialect string) *sql.TxOptions {
+	if dialect == "postgres" {
+		return &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead}
+	}
+	return &sql.TxOptions{ReadOnly: true}
+}
+
+// Snapshot 在同一只读事务内读取资源计数和指定区间的审计聚合。
 func (r *DashboardRepository) Snapshot(ctx context.Context, window repository.DashboardSnapshotWindow, snapshotAt time.Time) (dashboarddomain.Aggregate, error) {
 	if err := validateDashboardBoundaries(window.BucketBoundaries); err != nil {
 		return dashboarddomain.Aggregate{}, err
@@ -218,7 +228,7 @@ func (r *DashboardRepository) Snapshot(ctx context.Context, window repository.Da
 			}
 		}
 		return nil
-	})
+	}, reportTxOptions(r.db.dialect))
 	return result, err
 }
 
