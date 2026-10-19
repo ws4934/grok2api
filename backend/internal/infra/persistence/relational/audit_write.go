@@ -213,13 +213,15 @@ func loadInsertedAuditIDs(tx *gorm.DB, prepared []preparedAudit) (map[string]uin
 		eventIDs[index] = prepared[index].row.EventID
 	}
 	idsByEvent := make(map[string]uint64, len(eventIDs))
+	// "event_id <> ''" lets SQLite and PostgreSQL use the partial unique index
+	// idx_audits_event_id; without it large batches scan the whole table.
 	for start := 0; start < len(eventIDs); start += auditLookupBatchSize {
 		end := min(start+auditLookupBatchSize, len(eventIDs))
 		var rows []struct {
 			ID      uint64
 			EventID string
 		}
-		if err := tx.Model(&requestAuditModel{}).Select("id", "event_id").Where("event_id IN ?", eventIDs[start:end]).Find(&rows).Error; err != nil {
+		if err := tx.Model(&requestAuditModel{}).Select("id", "event_id").Where("event_id IN ? AND event_id <> ''", eventIDs[start:end]).Find(&rows).Error; err != nil {
 			return nil, err
 		}
 		for _, row := range rows {

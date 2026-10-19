@@ -398,7 +398,7 @@ func (r *MediaJobRepository) GetMediaJobByIdempotencyKey(ctx context.Context, cl
 		return media.Job{}, repository.ErrNotFound
 	}
 	var row mediaJobModel
-	if err := r.db.db.WithContext(ctx).Omit("input_json").Where("client_key_id = ? AND idempotency_key = ?", clientKeyID, key).First(&row).Error; err != nil {
+	if err := r.db.db.WithContext(ctx).Omit("input_json").Where("client_key_id = ? AND idempotency_key = ? AND idempotency_key <> ''", clientKeyID, key).First(&row).Error; err != nil {
 		return media.Job{}, mapError(err)
 	}
 	return mediaJobToDomain(row), nil
