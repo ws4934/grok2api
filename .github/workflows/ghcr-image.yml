@@ -79,6 +79,9 @@ jobs:
           - arch: amd64
             platform: linux/amd64
             runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -100,7 +103,7 @@ jobs:
           sbom: false
 
   build_ghcr_image:
-    name: Publish image (amd64)
+    name: Publish image
     if: github.event_name == 'push'
     needs: verify
     permissions:
@@ -111,6 +114,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Only the final stage (apk add) runs for the target platform; the
+      # frontend and Go builds run natively and cross-compile.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -144,11 +152,11 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=amd64
-          cache-to: type=gha,scope=amd64,mode=max
+          cache-from: type=gha,scope=multiarch
+          cache-to: type=gha,scope=multiarch,mode=max
           provenance: mode=max
           sbom: true

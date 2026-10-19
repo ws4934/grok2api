@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Package the linux/amd64 release archive consumed by the in-app updater.
+# Package the linux release archives consumed by the in-app updater.
 # Usage: scripts/package-release.sh <vX.Y.Z> <outdir>
 # Requires frontend/dist (pnpm build) to exist.
 set -euo pipefail
@@ -16,7 +16,7 @@ out=$(cd "$out" && pwd)
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
-for arch in amd64; do
+for arch in amd64 arm64; do
   dir=$stage/$arch
   mkdir -p "$dir/frontend"
   (cd "$root/backend" && CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -buildvcs=false \
@@ -29,4 +29,4 @@ for arch in amd64; do
 done
 
 cd "$out"
-sha256sum "grok2api_${tag}_linux_amd64.tar.gz" > checksums.txt
+sha256sum "grok2api_${tag}_linux_amd64.tar.gz" "grok2api_${tag}_linux_arm64.tar.gz" > checksums.txt
