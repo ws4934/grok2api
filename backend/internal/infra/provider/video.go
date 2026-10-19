@@ -296,11 +296,31 @@ func (r *Registry) NormalizeVideoRequest(value account.Provider, options VideoRe
 	return options, r.ValidateVideoRequest(value, options)
 }
 
-// NormalizeGrokVideoRequest fills the xAI defaults (16:9, 720p, 8 s) for
-// generation and enforces the xAI ranges. Edit and extension keep the
-// gateway's rules.
+// NormalizeGrokVideoRequest fills the xAI defaults and enforces the xAI
+// ranges: generation defaults to 16:9, 720p and 8 s; an edit takes no
+// duration, aspect ratio or resolution; an extension takes no aspect ratio or
+// resolution and runs 2-10 s, 6 s by default.
 func NormalizeGrokVideoRequest(options VideoRequestOptions) (VideoRequestOptions, error) {
-	if options.Operation != VideoOperationGenerate {
+	switch options.Operation {
+	case VideoOperationGenerate:
+	case VideoOperationEdit:
+		switch {
+		case options.AspectRatio != "" || options.Resolution != "":
+			return options, fmt.Errorf("%w: 视频编辑不支持 aspect_ratio 或 resolution", ErrVideoParameterInvalid)
+		case options.Duration != 0:
+			return options, fmt.Errorf("%w: 视频编辑不支持 duration", ErrVideoParameterInvalid)
+		}
+		return options, nil
+	case VideoOperationExtend:
+		options.Duration = cmp.Or(options.Duration, 6)
+		switch {
+		case options.AspectRatio != "" || options.Resolution != "":
+			return options, fmt.Errorf("%w: 视频延长不支持 aspect_ratio 或 resolution", ErrVideoParameterInvalid)
+		case options.Duration < 2 || options.Duration > 10:
+			return options, fmt.Errorf("%w: 视频延长 duration 必须在 2 到 10 秒之间", ErrVideoParameterInvalid)
+		}
+		return options, nil
+	default:
 		return options, nil
 	}
 	options.AspectRatio = cmp.Or(options.AspectRatio, "16:9")

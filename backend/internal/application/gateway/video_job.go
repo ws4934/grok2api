@@ -48,15 +48,6 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		s.failVideoJob(parent, job, "input_unavailable", err, 0, nil)
 		return
 	}
-	duration := job.Seconds
-	aspectRatio := job.Size
-	resolution := job.Quality
-	switch operation {
-	case provider.VideoOperationEdit:
-		duration, aspectRatio, resolution = 0, "", ""
-	case provider.VideoOperationExtend:
-		aspectRatio, resolution = "", ""
-	}
 
 	quotaMode := s.providers.VideoQuotaMode(route.Provider, s.providers.QuotaMode(route.Provider, route.UpstreamModel), job.Quality)
 	quotaRefreshGroup := s.providers.QuotaRefreshGroup(route.Provider, route.UpstreamModel)
@@ -166,7 +157,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		result, err = adapter.GenerateVideo(originCtx, provider.VideoRequest{
 			Credential: lease.Credential, Billing: lease.Billing, JobID: job.ID, Model: route.UpstreamModel,
 			Operation: operation,
-			Prompt:    job.Prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
+			Prompt:    job.Prompt, Duration: job.Seconds, AspectRatio: job.Size, Resolution: job.Quality,
 			ImageURL: inputs.imageURL, LastFrameURL: inputs.lastFrameURL, ReferenceURLs: inputs.referenceURLs,
 			ReferenceVideoURLs: inputs.referenceVideoURLs, ReferenceAudios: inputs.referenceAudios, VideoURL: inputs.videoURL,
 			Checkpoint: job.Checkpoint,

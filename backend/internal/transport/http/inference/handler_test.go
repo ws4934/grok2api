@@ -1935,13 +1935,24 @@ func TestEditAndExtendVideoRequestValidation(t *testing.T) {
 		t.Fatalf("extend missing video status = %d body = %s", rec.Code, rec.Body.String())
 	}
 
-	// invalid extend duration
-	req = httptest.NewRequest(http.MethodPost, "/v1/videos/extensions", strings.NewReader(`{"model":"grok-imagine-video","prompt":"x","duration":15,"video":{"url":"https://example.com/a.mp4"}}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec = httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("extend bad duration status = %d body = %s", rec.Code, rec.Body.String())
+	// 接口层只查写法：写法不对回 400；写法合法的取值交给路由的 Provider，这里进入鉴权
+	// （测试里没有 client key → 401）。xAI 的延长时长与编辑参数规则在 provider.NormalizeGrokVideoRequest。
+	for _, test := range []struct {
+		path, body string
+		status     int
+	}{
+		{"/v1/videos/extensions", `{"model":"grok-imagine-video","prompt":"x","duration":"abc","video":{"url":"https://example.com/a.mp4"}}`, http.StatusBadRequest},
+		{"/v1/videos/edits", `{"model":"grok-imagine-video","prompt":"x","resolution":"720","video":{"url":"https://example.com/a.mp4"}}`, http.StatusBadRequest},
+		{"/v1/videos/extensions", `{"model":"grok-imagine-video","prompt":"x","duration":15,"video":{"url":"https://example.com/a.mp4"}}`, http.StatusUnauthorized},
+		{"/v1/videos/edits", `{"model":"grok-imagine-video","prompt":"x","duration":5,"aspect_ratio":"16:9","resolution":"1080p","video":{"url":"https://example.com/a.mp4"}}`, http.StatusUnauthorized},
+	} {
+		req = httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+		req.Header.Set("Content-Type", "application/json")
+		rec = httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != test.status {
+			t.Fatalf("%s %s status = %d body = %s", test.path, test.body, rec.Code, rec.Body.String())
+		}
 	}
 }
 

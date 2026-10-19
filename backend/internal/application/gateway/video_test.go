@@ -290,6 +290,105 @@ func TestCreateVideoBillsTheParametersTheProviderPicks(t *testing.T) {
 	}
 }
 
+// changeVideoAdapter stands in for a provider whose edit and extension rules
+// are not xAI's: it takes any duration and aspect ratio, defaults to 1080p,
+// and records what the job runner sends.
+type changeVideoAdapter struct{ requests []provider.VideoRequest }
+
+func (a *changeVideoAdapter) Provider() account.Provider { return account.ProviderWeb }
+
+func (a *changeVideoAdapter) Definition() provider.Definition {
+	definition := testConversationDefinition(account.ProviderWeb)
+	definition.Media.VideoGeneration = true
+	return definition
+}
+
+func (a *changeVideoAdapter) ValidateVideoRequest(provider.VideoRequestOptions) error { return nil }
+
+func (a *changeVideoAdapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
+	if options.Resolution == "" {
+		options.Resolution = "1080p"
+	}
+	return options, nil
+}
+
+func (a *changeVideoAdapter) GenerateVideo(_ context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
+	a.requests = append(a.requests, request)
+	return provider.VideoResult{AssetID: "video_asset_change", ContentType: "video/mp4"}, nil
+}
+
+// 编辑与延长的取值归选中路由的 Provider，网关不套 xAI 的规则：20 秒的延长照样入队，
+// Provider 补的默认分辨率写进任务，执行时任务里的时长、比例和分辨率原样交给 Provider。
+func TestVideoEditAndExtensionFollowTheProviderRules(t *testing.T) {
+	for _, test := range []struct {
+		input VideoInput
+		want  provider.VideoRequest
+	}{
+		{VideoInput{Operation: provider.VideoOperationExtend, Duration: 20}, provider.VideoRequest{Duration: 20, Resolution: "1080p"}},
+		{VideoInput{Operation: provider.VideoOperationEdit, Duration: 5, AspectRatio: "9:16"}, provider.VideoRequest{Duration: 5, AspectRatio: "9:16", Resolution: "1080p"}},
+	} {
+		t.Run(string(test.input.Operation), func(t *testing.T) {
+			ctx := context.Background()
+			database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "video-change.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			if err := database.InitializeSchema(ctx); err != nil {
+				t.Fatal(err)
+			}
+			accountRepo, modelRepo, auditRepo, keyRepo := relational.NewAccountRepository(database), relational.NewModelRepository(database), relational.NewAuditRepository(database), relational.NewClientKeyRepository(database)
+			credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
+				Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierSuper, Name: "change", SourceKey: "change",
+				EncryptedAccessToken: "change-token", ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := modelRepo.UpsertDiscovered(ctx, account.ProviderWeb, []string{"grok-imagine-video"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := modelRepo.ReplaceAccountCapabilities(ctx, credential.ID, []string{"grok-imagine-video"}, time.Now().UTC()); err != nil {
+				t.Fatal(err)
+			}
+			route, err := modelRepo.GetByProviderUpstream(ctx, account.ProviderWeb, "grok-imagine-video")
+			if err != nil {
+				t.Fatal(err)
+			}
+			key, err := keyRepo.Create(ctx, clientkey.Key{Name: "video-change", Prefix: "vchange", SecretHash: strings.Repeat("d", 64), EncryptedSecret: "d",
+				Enabled: true, RPMLimit: 60, MaxConcurrent: 4, ProviderScope: clientkey.AllProviders()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			adapter := &changeVideoAdapter{}
+			registry := provider.NewRegistry(adapter)
+			sticky := memory.NewStickyStore()
+			accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
+			selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
+			service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(keyRepo, nil, nil, 60, 4, nil), registry, selector, nil, 1)
+			service.ConfigureMedia(relational.NewMediaJobRepository(database), 1)
+
+			input := test.input
+			input.RequestID, input.ClientKey, input.PublicModel = "video-change", key, route.PublicID
+			input.Prompt, input.VideoURL = "change it", "https://example.com/source.mp4"
+			job, err := service.CreateVideo(ctx, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.Seconds != test.want.Duration || job.Size != test.want.AspectRatio || job.Quality != test.want.Resolution {
+				t.Fatalf("job = %ds %q %q", job.Seconds, job.Size, job.Quality)
+			}
+			service.processMediaJob(ctx, job.ID)
+			if len(adapter.requests) != 1 {
+				t.Fatalf("provider calls = %d", len(adapter.requests))
+			}
+			if got := adapter.requests[0]; got.Operation != input.Operation || got.Duration != test.want.Duration || got.AspectRatio != test.want.AspectRatio || got.Resolution != test.want.Resolution {
+				t.Fatalf("request = %s %ds %q %q", got.Operation, got.Duration, got.AspectRatio, got.Resolution)
+			}
+		})
+	}
+}
+
 func TestCreateVideoAppliesRouteConstraintsAfterKeyEligibilityAndBeforeInputIO(t *testing.T) {
 	routes := []model.Route{
 		{ID: 1, PublicID: "shared-video", Provider: account.ProviderBuild, UpstreamModel: "grok-imagine-video-1.5", Capability: model.CapabilityResponses},

@@ -122,17 +122,6 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		if strings.TrimSpace(input.ImageURL) != "" || len(input.ReferenceURLs) > 0 || len(input.ReferenceAudios) > 0 {
 			return media.Job{}, fmt.Errorf("视频编辑/延长不支持 image、reference_images 或 reference_audios")
 		}
-		if operation == provider.VideoOperationEdit && input.Duration != 0 {
-			return media.Job{}, fmt.Errorf("视频编辑不支持 duration")
-		}
-		if operation == provider.VideoOperationExtend {
-			if input.Duration == 0 {
-				input.Duration = 6
-			}
-			if input.Duration < 2 || input.Duration > 10 {
-				return media.Job{}, fmt.Errorf("视频延长 duration 必须在 2 到 10 秒之间")
-			}
-		}
 	}
 	routes, err := s.models.GetByPublicIDCandidates(ctx, input.PublicModel)
 	if err != nil {

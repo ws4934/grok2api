@@ -105,9 +105,6 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 		return urlValue, true
 	}
 
-	duration := 0
-	aspectRatio := ""
-	resolution := ""
 	imageURL := ""
 	lastFrameURL := ""
 	referenceURLs := []string{}
@@ -115,24 +112,24 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 	referenceVideoURLs := []string{}
 	videoURL := ""
 
+	duration, err := parseVideoDuration(request.Duration)
+	if err != nil {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	// 这里只查写法、不填默认值：取值范围和默认值由路由的 Provider 按模型和操作决定。
+	aspectRatio := strings.TrimSpace(request.AspectRatio)
+	if aspectRatio != "" && !validVideoAspectRatio(aspectRatio) {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "aspect_ratio 应为 宽:高（如 16:9）或 auto")
+		return
+	}
+	resolution := strings.ToLower(strings.TrimSpace(request.Resolution))
+	if resolution != "" && !validVideoResolution(resolution) {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "resolution 应为 720p、1080p、4k 这类写法")
+		return
+	}
+
 	if operation == gatewayVideoOperationGenerate {
-		var err error
-		duration, err = parseVideoDuration(request.Duration)
-		if err != nil {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
-			return
-		}
-		// 这里只查写法、不填默认值：取值范围和默认值由路由的 Provider 按模型决定。
-		aspectRatio = strings.TrimSpace(request.AspectRatio)
-		if aspectRatio != "" && !validVideoAspectRatio(aspectRatio) {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "aspect_ratio 应为 宽:高（如 16:9）或 auto")
-			return
-		}
-		resolution = strings.ToLower(strings.TrimSpace(request.Resolution))
-		if resolution != "" && !validVideoResolution(resolution) {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "resolution 应为 720p、1080p、4k 这类写法")
-			return
-		}
 		if request.Image != nil {
 			value, ok := parseVideoImage(*request.Image, "image")
 			if !ok {
@@ -225,32 +222,6 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 		if request.Image != nil || request.LastFrame != nil || len(request.ReferenceImages) > 0 || len(request.ReferenceAudios) > 0 || len(request.ReferenceVideos) > 0 {
 			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"不支持 image、last_frame、reference_images、reference_videos 或 reference_audios")
 			return
-		}
-		if strings.TrimSpace(request.AspectRatio) != "" || strings.TrimSpace(request.Resolution) != "" {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"不支持 aspect_ratio 或 resolution")
-			return
-		}
-		if operation == gatewayVideoOperationEdit {
-			if hasJSONValue(request.Duration) {
-				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "视频编辑不支持 duration")
-				return
-			}
-		} else {
-			// extend: duration optional, default 6, range 2-10
-			if hasJSONValue(request.Duration) {
-				var err error
-				duration, err = parseVideoDuration(request.Duration)
-				if err != nil {
-					writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
-					return
-				}
-			} else {
-				duration = 6
-			}
-			if duration < 2 || duration > 10 {
-				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "视频延长 duration 必须在 2 到 10 秒之间")
-				return
-			}
 		}
 	}
 

@@ -175,6 +175,37 @@ func TestRegistryNormalizesVideoParametersPerProvider(t *testing.T) {
 	}
 }
 
+// 编辑与延长的取值也归 Provider：xAI 的编辑不收 duration、比例和分辨率；延长不收比例和
+// 分辨率，时长 2 到 10 秒，默认 6 秒。
+func TestNormalizeGrokVideoRequestEditAndExtension(t *testing.T) {
+	edit, extend := provider.VideoOperationEdit, provider.VideoOperationExtend
+	for _, test := range []struct {
+		in   provider.VideoRequestOptions
+		want int // 实际时长；-1 表示拒绝
+	}{
+		{provider.VideoRequestOptions{Operation: edit}, 0},
+		{provider.VideoRequestOptions{Operation: edit, Duration: 6}, -1},
+		{provider.VideoRequestOptions{Operation: edit, Resolution: "720p"}, -1},
+		{provider.VideoRequestOptions{Operation: edit, AspectRatio: "16:9"}, -1},
+		{provider.VideoRequestOptions{Operation: extend}, 6},
+		{provider.VideoRequestOptions{Operation: extend, Duration: 2}, 2},
+		{provider.VideoRequestOptions{Operation: extend, Duration: 10}, 10},
+		{provider.VideoRequestOptions{Operation: extend, Duration: 1}, -1},
+		{provider.VideoRequestOptions{Operation: extend, Duration: 11}, -1},
+		{provider.VideoRequestOptions{Operation: extend, AspectRatio: "16:9"}, -1},
+		{provider.VideoRequestOptions{Operation: extend, Resolution: "720p"}, -1},
+	} {
+		got, err := provider.NormalizeGrokVideoRequest(test.in)
+		if test.want < 0 {
+			if !errors.Is(err, provider.ErrVideoParameterInvalid) {
+				t.Errorf("%+v err = %v, want rejected", test.in, err)
+			}
+		} else if err != nil || got.Duration != test.want || got.AspectRatio != "" || got.Resolution != "" {
+			t.Errorf("%+v = %+v, %v; want %d s", test.in, got, err, test.want)
+		}
+	}
+}
+
 func TestRegistryRejectsLastFrameForProvidersWithoutSupport(t *testing.T) {
 	registry := provider.NewRegistry(
 		webprovider.NewAdapter(webprovider.Config{}, nil, nil, nil, nil),
