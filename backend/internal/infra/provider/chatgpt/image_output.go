@@ -4,6 +4,7 @@ package chatgpt
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"image"
 	"image/draw"
 	"image/jpeg"
@@ -19,6 +20,8 @@ import (
 type ImageOutputOptions struct {
 	Background   string `json:"background,omitempty"`
 	OutputFormat string `json:"output_format,omitempty"`
+	// Size is the requested WIDTHxHEIGHT, stated in the prompt only.
+	Size string `json:"size,omitempty"`
 }
 
 type ImageOptionError struct {
@@ -54,15 +57,29 @@ func (o ImageOutputOptions) EffectiveFormat() string {
 
 func (o ImageOutputOptions) promptSuffix() string {
 	var suffix string
+	// ChatGPT Web ignores image_generation_size: the model takes the shape
+	// from the prompt and draws about 1.57 MP, so the shape matches, not the
+	// pixel count.
+	var width, height int
+	if _, err := fmt.Sscanf(o.Size, "%dx%d", &width, &height); err == nil && width > 0 && height > 0 {
+		shape := "square"
+		if width > height {
+			shape = "landscape"
+		} else if width < height {
+			shape = "portrait"
+		}
+		divisor := gcd(width, height)
+		suffix = fmt.Sprintf("\nOutput requirement: %dx%d pixels (%s, aspect ratio %d:%d).", width, height, shape, width/divisor, height/divisor)
+	}
 	background := o.Background
 	if o.OutputFormat == "jpeg" && (background == "" || background == "auto") {
 		background = "opaque"
 	}
 	switch background {
 	case "transparent":
-		suffix = "\nOutput requirement: use a genuinely transparent background with an alpha channel (background pixels alpha=0). Do not simulate transparency with a painted checkerboard, white backdrop, or solid-color backdrop. Follow the user's requested content and editing operation."
+		suffix += "\nOutput requirement: use a genuinely transparent background with an alpha channel (background pixels alpha=0). Do not simulate transparency with a painted checkerboard, white backdrop, or solid-color backdrop. Follow the user's requested content and editing operation."
 	case "opaque":
-		suffix = "\nOutput requirement: use a fully opaque background, with no transparent or semi-transparent pixels. Follow the user's requested content and editing operation."
+		suffix += "\nOutput requirement: use a fully opaque background, with no transparent or semi-transparent pixels. Follow the user's requested content and editing operation."
 	}
 	// Request a PNG source from Web; final format is encoded locally. This does
 	// not rely on unverified Web support for Images API output_format fields.
@@ -158,4 +175,11 @@ func (o ImageOutputOptions) applyDecoded(download downloadedImage) ([]byte, stri
 		return nil, "", invalidImageOutput("OpenAI image output could not be encoded as " + target + " within the size limit")
 	}
 	return output.Bytes(), "image/" + target, nil
+}
+
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
 }

@@ -362,7 +362,7 @@ func (a *Adapter) submitDrawing(ctx context.Context, w wireAccount, job imageJob
 	if err != nil {
 		return "", nil, err
 	}
-	prompt := job.prompt + (ImageOutputOptions{OutputFormat: job.outputFormat, Background: job.background}).promptSuffix()
+	prompt := job.prompt + (ImageOutputOptions{OutputFormat: job.outputFormat, Background: job.background, Size: job.size}).promptSuffix()
 	conduit, err := a.image.prepare(ctx, w, requirements, prompt, model)
 	if err != nil {
 		return "", nil, err
