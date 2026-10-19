@@ -180,7 +180,7 @@ func (a *Adapter) SyncAccountIdentity(ctx context.Context, credential account.Cr
 	var identity provider.AccountIdentity
 	err := a.withClient(ctx, credential, func(ctx context.Context, c *client) error {
 		if c.rc.token == "" {
-			return &transportError{err: errNoToken}
+			return errNoToken
 		}
 		email, userID := c.imsProfile(ctx)
 		identity.Email = email

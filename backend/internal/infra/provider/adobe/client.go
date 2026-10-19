@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -130,7 +131,7 @@ func (c *client) send(ctx context.Context, method, rawURL string, body io.Reader
 	}
 	resp, err := c.do.Do(req)
 	if err != nil {
-		return nil, nil, &transportError{err: err}
+		return nil, nil, &transportError{err: withoutURL(err)}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
@@ -141,6 +142,19 @@ func (c *client) send(ctx context.Context, method, rawURL string, body io.Reader
 		return resp, nil, &upstreamError{stage: "response", status: http.StatusBadGateway, body: fmt.Sprintf("response exceeds %d MiB", limit>>20)}
 	}
 	return resp, raw, nil
+}
+
+// withoutURL 去掉 *url.Error 里的完整地址：预签名链接带签名，错误文本会落库并展示。
+func withoutURL(err error) error {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return err
+	}
+	host := ""
+	if parsed, parseErr := url.Parse(ue.URL); parseErr == nil {
+		host = parsed.Host
+	}
+	return fmt.Errorf("%s %s: %w", ue.Op, host, ue.Err)
 }
 
 // request 发起一次 JSON 调用，返回解码后的响应体、状态码与响应头。传输失败
@@ -165,7 +179,7 @@ func (c *client) request(ctx context.Context, method, rawURL string, body io.Rea
 
 func (c *client) submitImage(ctx context.Context, submitURL string, payloads []map[string]any, prompt string) (submission, error) {
 	headers := c.submitHeaders(prompt, false)
-	var last error
+	var last, uncertain error
 	for _, payload := range payloads {
 		encoded, _ := json.Marshal(payload)
 		status, data, hdr, reqErr := c.request(ctx, http.MethodPost, submitURL, bytes.NewReader(encoded), headers)
@@ -181,10 +195,17 @@ func (c *client) submitImage(ctx context.Context, submitURL string, payloads []m
 			return submission{pollURL: link}, nil
 		}
 		last = classifyUpstream("submit", status, bodyText(data))
+		if status >= 500 && uncertain == nil {
+			uncertain = last
+		}
 		// 只有普通 4xx 拒绝才停止尝试后续候选 payload。
 		if status < 500 && status != 429 && status != 451 {
 			break
 		}
+	}
+	// 某个候选拿到过 5xx 就可能已被接受：按结果未知上报，不能被当成明确拒绝去换账号。
+	if uncertain != nil {
+		return submission{}, uncertain
 	}
 	if last == nil {
 		last = &upstreamError{stage: "submit", status: 502, body: "image submission failed"}

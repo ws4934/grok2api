@@ -229,8 +229,6 @@ type videoPayloadInput struct {
 	duration      int
 	resolution    string
 	sourceImageID []string
-	sourceVideoID []string
-	sourceAudioID []string
 	generateAudio bool
 }
 
@@ -244,7 +242,7 @@ func buildVideoPayload(in videoPayloadInput) map[string]any {
 		return map[string]any{
 			"modelId": "gemini-omni", "modelVersion": "omni-flash", "n": 1, "seeds": []int64{seed},
 			"prompt": in.prompt, "output": map[string]any{"storeInputs": true},
-			"referenceBlobs":     videoRefBlobs(in.sourceImageID, 4, "style", in.sourceVideoID, 1, "source", nil, 0),
+			"referenceBlobs":     imageRefBlobs(in.sourceImageID, 4, "style"),
 			"generationMetadata": map[string]any{"module": "aura"},
 			"size":               sizeObj, "duration": in.duration,
 			"generationSettings": map[string]any{"aspectRatio": in.aspectRatio},
@@ -260,7 +258,7 @@ func buildVideoPayload(in videoPayloadInput) map[string]any {
 		}
 		return map[string]any{
 			"modelId": "seedance", "modelVersion": ver, "size": sizeObj, "seeds": []int64{seed}, "n": 1,
-			"referenceBlobs": videoRefBlobs(in.sourceImageID, 9, "style", in.sourceVideoID, 3, "source", in.sourceAudioID, 3),
+			"referenceBlobs": imageRefBlobs(in.sourceImageID, 9, "style"),
 			"prompt":         in.prompt, "negativePrompt": neg, "duration": in.duration,
 			"generateAudio":      in.generateAudio,
 			"generationMetadata": map[string]any{"module": "text2video", "submodule": "ff-video-generate"},
@@ -345,16 +343,10 @@ func buildVideoPayload(in videoPayloadInput) map[string]any {
 	}
 }
 
-func videoRefBlobs(images []string, imageMax int, imageUsage string, videos []string, videoMax int, videoUsage string, audios []string, audioMax int) []any {
+func imageRefBlobs(images []string, limit int, usage string) []any {
 	refs := make([]any, 0)
-	for _, id := range clip(images, imageMax) {
-		refs = append(refs, map[string]any{"id": id, "usage": imageUsage})
-	}
-	for _, id := range clip(videos, videoMax) {
-		refs = append(refs, map[string]any{"id": id, "usage": videoUsage})
-	}
-	for _, id := range clip(audios, audioMax) {
-		refs = append(refs, map[string]any{"id": id, "usage": "source"})
+	for _, id := range clip(images, limit) {
+		refs = append(refs, map[string]any{"id": id, "usage": usage})
 	}
 	return refs
 }

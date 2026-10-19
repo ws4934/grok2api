@@ -211,6 +211,9 @@ func TestClassifyUpstreamReportsGatewayStatus(t *testing.T) {
 		{400, `{"message":"prompt blocked"}`, 400, true},
 		{429, "", 429, false},
 		{503, "", 503, false},
+		// 请求级拒绝里出现 "limit exceeded"/"quota" 不能被当成积分耗尽（会耗尽一串账号）。
+		{413, `{"message":"Request size limit exceeded"}`, 413, true},
+		{422, `{"message":"quota"}`, 422, true},
 	}
 	for _, tc := range cases {
 		err := classifyUpstream("submit", tc.status, tc.body)
@@ -220,6 +223,9 @@ func TestClassifyUpstreamReportsGatewayStatus(t *testing.T) {
 	}
 	if !errors.Is(classifyUpstream("submit", 401, ""), provider.ErrUnauthorized) {
 		t.Fatal("401 must match provider.ErrUnauthorized")
+	}
+	if classifyUpstream("submit", 429, `{"message":"Rate limit exceeded"}`).quota {
+		t.Fatal("a plain rate limit is not exhausted credits")
 	}
 	if reason := classifyUpstream("submit", 400, `{"message":"prompt blocked"}`).reason; reason != "prompt blocked" {
 		t.Fatalf("reason = %q", reason)
@@ -390,7 +396,7 @@ func TestSubmitImageCheckpointSemantics(t *testing.T) {
 		submitStatus  int
 		wantSubmitted bool
 		wantUpstream  bool
-	}{{0, true, true}, {400, false, false}, {500, true, false}}
+	}{{0, true, true}, {400, false, false}, {500, true, false}, {408, false, false}}
 	for _, tc := range cases {
 		fake, adapter, credential := newFakeAdobe(t)
 		fake.submitStatus = tc.submitStatus
@@ -408,6 +414,10 @@ func TestSubmitImageCheckpointSemantics(t *testing.T) {
 		if tc.submitStatus == 400 && !provider.IsRequestScopedError(err) {
 			t.Fatalf("a rejected prompt must be request-scoped: %v", err)
 		}
+		// 408 重铸后仍被拒：问题在 mint 环境，请求级拒绝，不让每个账号都挨一次。
+		if tc.submitStatus == 408 && (!errors.Is(err, errSessionRejected) || fake.submits.Load() != 2) {
+			t.Fatalf("repeated 408 => %v after %d submits", err, fake.submits.Load())
+		}
 	}
 }
 
@@ -419,6 +429,13 @@ func TestGenerateImageRejectionsBecomeResponses(t *testing.T) {
 	response, err := adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"})
 	if err != nil || response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("401 submit => response %v err %v", response, err)
+	}
+
+	// 403 等网关不处理的拒绝保持为错误，账号照常降权。
+	fake, adapter, credential = newFakeAdobe(t)
+	fake.submitStatus = http.StatusForbidden
+	if response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"}); err == nil {
+		t.Fatalf("403 submit => response %v, want error", response)
 	}
 
 	fake, adapter, credential = newFakeAdobe(t)
@@ -498,5 +515,23 @@ func TestSyncQuotaModeNeverInventsEmptyWindow(t *testing.T) {
 	status = http.StatusInternalServerError
 	if window, err := adapter.SyncQuotaMode(context.Background(), credential, quotaModeCredits); err == nil {
 		t.Fatalf("credits 500 => window %+v without error", window)
+	}
+}
+
+// 某个候选 payload 拿到 5xx 后即使后续候选被 4xx 拒绝，结果也必须是"未知"，否则网关会换账号重画。
+func TestSubmitImageKeepsUncertainAfterServerError(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+	c := &client{do: server.Client(), rc: requestContext{token: "t", sherlock: "s"}}
+	_, err := c.submitImage(context.Background(), server.URL, []map[string]any{{"a": 1}, {"b": 2}}, "p")
+	if rejected(err) || provider.ErrorHTTPStatusOrZero(err) != http.StatusInternalServerError {
+		t.Fatalf("500 then 400 => %v (rejected=%v)", err, rejected(err))
 	}
 }

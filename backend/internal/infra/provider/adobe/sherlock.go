@@ -38,6 +38,8 @@ type sherlockService struct {
 	mu       sync.Mutex
 	token    string
 	mintedAt time.Time
+	// loadedFrom 是当前 token 那次拉取的开始时间；更早开始的拉取不得覆盖它。
+	loadedFrom time.Time
 	// triedAt 是最近一次后台刷新的开始时间。
 	triedAt time.Time
 }
@@ -82,6 +84,7 @@ func (s *sherlockService) mint(ctx context.Context, fresh bool) (string, error) 
 		key, endpoint = "fresh", endpoint+"?fresh=1"
 	}
 	return flight.Do(ctx, &s.flight, key, mintTimeout, func(ctx context.Context) (string, error) {
+		started := time.Now()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return "", err
@@ -107,7 +110,10 @@ func (s *sherlockService) mint(ctx context.Context, fresh bool) (string, error) 
 			return "", errors.New("adobe: mint 服务未返回有效 sherlockToken")
 		}
 		s.mu.Lock()
-		s.token, s.mintedAt = value, time.Now()
+		// 普通拉取可能晚于强制重铸返回（拿的是 sidecar 缓存的旧 token），不能覆盖新的。
+		if started.After(s.loadedFrom) {
+			s.token, s.mintedAt, s.loadedFrom = value, time.Now(), started
+		}
 		s.mu.Unlock()
 		return value, nil
 	})

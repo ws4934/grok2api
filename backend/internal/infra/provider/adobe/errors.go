@@ -62,13 +62,14 @@ func (e *upstreamError) RequestScopedFailure() bool {
 	return !e.quota && (e.status == http.StatusBadRequest || e.status == http.StatusRequestEntityTooLarge || e.status == http.StatusUnprocessableEntity)
 }
 
-var quotaBodyPattern = regexp.MustCompile(`(?i)quota|insufficient[ _]credit|not enough credit|credits? (?:exhausted|depleted|exceeded)|limit[ _]exceeded`)
+// creditBodyPattern 只认积分相关的措辞；"limit exceeded" 之类会把请求级拒绝（413/422）误判成积分耗尽。
+var creditBodyPattern = regexp.MustCompile(`(?i)insufficient[ _]credit|not enough credit|out of credit|credits? (?:exhausted|depleted|exceeded)|quota[ _]exceeded`)
 
 // classifyUpstream 把 Adobe 的 HTTP 状态与响应体归类成 upstreamError。
 func classifyUpstream(stage string, status int, body string) *upstreamError {
 	return &upstreamError{
 		stage: stage, status: status, body: truncate(body, 300), reason: upstreamReason(body),
-		quota: status == http.StatusPaymentRequired || (status >= 400 && status < 500 && status != http.StatusUnauthorized && quotaBodyPattern.MatchString(body)),
+		quota: status == http.StatusPaymentRequired || ((status == http.StatusBadRequest || status == http.StatusForbidden || status == http.StatusTooManyRequests) && creditBodyPattern.MatchString(body)),
 	}
 }
 
@@ -105,6 +106,9 @@ var (
 	errNoToken = &upstreamError{stage: "auth", status: http.StatusUnauthorized, body: "account has no access token"}
 	// errMintUnavailable 表示 mint 服务没给出 x-arp-session-id：请求未发出，换账号也无济于事。
 	errMintUnavailable = &requestError{msg: "Adobe 会话令牌服务（mint）暂不可用", status: http.StatusServiceUnavailable}
+	// errSessionRejected 表示重铸后 Adobe 仍以 408 拒绝 x-arp-session-id：问题在 mint
+	// 环境而不是账号，换账号无济于事。请求被明确拒绝，没有生成任务。
+	errSessionRejected = &requestError{msg: "Adobe 拒绝了会话令牌（x-arp-session-id），请检查 mint 服务", status: http.StatusRequestTimeout}
 )
 
 // truncate 按字节截断并丢弃被切开的 UTF-8 字符（文本会落库，PostgreSQL 拒绝非法 UTF-8）。
@@ -131,33 +135,33 @@ func errorResponse(status int, code, message string) *provider.Response {
 	return jsonResponse(status, map[string]any{"error": map[string]any{"type": errType, "code": code, "message": message, "param": nil}})
 }
 
-// syncFailure 决定同步图像失败怎么交给网关：Adobe 尚未接受任务时的明确拒绝（4xx、
-// 本地请求错误）转成响应，网关据此刷新凭据、对账积分或换账号；其余（已提交、
-// 5xx、传输失败）保持为错误，网关绝不重新提交。
+// syncFailure 决定同步图像失败怎么交给网关。Adobe 尚未接受任务时，网关能处理的
+// 拒绝转成响应：401 刷新凭据重试，429 对账积分后换账号，请求级拒绝原样返回；
+// 其余（403、已提交后的失败、5xx、传输错误）保持为错误，网关给账号降权且绝不重提。
 func syncFailure(err error, accepted bool) (*provider.Response, error) {
-	status := provider.ErrorHTTPStatusOrZero(err)
-	if accepted || status == 0 || (status >= 500 && !provider.IsRequestScopedError(err)) {
+	if accepted {
 		return nil, err
 	}
 	var ue *upstreamError
 	if !errors.As(err, &ue) {
-		return errorResponse(status, "invalid_request", err.Error()), nil
+		if provider.IsRequestScopedError(err) {
+			return errorResponse(provider.ErrorHTTPStatusOrZero(err), "invalid_request", err.Error()), nil
+		}
+		return nil, err
 	}
-	code, message := "upstream_error", "Adobe 拒绝了该请求"
 	switch {
 	case ue.quota:
-		code, message = "insufficient_credits", "Adobe 账号积分不足"
+		return errorResponse(http.StatusTooManyRequests, "insufficient_credits", "Adobe 账号积分不足"), nil
 	case ue.status == http.StatusUnauthorized:
-		code, message = "invalid_credential", "Adobe 拒绝了账号凭据"
-	case ue.status == http.StatusForbidden:
-		code, message = "upstream_forbidden", "Adobe 拒绝了该账号的请求"
+		return errorResponse(http.StatusUnauthorized, "invalid_credential", "Adobe 拒绝了账号凭据"), nil
 	case ue.status == http.StatusTooManyRequests:
-		code, message = "rate_limit_exceeded", "Adobe 请求过于频繁，请稍后重试"
+		return errorResponse(http.StatusTooManyRequests, "rate_limit_exceeded", "Adobe 请求过于频繁，请稍后重试"), nil
 	case ue.RequestScopedFailure():
-		code = "upstream_rejected_request"
+		message := "Adobe 拒绝了该请求"
+		if ue.reason != "" {
+			message += "：" + ue.reason
+		}
+		return errorResponse(ue.status, "upstream_rejected_request", message), nil
 	}
-	if ue.reason != "" {
-		message += "：" + ue.reason
-	}
-	return errorResponse(status, code, message), nil
+	return nil, err
 }

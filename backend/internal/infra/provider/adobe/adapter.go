@@ -129,24 +129,35 @@ func (a *Adapter) useSherlock(ctx context.Context, c *client) error {
 	return nil
 }
 
-// submit 发送一次提交；Adobe 以 408/503 拒绝过期的 x-arp-session-id 时强制重铸
-// 后再发一次。
+// submit 发送一次提交；Adobe 以 408 拒绝过期的 x-arp-session-id 时强制重铸后再发
+// 一次。只重试 408：它是明确拒绝，5xx 时任务可能已被接受，重发会重复扣积分。
 func (a *Adapter) submit(ctx context.Context, c *client, send func() (submission, error)) (submission, error) {
 	sub, err := send()
-	var ue *upstreamError
-	if err == nil || !errors.As(err, &ue) || (ue.status != http.StatusRequestTimeout && ue.status != http.StatusServiceUnavailable) {
+	if !sessionRejected(err) {
 		return sub, err
 	}
 	fresh, mintErr := a.sherlock.forceMint(ctx)
 	if mintErr != nil {
-		return sub, err
+		a.log().Warn("adobe_sherlock_remint_failed", "error", mintErr)
+		return sub, errMintUnavailable
 	}
 	c.rc.sherlock = fresh
-	return send()
+	if sub, err = send(); sessionRejected(err) {
+		a.log().Warn("adobe_sherlock_rejected_after_remint", "error", err)
+		return sub, errSessionRejected
+	}
+	return sub, err
 }
 
-// rejected 判断提交是否被 Adobe 明确拒绝（4xx）：此时没有生成任务，可以换账号重试。
+func sessionRejected(err error) bool {
+	var ue *upstreamError
+	return errors.As(err, &ue) && ue.status == http.StatusRequestTimeout
+}
+
+// rejected 判断提交是否被明确拒绝（Adobe 4xx 或本地请求错误）：此时没有生成任务，
+// 可以清掉提交标记。
 func rejected(err error) bool {
 	var ue *upstreamError
-	return errors.As(err, &ue) && ue.status >= 400 && ue.status < 500
+	var re *requestError
+	return errors.As(err, &re) || (errors.As(err, &ue) && ue.status >= 400 && ue.status < 500)
 }

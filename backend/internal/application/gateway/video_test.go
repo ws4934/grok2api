@@ -773,6 +773,8 @@ type videoCreateFailoverAdapter struct {
 	mu       sync.Mutex
 	failures map[uint64]int
 	status   int
+	// scoped makes the failure a request-scoped rejection.
+	scoped   bool
 	attempts []uint64
 }
 
@@ -796,6 +798,9 @@ func (a *videoCreateFailoverAdapter) GenerateVideo(_ context.Context, request pr
 		if a.status == 0 {
 			return provider.VideoResult{}, errors.New("unclassified create failure")
 		}
+		if a.scoped {
+			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageCreate, a.status, videoScopedError{videoHTTPStatusError{status: a.status}})
+		}
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageCreate, a.status, videoHTTPStatusError{status: a.status})
 	}
 	return provider.VideoResult{AssetID: "video_asset_00001", ContentType: "video/mp4"}, nil
@@ -811,6 +816,10 @@ type videoHTTPStatusError struct{ status int }
 
 func (e videoHTTPStatusError) Error() string       { return http.StatusText(e.status) }
 func (e videoHTTPStatusError) HTTPStatusCode() int { return e.status }
+
+type videoScopedError struct{ videoHTTPStatusError }
+
+func (videoScopedError) RequestScopedFailure() bool { return true }
 
 func TestVideoWebForbiddenRetriesPinnedAccountOnceThenFailsOver(t *testing.T) {
 	ctx := context.Background()
@@ -927,6 +936,41 @@ func TestVideoWebForbiddenRetriesPinnedAccountOnceThenFailsOver(t *testing.T) {
 	}
 	if stored.Status != media.StatusFailed || stored.AccountID != first.ID {
 		t.Fatalf("unclassified failed job = %#v", stored)
+	}
+
+	// A request-scoped rejection (bad input, moderated prompt) fails the job
+	// without failing over and without growing the account's failure count.
+	third := createAccount("third", 50)
+	if err := modelRepo.ReplaceAccountCapabilities(ctx, third.ID, []string{"grok-imagine-video"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	selector.MarkQuotaStateChanged(account.ProviderWeb) // drop the cached candidate snapshot
+	before, err := accountRepo.Get(ctx, third.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.mu.Lock()
+	adapter.failures = map[uint64]int{third.ID: 1}
+	adapter.status, adapter.scoped, adapter.attempts = http.StatusBadRequest, true, nil
+	adapter.mu.Unlock()
+	scopedJob := unknownJob
+	scopedJob.ID, scopedJob.RequestID = "video_request_scoped", "request-video-scoped"
+	scopedJob.AccountID, scopedJob.AccountName = third.ID, third.Name
+	scopedJob.CreatedAt = time.Now().UTC()
+	scopedJob.UpdatedAt = scopedJob.CreatedAt
+	if err := mediaRepo.CreateMediaJob(ctx, scopedJob); err != nil {
+		t.Fatal(err)
+	}
+	service.runVideoJob(ctx, scopedJob, route)
+	if attempts := adapter.Attempts(); len(attempts) != 1 || attempts[0] != third.ID {
+		t.Fatalf("request-scoped attempts = %#v, want pinned account once", attempts)
+	}
+	after, err := accountRepo.Get(ctx, third.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.FailureCount != before.FailureCount {
+		t.Fatalf("request-scoped failure changed account failure count %d -> %d", before.FailureCount, after.FailureCount)
 	}
 }
 

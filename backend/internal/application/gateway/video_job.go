@@ -214,6 +214,10 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			retriableCreate = safeCreateFailure
 		} else if hasStatus {
 			switch {
+			case provider.IsRequestScopedError(err):
+				// The request itself was refused; any account would be refused the
+				// same way, so it neither cools this account down nor fails over.
+				failureHandled = true
 			case status == http.StatusUnauthorized && lease.Credential.AuthType == account.AuthTypeSSO:
 				s.markSSOCredentialRejected(failureCtx, lease.Credential, fmt.Sprintf("%s SSO credential rejected", lease.Credential.Provider))
 				failureHandled = true

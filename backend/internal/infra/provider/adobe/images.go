@@ -270,7 +270,7 @@ func (a *Adapter) inputImage(ctx context.Context, ref string) ([]byte, string, e
 			if ctx.Err() != nil {
 				return nil, "", ctx.Err()
 			}
-			return nil, "", &requestError{msg: "无法下载输入图片：" + err.Error()}
+			return nil, "", &requestError{msg: "无法下载输入图片（需可公网访问的 https 地址）"}
 		}
 		data = raw
 	default:
