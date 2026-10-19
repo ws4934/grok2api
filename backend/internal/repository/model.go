@@ -13,6 +13,7 @@ type ModelRepository interface {
 	List(ctx context.Context, query ModelListQuery) ([]model.Route, int64, error)
 	ListGroups(ctx context.Context, query ModelListQuery) ([]model.RouteGroup, int64, error)
 	ListEnabled(ctx context.Context) ([]model.Route, error)
+	// ListEnabledForScope leaves the account availability counts unset.
 	ListEnabledForScope(ctx context.Context, filter ModelListFilter) ([]model.Route, error)
 	ListConfiguredEnabled(ctx context.Context) ([]model.Route, error)
 	Get(ctx context.Context, id uint64) (model.Route, error)

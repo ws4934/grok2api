@@ -259,6 +259,8 @@ func (r *ModelRepository) ListEnabled(ctx context.Context) ([]model.Route, error
 	return values, nil
 }
 
+// ListEnabledForScope skips annotateAvailability: the public model list needs
+// only route identity, and the account counts dominated its cost.
 func (r *ModelRepository) ListEnabledForScope(ctx context.Context, filter repository.ModelListFilter) ([]model.Route, error) {
 	query := r.availableRoutes(r.db.db.WithContext(ctx)).Where("enabled = ?", true)
 	if len(filter.Providers) > 0 {
@@ -271,11 +273,7 @@ func (r *ModelRepository) ListEnabledForScope(ctx context.Context, filter reposi
 	if err := query.Order("public_id ASC, id ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	values := mapModelRows(rows)
-	if err := r.annotateAvailability(ctx, values); err != nil {
-		return nil, err
-	}
-	return values, nil
+	return mapModelRows(rows), nil
 }
 
 // ListConfiguredEnabled 返回所有已启用配置，包括暂时没有可用账号的路由，供 readiness 展示部分故障。

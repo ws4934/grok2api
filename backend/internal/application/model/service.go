@@ -215,8 +215,10 @@ func validModelFilter(value string, allowed ...string) bool {
 	return false
 }
 
+// ListEnabled and ListEnabledForClientKey back /v1/models and return routes
+// without account availability counts.
 func (s *Service) ListEnabled(ctx context.Context) ([]modeldomain.Route, error) {
-	return s.models.ListEnabled(ctx)
+	return s.models.ListEnabledForScope(ctx, repository.ModelListFilter{})
 }
 
 func (s *Service) ListEnabledForClientKey(ctx context.Context, key clientkeydomain.Key) ([]modeldomain.Route, error) {
@@ -225,7 +227,7 @@ func (s *Service) ListEnabledForClientKey(ctx context.Context, key clientkeydoma
 		return nil, ErrInvalidFilter
 	}
 	if !scope.IsRestricted() {
-		return s.models.ListEnabled(ctx)
+		return s.ListEnabled(ctx)
 	}
 	var providers []string
 	if !scope.Providers.All {
