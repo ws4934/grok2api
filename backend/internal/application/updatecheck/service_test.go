@@ -23,14 +23,14 @@ func TestCheckFindsLatestRelease(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"tag_name":"v3.0.1","body":"Release notes"}`)), Header: make(http.Header)}, nil
 	})}
-	service := NewService("v3.0.0", client)
+	service := NewService("v3.0.0", "", client)
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
 	service.now = func() time.Time { return now }
 	snapshot := service.Check(context.Background())
 	if snapshot.Status != StatusUpdateAvailable || !snapshot.UpdateAvailable || snapshot.LatestVersion != "v3.0.1" || snapshot.CheckedAt == nil || !snapshot.CheckedAt.Equal(now) {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
-	if snapshot.ReleaseURL != "https://github.com/chenyme/grok2api/releases/tag/v3.0.1" || snapshot.ReleaseNotes != "Release notes" {
+	if snapshot.ReleaseURL != "https://github.com/ws4934/grok2api/releases/tag/v3.0.1" || snapshot.ReleaseNotes != "Release notes" {
 		t.Fatalf("release = %#v", snapshot)
 	}
 }
@@ -43,7 +43,7 @@ func TestCheckFailureKeepsLastSuccessfulRelease(t *testing.T) {
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"tag_name":"v3.0.0","body":"Stable"}`)), Header: make(http.Header)}, nil
 	})}
-	service := NewService("v3.0.0", client)
+	service := NewService("v3.0.0", "", client)
 	first := service.Check(context.Background())
 	fail = true
 	second := service.Check(context.Background())
@@ -82,7 +82,7 @@ func TestCheckFindsHotfixAfterStableRelease(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"tag_name":"v3.0.8-hotfix.1"}`)), Header: make(http.Header)}, nil
 	})}
-	service := NewService("v3.0.8", client)
+	service := NewService("v3.0.8", "", client)
 	snapshot := service.Check(context.Background())
 	if snapshot.Status != StatusUpdateAvailable || !snapshot.UpdateAvailable {
 		t.Fatalf("snapshot = %#v", snapshot)

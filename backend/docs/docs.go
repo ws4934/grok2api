@@ -15,6 +15,76 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/api/admin/v1/system/update/apply": {
+            "post": {
+                "description": "需要管理端登录会话。下载 GitHub Release 中当前平台的 grok2api_\u003ctag\u003e_\u003cos\u003e_\u003carch\u003e.tar.gz，按 checksums.txt 校验 SHA-256 后替换可执行文件、前端静态目录与 VERSION，原文件保留为 \u003c路径\u003e.backup。\n仅在 GET /api/admin/v1/system/version 返回 canUpdate=true 时可用；同一时间只允许一个更新或回滚。返回 data.version 为新版本；data.restarting=true 表示受 Docker 或 systemd 托管、服务即将自动重启，否则需手动重启。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "在线更新到最新版本",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "409": {
+                        "description": "没有新版本、当前安装不支持在线更新或已有操作进行中",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
+        "/api/admin/v1/system/update/rollback": {
+            "post": {
+                "description": "需要管理端登录会话。用上次更新留下的 .backup 换回可执行文件、前端静态目录与 VERSION，响应与在线更新相同（data.version 为回滚后的版本）。",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "回滚上次在线更新",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "409": {
+                        "description": "没有可回滚的备份或已有操作进行中",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    }
+                }
+            }
+        },
         "/healthz": {
             "get": {
                 "produces": [

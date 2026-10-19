@@ -454,7 +454,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		clientKeyService.UpdateDefaults(next.ClientKeyDefaults.RPMLimit, next.ClientKeyDefaults.MaxConcurrent)
 		accountService.UpdateAutoCleanConfig(accountAutoCleanConfig(next.Accounts))
 	})
-	updateService := updatecheckapp.NewService(buildinfo.CurrentVersion(), nil)
+	updateService := updatecheckapp.NewService(buildinfo.CurrentVersion(), cfg.Frontend.StaticPath, nil)
 
 	startup := newStartupState(len(windows))
 	readiness := func(readyCtx context.Context) httpserver.ReadinessSnapshot {

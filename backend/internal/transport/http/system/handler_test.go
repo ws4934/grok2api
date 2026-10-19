@@ -21,7 +21,7 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 func TestHandlerReturnsOnlyPublicFrontendConfig(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	NewHandler(func() string { return "https://api.example.com/" }, updatecheckapp.NewService("v3.0.0", nil)).Register(router.Group("/api/admin/v1"))
+	NewHandler(func() string { return "https://api.example.com/" }, updatecheckapp.NewService("v3.0.0", "", nil)).Register(router.Group("/api/admin/v1"))
 	request := httptest.NewRequest(http.MethodGet, "/api/admin/v1/system", nil)
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -45,7 +45,7 @@ func TestHandlerReturnsAndChecksVersion(t *testing.T) {
 		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"tag_name":"v3.0.1","body":"Notes"}`))}, nil
 	})}
 	router := gin.New()
-	updates := updatecheckapp.NewService("v3.0.0", client)
+	updates := updatecheckapp.NewService("v3.0.0", "", client)
 	NewHandler(nil, updates).Register(router.Group("/api/admin/v1"))
 
 	for _, test := range []struct {
@@ -73,6 +73,34 @@ func TestHandlerReturnsAndChecksVersion(t *testing.T) {
 		}
 		if payload.Data.CurrentVersion != "v3.0.0" || payload.Data.Status != test.status {
 			t.Fatalf("%s %s data = %#v", test.method, test.path, payload.Data)
+		}
+	}
+}
+
+func TestHandlerRejectsInstallWithoutUpdateOrBackup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"tag_name":"v3.0.0"}`))}, nil
+	})}
+	router := gin.New()
+	NewHandler(nil, updatecheckapp.NewService("v3.0.0", "", client)).Register(router.Group("/api/admin/v1"))
+
+	for path, code := range map[string]string{
+		"/api/admin/v1/system/update/apply":    "updateNotAvailable",
+		"/api/admin/v1/system/update/rollback": "rollbackUnavailable",
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, path, nil))
+		var payload struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if recorder.Code != http.StatusConflict || payload.Error.Code != code {
+			t.Fatalf("POST %s = %d %s", path, recorder.Code, recorder.Body.String())
 		}
 	}
 }

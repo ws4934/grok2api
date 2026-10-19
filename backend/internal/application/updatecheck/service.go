@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,7 +19,9 @@ import (
 )
 
 const (
-	latestReleaseAPI = "https://api.github.com/repos/chenyme/grok2api/releases/latest"
+	githubRepository = "ws4934/grok2api"
+	latestReleaseAPI = "https://api.github.com/repos/" + githubRepository + "/releases/latest"
+	releasesPage     = "https://github.com/" + githubRepository + "/releases"
 	maxReleaseBytes  = 1 << 20
 	maxNotesRunes    = 4096
 )
@@ -40,6 +44,11 @@ type Snapshot struct {
 	ReleaseURL      string     `json:"releaseUrl"`
 	ReleaseNotes    string     `json:"releaseNotes"`
 	Error           string     `json:"error"`
+	// 以下字段在每次读取时按当前安装状态计算。
+	CanUpdate           bool   `json:"canUpdate"`
+	UpdateBlockedReason string `json:"updateBlockedReason"`
+	CanRestart          bool   `json:"canRestart"`
+	RollbackAvailable   bool   `json:"rollbackAvailable"`
 }
 
 type Service struct {
@@ -47,12 +56,25 @@ type Service struct {
 	client  *http.Client
 	now     func() time.Time
 
-	mu       sync.RWMutex
-	snapshot Snapshot
-	checks   singleflight.Group
+	// 安装布局与重启钩子，测试中直接替换。
+	latestURL    string
+	executable   string
+	staticPath   string
+	versionPath  string
+	restart      func()
+	canRestart   func() bool
+	restartDelay time.Duration
+
+	mu         sync.RWMutex
+	snapshot   Snapshot
+	release    latestRelease
+	pending    bool
+	checks     singleflight.Group
+	installing sync.Mutex
 }
 
-func NewService(currentVersion string, client *http.Client) *Service {
+// NewService 创建更新服务；staticPath 是前端静态目录，在线更新时会一并替换。
+func NewService(currentVersion, staticPath string, client *http.Client) *Service {
 	currentVersion = strings.TrimSpace(currentVersion)
 	if currentVersion == "" {
 		currentVersion = "dev"
@@ -60,10 +82,27 @@ func NewService(currentVersion string, client *http.Client) *Service {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
+	if staticPath = strings.TrimSpace(staticPath); staticPath != "" {
+		if absolute, err := filepath.Abs(staticPath); err == nil {
+			staticPath = absolute
+		}
+	}
+	executable := executablePath()
+	versionPath := ""
+	if executable != "" {
+		versionPath = filepath.Join(filepath.Dir(executable), "VERSION")
+	}
 	return &Service{
-		current: currentVersion,
-		client:  client,
-		now:     time.Now,
+		current:      currentVersion,
+		client:       client,
+		now:          time.Now,
+		latestURL:    latestReleaseAPI,
+		executable:   executable,
+		staticPath:   staticPath,
+		versionPath:  versionPath,
+		restart:      terminateSelf,
+		canRestart:   underSupervisor,
+		restartDelay: time.Second,
 		snapshot: Snapshot{
 			CurrentVersion: currentVersion,
 			Status:         StatusUnchecked,
@@ -73,20 +112,30 @@ func NewService(currentVersion string, client *http.Client) *Service {
 
 func (s *Service) Snapshot() Snapshot {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return cloneSnapshot(s.snapshot)
+	snapshot, release, pending := cloneSnapshot(s.snapshot), s.release, s.pending
+	s.mu.RUnlock()
+	snapshot.CanRestart = s.canRestart()
+	snapshot.RollbackAvailable = s.backupsExist()
+	snapshot.UpdateBlockedReason = s.blockedReason(snapshot.UpdateAvailable, release, pending)
+	snapshot.CanUpdate = snapshot.UpdateBlockedReason == ""
+	return snapshot
 }
 
 func (s *Service) Check(ctx context.Context) Snapshot {
 	result, err, _ := s.checks.Do("latest", func() (any, error) {
 		return s.fetchLatest(ctx)
 	})
+	s.record(result, err)
+	return s.Snapshot()
+}
+
+func (s *Service) record(result any, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
 		s.snapshot.Status = StatusCheckFailed
 		s.snapshot.Error = err.Error()
-		return cloneSnapshot(s.snapshot)
+		return
 	}
 	release := result.(latestRelease)
 	checkedAt := s.now().UTC()
@@ -98,7 +147,7 @@ func (s *Service) Check(ctx context.Context) Snapshot {
 		s.snapshot.ReleaseNotes = release.Notes
 		s.snapshot.Status = StatusCheckFailed
 		s.snapshot.Error = "当前版本或最新版本不是有效的语义化版本，无法比较"
-		return cloneSnapshot(s.snapshot)
+		return
 	}
 	available := compareSemanticVersion(latest, current) > 0
 	s.snapshot = Snapshot{
@@ -107,20 +156,23 @@ func (s *Service) Check(ctx context.Context) Snapshot {
 		ReleaseURL: release.URL, ReleaseNotes: release.Notes,
 		Status: StatusUpToDate,
 	}
+	s.release = release
 	if available {
 		s.snapshot.Status = StatusUpdateAvailable
 	}
-	return cloneSnapshot(s.snapshot)
 }
 
 type latestRelease struct {
 	Tag   string
 	URL   string
 	Notes string
+	// 当前平台安装包与 checksums.txt 的下载地址，缺失时为空。
+	ArchiveURL   string
+	ChecksumsURL string
 }
 
 func (s *Service) fetchLatest(ctx context.Context) (latestRelease, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, latestReleaseAPI, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.latestURL, nil)
 	if err != nil {
 		return latestRelease{}, err
 	}
@@ -143,8 +195,13 @@ func (s *Service) fetchLatest(ctx context.Context) (latestRelease, error) {
 		return latestRelease{}, errors.New("GitHub Release 响应超过安全上限")
 	}
 	var payload struct {
-		Tag  string `json:"tag_name"`
-		Body string `json:"body"`
+		Tag     string `json:"tag_name"`
+		Body    string `json:"body"`
+		HTMLURL string `json:"html_url"`
+		Assets  []struct {
+			Name string `json:"name"`
+			URL  string `json:"browser_download_url"`
+		} `json:"assets"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return latestRelease{}, fmt.Errorf("解析 GitHub Release 响应: %w", err)
@@ -153,11 +210,29 @@ func (s *Service) fetchLatest(ctx context.Context) (latestRelease, error) {
 	if payload.Tag == "" {
 		return latestRelease{}, errors.New("GitHub Release 未返回版本号")
 	}
-	return latestRelease{
+	release := latestRelease{
 		Tag:   payload.Tag,
-		URL:   "https://github.com/chenyme/grok2api/releases/tag/" + url.PathEscape(payload.Tag),
+		URL:   payload.HTMLURL,
 		Notes: truncateRunes(strings.TrimSpace(payload.Body), maxNotesRunes),
-	}, nil
+	}
+	if !strings.HasPrefix(release.URL, releasesPage+"/") {
+		release.URL = releasesPage + "/tag/" + url.PathEscape(payload.Tag)
+	}
+	archive := releaseArchiveName(payload.Tag)
+	for _, asset := range payload.Assets {
+		switch asset.Name {
+		case archive:
+			release.ArchiveURL = asset.URL
+		case "checksums.txt":
+			release.ChecksumsURL = asset.URL
+		}
+	}
+	return release, nil
+}
+
+// releaseArchiveName 返回当前平台的发行包文件名，例如 grok2api_v3.2.0_linux_amd64.tar.gz。
+func releaseArchiveName(tag string) string {
+	return fmt.Sprintf("grok2api_%s_%s_%s.tar.gz", tag, runtime.GOOS, runtime.GOARCH)
 }
 
 type semanticVersion struct {
