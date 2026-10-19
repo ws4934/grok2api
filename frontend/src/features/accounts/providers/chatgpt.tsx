@@ -18,6 +18,7 @@ export const chatgptAccountUI: Partial<ProviderAccountUI> = {
   importTexts: {
     quickImport: "accounts.chatgpt.quickImport", file: "accounts.importFile", title: "accounts.quickImportProviderTitle", description: "accounts.chatgpt.quickImportDescription",
     tokens: "accounts.chatgpt.tokens", placeholder: "accounts.chatgpt.tokenPlaceholder", filename: "chatgpt-accounts.txt",
+    formats: ["accounts.chatgpt.importSub2api", "accounts.chatgpt.importCPA"],
   },
   AuthHelp,
 };

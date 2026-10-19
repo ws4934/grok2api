@@ -32,6 +32,7 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 1. **添加账号**（账号页 → ChatGPT 标签）：
    - **浏览器 OAuth**：打开授权链接并登录，把浏览器地址栏里的完整回调 URL（`https://platform.openai.com/auth/callback?code=…&state=…`）粘贴回来。会话 10 分钟内有效。
    - **导入**：JSON、JSONL，或每行一个 access token。只有 refresh token 的记录会在导入时换取 token。导入时会查询身份和套餐（plan）。
+   - **sub2api / CPA**：直接上传 sub2api 导出的账号文件（只取其中的 OpenAI OAuth 账号，其他平台跳过），或 CLIProxyAPI 的 `codex-*.json` 凭据文件（可多选）。这些 token 由 Codex CLI 的 OAuth 客户端签发，账号同样走 ChatGPT 网页接口。refresh token 只交回签发它的客户端续期：客户端从 access token 的 `client_id` 或 ID token 的 `aud` 读出，读不到时按这两个工具的默认值视为 Codex 客户端。
 2. **设置**（设置 → ChatGPT）：
    - **图片会话模型**：留空即可。留空时按账号自动选择 ChatGPT 会话模型：`gpt-image-2` 用 `gpt-5-3`；`gpt-image-2.5` 系列优先用 `gpt-6`，不可用时用 `auto`。只有在 `/backend-api/models` 里开启了生图工具（`image_gen_tool_enabled`）的模型才会被选用。填写后所有图片模型都改用该模型。
    - **输出上限**：默认 16,384。

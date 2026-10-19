@@ -25,6 +25,52 @@ import (
 const oauthProfile = "platform_pkce_v1"
 const oauthClientID = "app_2SKx67EdpoN0G6j64rFvigXD"
 const oauthRedirect = "https://platform.openai.com/auth/callback"
+
+// codexProfile marks tokens issued to the Codex CLI client, as sub2api and
+// CLIProxyAPI (CPA) store them.
+const codexProfile = "codex_cli"
+const codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+
+// oauthClients are the OAuth clients whose refresh tokens can be renewed. A
+// refresh token goes back only to the client that issued it: another client
+// can revoke it.
+var oauthClients = map[string]struct{ id, scope string }{
+	oauthProfile: {id: oauthClientID},
+	codexProfile: {id: codexClientID, scope: "openid profile email"},
+}
+
+func refreshBody(c credentials) map[string]string {
+	client := oauthClients[c.ClientProfile]
+	body := map[string]string{"client_id": client.id, "grant_type": "refresh_token", "refresh_token": c.RefreshToken}
+	if client.scope != "" {
+		body["scope"] = client.scope
+	}
+	return body
+}
+
+func canRefresh(c credentials) bool {
+	_, ok := oauthClients[c.ClientProfile]
+	return c.RefreshToken != "" && ok
+}
+
+// tokenClientID reads the issuing client from the access token, or from the
+// ID token audience.
+func tokenClientID(accessToken, idToken string) string {
+	if id, _ := tokenClaims(accessToken)["client_id"].(string); id != "" {
+		return id
+	}
+	switch aud := tokenClaims(idToken)["aud"].(type) {
+	case string:
+		return aud
+	case []any:
+		if len(aud) == 1 {
+			id, _ := aud[0].(string)
+			return id
+		}
+	}
+	return ""
+}
+
 const defaultAccountName = "ChatGPT account"
 
 // credentials is a decrypted ChatGPT login: the tokens plus the provider state
@@ -96,7 +142,8 @@ func (a *Adapter) encryptState(c credentials) (string, error) {
 }
 
 // importRecord accepts the reference-project fields, the channel export
-// envelope ("credentials") and this adapter's own export.
+// envelope ("credentials"), sub2api exports (Platform "openai", Type "oauth"),
+// CPA Codex files (Type "codex") and this adapter's own export.
 type importRecord struct {
 	Name        string          `json:"name,omitempty"`
 	Credentials *importRecord   `json:"credentials,omitempty"`
@@ -112,6 +159,10 @@ type importRecord struct {
 	Session     string          `json:"oai_session_id,omitempty"`
 	Session2    string          `json:"session_id,omitempty"`
 	Browser     json.RawMessage `json:"browser_profile,omitempty"`
+	Platform    string          `json:"platform,omitempty"`
+	Type        string          `json:"type,omitempty"`
+	UseSIWC     bool            `json:"use_siwc,omitempty"`
+	ClientID    string          `json:"client_id,omitempty"`
 }
 
 // ParseImportedCredentials reads one JSON object, a JSON array, {"accounts": [...]},
@@ -169,20 +220,32 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 	out := make([]provider.CredentialSeed, 0, len(values))
 	for index, raw := range values {
 		seed, err := parseImportRecord(raw)
+		if errors.Is(err, errOtherPlatform) {
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("record %d: %w", index+1, err)
 		}
 		out = append(out, seed)
 	}
+	if len(out) == 0 {
+		return nil, errors.New("no OpenAI OAuth account to import")
+	}
 	return out, nil
 }
+
+// errOtherPlatform skips the accounts of other platforms in a sub2api export.
+var errOtherPlatform = errors.New("not an OpenAI OAuth account")
 
 func parseImportRecord(raw json.RawMessage) (provider.CredentialSeed, error) {
 	var v importRecord
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return provider.CredentialSeed{}, errors.New("invalid credential record")
 	}
-	name := v.Name
+	if v.Platform != "" && (v.Platform != "openai" || v.Type != "oauth") {
+		return provider.CredentialSeed{}, errOtherPlatform
+	}
+	name, sub2api, cpa := v.Name, v.Platform != "", v.Type == "codex" && !v.UseSIWC
 	if v.Credentials != nil {
 		v = *v.Credentials
 	}
@@ -204,6 +267,18 @@ func parseImportRecord(raw json.RawMessage) (provider.CredentialSeed, error) {
 	}
 	if c.AccessToken == "" && c.RefreshToken == "" {
 		return provider.CredentialSeed{}, errors.New("access_token or refresh_token is required")
+	}
+	if c.ClientProfile == "" {
+		clientID := firstNonEmptyString([]string{v.ClientID, tokenClientID(c.AccessToken, c.IDToken)}, "")
+		if clientID == "" && (sub2api || cpa) {
+			// Both tools log in through the Codex client unless told otherwise.
+			clientID = codexClientID
+		}
+		for profile, client := range oauthClients {
+			if client.id == clientID {
+				c.ClientProfile = profile
+			}
+		}
 	}
 	if len(c.AccessToken) > 32000 || len(c.RefreshToken) > 16000 || len(c.IDToken) > 16000 {
 		return provider.CredentialSeed{}, errors.New("credential exceeds size limit")
@@ -277,16 +352,15 @@ func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.C
 		// exchange outlives a request that leaves and its pair is kept.
 		exchangeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), importExchangeTimeout)
 		defer cancel()
-		next, err := a.exchange(exchangeCtx, pending, map[string]string{"client_id": oauthClientID, "grant_type": "refresh_token", "refresh_token": c.RefreshToken}, c)
+		next, err := a.exchange(exchangeCtx, pending, refreshBody(c), c)
 		if err == nil {
 			c, refreshed = next, true
 		}
 		return err
 	}
-	// Sending a refresh token to another OAuth client can revoke it.
-	canRefresh := c.RefreshToken != "" && c.ClientProfile == oauthProfile
+	canRefresh := canRefresh(c)
 	if c.AccessToken == "" && !canRefresh {
-		return seed, errors.New("a refresh_token import requires client_profile " + oauthProfile)
+		return seed, errors.New("a refresh_token import needs the client that issued it (client_profile or client_id)")
 	}
 	if c.AccessToken == "" || (canRefresh && !c.ExpiresAt.IsZero() && !c.ExpiresAt.After(time.Now())) {
 		if err := refresh(); err != nil {
@@ -321,11 +395,10 @@ func (a *Adapter) RefreshCredential(ctx context.Context, credential account.Cred
 	if c.RefreshToken == "" {
 		return provider.RefreshedCredential{}, &provider.CredentialRefreshError{Code: "missing_refresh_token", Message: "Refresh token is missing", Permanent: true}
 	}
-	if c.ClientProfile != oauthProfile {
-		// Sending a refresh token to another OAuth client can revoke it.
+	if !canRefresh(c) {
 		return provider.RefreshedCredential{}, &provider.CredentialRefreshError{Code: "unsupported_client_profile", Message: "Refresh token was not issued to a supported OAuth client", Permanent: true}
 	}
-	next, err := a.exchange(ctx, credential, map[string]string{"client_id": oauthClientID, "grant_type": "refresh_token", "refresh_token": c.RefreshToken}, c)
+	next, err := a.exchange(ctx, credential, refreshBody(c), c)
 	if err != nil {
 		return provider.RefreshedCredential{}, err
 	}
@@ -361,8 +434,10 @@ func (a *Adapter) exchange(ctx context.Context, credential account.Credential, b
 		return old, errors.New("invalid OAuth token endpoint")
 	}
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Origin", "https://platform.openai.com")
-	r.Header.Set("Referer", "https://platform.openai.com/")
+	if old.ClientProfile == oauthProfile {
+		r.Header.Set("Origin", "https://platform.openai.com")
+		r.Header.Set("Referer", "https://platform.openai.com/")
+	}
 	client := *a.oauth
 	if proxy := environmentFrom(ctx).ProxyURL; proxy != "" {
 		egress, err := parseEgressProxy(proxy)

@@ -30,7 +30,8 @@ export type AccountUIContext = {
 };
 
 // i18n keys for the import entries (filename is literal; the backend reads text parts by extension).
-export type AccountImportTexts = { quickImport: string; file: string; title: string; description: string; tokens: string; placeholder: string; filename: string };
+// formats: extra menu entries for files of other tools; the backend recognizes them by content.
+export type AccountImportTexts = { quickImport: string; file: string; title: string; description: string; tokens: string; placeholder: string; filename: string; formats?: readonly string[] };
 
 export type ProviderAccountUI = {
   TypeCell: ComponentType<{ account: AccountDTO }>;

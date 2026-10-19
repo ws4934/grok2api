@@ -2619,6 +2619,8 @@ Object.assign(resources["zh-CN"].translation.accounts as unknown as Record<strin
     tokens: "Token 或 JSON 凭据",
     tokenPlaceholder: "access_token_1\naccess_token_2\n{\"access_token\":\"…\",\"refresh_token\":\"…\"}",
     authHelp: "回调页面可能显示无法访问，直接复制地址栏中的完整地址即可，形如：",
+    importSub2api: "导入 sub2api 导出文件",
+    importCPA: "导入 CPA 凭据文件",
   },
 });
 Object.assign(resources.en.translation.accounts as unknown as Record<string, unknown>, {
@@ -2642,6 +2644,8 @@ Object.assign(resources.en.translation.accounts as unknown as Record<string, unk
     tokens: "Tokens or JSON credentials",
     tokenPlaceholder: "access_token_1\naccess_token_2\n{\"access_token\":\"…\",\"refresh_token\":\"…\"}",
     authHelp: "The callback page may fail to load; copy the full address from the address bar. It looks like:",
+    importSub2api: "Import sub2api export",
+    importCPA: "Import CPA credential files",
   },
 });
 function readStoredLanguage(): string | null {

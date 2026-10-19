@@ -964,6 +964,7 @@ export function AccountsPage() {
                 <>
                   <DropdownMenuItem disabled={bulkTaskPending} onClick={() => setQuickImportOpen(true)}><ClipboardPaste />{t(ui.importTexts.quickImport)}</DropdownMenuItem>
                   <DropdownMenuItem disabled={bulkTaskPending} onClick={() => fileInputRef.current?.click()}><FileUp />{t(ui.importTexts.file)}</DropdownMenuItem>
+                  {ui.importTexts.formats?.map((label) => <DropdownMenuItem key={label} disabled={bulkTaskPending} onClick={() => fileInputRef.current?.click()}><FileUp />{t(label)}</DropdownMenuItem>)}
                 </>
               ) : null}
               {hasProviderAccounts ? (

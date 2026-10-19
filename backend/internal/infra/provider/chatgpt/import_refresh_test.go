@@ -49,7 +49,7 @@ func TestImportExchangesRefreshTokenForUnusableAccessToken(t *testing.T) {
 	}{
 		"expired":                {`{"access_token":"` + expired + `","refresh_token":"RT","client_profile":"platform_pkce_v1"}`, 1, "fresh-AT"},
 		"rejected":               {`{"access_token":"` + revoked + `","refresh_token":"RT","client_profile":"platform_pkce_v1"}`, 1, "fresh-AT"},
-		"expired foreign client": {`{"access_token":"` + expired + `","refresh_token":"RT","client_profile":"codex"}`, 0, ""},
+		"expired foreign client": {`{"access_token":"` + expired + `","refresh_token":"RT","client_profile":"other_client"}`, 0, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var tokenCalls atomic.Int32
