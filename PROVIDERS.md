@@ -216,7 +216,7 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 
 模型目录和请求体都来自 Adobe 官方的模型发现接口 `POST https://firefly-3p.ff.adobe.io/v2/models/discovery`（无需鉴权，与 firefly.adobe.com 前端同源）：
 
-- **自动登记**：后台启动时拉取一次，之后每小时一次。新上线的图像/视频模型自动出现，下架（`isDeprecated`）或禁用的模型路由自动删除；结果为空或比当前少一半以上时视为异常，保留上次结果。程序内嵌一份快照（`backend/internal/infra/provider/adobe/discovery.json`），启动即可用，拉取失败时兜底；快照只补齐缺失路由、不删除。
+- **自动登记**：后台启动时拉取一次，之后每天一次（失败时 1 小时后重试）。新上线的图像/视频模型自动出现，下架（`isDeprecated`）或禁用的模型路由自动删除；结果为空或比当前少一半以上时视为异常，保留上次结果。程序内嵌一份快照（`backend/internal/infra/provider/adobe/discovery.json`），启动即可用，拉取失败时兜底；快照只补齐缺失路由、不删除。
 - **筛选**：只收图像/视频生成模型；跳过放大/降噪类（Topaz）、视频编辑/延长版本、Kling 按模式拆分的版本（统一用合并版 `kling-3.0` / `kling-3.0-omni`）。
 - **命名**：按官方显示名生成，例如 `veo-3.1`、`veo-3.1-fast`、`kling-3.0-omni`、`seedance-2.0`、`gpt-image-2.5-flare`、`ray3.14`、`flux-kontext-pro`；Gemini 系列用 `nano-banana-pro`（Gemini 3）、`nano-banana-2`（Gemini 3.1）、`nano-banana-2.1`。完整清单见管理端模型页或 `/v1/models`。
 - **请求体**：按模型 schema 填字段，再按官网前端的按模型规则放置比例、分辨率与参考图用途（首帧 `frame`、参考图 `subject` / `style` / `asset` / `general`、蒙版 `mask`），最后丢弃 schema 之外的字段。

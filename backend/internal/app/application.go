@@ -766,14 +766,25 @@ func (a *Application) Run(ctx context.Context) error {
 		return nil
 	})
 	startBackground("adobe_model_catalog", func(taskCtx context.Context) error {
+		// Adobe 的模型列表很少变化：启动时拉一次，之后每天一次；失败时 1 小时后重试。
 		refresh := a.refreshAdobeCatalog()
-		initCtx, cancel := context.WithTimeout(taskCtx, time.Minute)
-		if err := refresh(initCtx); err != nil {
-			a.logger.Warn("adobe_model_catalog_failed", "error", err)
+		for {
+			runCtx, cancel := context.WithTimeout(taskCtx, time.Minute)
+			err := refresh(runCtx)
+			cancel()
+			wait := 24 * time.Hour
+			if err != nil {
+				a.logger.Warn("adobe_model_catalog_failed", "error", err)
+				wait = time.Hour
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-taskCtx.Done():
+				timer.Stop()
+				return nil
+			case <-timer.C:
+			}
 		}
-		cancel()
-		a.runPeriodicTask(taskCtx, time.Hour, "adobe_model_catalog", refresh)
-		return nil
 	})
 	startBackground("egress_operations", func(taskCtx context.Context) error {
 		if err := a.egressOps.RunMaintenance(taskCtx); err != nil {
