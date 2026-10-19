@@ -26,22 +26,6 @@ func normalizeAgentMessageInput(item map[string]any, _ string) (map[string]any, 
 	}, nil
 }
 
-// normalizeLocalShellInput 将本地执行记录降级为可见 assistant 历史，避免伪造可再次执行的 hosted shell call。
-func normalizeLocalShellInput(item map[string]any, param string) (map[string]any, error) {
-	action, err := json.Marshal(item["action"])
-	if err != nil {
-		return nil, &responsesRequestError{Message: "local_shell_call.action 无法编码", Param: param + ".action", Code: "invalid_parameter"}
-	}
-	status := strings.TrimSpace(stringField(item, "status"))
-	if status == "" {
-		status = "unknown"
-	}
-	return map[string]any{
-		"type": "message", "role": "assistant",
-		"content": []any{map[string]any{"type": "output_text", "text": "Local shell call (" + status + "): " + string(action)}},
-	}, nil
-}
-
 // normalizeMCPOutputInput 将无法关联到上游 MCP 状态的输出保留为 developer 文本历史。
 func normalizeMCPOutputInput(item map[string]any, param string) (map[string]any, error) {
 	output, err := json.Marshal(item["output"])

@@ -310,8 +310,3 @@ func TestResponsesImageToolDefaultModelAndStream(t *testing.T) {
 		t.Fatalf("stream events = %v completed = %v", names, completed)
 	}
 }
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
-}

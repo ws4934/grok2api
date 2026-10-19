@@ -164,16 +164,6 @@ func lookupSourcePageTitle(sources []map[string]any, rawURL string) string {
 	return ""
 }
 
-func searchSourceTitle(sources []map[string]any, rawURL string) string {
-	if title := lookupSourcePageTitle(sources, rawURL); title != "" {
-		return title
-	}
-	if normalized, valid := searchresult.NormalizeURL(rawURL); valid {
-		return normalized
-	}
-	return rawURL
-}
-
 func chatAnnotations(annotations []map[string]any) []any {
 	values := make([]any, 0, len(annotations))
 	for _, annotation := range annotations {

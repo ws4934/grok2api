@@ -83,10 +83,6 @@ func normalizeBuildRequestWithMetadata(body []byte, model, operation string, met
 	return json.Marshal(payload)
 }
 
-func normalizeBuildRequestPayload(payload map[string]json.RawMessage, model, operation string) (bool, error) {
-	return normalizeBuildRequestPayloadWithMetadata(payload, model, operation, nil)
-}
-
 func normalizeBuildRequestPayloadWithMetadata(payload map[string]json.RawMessage, model, operation string, metadata *provider.NormalizedRequestMetadata) (bool, error) {
 	requestedEffort := metadata != nil && auditdomain.NormalizeReasoningEffort(metadata.ReasoningEffort) != ""
 	requestedEffort = requestedEffort || hasRecognizedBuildReasoningEffort(payload)

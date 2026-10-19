@@ -9,10 +9,6 @@ import (
 
 const anthropicBillingHeaderPrefix = "x-anthropic-billing-header: "
 
-func convertMessagesRequest(body []byte, model string) ([]byte, ResponseOptions, error) {
-	return convertMessagesRequestWithReasoningReplay(body, model, nil, "")
-}
-
 func convertMessagesRequestWithReasoningReplay(body []byte, model string, cache *ReasoningCache, scope string) ([]byte, ResponseOptions, error) {
 	var request anthropicRequest
 	if err := json.Unmarshal(body, &request); err != nil {
@@ -191,10 +187,6 @@ type anthropicToolChoice struct {
 	Type                   string `json:"type"`
 	Name                   string `json:"name"`
 	DisableParallelToolUse bool   `json:"disable_parallel_tool_use"`
-}
-
-func convertAnthropicMessages(messages []anthropicMessage, declaredTools map[string]struct{}) ([]any, []string, error) {
-	return convertAnthropicMessagesWithReasoningReplay(messages, declaredTools, nil, "")
 }
 
 func convertAnthropicMessagesWithReasoningReplay(messages []anthropicMessage, declaredTools map[string]struct{}, cache *ReasoningCache, scope string) ([]any, []string, error) {

@@ -475,12 +475,6 @@ func lockClientKey(tx *gorm.DB, keyID uint64) error {
 	return nil
 }
 
-func expiredBillingReservationCount(tx *gorm.DB, keyID uint64, now time.Time) (int64, error) {
-	var count int64
-	err := tx.Model(&billingReservationModel{}).Where("client_key_id = ? AND expires_at <= ?", keyID, now).Count(&count).Error
-	return count, err
-}
-
 func decrementReservedUsage(tx *gorm.DB, keyID uint64, amount int64) error {
 	return tx.Model(&clientKeyModel{}).Where("id = ?", keyID).UpdateColumn(
 		"reserved_usage_usd_ticks",

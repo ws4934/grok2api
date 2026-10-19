@@ -8,11 +8,6 @@ import (
 	"strings"
 )
 
-// convertChatRequest 将 Chat Completions 请求完整转换为标准 Responses 输入。
-func convertChatRequest(body []byte, model string) ([]byte, ResponseOptions, error) {
-	return convertChatRequestWithReasoningReplay(body, model, nil, "")
-}
-
 func convertChatRequestWithReasoningReplay(body []byte, model string, cache *ReasoningCache, scope string) ([]byte, ResponseOptions, error) {
 	var source map[string]json.RawMessage
 	if err := json.Unmarshal(body, &source); err != nil {
@@ -108,10 +103,6 @@ type chatMessage struct {
 	ToolCalls  json.RawMessage `json:"tool_calls"`
 	ToolCallID string          `json:"tool_call_id"`
 	Name       string          `json:"name"`
-}
-
-func convertChatMessages(messages []chatMessage) ([]any, error) {
-	return convertChatMessagesWithReasoningReplay(messages, nil, "")
 }
 
 func convertChatMessagesWithReasoningReplay(messages []chatMessage, cache *ReasoningCache, scope string) ([]any, error) {

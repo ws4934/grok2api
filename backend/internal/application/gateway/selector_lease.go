@@ -109,10 +109,6 @@ func (l *accountLease) completeSelectorObservation(success bool) {
 	}
 }
 
-func (s *Selector) claimAccountSlot(ctx context.Context, value account.Credential) (*accountLease, error) {
-	return s.claimAccountSlotTracked(ctx, value, nil)
-}
-
 func (s *Selector) claimAccountSlotTracked(ctx context.Context, value account.Credential, materialFailures *credentialMaterialFailureTracker) (*accountLease, error) {
 	now := time.Now().UTC()
 	value = s.applyRoutingHealth(value, now)
