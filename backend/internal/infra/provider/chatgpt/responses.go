@@ -110,10 +110,6 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 		credential.EgressNodeID = request.ForcedEgressNodeID
 	}
 	cfg := a.config()
-	inputTokens, err := estimateInput(in.Messages, cfg.VisionTokens)
-	if err != nil {
-		return nil, err
-	}
 	limit := int64(cfg.OutputTokenLimit)
 	if limit <= 0 {
 		limit = defaultOutputTokenLimit
@@ -125,6 +121,12 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	m := &meter{limit: limit}
 	run := func(ctx context.Context) (map[string]any, error) {
 		if err := a.converse(ctx, credential, c, request.Model, in, t, m); err != nil {
+			return nil, err
+		}
+		// Only usage needs the input count, so it is taken after the reply
+		// instead of delaying the upstream call, and a failed attempt skips it.
+		inputTokens, err := estimateInput(in.Messages, cfg.VisionTokens)
+		if err != nil {
 			return nil, err
 		}
 		usage, err := m.usage(inputTokens)
@@ -361,7 +363,7 @@ func parseTurn(body []byte) (turnRequest, error) {
 	var items []json.RawMessage
 	if !set("input") {
 		return in, errors.New("input is required")
-	} else if json.Unmarshal(raw["input"], &text) == nil {
+	} else if raw["input"][0] == '"' && json.Unmarshal(raw["input"], &text) == nil {
 		in.Messages = append(in.Messages, textMessage("user", text))
 	} else if json.Unmarshal(raw["input"], &items) != nil {
 		return in, errors.New("input must be text or an array of items")
@@ -513,8 +515,10 @@ func decodeContent(raw json.RawMessage) ([]turnPart, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
+	// Decoded values carry no leading space; checking the first byte spares
+	// an array a failed string decode that scans it twice.
 	var text string
-	if json.Unmarshal(raw, &text) == nil {
+	if raw[0] == '"' && json.Unmarshal(raw, &text) == nil {
 		return []turnPart{{Text: text}}, nil
 	}
 	var parts []struct {

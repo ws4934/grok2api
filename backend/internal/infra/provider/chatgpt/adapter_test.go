@@ -309,6 +309,34 @@ func TestOutputLimitAndInputEstimate(t *testing.T) {
 	}
 }
 
+// The input count is taken after the reply; it still covers the whole parsed turn.
+func TestUsageInputTokensCountParsedTurn(t *testing.T) {
+	a, _ := newTestAdapter(t, chatUpstream(t, nil))
+	credential := testCredential(t, a, credentials{AccessToken: "AT"})
+	body := `{"model":"gpt-5","instructions":"Be brief.","input":[{"role":"user","content":"hi"},{"role":"assistant","content":[{"type":"output_text","text":"Hello there"}]},{"role":"user","content":[{"type":"input_text","text":"And again?"}]}]}`
+	in, err := parseTurn([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := estimateInput(in.Messages, 256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object := decodeBody(t, forward(t, a, credential, "responses", body, false))
+	if got := object["usage"].(map[string]any)["input_tokens"]; got != float64(want) {
+		t.Fatalf("JSON input_tokens = %v, want %d", got, want)
+	}
+	var got any
+	for _, event := range events(t, forward(t, a, credential, "responses", body, true).Body) {
+		if event["type"] == "response.completed" {
+			got = event["response"].(map[string]any)["usage"].(map[string]any)["input_tokens"]
+		}
+	}
+	if got != float64(want) {
+		t.Fatalf("stream input_tokens = %v, want %d", got, want)
+	}
+}
+
 func TestToolsThatCannotRunDegradeToTextWithNotice(t *testing.T) {
 	payloads := make(chan map[string]any, 1)
 	a, _ := newTestAdapter(t, chatUpstream(t, payloads))
