@@ -69,7 +69,6 @@ const (
 // Application 管理后端进程生命周期和本地后台任务。
 type Application struct {
 	chatgpt         *chatgpt.Adapter
-	adobe           *adobe.Adapter
 	logger          *slog.Logger
 	database        *relational.Database
 	server          *http.Server
@@ -328,11 +327,10 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		database.Close()
 		return nil, fmt.Errorf("初始化 ChatGPT 图片模型: %w", err)
 	}
-	// Adobe 目录由后台任务按线上 discovery 替换（见 refreshAdobeCatalog）；启动时只用
-	// 内嵌快照补齐缺失的路由，不删除：重启不能抹掉线上新增模型的路由及其绑定。补齐
-	// 失败（例如管理员把模型改名后旧名成了别名）不影响启动，后台对账会修正。
-	if err := modelRepo.UpsertRoutes(ctx, adobe.SnapshotRoutes()); err != nil {
-		logger.Warn("adobe_model_catalog_seed_failed", "error", err)
+	// Adobe 的路由跟随手写目录（adobe.Routes）：表外模型的路由删除。对账失败（例如
+	// 管理员占用了某个模型名）不影响启动，只记日志。
+	if err := modelRepo.ReplaceProviderRoutes(ctx, account.ProviderAdobe, adobe.Routes()); err != nil {
+		logger.Warn("adobe_model_catalog_sync_failed", "error", err)
 	}
 	accountSyncService := accountsyncapp.NewService(logger, accountService, accountService, accountService, modelService)
 	accountSyncService.SetBulkPool(importPool)
@@ -496,7 +494,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	egressdomain.SetExtensionScopes(extensionScopes)
 	router := httpserver.New(httpserver.Dependencies{Providers: providerCatalog, Pricing: pricingService, Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
 	server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
-	return &Application{chatgpt: chatgptAdapter, adobe: adobeAdapter,
+	return &Application{chatgpt: chatgptAdapter,
 		logger: logger, database: database, server: server, inferenceGate: inferenceConcurrency,
 		audits: auditService, responses: responseRepo, cleanupLock: refreshLock, runtime: runtimeStore,
 		settingsBus: settingsBus, invalidationBus: invalidationBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService, invalidations: invalidationService,
@@ -760,27 +758,6 @@ func (a *Application) Run(ctx context.Context) error {
 		})
 		return nil
 	})
-	startBackground("adobe_model_catalog", func(taskCtx context.Context) error {
-		// Adobe 的模型列表很少变化：启动时拉一次，之后每天一次；失败时 1 小时后重试。
-		refresh := a.refreshAdobeCatalog()
-		for {
-			runCtx, cancel := context.WithTimeout(taskCtx, time.Minute)
-			err := refresh(runCtx)
-			cancel()
-			wait := 24 * time.Hour
-			if err != nil {
-				a.logger.Warn("adobe_model_catalog_failed", "error", err)
-				wait = time.Hour
-			}
-			timer := time.NewTimer(wait)
-			select {
-			case <-taskCtx.Done():
-				timer.Stop()
-				return nil
-			case <-timer.C:
-			}
-		}
-	})
 	startBackground("egress_operations", func(taskCtx context.Context) error {
 		if err := a.egressOps.RunMaintenance(taskCtx); err != nil {
 			a.logger.Warn("egress_operations_initial_run_failed", "error", err)
@@ -1015,17 +992,4 @@ func minDuration(left, right time.Duration) time.Duration {
 		return left
 	}
 	return right
-}
-
-// refreshAdobeCatalog 拉取 Adobe 官方 discovery 并让路由跟随它：新增模型自动登记，
-// 下架模型的路由删除。每次都与数据库对账（每天一次，开销可忽略），其他实例或旧版本
-// 写坏的路由也能自愈。拉取失败时内存与数据库都保留上一次的结果。
-func (a *Application) refreshAdobeCatalog() func(context.Context) error {
-	return func(ctx context.Context) error {
-		routes, err := a.adobe.RefreshCatalog(ctx)
-		if err != nil {
-			return err
-		}
-		return a.modelRepo.ReplaceProviderRoutes(ctx, account.ProviderAdobe, routes)
-	}
 }

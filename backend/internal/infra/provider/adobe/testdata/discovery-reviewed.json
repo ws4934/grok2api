@@ -1,0 +1,6125 @@
+{
+  "commonRequestSchema": {
+    "$defs": {
+      "ACPDirectory": {
+        "description": "Represents an ACP directory.",
+        "properties": {
+          "creativeCloudPath": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ACP path. In combination with project ID it represents the file name",
+            "title": "ACP Path"
+          },
+          "creativeCloudProjectId": {
+            "description": "An ID of ACP folder where the file is stored",
+            "title": "ACP Project/Directory ID",
+            "type": "string"
+          }
+        },
+        "required": [
+          "creativeCloudProjectId"
+        ],
+        "title": "ACPDirectory",
+        "type": "object"
+      },
+      "AspectRatio": {
+        "description": "Supported aspect ratios for image generation.",
+        "enum": [
+          "square",
+          "portrait",
+          "landscape",
+          "widescreen",
+          "vertical"
+        ],
+        "title": "AspectRatio",
+        "type": "string"
+      },
+      "AudioAlignmentType": {
+        "enum": [
+          "none",
+          "character"
+        ],
+        "title": "AudioAlignmentType",
+        "type": "string"
+      },
+      "AudioConfig": {
+        "properties": {
+          "bitRateKbps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The bitrate in kbps",
+            "title": "Bit Rate"
+          },
+          "codec": {
+            "description": "The codec to use for the audio",
+            "maxLength": 10,
+            "minLength": 1,
+            "title": "Codec",
+            "type": "string"
+          },
+          "sampleRateHz": {
+            "description": "The samplerate in Hertz",
+            "title": "Sample Rate",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "codec",
+          "sampleRateHz"
+        ],
+        "title": "AudioConfig",
+        "type": "object"
+      },
+      "AudioOutputSpec": {
+        "properties": {
+          "audioConfig": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/AudioConfig"
+                },
+                "maxItems": 1,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional. When set, must contain exactly one audio output configuration.",
+            "title": "Audio config"
+          },
+          "includeAlignment": {
+            "$ref": "#/$defs/AudioAlignmentType",
+            "default": "none",
+            "description": "Whether to include alignment data in the output",
+            "title": "Include alignment"
+          },
+          "storeInputs": {
+            "default": false,
+            "description": "If this property value is true, then Firefly+ACPC will store the output as a DCX composite\nwhich contains the input recipe information along with output content, else it will store\nas plain content.",
+            "title": "Store inputs",
+            "type": "boolean"
+          },
+          "targetFolder": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ACPDirectory"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional ACP location to upload the output to",
+            "title": "ACP Output Target Directory"
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TranscriptConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Aligned-transcript options. When unset, no transcript is returned.",
+            "title": "Transcript"
+          }
+        },
+        "title": "AudioOutputSpec",
+        "type": "object"
+      },
+      "AutoModelSettings": {
+        "description": "Settings for automatic model selection when modelId='auto'.",
+        "properties": {
+          "alwaysIncludeFirstParty": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When true and the ranked candidate pool for this request contains a first-party model (provider.config.is_first_party=True), ensure one such model is included in multi-generation results. If no first-party model is in the candidate set, no model is force-injected. Only valid with model_selection_mode='top_n_models' — combining it with 'all_from_top_model' is rejected, since that mode requires all generations to use the same top-ranked model and injecting a first-party slot would violate that contract.",
+            "title": "Always include first party"
+          },
+          "modelSelectionMode": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ModelSelectionMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Controls how models are selected: 'top_n_models' picks N different models, 'all_from_top_model' uses only the top-ranked model for all generations.",
+            "title": "Model selection mode"
+          },
+          "topk": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ModelInfo"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Client-provided allowlist of models auto-selection may choose from for this request — typically the set the calling surface has enabled for this user (entitlement / availability the Gateway cannot infer on its own). When provided and non-empty, the harness selects only from the intersection of its server-eligible candidate pool and this list. Each entry is a modelId with an optional modelVersion; omitting modelVersion allows any version of that model. Omitted or empty means no client restriction. This only narrows the pool — it never authorizes a model the user is not otherwise entitled to (BKS / ABP authorization still applies).",
+            "title": "Top-k models (client allowlist)"
+          }
+        },
+        "title": "AutoModelSettings",
+        "type": "object"
+      },
+      "CacheControl": {
+        "description": "Cache control directive for Anthropic prompt caching.",
+        "properties": {
+          "type": {
+            "default": "ephemeral",
+            "description": "Cache control type (e.g. 'ephemeral')",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "CacheControl",
+        "type": "object"
+      },
+      "CharacterOrientation": {
+        "description": "Character orientation mode for V2V motion control.",
+        "enum": [
+          "image",
+          "video"
+        ],
+        "title": "CharacterOrientation",
+        "type": "string"
+      },
+      "ChoiceQuestion": {
+        "description": "Picks one option from a caller-defined set.",
+        "properties": {
+          "criteria": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "items": {},
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Criteria",
+            "type": "object"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "type": {
+            "const": "choice",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "criteria"
+        ],
+        "title": "ChoiceQuestion",
+        "type": "object"
+      },
+      "ClientGenerationMetadata": {
+        "description": "A client may refer to a source (parent) asset such as an Express project, a Creative Cloud project or Firefly board in which this generation was created",
+        "properties": {
+          "assetName": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The file name of the asset to be persisted",
+            "title": "The file name of the asset to be persisted"
+          },
+          "canvasImageReference": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The canvas image reference",
+            "title": "The canvas image reference"
+          },
+          "creativeCloudOriginProjectId": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Creative Cloud project id in which this generation originated",
+            "title": "The Creative Cloud origin project id"
+          },
+          "creativeIntentId": {
+            "anyOf": [
+              {
+                "format": "uuid4",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A client-assigned identifier that groups all generations belonging to the same creative intent. The client assigns the same id across related generation calls while the user refines a prompt or adjusts settings toward a desired output. When the user pivots to an entirely different creative direction, the client generates a new id. The server records this signal as-is to stitch the generations into a navigable variation chain without maintaining any server-side session state.",
+            "title": "Creative intent id"
+          },
+          "filterString": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The filter string",
+            "title": "The filter string"
+          },
+          "module": {
+            "description": "The module",
+            "title": "The module",
+            "type": "string"
+          },
+          "originalPrompt": {
+            "anyOf": [
+              {
+                "maxLength": 500000,
+                "minLength": 0,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The original prompt",
+            "title": "The original prompt"
+          },
+          "sourceDocumentId": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The source document id",
+            "title": "The source document id"
+          },
+          "subPrompts": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The sub prompts",
+            "title": "The sub prompts"
+          },
+          "submodule": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The submodule",
+            "title": "The submodule"
+          }
+        },
+        "required": [
+          "module"
+        ],
+        "title": "ClientGenerationMetadata",
+        "type": "object"
+      },
+      "Composition": {
+        "properties": {
+          "adherence": {
+            "default": 1,
+            "description": "It controls the adherence to the reference image",
+            "maximum": 2,
+            "minimum": 0,
+            "title": "Adherence to the reference image",
+            "type": "integer"
+          },
+          "referenceImage": {
+            "$ref": "#/$defs/PublicBinary",
+            "description": "The reference image to be used for composition",
+            "title": "The reference image"
+          }
+        },
+        "required": [
+          "referenceImage"
+        ],
+        "title": "Composition",
+        "type": "object"
+      },
+      "ConsumptionMode": {
+        "description": "How a usage=element reference blob is consumed by the model.",
+        "enum": [
+          "reference",
+          "prompt"
+        ],
+        "title": "ConsumptionMode",
+        "type": "string"
+      },
+      "ConsumptionTier": {
+        "enum": [
+          "ptWithPriorityFallback"
+        ],
+        "title": "ConsumptionTier",
+        "type": "string"
+      },
+      "ContentClass": {
+        "enum": [
+          "photo",
+          "art",
+          "vector",
+          "raw"
+        ],
+        "title": "ContentClass",
+        "type": "string"
+      },
+      "DocumentContent": {
+        "description": "Document (PDF) content block.\n\nMirrors ``ImageContent``: the document is represented as a ``PublicBinary`` resolved\nto a presigned URL (or a Firefly Storage id resolvable to one) before the pipeline\nconsumes it. For Gemini the adapter additionally fetches that presigned URL and\nre-uploads to GCS, setting ``gcs_uri`` so no presigned URL is sent to Google;\nClaude/OpenAI are still handed the presigned URL directly (there is no inline-byte\nmode).",
+        "properties": {
+          "gcs_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Resolved gs:// URI, set by the adapter",
+            "title": "Gcs Uri"
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "MIME type of the document. Allowed values: ['application/pdf']",
+            "title": "Mime Type"
+          },
+          "source": {
+            "$ref": "#/$defs/PublicBinary",
+            "description": "The document as a PublicBinary object"
+          },
+          "type": {
+            "const": "document",
+            "default": "document",
+            "description": "Content type identifier",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "DocumentContent",
+        "type": "object"
+      },
+      "GenerationSettings": {
+        "properties": {
+          "aspectRatio": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AspectRatio"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "default": "square",
+            "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+            "title": "The aspect ratio"
+          },
+          "autoModel": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AutoModelSettings"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Settings for automatic model selection (only applicable when modelId='auto')",
+            "title": "Auto model settings"
+          },
+          "avoidKeywords": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The keywords making the negative prompt against which the image is generated",
+            "title": "Avoid keywords"
+          },
+          "composition": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Composition"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Controls structure - outline and depth of the generated image",
+            "title": "The composition"
+          },
+          "contentClass": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ContentClass"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Guides the generation to being more photographic or more like art",
+            "title": "The content class"
+          },
+          "creativityLevel": {
+            "anyOf": [
+              {
+                "maximum": 5,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Creativity level (1–5). 1–2 = low, 3 = middle, 4–5 = high. Supported values vary by model.",
+            "title": "Creativity level"
+          },
+          "detailLevel": {
+            "anyOf": [
+              {
+                "maximum": 7,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Controls the detail level of the generated image",
+            "title": "The detail level"
+          },
+          "promptEnhancement": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Controls if the prompt should be enhanced pre-generation",
+            "title": "Prompt enhancement"
+          },
+          "realism": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Realism intensity [0.0, 1.0]. Supported values vary by model.",
+            "title": "Realism"
+          },
+          "sharpness": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sharpness intensity [0.0, 1.0]. Supported values vary by model.",
+            "title": "Sharpness"
+          },
+          "structuredPrompt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StructuredPrompt"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Explicit scene layout, literal text placement, and granular style facets. Generate-only; honored only by models that advertise it.",
+            "title": "The structured prompt"
+          },
+          "style": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Style"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Controls visual style and aesthetic of the generated image",
+            "title": "The style"
+          },
+          "transparentBackground": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transparentbackground"
+          },
+          "vectorType": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/VectorType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Controls the vector type of the generated image",
+            "title": "The vector type"
+          }
+        },
+        "title": "GenerationSettings",
+        "type": "object"
+      },
+      "ImageContent": {
+        "description": "Image content block.",
+        "properties": {
+          "gcs_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Resolved gs:// URI, set by the adapter",
+            "title": "Gcs Uri"
+          },
+          "source": {
+            "$ref": "#/$defs/PublicBinary",
+            "description": "The image as a PublicBinary object"
+          },
+          "type": {
+            "const": "image",
+            "default": "image",
+            "description": "Content type identifier",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "ImageContent",
+        "type": "object"
+      },
+      "InlinePromptMention": {
+        "description": "Links an inline @mention in the prompt to a reference blob.\n\nClients use @{mention.id} in the prompt text to reference a blob.\nThe gateway rewrites mentions to provider-specific names (e.g. @Element1).",
+        "properties": {
+          "id": {
+            "description": "NanoID (21 chars, [A-Za-z0-9_-]) uniquely identifying this mention in the prompt.",
+            "maxLength": 21,
+            "minLength": 21,
+            "pattern": "^[A-Za-z0-9_-]{21}$",
+            "title": "Mention ID",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Human-readable name for UI display (e.g. 'John Doe', 'gothic'). Ignored for elements (label from Entity Service).",
+            "title": "Display Label"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "InlinePromptMention",
+        "type": "object"
+      },
+      "LanguageCandidate": {
+        "description": "One weighted language-detector candidate for speech locale resolution.",
+        "properties": {
+          "languageCode": {
+            "description": "BCP-47 primary language subtag, e.g. ``en``.",
+            "minLength": 1,
+            "title": "Language code",
+            "type": "string"
+          },
+          "weight": {
+            "default": 1.0,
+            "description": "Detector confidence for this candidate; higher wins ties.",
+            "minimum": 0,
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "languageCode"
+        ],
+        "title": "LanguageCandidate",
+        "type": "object"
+      },
+      "MessageRole": {
+        "description": "Message role in conversation.",
+        "enum": [
+          "user",
+          "assistant",
+          "developer",
+          "tool"
+        ],
+        "title": "MessageRole",
+        "type": "string"
+      },
+      "ModelInfo": {
+        "properties": {
+          "modelId": {
+            "title": "Modelid",
+            "type": "string"
+          },
+          "modelVersion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modelversion"
+          }
+        },
+        "required": [
+          "modelId"
+        ],
+        "title": "ModelInfo",
+        "type": "object"
+      },
+      "ModelSelectionMode": {
+        "enum": [
+          "top_n_models",
+          "all_from_top_model"
+        ],
+        "title": "ModelSelectionMode",
+        "type": "string"
+      },
+      "MultiPromptItem": {
+        "description": "Single shot in multi-shot video generation. Each element has its own prompt and optional duration.\n\nThe per-shot ``prompt`` length cap is provider-specific and enforced by the owning\nprovider schema (see the Kling validators), not here, so other families can reuse\nthis type with their own limits.",
+        "properties": {
+          "duration": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The duration of this shot in seconds. Valid range/supported values from model config.",
+            "title": "Duration"
+          },
+          "prompt": {
+            "description": "The prompt for this shot.",
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "MultiPromptItem",
+        "type": "object"
+      },
+      "NoulCriteria": {
+        "description": "Optional descriptions of what a yes/no outcome means for a Noul question.",
+        "properties": {
+          "false": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "False"
+          },
+          "true": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "True"
+          }
+        },
+        "title": "NoulCriteria",
+        "type": "object"
+      },
+      "NoulQuestion": {
+        "description": "A yes/no question. The answer is the probability the answer is yes.",
+        "properties": {
+          "criteria": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NoulCriteria"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "type": {
+            "const": "noul",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "NoulQuestion",
+        "type": "object"
+      },
+      "ObjectElement": {
+        "description": "A non-text scene element placed via the structured prompt.",
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PromptBBox"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional layout box on the 1000x1000 canvas"
+          },
+          "description": {
+            "description": "What the object is",
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "type": {
+            "const": "obj",
+            "default": "obj",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "title": "ObjectElement",
+        "type": "object"
+      },
+      "OutputSpec": {
+        "properties": {
+          "storeInputs": {
+            "default": false,
+            "description": "If this property value is true, then Firefly+ACPC will store the output as a DCX composite\nwhich contains the input recipe information along with output content, else it will store\nas plain content.",
+            "title": "Store inputs",
+            "type": "boolean"
+          },
+          "targetFolder": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ACPDirectory"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional ACP location to upload the output to",
+            "title": "ACP Output Target Directory"
+          }
+        },
+        "title": "OutputSpec",
+        "type": "object"
+      },
+      "PromptBBox": {
+        "description": "Normalized layout box on a 1000x1000 canvas (resolution-independent).",
+        "properties": {
+          "bottom": {
+            "description": "Bottom edge on a 0-1000 canvas",
+            "maximum": 1000,
+            "minimum": 0,
+            "title": "Bottom edge",
+            "type": "integer"
+          },
+          "left": {
+            "description": "Left edge on a 0-1000 canvas",
+            "maximum": 1000,
+            "minimum": 0,
+            "title": "Left edge",
+            "type": "integer"
+          },
+          "right": {
+            "description": "Right edge on a 0-1000 canvas",
+            "maximum": 1000,
+            "minimum": 0,
+            "title": "Right edge",
+            "type": "integer"
+          },
+          "top": {
+            "description": "Top edge on a 0-1000 canvas",
+            "maximum": 1000,
+            "minimum": 0,
+            "title": "Top edge",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "top",
+          "left",
+          "bottom",
+          "right"
+        ],
+        "title": "PromptBBox",
+        "type": "object"
+      },
+      "PromptComposition": {
+        "description": "Scene layout: a background plus one or more placed elements.",
+        "properties": {
+          "background": {
+            "description": "The scene background",
+            "minLength": 1,
+            "title": "Background",
+            "type": "string"
+          },
+          "elements": {
+            "description": "Placed scene elements (at least one)",
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ObjectElement"
+                },
+                {
+                  "$ref": "#/$defs/TextElement"
+                }
+              ]
+            },
+            "minItems": 1,
+            "title": "Elements",
+            "type": "array"
+          }
+        },
+        "required": [
+          "background",
+          "elements"
+        ],
+        "title": "PromptComposition",
+        "type": "object"
+      },
+      "PromptConfig": {
+        "description": "How a text-to-speech prompt is interpreted.",
+        "properties": {
+          "localeCode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "BCP-47 locale of the prompt, e.g. ``en-US``.",
+            "title": "Locale code"
+          },
+          "mediaType": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PromptMediaType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Content type of the prompt: ``text/plain`` (default) or ``application/ssml+xml`` for SSML.",
+            "title": "Media type"
+          }
+        },
+        "title": "PromptConfig",
+        "type": "object"
+      },
+      "PromptMediaType": {
+        "description": "Content type of the TTS prompt body. ``text/plain`` is the default for plain-text prompts; ``application/ssml+xml`` is used for SSML prompts.",
+        "enum": [
+          "text/plain",
+          "application/ssml+xml"
+        ],
+        "title": "PromptMediaType",
+        "type": "string"
+      },
+      "PromptStyle": {
+        "description": "Free-text style facets for a structured prompt (sole style source; no presets).",
+        "properties": {
+          "aesthetics": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Overall aesthetic, mood, or vibe",
+            "title": "Aesthetics"
+          },
+          "artStyle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Art-style hint (e.g. illustration, oil painting)",
+            "title": "Artstyle"
+          },
+          "lighting": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Lighting description",
+            "title": "Lighting"
+          },
+          "medium": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Medium (e.g. photograph, digital art)",
+            "title": "Medium"
+          },
+          "photo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Photographic style notes (e.g. lens, film stock)",
+            "title": "Photo"
+          }
+        },
+        "title": "PromptStyle",
+        "type": "object"
+      },
+      "PublicBinary": {
+        "description": "In public HTTP APIS by convention we use this object to represent binary data (image, mesh, ...);\neven though for internal rquests we have different types.\n\nInputs (at least one should be provided):\n\n- id: If this object represents a file in our s3 temp storage system, the ID for that. This is usually\n  used when caller wants to send the image back to us.\n- presigned_url: If the object is stored as pre-signed URL.\n- creative_cloud_file_id: if the object is stored as as ACP file; id of the file.\n- name: This is used if the object is included in the request or response payload as form. This field will\n  be the name of the multi-part file. When accepting this file in the adapter, you don't need to use this field\n  directly, instead the _source (binary) and _mime_type (string) will be set for you.\n  When returning this type, tou don't need to set this field directly, instead set the bytes,\n  and the mime type, and inference platform takes care of converting to multi-part.\n    ```\n    binary = PublicBinary(); binary._source = ...;  binary._mime_type = ...\n    ```\n\nIt is also possible to set multiple fields; in case you want to return a file stored in various places\nto the user.",
+        "properties": {
+          "creativeCloudComponentId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The ID of the component in ACP. Has to be a ACP Component assetID.",
+            "title": "ACP Component ID"
+          },
+          "creativeCloudComponentRevision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The revision of the component in ACP. Has to be an ACP Component revision.",
+            "title": "ACP Component Revision"
+          },
+          "creativeCloudFileId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional ID of the file in ACP. Has to be a ACP File assetID.",
+            "title": "ACP File ID"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "format": "uuid4",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This is coming from other outputs",
+            "title": "The internal id for a storage item"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "name of the item, e.g. for look up in multi part files"
+          },
+          "presignedUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This URL will expire in one hour",
+            "title": "The presigned url"
+          }
+        },
+        "title": "PublicBinary",
+        "type": "object"
+      },
+      "ReasoningLevel": {
+        "description": "Reasoning level for models that support extended thinking.",
+        "enum": [
+          "disable",
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "title": "ReasoningLevel",
+        "type": "string"
+      },
+      "RedactedThinkingContent": {
+        "description": "Redacted thinking content block.\n\nOccasionally Claude's internal reasoning is redacted for safety.  The\nopaque ``data`` payload must still be roundtripped so the API can\nreconstruct conversation state.",
+        "properties": {
+          "content_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Arrival position relative to non-thinking content blocks. Equal to the number of content blocks (text/tool_use) emitted before this thinking block. Used by the Responses-API sync adapter to preserve thinking↔content interleaving in output. Excluded from serialization — only the new Responses-API consumer reads it.",
+            "title": "Content Index"
+          },
+          "data": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque data payload for redacted thinking blocks",
+            "title": "Data"
+          },
+          "type": {
+            "const": "redacted_thinking",
+            "default": "redacted_thinking",
+            "description": "Content type identifier",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "RedactedThinkingContent",
+        "type": "object"
+      },
+      "ReferenceBlob": {
+        "description": "A single reference input (image/asset/element/frame/etc.) attached to a generation request.\n\nFor ``usage='element'`` blobs: the client is responsible for sending an already-deduplicated\nlist. The gateway does not detect or collapse repeated elements (e.g. the same\n``creativeCloudFileId`` submitted twice, once with a ``mention`` and once without) — sending\na duplicate produces a duplicate caption/reference for the same entity.",
+        "properties": {
+          "consumptionMode": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ConsumptionMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How a usage='element' reference blob is consumed by the model: 'reference' (resolved to reference image(s)/asset and passed to the model, the default) or 'prompt' (injected into the prompt as a caption only, consumes no reference slot). Only valid when usage='element'.",
+            "title": "Consumption Mode"
+          },
+          "creativeCloudComponentId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The ID of the component in ACP. Has to be an ACP Component assetID.",
+            "title": "ACP Component ID"
+          },
+          "creativeCloudComponentRevision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The revision of the component in ACP. Has to be an ACP Component revision.",
+            "title": "ACP Component Revision"
+          },
+          "creativeCloudFileId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional ID of the file in ACP. Has to be a ACP File assetID.",
+            "title": "ACP File ID"
+          },
+          "depthStrength": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Depth strength for structure reference videos (0–1). Clineto-specific.",
+            "title": "Depth strength"
+          },
+          "edgeStrength": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Edge strength for structure reference videos (0–1). Clineto-specific.",
+            "title": "Edge strength"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "format": "uuid4",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "This is coming from other outputs",
+            "title": "The internal id for a storage item"
+          },
+          "mention": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InlinePromptMention"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Links this blob to an @mention in the prompt via @{mention.id}.",
+            "title": "Inline Prompt Mention"
+          },
+          "order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Defines the explicit ordering (always following the sequence starting with 1) of reference blobs used",
+            "title": "The order of the reference blob"
+          },
+          "presignedUrl": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A presigned URL to the reference asset.",
+            "title": "Presigned URL"
+          },
+          "promptReference": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The index of the prompt reference image.",
+            "title": "The prompt reference image index"
+          },
+          "timestampMs": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For frame references, the exact timestamp within a video that this reference corresponds to. Takes precedence over 'order' when both are specified.",
+            "title": "Frame timestamp in milliseconds"
+          },
+          "usage": {
+            "$ref": "#/$defs/ReferenceBlobUsage",
+            "description": "The usage of the reference blob. Available options: 'general' for general reference, 'frame' for first/last frame references (use with 'order' field: 1=first, 2=last), 'subject' for subject reference, 'unknown' for images used in formulating a generation request, 'source' for audio/video source blobs, 'composition' for gensoundfx text2sfx audio references.",
+            "title": "The usage of the reference blob"
+          }
+        },
+        "required": [
+          "usage"
+        ],
+        "title": "ReferenceBlob",
+        "type": "object"
+      },
+      "ReferenceBlobUsage": {
+        "enum": [
+          "subject",
+          "mask",
+          "general",
+          "unknown",
+          "nonGenRef",
+          "asset",
+          "style",
+          "frame",
+          "element",
+          "source",
+          "composition",
+          "camera"
+        ],
+        "title": "ReferenceBlobUsage",
+        "type": "string"
+      },
+      "ReferenceImageTransform": {
+        "description": "Image-media transform controls. Bare-minimum shape for now (``mode`` only); grows to add\n``resize``/``format`` controls later without another breaking change.",
+        "properties": {
+          "mode": {
+            "$ref": "#/$defs/ReferenceImageTransformMode"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "ReferenceImageTransform",
+        "type": "object"
+      },
+      "ReferenceImageTransformMode": {
+        "description": "Per-image reference-transform mode. ``ALLOW_LOSSY_CONVERSION`` opts into converting and/or\nresizing reference images to fit the provider's format/size limits, permitting lossy re-encodes.",
+        "enum": [
+          "allowLossyConversion"
+        ],
+        "title": "ReferenceImageTransformMode",
+        "type": "string"
+      },
+      "ReferenceTransform": {
+        "description": "Client opt-in to transform reference media before the model sees it.\n\nPer-media-type groups; only ``image`` is implemented today (``video`` reserved for later).",
+        "properties": {
+          "image": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ReferenceImageTransform"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ReferenceTransform",
+        "type": "object"
+      },
+      "RequestMessage": {
+        "description": "A message in the conversation for input requests.",
+        "properties": {
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/TextContent"
+                    },
+                    {
+                      "$ref": "#/$defs/ImageContent"
+                    },
+                    {
+                      "$ref": "#/$defs/DocumentContent"
+                    },
+                    {
+                      "$ref": "#/$defs/VideoContent"
+                    },
+                    {
+                      "$ref": "#/$defs/ToolCallContent"
+                    },
+                    {
+                      "$ref": "#/$defs/ToolCallOutputContent"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              }
+            ],
+            "description": "The content of the message - can be a simple string, a list of content blocks (text, image, etc.), or a dict for structured output",
+            "title": "Content"
+          },
+          "role": {
+            "$ref": "#/$defs/MessageRole",
+            "description": "The role of the message sender",
+            "title": "Role"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ThinkingContent"
+                    },
+                    {
+                      "$ref": "#/$defs/RedactedThinkingContent"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional thinking/redacted_thinking blocks from Claude's extended thinking. Present when thinking is enabled; must be round-tripped for multi-turn conversation continuity.",
+            "title": "Thinking"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "RequestMessage",
+        "type": "object"
+      },
+      "ScoreQuestion": {
+        "description": "Rates the state along an ordered rubric of levels.",
+        "properties": {
+          "criteria": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "items": {},
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxItems": 10,
+            "minItems": 2,
+            "title": "Criteria",
+            "type": "array"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "type": {
+            "const": "score",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "criteria"
+        ],
+        "title": "ScoreQuestion",
+        "type": "object"
+      },
+      "ShotType": {
+        "description": "Type of multi-shot video generation. Supported values vary by model.",
+        "enum": [
+          "customize",
+          "intelligent"
+        ],
+        "title": "ShotType",
+        "type": "string"
+      },
+      "Size": {
+        "properties": {
+          "height": {
+            "minimum": 1,
+            "title": "The height of the output image/video",
+            "type": "integer"
+          },
+          "width": {
+            "minimum": 1,
+            "title": "The width of the output image/video",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height"
+        ],
+        "title": "Size",
+        "type": "object"
+      },
+      "SpeechGenerationSettings": {
+        "description": "Generation settings for speech models.",
+        "properties": {
+          "deviceLocale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "BCP-47 device locale, e.g. ``en-US``. Used only as a fallback when ``languageCandidates`` is empty, or to pick an English accent (e.g. ``en`` + ``en-IN`` -> ``en-in``) when every candidate resolves to bare English.",
+            "title": "Device locale"
+          },
+          "languageCandidates": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/LanguageCandidate"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Weighted language-detector output. When present, takes precedence over ``promptConfig.localeCode`` for locale resolution: the highest-weight supported candidate is used, preferring non-English candidates over English ones.",
+            "title": "Language candidates"
+          },
+          "promptConfig": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PromptConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the prompt is interpreted: its media type and locale.",
+            "title": "Prompt config"
+          },
+          "promptPlainText": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Tag-free text parallel to the prompt (e.g. when the prompt is SSML); used for per-word transcript character offsets.",
+            "title": "Prompt plain text"
+          },
+          "voiceConfig": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/VoiceConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Speaking rate / pitch tuning. Ignored for SSML prompts.",
+            "title": "Voice config"
+          }
+        },
+        "title": "SpeechGenerationSettings",
+        "type": "object"
+      },
+      "StructuredPrompt": {
+        "description": "Explicit scene authoring: layout + literal text placement + granular style facets.\n\nProvider-agnostic construct mirroring Ideogram 4.0's ``json_prompt``. Generate-only, and\nhonored only by providers that advertise it (see ``IdeogramV4NativeSchema``); routes that\ncannot honor it reject a request carrying it.",
+        "properties": {
+          "composition": {
+            "$ref": "#/$defs/PromptComposition",
+            "description": "Required scene layout - the value-add over a plain text prompt",
+            "title": "Composition"
+          },
+          "highLevelDescription": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Single natural-language summary; falls back to the request prompt when unset",
+            "title": "High-level description"
+          },
+          "style": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PromptStyle"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional style facets applied to the whole image"
+          }
+        },
+        "required": [
+          "composition"
+        ],
+        "title": "StructuredPrompt",
+        "type": "object"
+      },
+      "Style": {
+        "properties": {
+          "adherence": {
+            "default": 1,
+            "description": "It controls the adherence to the reference image",
+            "maximum": 2,
+            "minimum": 0,
+            "title": "Adherence to the reference image",
+            "type": "integer"
+          },
+          "presets": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The style presets to guide color and tone, lighting, camera angle and other effects",
+            "title": "The style presets"
+          },
+          "referenceImage": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PublicBinary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The reference image to be used for style",
+            "title": "The reference image"
+          }
+        },
+        "title": "Style",
+        "type": "object"
+      },
+      "TextContent": {
+        "description": "Text content block.",
+        "properties": {
+          "cache_control": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CacheControl"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cache control for Anthropic prompt caching"
+          },
+          "text": {
+            "description": "The text content",
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "default": "text",
+            "description": "Content type identifier",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "TextContent",
+        "type": "object"
+      },
+      "TextElement": {
+        "description": "A literal text element to render, placed via the structured prompt.",
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PromptBBox"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional layout box on the 1000x1000 canvas"
+          },
+          "description": {
+            "description": "Style, role, or placement notes for the text",
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "text": {
+            "description": "The literal text to render",
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "default": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "description"
+        ],
+        "title": "TextElement",
+        "type": "object"
+      },
+      "ThinkingContent": {
+        "description": "Thinking content block for Claude's extended/interleaved thinking.\n\nWhen thinking is enabled, Claude returns thinking blocks containing its\ninternal reasoning. Each block carries a cryptographic ``signature`` that\nmust be sent back in multi-turn conversations so the API can verify\nconversation continuity (analogous to Gemini's ``thought_signature``).",
+        "properties": {
+          "content_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Arrival position relative to non-thinking content blocks. Equal to the number of content blocks (text/tool_use) emitted before this thinking block. Used by the Responses-API sync adapter to preserve thinking↔content interleaving in output. Excluded from serialization — only the new Responses-API consumer reads it.",
+            "title": "Content Index"
+          },
+          "signature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Cryptographic signature required for roundtripping thinking blocks",
+            "title": "Signature"
+          },
+          "thinking": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The model's chain-of-thought reasoning text",
+            "title": "Thinking"
+          },
+          "type": {
+            "const": "thinking",
+            "default": "thinking",
+            "description": "Content type identifier",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "ThinkingContent",
+        "type": "object"
+      },
+      "Tool": {
+        "description": "Tool definition that can be called by the LLM.",
+        "properties": {
+          "cache_control": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CacheControl"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional cache control directive (Claude only). Caches the tool definition prefix."
+          },
+          "function": {
+            "$ref": "#/$defs/ToolFunction",
+            "description": "The function definition"
+          },
+          "type": {
+            "const": "function",
+            "default": "function",
+            "description": "The type of the tool, currently only 'function' is supported",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "function"
+        ],
+        "title": "Tool",
+        "type": "object"
+      },
+      "ToolCallContent": {
+        "description": "Tool call content block.",
+        "properties": {
+          "function": {
+            "$ref": "#/$defs/ToolCallFunction",
+            "description": "The function call details"
+          },
+          "id": {
+            "description": "Unique identifier for this tool call",
+            "title": "Id",
+            "type": "string"
+          },
+          "thoughtSignature": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "thought signature for function call",
+            "title": "Thoughtsignature"
+          },
+          "type": {
+            "const": "tool_call",
+            "default": "tool_call",
+            "description": "Content type identifier",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "function"
+        ],
+        "title": "ToolCallContent",
+        "type": "object"
+      },
+      "ToolCallFunction": {
+        "description": "Function call details within a tool call.",
+        "properties": {
+          "arguments": {
+            "description": "JSON string of arguments for the function call",
+            "title": "Arguments",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name of the function being called",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "arguments"
+        ],
+        "title": "ToolCallFunction",
+        "type": "object"
+      },
+      "ToolCallOutputContent": {
+        "description": "Tool response content block.",
+        "properties": {
+          "cache_control": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CacheControl"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional cache control directive (Claude only). Caches the conversation prefix up to this tool result."
+          },
+          "content": {
+            "description": "The response content from the tool",
+            "title": "Content",
+            "type": "string"
+          },
+          "id": {
+            "description": "The ID of the tool call this is responding to",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "const": "tool_call_output",
+            "default": "tool_call_output",
+            "description": "Content type identifier",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content"
+        ],
+        "title": "ToolCallOutputContent",
+        "type": "object"
+      },
+      "ToolFunction": {
+        "description": "Function definition for a tool.",
+        "properties": {
+          "description": {
+            "description": "A description of what the function does",
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name of the function to be called",
+            "title": "Name",
+            "type": "string"
+          },
+          "parameters": {
+            "$ref": "#/$defs/ToolFunctionParameters",
+            "description": "The parameters the function accepts"
+          },
+          "strict": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider ``strict`` flag for function tools. Passed through to OpenAI and Anthropic; Gemini does not support the field and silently ignores it.",
+            "title": "Strict"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "parameters"
+        ],
+        "title": "ToolFunction",
+        "type": "object"
+      },
+      "ToolFunctionParameters": {
+        "description": "Parameters definition for a tool function.",
+        "properties": {
+          "additional_properties": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "JSON Schema ``additionalProperties`` constraint. Passed through to the provider when set; no internal enforcement is performed.",
+            "title": "Additional Properties"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "description": "JSON schema properties for the function parameters",
+            "title": "Properties",
+            "type": "object"
+          },
+          "required": {
+            "description": "List of required parameter names",
+            "items": {
+              "type": "string"
+            },
+            "title": "Required",
+            "type": "array"
+          },
+          "type": {
+            "const": "object",
+            "default": "object",
+            "description": "Parameter type, must be 'object'",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "properties"
+        ],
+        "title": "ToolFunctionParameters",
+        "type": "object"
+      },
+      "TranscriptConfig": {
+        "description": "Aligned-transcript options for generated speech.",
+        "properties": {
+          "granularity": {
+            "$ref": "#/$defs/TranscriptGranularity",
+            "description": "Granularity of the aligned transcript to include in the response (``WORD``: segments with per-word timings/offsets).",
+            "title": "Transcript granularity"
+          }
+        },
+        "required": [
+          "granularity"
+        ],
+        "title": "TranscriptConfig",
+        "type": "object"
+      },
+      "TranscriptGranularity": {
+        "description": "Granularity of the aligned transcript returned for generated speech.",
+        "enum": [
+          "WORD"
+        ],
+        "title": "TranscriptGranularity",
+        "type": "string"
+      },
+      "VectorType": {
+        "enum": [
+          "icon",
+          "pattern",
+          "scene",
+          "subject"
+        ],
+        "title": "VectorType",
+        "type": "string"
+      },
+      "VideoContent": {
+        "description": "Video content block.\n\nUnlike ``DocumentContent``, the caller-supplied ``PublicBinary`` (``source``) is\nnever handed to the provider as-is. The adapter layer\n(``_resolve_video_gcs_uris`` in ``endpoints/responses_adapters.py`` and the\nequivalent branch in ``endpoints/llm_3p_generate_adapters.py``) fetches the video\nbytes from ``source``'s resolved presigned URL and re-uploads them to GCS,\npopulating ``gcs_uri`` with the resulting ``gs://`` URI before the pipeline or\nprovider ever sees the block. ``gcs_uri`` is a separate field rather than\noverwriting ``source.presigned_url`` because ``PublicBinary.presigned_url`` is\ntyped as ``HttpUrlSerializable`` (Pydantic's ``HttpUrl``), which only accepts\nhttp/https schemes and would reject a ``gs://`` value. This removes Gemini's\ninline-fetch size ceiling entirely, since a ``gs://`` URI is read directly by\nGemini rather than fetched by it. There is no raw ``gs://`` passthrough from the\ncaller and no inline-base64 mode.\n\nOrdering recommendation (caller-controlled, not enforced by the gateway): per\nhttps://ai.google.dev/gemini-api/docs/video-understanding, when a message\ncombines exactly one video with text, Gemini recommends placing the video block\n*before* the text block in ``content`` for best results. Content block order is\npassed through unchanged on both serving paths (LEGACY and DIRECT_HTTP) -- the\ngateway does not reorder blocks -- so callers wanting this behavior must order\ntheir own ``content`` list accordingly. Google also recommends at most one video\nper prompt for optimal results (``max_videos_in_request`` allows up to Gemini's\ndocumented hard ceiling of 10 for Gemini 2.5+, not their single-video\nrecommendation), and gives no ordering guidance for multi-video messages.",
+        "properties": {
+          "gcs_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Resolved gs:// URI, set by the adapter",
+            "title": "Gcs Uri"
+          },
+          "mime_type": {
+            "description": "MIME type of the video. Allowed values: ['video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska', 'video/x-msvideo']",
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/PublicBinary",
+            "description": "The video as a PublicBinary object"
+          },
+          "type": {
+            "const": "video",
+            "default": "video",
+            "description": "Content type identifier",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "mime_type"
+        ],
+        "title": "VideoContent",
+        "type": "object"
+      },
+      "VoiceConfig": {
+        "description": "Synthesis-time speed / pitch tuning for text-to-speech. Honored only for plain-text scripts",
+        "properties": {
+          "pitch": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pitch shift in semitones"
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Speaking rate multiplier"
+          }
+        },
+        "title": "VoiceConfig",
+        "type": "object"
+      },
+      "bksExperiment": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Opaque client-managed tag forwarded verbatim to BKS authorization and metering. Use to differentiate metering behavior across workflows sharing the same product and model. The client owns the tag value and must coordinate its meaning with BKS/Metering.",
+        "title": "BKS Experiment"
+      },
+      "caiClaimVersion": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cai Claim Version"
+      },
+      "characterOrientation": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CharacterOrientation"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "classifyPrompt": {
+        "default": false,
+        "title": "Classify Prompt",
+        "type": "boolean"
+      },
+      "creativityLevel": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Creativity Level"
+      },
+      "duration": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Duration"
+      },
+      "enhanceAudio": {
+        "default": false,
+        "title": "Enhance Audio",
+        "type": "boolean"
+      },
+      "fps": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Fps"
+      },
+      "gapSeconds": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Freeze-frame duration at a transition seam, in seconds. 0 = direct cut with no hold.",
+        "title": "Gap Seconds"
+      },
+      "generateAudio": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Whether to generate native audio for the video.",
+        "title": "Generate Audio"
+      },
+      "generatePreview": {
+        "default": false,
+        "title": "Generate Preview",
+        "type": "boolean"
+      },
+      "generationMetadata": {
+        "$ref": "#/$defs/ClientGenerationMetadata"
+      },
+      "generationSettings": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GenerationSettings"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The common settings parameters for the generation process",
+        "title": "Common generation settings"
+      },
+      "generationType": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Generation Type"
+      },
+      "groundSearch": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": false,
+        "title": "Ground Search"
+      },
+      "keepAudio": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Whether to keep the original audio from the reference video.",
+        "title": "Keep Audio"
+      },
+      "loop": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Whether the generated video should loop seamlessly — the end blends back into the start so it plays on repeat with no visible jump.",
+        "title": "Loop"
+      },
+      "mode": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Mode"
+      },
+      "modelId": {
+        "title": "Model Id",
+        "type": "string"
+      },
+      "modelSpecificPayload": {
+        "additionalProperties": true,
+        "default": {},
+        "title": "Model Specific Payload",
+        "type": "object"
+      },
+      "modelVersion": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Version"
+      },
+      "multiPrompt": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/$defs/MultiPromptItem"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "List of prompts for multi-shot video generation. Each element has prompt and optional duration. Either prompt or multi_prompt required, not both.",
+        "title": "Multi Prompt"
+      },
+      "n": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": 1,
+        "description": "Number of outputs to generate",
+        "title": "N"
+      },
+      "negativePrompt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Negative Prompt"
+      },
+      "numInferenceSteps": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Num Inference Steps"
+      },
+      "output": {
+        "$ref": "#/$defs/OutputSpec",
+        "default": {
+          "storeInputs": false
+        }
+      },
+      "placement": {
+        "anyOf": [
+          {
+            "properties": {
+              "alignmentX": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": 0,
+                "description": "Horizontal pixel shift of the scaled source from the canvas's horizontal center. Positive = shift right, negative = shift left. 0 = horizontally centered.",
+                "title": "Alignment X"
+              },
+              "alignmentY": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": 0,
+                "description": "Vertical pixel shift of the scaled source from the canvas's vertical center. Positive = shift down, negative = shift up. 0 = vertically centered.",
+                "title": "Alignment Y"
+              },
+              "sourceScaleH": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": 1.0,
+                "description": "How much to scale the source video's height. 1.0 = native height (default), 0.5 = half, 2.0 = double.",
+                "title": "Source Scale H"
+              },
+              "sourceScaleW": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0.0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": 1.0,
+                "description": "How much to scale the source video's width. 1.0 = native width (default), 0.5 = half, 2.0 = double.",
+                "title": "Source Scale W"
+              }
+            },
+            "title": "OutpaintPlacement",
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "preflightContextId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Preflight Context Id"
+      },
+      "preset": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "A named provider preset selecting a pre-tuned combination of knobs. Mutually exclusive with gap_seconds/retake_length.",
+        "title": "Preset"
+      },
+      "prompt": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The prompt used for generation or editing.",
+        "title": "Prompt"
+      },
+      "promptAdherence": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "How closely to follow the prompt (higher = more adherent)",
+        "title": "Prompt Adherence"
+      },
+      "referenceBlobs": {
+        "default": [],
+        "description": "List of reference blobs that will be used as additional input for the generation process.",
+        "items": {
+          "$ref": "#/$defs/ReferenceBlob"
+        },
+        "minItems": 0,
+        "title": "Reference blobs",
+        "type": "array"
+      },
+      "referenceTransform": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ReferenceTransform"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Opt in to transform reference images (e.g. convert an unsupported format) before the model sees them."
+      },
+      "removeBackgroundNoise": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Remove Background Noise"
+      },
+      "resolution": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Resolution"
+      },
+      "retakeLength": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Length (in seconds) of the segment to regenerate, centered on a cut.",
+        "title": "Retake Length"
+      },
+      "seeds": {
+        "default": [],
+        "items": {
+          "type": "integer"
+        },
+        "title": "Seeds",
+        "type": "array"
+      },
+      "shotType": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ShotType"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The type of multi-shot video generation (customize or intelligent)."
+      },
+      "size": {
+        "$ref": "#/$defs/Size",
+        "default": {
+          "height": 1024,
+          "width": 1024
+        }
+      },
+      "upsamplerFactor": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Upsampler Factor"
+      },
+      "voiceId": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Voice Id"
+      }
+    }
+  },
+  "skipped": [
+    "gpt-image/1.5",
+    "kling/kling_o3_pro_i2v",
+    "kling/kling_o3_pro_reference_to_video",
+    "kling/kling_o3_pro_t2v",
+    "kling/kling_o3_pro_v2v_edit",
+    "kling/kling_o3_pro_v2v_reference",
+    "kling/kling_o3_standard_i2v",
+    "kling/kling_o3_standard_reference_to_video",
+    "kling/kling_o3_standard_t2v",
+    "kling/kling_o3_standard_v2v_edit",
+    "kling/kling_o3_standard_v2v_reference",
+    "kling/kling_v3_omni_v2v_create",
+    "kling/kling_v3_omni_v2v_edit",
+    "kling/kling_v3_pro_i2v",
+    "kling/kling_v3_pro_t2v",
+    "kling/kling_v3_standard_i2v",
+    "kling/kling_v3_standard_t2v",
+    "kling/kling_v3_v2v_edit",
+    "seedance/seedance_2.5_editing",
+    "seedance/seedance_2.5_extension"
+  ],
+  "versions": {
+    "gemini-flash/nano-banana-2": {
+      "acModelFamilyDisplayName": "Gemini Flash",
+      "acModelFamilyId": "gemini-flash",
+      "bksGenerationModel": "firefly_3p:external:gemini_flash_2",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "style_reference",
+        "editing"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Gemini Flash",
+      "modelDisplayName": "Gemini 3.0 (Nano Banana Pro)",
+      "outputModality": [
+        "image"
+      ],
+      "partnerCoverageEligible": true,
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "1:1",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "1:1",
+                      "3:2",
+                      "2:3",
+                      "3:4",
+                      "4:3",
+                      "4:5",
+                      "5:4",
+                      "9:16",
+                      "16:9",
+                      "21:9"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "groundSearch": {
+            "$ref": "#/$defs/groundSearch"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "$ref": "#/$defs/n"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "description": "The prompt used for generation or editing.",
+            "maxLength": 262000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 14,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ],
+                "maxFileSizeBytes": 20971520,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "maxItems": 14,
+                    "minItems": 0,
+                    "usageType": "general"
+                  },
+                  {
+                    "maxItems": 14,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "default": "1K",
+                "enum": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Output resolution tier. When provided, takes precedence over 'size' for resolution selection. Defaults to 1K when neither resolution nor size is provided.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          },
+          "size": {
+            "enum": [
+              {
+                "height": 1024,
+                "width": 1024
+              },
+              {
+                "height": 848,
+                "width": 1264
+              },
+              {
+                "height": 1264,
+                "width": 848
+              },
+              {
+                "height": 896,
+                "width": 1200
+              },
+              {
+                "height": 1200,
+                "width": 896
+              },
+              {
+                "height": 928,
+                "width": 1152
+              },
+              {
+                "height": 1152,
+                "width": 928
+              },
+              {
+                "height": 1376,
+                "width": 768
+              },
+              {
+                "height": 768,
+                "width": 1376
+              },
+              {
+                "height": 672,
+                "width": 1584
+              },
+              {
+                "height": 2048,
+                "width": 2048
+              },
+              {
+                "height": 1696,
+                "width": 2528
+              },
+              {
+                "height": 2528,
+                "width": 1696
+              },
+              {
+                "height": 1792,
+                "width": 2400
+              },
+              {
+                "height": 2400,
+                "width": 1792
+              },
+              {
+                "height": 1856,
+                "width": 2304
+              },
+              {
+                "height": 2304,
+                "width": 1856
+              },
+              {
+                "height": 2752,
+                "width": 1536
+              },
+              {
+                "height": 1536,
+                "width": 2752
+              },
+              {
+                "height": 1344,
+                "width": 3168
+              },
+              {
+                "height": 4096,
+                "width": 4096
+              },
+              {
+                "height": 3392,
+                "width": 5056
+              },
+              {
+                "height": 5056,
+                "width": 3392
+              },
+              {
+                "height": 3584,
+                "width": 4800
+              },
+              {
+                "height": 4800,
+                "width": 3584
+              },
+              {
+                "height": 3712,
+                "width": 4608
+              },
+              {
+                "height": 4608,
+                "width": 3712
+              },
+              {
+                "height": 5504,
+                "width": 3072
+              },
+              {
+                "height": 3072,
+                "width": 5504
+              },
+              {
+                "height": 2688,
+                "width": 6336
+              }
+            ]
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "vector",
+        "raw"
+      ]
+    },
+    "gemini-flash/nano-banana-2026-09": {
+      "acModelFamilyDisplayName": "Gemini Flash",
+      "acModelFamilyId": "gemini-flash",
+      "bksGenerationModel": "firefly_3p:external:nano_banana_2026_09",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "style_reference",
+        "editing"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Gemini Flash",
+      "modelDisplayName": "Gemini Nano Banana 2.1",
+      "outputModality": [
+        "image"
+      ],
+      "partnerCoverageEligible": true,
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "1:1",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "1:1",
+                      "3:2",
+                      "2:3",
+                      "3:4",
+                      "4:3",
+                      "4:5",
+                      "5:4",
+                      "9:16",
+                      "16:9",
+                      "21:9",
+                      "1:8",
+                      "8:1",
+                      "1:4",
+                      "4:1"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "groundSearch": {
+            "$ref": "#/$defs/groundSearch"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "$ref": "#/$defs/n"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "description": "The prompt used for generation or editing.",
+            "maxLength": 524000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 14,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ],
+                "maxFileSizeBytes": 20971520,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "maxItems": 14,
+                    "minItems": 0,
+                    "usageType": "general"
+                  },
+                  {
+                    "maxItems": 14,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "default": "1K",
+                "enum": [
+                  "1K",
+                  "2K",
+                  "4K"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Output resolution tier. When provided, takes precedence over 'size' for resolution selection. Defaults to 1K when neither resolution nor size is provided.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          },
+          "size": {
+            "enum": [
+              {
+                "height": 1024,
+                "width": 1024
+              },
+              {
+                "height": 848,
+                "width": 1264
+              },
+              {
+                "height": 1264,
+                "width": 848
+              },
+              {
+                "height": 896,
+                "width": 1200
+              },
+              {
+                "height": 1200,
+                "width": 896
+              },
+              {
+                "height": 928,
+                "width": 1152
+              },
+              {
+                "height": 1152,
+                "width": 928
+              },
+              {
+                "height": 1376,
+                "width": 768
+              },
+              {
+                "height": 768,
+                "width": 1376
+              },
+              {
+                "height": 672,
+                "width": 1584
+              },
+              {
+                "height": 2048,
+                "width": 2048
+              },
+              {
+                "height": 1696,
+                "width": 2528
+              },
+              {
+                "height": 2528,
+                "width": 1696
+              },
+              {
+                "height": 1792,
+                "width": 2400
+              },
+              {
+                "height": 2400,
+                "width": 1792
+              },
+              {
+                "height": 1856,
+                "width": 2304
+              },
+              {
+                "height": 2304,
+                "width": 1856
+              },
+              {
+                "height": 2752,
+                "width": 1536
+              },
+              {
+                "height": 1536,
+                "width": 2752
+              },
+              {
+                "height": 1344,
+                "width": 3168
+              },
+              {
+                "height": 4096,
+                "width": 4096
+              },
+              {
+                "height": 3392,
+                "width": 5056
+              },
+              {
+                "height": 5056,
+                "width": 3392
+              },
+              {
+                "height": 3584,
+                "width": 4800
+              },
+              {
+                "height": 4800,
+                "width": 3584
+              },
+              {
+                "height": 3712,
+                "width": 4608
+              },
+              {
+                "height": 4608,
+                "width": 3712
+              },
+              {
+                "height": 5504,
+                "width": 3072
+              },
+              {
+                "height": 3072,
+                "width": 5504
+              },
+              {
+                "height": 2688,
+                "width": 6336
+              }
+            ]
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "gemini-flash/nano-banana-3": {
+      "acModelFamilyDisplayName": "Gemini Flash",
+      "acModelFamilyId": "gemini-flash",
+      "bksGenerationModel": "firefly_3p:external:nano_banana_3",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "style_reference",
+        "editing"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Gemini Flash",
+      "modelDisplayName": "Gemini 3.1 (with Nano Banana 2)",
+      "outputModality": [
+        "image"
+      ],
+      "partnerCoverageEligible": true,
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "1:1",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "1:1",
+                      "3:2",
+                      "2:3",
+                      "3:4",
+                      "4:3",
+                      "4:5",
+                      "5:4",
+                      "9:16",
+                      "16:9",
+                      "21:9",
+                      "1:8",
+                      "8:1",
+                      "1:4",
+                      "4:1"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "groundSearch": {
+            "$ref": "#/$defs/groundSearch"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "$ref": "#/$defs/n"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 524000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The prompt used for generation or editing.",
+            "title": "Prompt"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 14,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ],
+                "maxFileSizeBytes": 20971520,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "maxItems": 14,
+                    "minItems": 0,
+                    "usageType": "general"
+                  },
+                  {
+                    "maxItems": 14,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "default": "1K",
+                "enum": [
+                  "512",
+                  "1K",
+                  "2K",
+                  "4K"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Output resolution tier. When provided, takes precedence over 'size' for resolution selection. Defaults to 1K when neither resolution nor size is provided.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          },
+          "size": {
+            "enum": [
+              {
+                "height": 512,
+                "width": 512
+              },
+              {
+                "height": 1024,
+                "width": 1024
+              },
+              {
+                "height": 848,
+                "width": 1264
+              },
+              {
+                "height": 1264,
+                "width": 848
+              },
+              {
+                "height": 896,
+                "width": 1200
+              },
+              {
+                "height": 1200,
+                "width": 896
+              },
+              {
+                "height": 928,
+                "width": 1152
+              },
+              {
+                "height": 1152,
+                "width": 928
+              },
+              {
+                "height": 1376,
+                "width": 768
+              },
+              {
+                "height": 768,
+                "width": 1376
+              },
+              {
+                "height": 672,
+                "width": 1584
+              },
+              {
+                "height": 2048,
+                "width": 2048
+              },
+              {
+                "height": 1696,
+                "width": 2528
+              },
+              {
+                "height": 2528,
+                "width": 1696
+              },
+              {
+                "height": 1792,
+                "width": 2400
+              },
+              {
+                "height": 2400,
+                "width": 1792
+              },
+              {
+                "height": 1856,
+                "width": 2304
+              },
+              {
+                "height": 2304,
+                "width": 1856
+              },
+              {
+                "height": 2752,
+                "width": 1536
+              },
+              {
+                "height": 1536,
+                "width": 2752
+              },
+              {
+                "height": 1344,
+                "width": 3168
+              },
+              {
+                "height": 4096,
+                "width": 4096
+              },
+              {
+                "height": 3392,
+                "width": 5056
+              },
+              {
+                "height": 5056,
+                "width": 3392
+              },
+              {
+                "height": 3584,
+                "width": 4800
+              },
+              {
+                "height": 4800,
+                "width": 3584
+              },
+              {
+                "height": 3712,
+                "width": 4608
+              },
+              {
+                "height": 4608,
+                "width": 3712
+              },
+              {
+                "height": 5504,
+                "width": 3072
+              },
+              {
+                "height": 3072,
+                "width": 5504
+              },
+              {
+                "height": 2688,
+                "width": 6336
+              }
+            ]
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId"
+        ],
+        "type": "object"
+      },
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "gpt-image/2": {
+      "acModelFamilyDisplayName": "GPT Image",
+      "acModelFamilyId": "gpt-image",
+      "bksGenerationModel": "firefly_3p:external:gpt_image_2",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing",
+        "inpainting",
+        "style_reference"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "GPT Image 2",
+      "modelDisplayName": "GPT Image 2",
+      "outputModality": [
+        "image"
+      ],
+      "partnerCoverageEligible": true,
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "detailLevel": {
+                    "anyOf": [
+                      {
+                        "maximum": 5,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": 3,
+                    "description": "Controls the detail level of the generated image",
+                    "title": "The detail level"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "$ref": "#/$defs/n"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "description": "The prompt used for generation or editing.",
+            "maxLength": 32000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 17,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/webp",
+                  "image/jpeg"
+                ],
+                "maxFileSizeBytes": 104857600,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "deprecated": true,
+                    "description": "Deprecated. Use usage='source' instead.",
+                    "maxItems": 16,
+                    "minItems": 0,
+                    "replacement": "source",
+                    "usageType": "subject"
+                  },
+                  {
+                    "description": "Image to edit or use as a visual reference to guide generation.",
+                    "maxItems": 16,
+                    "minItems": 0,
+                    "usageType": "source"
+                  },
+                  {
+                    "description": "Optional edit mask for the source image. Fully transparent (alpha) areas mark the regions to regenerate; opaque areas are preserved. Must include an alpha channel and match the source image's dimensions.",
+                    "maxItems": 1,
+                    "minItems": 0,
+                    "usageType": "mask"
+                  },
+                  {
+                    "maxItems": 16,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              }
+            ]
+          },
+          "size": {
+            "properties": {
+              "height": {
+                "description": "Must be a multiple of 16. Total pixels (width x height) must be between 655,360 and 8,294,400, with an aspect ratio no greater than 3:1.",
+                "maximum": 3840,
+                "minimum": 480,
+                "type": "integer"
+              },
+              "width": {
+                "description": "Must be a multiple of 16. Total pixels (width x height) must be between 655,360 and 8,294,400, with an aspect ratio no greater than 3:1.",
+                "maximum": 3840,
+                "minimum": 480,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "width",
+              "height"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "vector",
+        "raw"
+      ]
+    },
+    "gpt-image/gpt-image-2.5-flare": {
+      "acModelFamilyDisplayName": "GPT Image",
+      "acModelFamilyId": "gpt-image",
+      "bksGenerationModel": "firefly_3p:external:gpt_image_2_5_flare",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing",
+        "inpainting",
+        "style_reference"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "GPT Image 2.5 Flare",
+      "modelDisplayName": "GPT Image 2.5 Flare",
+      "outputModality": [
+        "image"
+      ],
+      "partnerCoverageEligible": true,
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "detailLevel": {
+                    "anyOf": [
+                      {
+                        "maximum": 7,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": 3,
+                    "description": "Controls the detail level of the generated image",
+                    "title": "The detail level"
+                  },
+                  "transparentBackground": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Transparentbackground"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "$ref": "#/$defs/n"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "description": "The prompt used for generation or editing.",
+            "maxLength": 32000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 17,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/webp",
+                  "image/jpeg"
+                ],
+                "maxFileSizeBytes": 104857600,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "deprecated": true,
+                    "description": "Deprecated. Use usage='source' instead.",
+                    "maxItems": 16,
+                    "minItems": 0,
+                    "replacement": "source",
+                    "usageType": "subject"
+                  },
+                  {
+                    "description": "Image to edit or use as a visual reference to guide generation.",
+                    "maxItems": 16,
+                    "minItems": 0,
+                    "usageType": "source"
+                  },
+                  {
+                    "description": "Optional edit mask for the source image. Fully transparent (alpha) areas mark the regions to regenerate; opaque areas are preserved. Must include an alpha channel and match the source image's dimensions.",
+                    "maxItems": 1,
+                    "minItems": 0,
+                    "usageType": "mask"
+                  },
+                  {
+                    "maxItems": 16,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              }
+            ]
+          },
+          "size": {
+            "properties": {
+              "height": {
+                "description": "Must be a multiple of 16. Total pixels (width x height) must be between 655,360 and 8,294,400, with an aspect ratio no greater than 3:1.",
+                "maximum": 3840,
+                "minimum": 480,
+                "type": "integer"
+              },
+              "width": {
+                "description": "Must be a multiple of 16. Total pixels (width x height) must be between 655,360 and 8,294,400, with an aspect ratio no greater than 3:1.",
+                "maximum": 3840,
+                "minimum": 480,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "width",
+              "height"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "gpt-image/gpt-image-2.5-prism": {
+      "acModelFamilyDisplayName": "GPT Image",
+      "acModelFamilyId": "gpt-image",
+      "bksGenerationModel": "firefly_3p:external:gpt_image_2_5_prism",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing",
+        "inpainting",
+        "style_reference"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "GPT Image 2.5 Sunburst",
+      "modelDisplayName": "GPT Image 2.5 Sunburst",
+      "outputModality": [
+        "image"
+      ],
+      "partnerCoverageEligible": true,
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "detailLevel": {
+                    "anyOf": [
+                      {
+                        "maximum": 7,
+                        "minimum": 1,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": 3,
+                    "description": "Controls the detail level of the generated image",
+                    "title": "The detail level"
+                  },
+                  "transparentBackground": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Transparentbackground"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "$ref": "#/$defs/n"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "description": "The prompt used for generation or editing.",
+            "maxLength": 32000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 17,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/webp",
+                  "image/jpeg"
+                ],
+                "maxFileSizeBytes": 104857600,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "deprecated": true,
+                    "description": "Deprecated. Use usage='source' instead.",
+                    "maxItems": 16,
+                    "minItems": 0,
+                    "replacement": "source",
+                    "usageType": "subject"
+                  },
+                  {
+                    "description": "Image to edit or use as a visual reference to guide generation.",
+                    "maxItems": 16,
+                    "minItems": 0,
+                    "usageType": "source"
+                  },
+                  {
+                    "description": "Optional edit mask for the source image. Fully transparent (alpha) areas mark the regions to regenerate; opaque areas are preserved. Must include an alpha channel and match the source image's dimensions.",
+                    "maxItems": 1,
+                    "minItems": 0,
+                    "usageType": "mask"
+                  },
+                  {
+                    "maxItems": 16,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              }
+            ]
+          },
+          "size": {
+            "properties": {
+              "height": {
+                "description": "Must be a multiple of 16. Total pixels (width x height) must be between 655,360 and 8,294,400, with an aspect ratio no greater than 3:1.",
+                "maximum": 3840,
+                "minimum": 480,
+                "type": "integer"
+              },
+              "width": {
+                "description": "Must be a multiple of 16. Total pixels (width x height) must be between 655,360 and 8,294,400, with an aspect ratio no greater than 3:1.",
+                "maximum": 3840,
+                "minimum": 480,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "width",
+              "height"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId",
+          "prompt"
+        ],
+        "type": "object"
+      },
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "kling/kling_v2_5_turbo_pro_i2v": {
+      "acModelFamilyDisplayName": "Kling Video",
+      "acModelFamilyId": "kling_video",
+      "bksGenerationModel": "firefly_3p:external:kling_v2_5_turbo_pro",
+      "elementSupportEnabled": false,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing"
+      ],
+      "mentionSupportEnabled": false,
+      "modelCaiDisplayName": "Kling Video",
+      "modelDisplayName": "Kling Video 2.5 Turbo",
+      "outputModality": [
+        "video"
+      ],
+      "releaseReadiness": "alpha",
+      "requestSchema": {
+        "allOf": [
+          {
+            "properties": {
+              "bksExperiment": {
+                "$ref": "#/$defs/bksExperiment"
+              },
+              "duration": {
+                "anyOf": [
+                  {
+                    "default": 5,
+                    "enum": [
+                      5,
+                      10
+                    ],
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The duration of the generated video (single-prompt mode only). Ignored when multiPrompt is provided.",
+                "title": "Duration"
+              },
+              "generateAudio": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Include audio in the generated video",
+                "title": "Generate Audio"
+              },
+              "generationMetadata": {
+                "$ref": "#/$defs/generationMetadata"
+              },
+              "generationSettings": {
+                "anyOf": [
+                  {
+                    "properties": {},
+                    "title": "GenerationSettings",
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The common settings parameters for the generation process",
+                "title": "Common generation settings"
+              },
+              "keepAudio": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Whether to keep the original audio from the reference video",
+                "title": "Keep Audio"
+              },
+              "modelId": {
+                "$ref": "#/$defs/modelId"
+              },
+              "modelSpecificPayload": {
+                "$ref": "#/$defs/modelSpecificPayload"
+              },
+              "modelVersion": {
+                "$ref": "#/$defs/modelVersion"
+              },
+              "multiPrompt": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "properties": {
+                        "duration": {
+                          "default": 5,
+                          "maximum": 15,
+                          "minimum": 1,
+                          "title": "Duration",
+                          "type": "integer"
+                        },
+                        "prompt": {
+                          "description": "The prompt for this shot. Maximum length 512 characters.",
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "title": "Prompt",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "prompt"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 6,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "List of prompts for multi-shot video generation. Each element has prompt and optional duration. Either prompt or multi_prompt required, not both.",
+                "title": "Multi Prompt",
+                "x-maxTotalDuration": 15,
+                "x-minTotalDuration": 3
+              },
+              "negativePrompt": {
+                "anyOf": [
+                  {
+                    "maxLength": 2500,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Terms to avoid in generation",
+                "title": "Negative Prompt"
+              },
+              "output": {
+                "$ref": "#/$defs/output"
+              },
+              "prompt": {
+                "anyOf": [
+                  {
+                    "maxLength": 2500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The prompt used for generation or editing.",
+                "title": "Prompt"
+              },
+              "promptAdherence": {
+                "anyOf": [
+                  {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Prompt Adherence"
+              },
+              "referenceBlobs": {
+                "$ref": "#/$defs/referenceBlobs",
+                "x-capabilities": [
+                  {
+                    "acceptedMimeTypes": [
+                      "image/png",
+                      "image/jpeg"
+                    ],
+                    "maxFileSizeBytes": 10485760,
+                    "mediaType": "image",
+                    "usageConstraints": [
+                      {
+                        "deprecated": true,
+                        "description": "Deprecated. Use usage='frame' to explicitly assign start/end frame roles.",
+                        "maxItems": 2,
+                        "minItems": 0,
+                        "replacement": "frame",
+                        "usageType": "general"
+                      },
+                      {
+                        "description": "A start or end keyframe for the video. Set the reference blob's 'order' field to assign the role: order=1 is the first frame the video is generated from; order=2 is the last frame the video ends on.",
+                        "maxItems": 2,
+                        "minItems": 0,
+                        "usageType": "frame"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "seeds": {
+                "$ref": "#/$defs/seeds"
+              },
+              "shotType": {
+                "$ref": "#/$defs/shotType"
+              },
+              "size": {
+                "$ref": "#/$defs/size"
+              }
+            },
+            "required": [
+              "generationMetadata",
+              "modelId"
+            ],
+            "type": "object"
+          },
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "prompt"
+                ]
+              },
+              {
+                "required": [
+                  "multiPrompt"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "sanitizeInputReferences": true,
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "kling/kling_v3": {
+      "acModelFamilyDisplayName": "Kling Video",
+      "acModelFamilyId": "kling_video",
+      "bksGenerationModel": "firefly_3p:external:kling_v3_ti2v",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Kling Video",
+      "modelDisplayName": "Kling Video V3",
+      "outputModality": [
+        "video"
+      ],
+      "releaseReadiness": "alpha",
+      "requestSchema": {
+        "allOf": [
+          {
+            "properties": {
+              "bksExperiment": {
+                "$ref": "#/$defs/bksExperiment"
+              },
+              "duration": {
+                "anyOf": [
+                  {
+                    "default": 5,
+                    "maximum": 15,
+                    "minimum": 3,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The duration of the generated video (single-prompt mode only). Ignored when multiPrompt is provided.",
+                "title": "Duration"
+              },
+              "generateAudio": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": false,
+                "description": "Include audio in the generated video",
+                "title": "Generate Audio"
+              },
+              "generationMetadata": {
+                "$ref": "#/$defs/generationMetadata"
+              },
+              "generationSettings": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "aspectRatio": {
+                        "default": "16:9",
+                        "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                        "enum": [
+                          "16:9",
+                          "9:16",
+                          "1:1"
+                        ],
+                        "title": "The aspect ratio",
+                        "type": "string"
+                      }
+                    },
+                    "title": "GenerationSettings",
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The common settings parameters for the generation process",
+                "title": "Common generation settings"
+              },
+              "modelId": {
+                "$ref": "#/$defs/modelId"
+              },
+              "modelSpecificPayload": {
+                "$ref": "#/$defs/modelSpecificPayload"
+              },
+              "modelVersion": {
+                "$ref": "#/$defs/modelVersion"
+              },
+              "multiPrompt": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "properties": {
+                        "duration": {
+                          "default": 5,
+                          "maximum": 15,
+                          "minimum": 1,
+                          "title": "Duration",
+                          "type": "integer"
+                        },
+                        "prompt": {
+                          "description": "The prompt for this shot. Maximum length 512 characters.",
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "title": "Prompt",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "prompt"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 6,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "List of prompts for multi-shot video generation. Each element has prompt and optional duration. Either prompt or multi_prompt required, not both.",
+                "title": "Multi Prompt",
+                "x-maxTotalDuration": 15,
+                "x-minTotalDuration": 3
+              },
+              "negativePrompt": {
+                "anyOf": [
+                  {
+                    "maxLength": 2500,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "deprecated": true,
+                "description": "Deprecated; negativePrompt is ignored and will be removed.",
+                "title": "Negative Prompt"
+              },
+              "output": {
+                "$ref": "#/$defs/output"
+              },
+              "prompt": {
+                "anyOf": [
+                  {
+                    "maxLength": 2500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The prompt used for generation or editing.",
+                "title": "Prompt"
+              },
+              "promptAdherence": {
+                "anyOf": [
+                  {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": 0.5,
+                "deprecated": true,
+                "description": "Deprecated; promptAdherence is ignored and will be removed.",
+                "title": "Prompt Adherence"
+              },
+              "referenceBlobs": {
+                "$ref": "#/$defs/referenceBlobs",
+                "maxItems": 5,
+                "x-capabilities": [
+                  {
+                    "acceptedMimeTypes": [
+                      "image/png",
+                      "image/jpeg"
+                    ],
+                    "maxFileSizeBytes": 10485760,
+                    "mediaType": "image",
+                    "usageConstraints": [
+                      {
+                        "description": "A start or end keyframe for the video. Set the reference blob's 'order' field to assign the role: order=1 is the first frame the video is generated from; order=2 is the last frame the video ends on.",
+                        "maxItems": 2,
+                        "minItems": 0,
+                        "usageType": "frame"
+                      },
+                      {
+                        "maxItems": 3,
+                        "minItems": 0,
+                        "usageType": "element"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "resolution": {
+                "anyOf": [
+                  {
+                    "default": "720p",
+                    "enum": [
+                      "720p",
+                      "1080p"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Video resolution tier: '1080p' routes to the pro tier, '720p' to standard. ",
+                "title": "Resolution"
+              },
+              "shotType": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ShotType"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": "customize",
+                "deprecated": true,
+                "description": "Deprecated; shotType is ignored and will be removed."
+              },
+              "size": {
+                "$ref": "#/$defs/size"
+              }
+            },
+            "required": [
+              "generationMetadata",
+              "modelId"
+            ],
+            "type": "object"
+          },
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "prompt"
+                ]
+              },
+              {
+                "required": [
+                  "multiPrompt"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "sanitizeInputReferences": true,
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "kling/kling_v3_omni": {
+      "acModelFamilyDisplayName": "Kling Video",
+      "acModelFamilyId": "kling_video",
+      "bksGenerationModel": "firefly_3p:external:kling_o3_tir2v",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing",
+        "style_reference"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Kling Video",
+      "modelDisplayName": "Kling Video O3",
+      "outputModality": [
+        "video"
+      ],
+      "releaseReadiness": "alpha",
+      "requestSchema": {
+        "allOf": [
+          {
+            "properties": {
+              "bksExperiment": {
+                "$ref": "#/$defs/bksExperiment"
+              },
+              "duration": {
+                "anyOf": [
+                  {
+                    "default": 5,
+                    "maximum": 15,
+                    "minimum": 3,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The duration of the generated video (single-prompt mode only). Ignored when multiPrompt is provided.",
+                "title": "Duration"
+              },
+              "generateAudio": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": false,
+                "description": "Include audio in the generated video",
+                "title": "Generate Audio"
+              },
+              "generationMetadata": {
+                "$ref": "#/$defs/generationMetadata"
+              },
+              "generationSettings": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "aspectRatio": {
+                        "default": "16:9",
+                        "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                        "enum": [
+                          "16:9",
+                          "9:16",
+                          "1:1"
+                        ],
+                        "title": "The aspect ratio",
+                        "type": "string"
+                      }
+                    },
+                    "title": "GenerationSettings",
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The common settings parameters for the generation process",
+                "title": "Common generation settings"
+              },
+              "modelId": {
+                "$ref": "#/$defs/modelId"
+              },
+              "modelSpecificPayload": {
+                "$ref": "#/$defs/modelSpecificPayload"
+              },
+              "modelVersion": {
+                "$ref": "#/$defs/modelVersion"
+              },
+              "multiPrompt": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "properties": {
+                        "duration": {
+                          "default": 5,
+                          "maximum": 15,
+                          "minimum": 1,
+                          "title": "Duration",
+                          "type": "integer"
+                        },
+                        "prompt": {
+                          "description": "The prompt for this shot. Maximum length 512 characters.",
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "title": "Prompt",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "prompt"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 6,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "List of prompts for multi-shot video generation. Each element has prompt and optional duration. Either prompt or multi_prompt required, not both.",
+                "title": "Multi Prompt",
+                "x-maxTotalDuration": 15,
+                "x-minTotalDuration": 3
+              },
+              "output": {
+                "$ref": "#/$defs/output"
+              },
+              "prompt": {
+                "anyOf": [
+                  {
+                    "maxLength": 2500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The prompt used for generation or editing.",
+                "title": "Prompt"
+              },
+              "referenceBlobs": {
+                "$ref": "#/$defs/referenceBlobs",
+                "x-capabilities": [
+                  {
+                    "acceptedMimeTypes": [
+                      "image/png",
+                      "image/jpeg"
+                    ],
+                    "maxFileSizeBytes": 10485760,
+                    "mediaType": "image",
+                    "usageConstraints": [
+                      {
+                        "description": "A start or end keyframe for the video. Set the reference blob's 'order' field to assign the role: order=1 is the first frame the video is generated from; order=2 is the last frame the video ends on.",
+                        "maxItems": 2,
+                        "minItems": 0,
+                        "usageType": "frame"
+                      },
+                      {
+                        "description": "A reference blob whose colour, style, and overall theme guide the look of the generated video.",
+                        "maxItems": 3,
+                        "minItems": 0,
+                        "usageType": "style"
+                      },
+                      {
+                        "maxItems": 3,
+                        "minItems": 0,
+                        "usageType": "element"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "resolution": {
+                "anyOf": [
+                  {
+                    "default": "720p",
+                    "enum": [
+                      "720p",
+                      "1080p"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Video resolution tier: '1080p' routes to the pro tier, '720p' to standard. ",
+                "title": "Resolution"
+              },
+              "shotType": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ShotType"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": "customize",
+                "deprecated": true,
+                "description": "Deprecated; shotType is ignored and will be removed."
+              },
+              "size": {
+                "$ref": "#/$defs/size"
+              }
+            },
+            "required": [
+              "generationMetadata",
+              "modelId"
+            ],
+            "type": "object"
+          },
+          {
+            "oneOf": [
+              {
+                "required": [
+                  "prompt"
+                ]
+              },
+              {
+                "required": [
+                  "multiPrompt"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "sanitizeInputReferences": true,
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "seedance/seedance_2.0": {
+      "acModelFamilyDisplayName": "Seedance",
+      "acModelFamilyId": "seedance",
+      "bksGenerationModel": "firefly_3p:external:seedance_2_0",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing",
+        "style_reference"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Seedance",
+      "modelDisplayName": "Seedance 2.0",
+      "outputModality": [
+        "video"
+      ],
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "maximum": 15,
+                "minimum": 4,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "generateAudio": {
+            "$ref": "#/$defs/generateAudio"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "auto",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "auto",
+                      "21:9",
+                      "16:9",
+                      "4:3",
+                      "1:1",
+                      "3:4",
+                      "9:16"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 1,
+            "description": "Number of outputs to generate",
+            "title": "N"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The prompt used for generation or editing.",
+            "title": "Prompt"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 12,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ],
+                "maxFileSizeBytes": 31457280,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "description": "A start or end keyframe for the video. Set the reference blob's 'order' field to assign the role: order=1 is the first frame the video is generated from; order=2 is the last frame the video ends on.",
+                    "maxItems": 2,
+                    "minItems": 0,
+                    "usageType": "frame"
+                  },
+                  {
+                    "description": "A reference blob whose colour, style, and overall theme guide the look of the generated video.",
+                    "maxItems": 9,
+                    "minItems": 0,
+                    "usageType": "style"
+                  },
+                  {
+                    "maxItems": 9,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              },
+              {
+                "maxFileSizeBytes": 52428800,
+                "mediaType": "video",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "usageType": "source"
+                  }
+                ]
+              },
+              {
+                "maxFileSizeBytes": 52428800,
+                "mediaType": "audio",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "usageType": "source"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "enum": [
+                  "480p",
+                  "720p",
+                  "1080p"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Output resolution tier. When provided, takes precedence over 'size' for resolution selection.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          },
+          "size": {
+            "enum": [
+              {
+                "height": 1080,
+                "width": 1920
+              },
+              {
+                "height": 720,
+                "width": 1280
+              },
+              {
+                "height": 480,
+                "width": 640
+              }
+            ]
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId"
+        ],
+        "type": "object"
+      },
+      "sanitizeInputReferences": true,
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "seedance/seedance_2.0_fast": {
+      "acModelFamilyDisplayName": "Seedance",
+      "acModelFamilyId": "seedance",
+      "bksGenerationModel": "firefly_3p:external:seedance_2_0_fast",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "editing",
+        "style_reference"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Seedance",
+      "modelDisplayName": "Seedance 2.0 Fast",
+      "outputModality": [
+        "video"
+      ],
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "maximum": 15,
+                "minimum": 4,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "generateAudio": {
+            "$ref": "#/$defs/generateAudio"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "auto",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "auto",
+                      "21:9",
+                      "16:9",
+                      "4:3",
+                      "1:1",
+                      "3:4",
+                      "9:16"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 1,
+            "description": "Number of outputs to generate",
+            "title": "N"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The prompt used for generation or editing.",
+            "title": "Prompt"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 12,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ],
+                "maxFileSizeBytes": 31457280,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "description": "A start or end keyframe for the video. Set the reference blob's 'order' field to assign the role: order=1 is the first frame the video is generated from; order=2 is the last frame the video ends on.",
+                    "maxItems": 2,
+                    "minItems": 0,
+                    "usageType": "frame"
+                  },
+                  {
+                    "description": "A reference blob whose colour, style, and overall theme guide the look of the generated video.",
+                    "maxItems": 9,
+                    "minItems": 0,
+                    "usageType": "style"
+                  },
+                  {
+                    "maxItems": 9,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              },
+              {
+                "maxFileSizeBytes": 52428800,
+                "mediaType": "video",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "usageType": "source"
+                  }
+                ]
+              },
+              {
+                "maxFileSizeBytes": 52428800,
+                "mediaType": "audio",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "usageType": "source"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "enum": [
+                  "480p",
+                  "720p"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Output resolution tier. When provided, takes precedence over 'size' for resolution selection.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          },
+          "size": {
+            "enum": [
+              {
+                "height": 720,
+                "width": 1280
+              },
+              {
+                "height": 480,
+                "width": 640
+              }
+            ]
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId"
+        ],
+        "type": "object"
+      },
+      "sanitizeInputReferences": true,
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "seedance/seedance_2.5": {
+      "acModelFamilyDisplayName": "Seedance",
+      "acModelFamilyId": "seedance",
+      "bksGenerationModel": "firefly_3p:external:seedance_2_5",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "style_reference"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Seedance",
+      "modelDisplayName": "Seedance 2.5",
+      "outputModality": [
+        "video"
+      ],
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "maximum": 30,
+                "minimum": 4,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "generateAudio": {
+            "$ref": "#/$defs/generateAudio"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "auto",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "auto",
+                      "21:9",
+                      "16:9",
+                      "4:3",
+                      "1:1",
+                      "3:4",
+                      "9:16"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 1,
+            "description": "Number of outputs to generate",
+            "title": "N"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The prompt used for generation or editing.",
+            "title": "Prompt"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 50,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg",
+                  "image/webp"
+                ],
+                "maxFileSizeBytes": 31457280,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "description": "A start or end keyframe for the video. Set the reference blob's 'order' field to assign the role: order=1 is the first frame the video is generated from; order=2 is the last frame the video ends on.",
+                    "maxItems": 2,
+                    "minItems": 0,
+                    "usageType": "frame"
+                  },
+                  {
+                    "description": "A reference blob whose colour, style, and overall theme guide the look of the generated video.",
+                    "maxItems": 30,
+                    "minItems": 0,
+                    "usageType": "style"
+                  },
+                  {
+                    "maxItems": 30,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              },
+              {
+                "maxFileSizeBytes": 209715200,
+                "mediaType": "video",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 10,
+                    "minItems": 0,
+                    "usageType": "source"
+                  }
+                ]
+              },
+              {
+                "maxFileSizeBytes": 15728640,
+                "mediaType": "audio",
+                "usageConstraints": [
+                  {
+                    "description": "The source reference video used as the basis for video generation (e.g. video-to-video).",
+                    "maxItems": 10,
+                    "minItems": 0,
+                    "usageType": "source"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "default": "720p",
+                "enum": [
+                  "480p",
+                  "720p"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Output resolution. Seedance 2.5 supports 480p and 720p; defaults to 720p.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId"
+        ],
+        "type": "object"
+      },
+      "sanitizeInputReferences": true,
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "veo/3.1-fast-generate": {
+      "acModelFamilyDisplayName": "Veo",
+      "acModelFamilyId": "veo",
+      "bksGenerationModel": "firefly_3p:external:veo_3_fast",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "style_reference"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Veo",
+      "modelDisplayName": "Veo 3.1 Fast",
+      "outputModality": [
+        "video"
+      ],
+      "partnerCoverageEligible": true,
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "default": 8,
+                "enum": [
+                  4,
+                  6,
+                  8
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "generateAudio": {
+            "$ref": "#/$defs/generateAudio"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "16:9",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "16:9",
+                      "9:16"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "generationType": {
+            "$ref": "#/$defs/generationType"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 1,
+            "description": "Number of outputs to generate",
+            "title": "N"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The prompt used for generation or editing.",
+            "title": "Prompt"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 3,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg"
+                ],
+                "maxFileSizeBytes": 104857600,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "deprecated": true,
+                    "description": "Deprecated. Use usage='frame' to explicitly assign start/end frame roles.",
+                    "maxItems": 2,
+                    "minItems": 0,
+                    "replacement": "frame",
+                    "usageType": "general"
+                  },
+                  {
+                    "description": "A start or end keyframe for the video. Set the reference blob's 'order' field to assign the role: order=1 is the first frame the video is generated from; order=2 is the last frame the video ends on.",
+                    "maxItems": 2,
+                    "minItems": 0,
+                    "usageType": "frame"
+                  },
+                  {
+                    "deprecated": true,
+                    "description": "Deprecated. Use usage='subject' instead.",
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "replacement": "subject",
+                    "usageType": "asset"
+                  },
+                  {
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "usageType": "subject"
+                  },
+                  {
+                    "consumptionModes": [
+                      {
+                        "consumptionMode": "reference",
+                        "default": true,
+                        "description": "Element referenceBlobs consumed as binaries.",
+                        "maxItems": 3,
+                        "minItems": 0
+                      },
+                      {
+                        "consumptionMode": "prompt",
+                        "default": false,
+                        "description": "Element referenceBlobs consumed inline via prompt (e.g. @-mentions) instead of as a fixed reference slot.",
+                        "minItems": 0
+                      }
+                    ],
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "default": "720p",
+                "enum": [
+                  "720p",
+                  "1080p"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Resolution tier of the generated video.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          },
+          "size": {
+            "enum": [
+              {
+                "height": 720,
+                "width": 1280
+              },
+              {
+                "height": 1280,
+                "width": 720
+              },
+              {
+                "height": 1080,
+                "width": 1920
+              },
+              {
+                "height": 1920,
+                "width": 1080
+              }
+            ]
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId"
+        ],
+        "type": "object"
+      },
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "veo/3.1-generate": {
+      "acModelFamilyDisplayName": "Veo",
+      "acModelFamilyId": "veo",
+      "bksGenerationModel": "firefly_3p:external:veo_3",
+      "elementSupportEnabled": true,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "style_reference"
+      ],
+      "mentionSupportEnabled": true,
+      "modelCaiDisplayName": "Veo",
+      "modelDisplayName": "Veo 3.1",
+      "outputModality": [
+        "video"
+      ],
+      "partnerCoverageEligible": true,
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "default": 8,
+                "enum": [
+                  4,
+                  6,
+                  8
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "generateAudio": {
+            "$ref": "#/$defs/generateAudio"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "16:9",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "16:9",
+                      "9:16"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "generationType": {
+            "$ref": "#/$defs/generationType"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 1,
+            "description": "Number of outputs to generate",
+            "title": "N"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The prompt used for generation or editing.",
+            "title": "Prompt"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "maxItems": 3,
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg"
+                ],
+                "maxFileSizeBytes": 104857600,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "deprecated": true,
+                    "description": "Deprecated. Use usage='frame' to explicitly assign start/end frame roles.",
+                    "maxItems": 2,
+                    "minItems": 0,
+                    "replacement": "frame",
+                    "usageType": "general"
+                  },
+                  {
+                    "description": "A start or end keyframe for the video. Set the reference blob's 'order' field to assign the role: order=1 is the first frame the video is generated from; order=2 is the last frame the video ends on.",
+                    "maxItems": 2,
+                    "minItems": 0,
+                    "usageType": "frame"
+                  },
+                  {
+                    "deprecated": true,
+                    "description": "Deprecated. Use usage='subject' instead.",
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "replacement": "subject",
+                    "usageType": "asset"
+                  },
+                  {
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "usageType": "subject"
+                  },
+                  {
+                    "consumptionModes": [
+                      {
+                        "consumptionMode": "reference",
+                        "default": true,
+                        "description": "Element referenceBlobs consumed as binaries.",
+                        "maxItems": 3,
+                        "minItems": 0
+                      },
+                      {
+                        "consumptionMode": "prompt",
+                        "default": false,
+                        "description": "Element referenceBlobs consumed inline via prompt (e.g. @-mentions) instead of as a fixed reference slot.",
+                        "minItems": 0
+                      }
+                    ],
+                    "maxItems": 3,
+                    "minItems": 0,
+                    "usageType": "element"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "default": "720p",
+                "enum": [
+                  "720p",
+                  "1080p"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Resolution tier of the generated video.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          },
+          "size": {
+            "enum": [
+              {
+                "height": 720,
+                "width": 1280
+              },
+              {
+                "height": 1280,
+                "width": 720
+              },
+              {
+                "height": 1080,
+                "width": 1920
+              },
+              {
+                "height": 1920,
+                "width": 1080
+              }
+            ]
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId"
+        ],
+        "type": "object"
+      },
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    },
+    "veo/3.1-lite-generate": {
+      "acModelFamilyDisplayName": "Veo",
+      "acModelFamilyId": "veo",
+      "bksGenerationModel": "firefly_3p:external:veo_3_1_lite",
+      "elementSupportEnabled": false,
+      "enabled": true,
+      "healthStatus": "HEALTHY",
+      "inputMediaUseCase": [
+        "style_reference"
+      ],
+      "mentionSupportEnabled": false,
+      "modelCaiDisplayName": "Veo",
+      "modelDisplayName": "Veo 3.1 Lite",
+      "outputModality": [
+        "video"
+      ],
+      "partnerCoverageEligible": true,
+      "releaseReadiness": "ga",
+      "requestSchema": {
+        "properties": {
+          "bksExperiment": {
+            "$ref": "#/$defs/bksExperiment"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "default": 8,
+                "enum": [
+                  4,
+                  6,
+                  8
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration"
+          },
+          "generateAudio": {
+            "$ref": "#/$defs/generateAudio"
+          },
+          "generationMetadata": {
+            "$ref": "#/$defs/generationMetadata"
+          },
+          "generationSettings": {
+            "anyOf": [
+              {
+                "properties": {
+                  "aspectRatio": {
+                    "default": "16:9",
+                    "description": "The aspect ratio of the generated image/video. Use enum values (square, portrait, landscape, widescreen, vertical) or direct ratio strings ('16:9', '1:1', '9:16', '21:9', etc.)",
+                    "enum": [
+                      "16:9",
+                      "9:16"
+                    ],
+                    "title": "The aspect ratio",
+                    "type": "string"
+                  }
+                },
+                "title": "GenerationSettings",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The common settings parameters for the generation process",
+            "title": "Common generation settings"
+          },
+          "generationType": {
+            "$ref": "#/$defs/generationType"
+          },
+          "modelId": {
+            "$ref": "#/$defs/modelId"
+          },
+          "modelSpecificPayload": {
+            "$ref": "#/$defs/modelSpecificPayload"
+          },
+          "modelVersion": {
+            "$ref": "#/$defs/modelVersion"
+          },
+          "n": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": 1,
+            "description": "Number of outputs to generate",
+            "title": "N"
+          },
+          "output": {
+            "$ref": "#/$defs/output"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The prompt used for generation or editing.",
+            "title": "Prompt"
+          },
+          "referenceBlobs": {
+            "$ref": "#/$defs/referenceBlobs",
+            "x-capabilities": [
+              {
+                "acceptedMimeTypes": [
+                  "image/png",
+                  "image/jpeg"
+                ],
+                "maxFileSizeBytes": 104857600,
+                "mediaType": "image",
+                "usageConstraints": [
+                  {
+                    "description": "A start or end keyframe for the video. Set the reference blob's 'order' field to assign the role: order=1 is the first frame the video is generated from; order=2 is the last frame the video ends on.",
+                    "maxItems": 2,
+                    "minItems": 0,
+                    "usageType": "frame"
+                  }
+                ]
+              }
+            ]
+          },
+          "resolution": {
+            "anyOf": [
+              {
+                "default": "720p",
+                "enum": [
+                  "720p",
+                  "1080p"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Resolution tier of the generated video.",
+            "title": "Resolution"
+          },
+          "seeds": {
+            "$ref": "#/$defs/seeds"
+          },
+          "size": {
+            "enum": [
+              {
+                "height": 720,
+                "width": 1280
+              },
+              {
+                "height": 1280,
+                "width": 720
+              },
+              {
+                "height": 1080,
+                "width": 1920
+              },
+              {
+                "height": 1920,
+                "width": 1080
+              }
+            ]
+          }
+        },
+        "required": [
+          "generationMetadata",
+          "modelId"
+        ],
+        "type": "object"
+      },
+      "supportedContentClasses": [
+        "photo",
+        "art",
+        "raw"
+      ]
+    }
+  }
+}

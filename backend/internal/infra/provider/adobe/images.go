@@ -19,7 +19,7 @@ import (
 
 // imageModel 查找图像模型并规划请求参数。
 func (a *Adapter) imageModel(model string) (*modelVersion, error) {
-	v, ok := a.catalog.Load().lookup(model)
+	v, ok := lookup(model)
 	if !ok || v.video {
 		return nil, &requestError{msg: fmt.Sprintf("未知的 Adobe 图像模型：%s", model)}
 	}
@@ -27,7 +27,7 @@ func (a *Adapter) imageModel(model string) (*modelVersion, error) {
 }
 
 // ValidateImageRequest 拒绝所有 Adobe 模型都不支持的参数；与模型相关的比例、档位、
-// 张数在规划请求时按 schema 校验。
+// 张数在规划请求时按模型表校验。
 func (a *Adapter) ValidateImageRequest(options provider.ImageRequestOptions) error {
 	switch {
 	case options.Streaming || options.PartialImages != 0:
@@ -227,7 +227,7 @@ func (a *Adapter) prepareImage(ctx context.Context, c *client, v *modelVersion, 
 	return a.useSherlock(ctx, c)
 }
 
-// uploadInput 读取客户端给的输入（kind 为 "image" 或 "video"），按 schema 的单文件
+// uploadInput 读取客户端给的输入（kind 为 "image" 或 "video"），按模型表的单文件
 // 上限检查后上传到 Adobe 存储，返回 asset id。
 func (a *Adapter) uploadInput(ctx context.Context, c *client, v *modelVersion, ref, kind string) (string, error) {
 	data, mime, err := a.readInput(ctx, ref, kind)

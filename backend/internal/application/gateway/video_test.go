@@ -238,8 +238,8 @@ func TestRoutesForVideoParametersKeepsCompatibleSameNameProviders(t *testing.T) 
 	}
 }
 
-// 不传 duration 时用模型默认值，计费和任务记录也用它。Ray 3 默认 5 秒；以前网关先填
-// 8 秒，Adobe 再就近对齐成 10 秒，账却按 8 秒记。
+// 不传 duration 时用模型默认值，计费和任务记录也用它：Kling 3.0 默认 5 秒（以前网关先填
+// 8 秒，就按 8 秒生成和计费）。
 func TestCreateVideoBillsTheParametersTheProviderPicks(t *testing.T) {
 	ctx := context.Background()
 	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "video-params.db"))
@@ -257,7 +257,7 @@ func TestCreateVideoBillsTheParametersTheProviderPicks(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := modelRepo.UpsertRoutes(ctx, adobe.SnapshotRoutes()); err != nil {
+	if err := modelRepo.UpsertRoutes(ctx, adobe.Routes()); err != nil {
 		t.Fatal(err)
 	}
 	key, err := keyRepo.Create(ctx, clientkey.Key{Name: "video-params", Prefix: "vparams", SecretHash: strings.Repeat("e", 64), EncryptedSecret: "e",
@@ -274,18 +274,18 @@ func TestCreateVideoBillsTheParametersTheProviderPicks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := prices.Put(ctx, pricingapp.Input{Provider: string(account.ProviderAdobe), PricingModel: "luma/3.0-ray", Operation: string(pricingdomain.OperationVideo),
+	if _, err := prices.Put(ctx, pricingapp.Input{Provider: string(account.ProviderAdobe), PricingModel: "kling/kling_v3", Operation: string(pricingdomain.OperationVideo),
 		Rates: map[pricingdomain.Component]string{pricingdomain.OutputSecond: "0.1"}}); err != nil {
 		t.Fatal(err)
 	}
 	service.SetPricing(prices)
 	service.ConfigureMedia(relational.NewMediaJobRepository(database), 1)
 
-	job, err := service.CreateVideo(ctx, VideoInput{RequestID: "video-params", ClientKey: key, PublicModel: "adobe/ray3", Prompt: "waves"})
+	job, err := service.CreateVideo(ctx, VideoInput{RequestID: "video-params", ClientKey: key, PublicModel: "adobe/kling-3.0", Prompt: "waves"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := prices.QuoteVideo(account.ProviderAdobe, "luma/3.0-ray", "720p", 5, 0)
+	want, _ := prices.QuoteVideo(account.ProviderAdobe, "kling/kling_v3", "720p", 5, 0)
 	if job.Seconds != 5 || job.Size != "16:9" || job.Quality != "720p" || job.Price == nil || want.CostInUSDTicks == 0 || job.Price.CostInUSDTicks != want.CostInUSDTicks {
 		t.Fatalf("job = %ds %s %s price %+v, want 5s 16:9 720p at %d ticks", job.Seconds, job.Size, job.Quality, job.Price, want.CostInUSDTicks)
 	}

@@ -83,7 +83,7 @@ type SwaggerImageEditRequest struct {
 // image 与 reference_images/reference_audios 互斥。
 // last_frame（尾帧）必须同时提供 image，目前仅 Adobe 支持首尾帧的模型接受。
 // reference_videos（参考视频，url 或 file_id，MP4/QuickTime，最多 10 个）需提供 prompt，
-// 目前仅 Adobe 的 Seedance（不能与首尾帧同用）、Gemini Omni 接受。
+// 目前仅 Adobe 的 Seedance 接受（不能与首尾帧同用）。
 type SwaggerVideoGenerationRequest struct {
 	Model            string                    `json:"model" example:"grok-imagine-video"`
 	Prompt           string                    `json:"prompt" example:"A cinematic tracking shot in the rain"`

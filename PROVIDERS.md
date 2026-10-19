@@ -193,7 +193,7 @@ ChatGPT 账号需要在账号页重新添加，价格需要在模型页重新设
 
 ## Adobe（Firefly）接入
 
-Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游是 `firefly-3p.ff.adobe.io` 的异步任务（submit → poll → 取结果 URL），模型目录与请求体由官方 schema 驱动。图像走共享的 `AsyncImageAdapter`、视频走 `VideoAdapter`，持久任务、账号池、出口、定价、审计全部复用。
+Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游是 `firefly-3p.ff.adobe.io` 的异步任务（submit → poll → 取结果 URL）。模型目录是一张手写表，请求体按官网前端的规则构建。图像走共享的 `AsyncImageAdapter`、视频走 `VideoAdapter`，持久任务、账号池、出口、定价、审计全部复用。
 
 ### 账号与凭据
 
@@ -212,20 +212,32 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 - mint 容器可选出站代理 `MINT_PROXY`：`http(s)://`（可带 `user:pass@`，由页面应答代理认证）或 `socks5://`（带认证时走容器内置中转）。
 - 账号始终靠导入 Cookie，无自动注册。
 
-### 模型（由官方 schema 驱动）
+### 模型（手写目录）
 
-模型目录和请求体都来自 Adobe 官方的模型发现接口 `POST https://firefly-3p.ff.adobe.io/v2/models/discovery`（无需鉴权，与 firefly.adobe.com 前端同源）：
+目录是 `backend/internal/infra/provider/adobe/models.go` 里的一张表，共 15 个模型。取值抄自官方 discovery schema，填法抄自官网前端（2026-10-19 核对）。
 
-- **自动登记**：后台启动时拉取一次，之后每天一次（失败时 1 小时后重试）。新上线的图像/视频模型自动出现，下架（`isDeprecated`）或禁用的模型路由自动删除；结果为空或比当前少一半以上时视为异常，保留上次结果。程序内嵌一份快照（`backend/internal/infra/provider/adobe/discovery.json`），启动即可用，拉取失败时兜底；快照只补齐缺失路由、不删除。
-- **筛选**：只收图像/视频生成模型；跳过放大/降噪类（Topaz）、视频编辑/延长版本、Kling 按模式拆分的版本（统一用合并版 `kling-3.0` / `kling-3.0-omni`）。
-- **命名**：按官方显示名生成，例如 `veo-3.1`、`veo-3.1-fast`、`kling-3.0-omni`、`seedance-2.0`、`gpt-image-2.5-flare`、`ray3.14`、`flux-kontext-pro`；Gemini 系列用 `nano-banana-pro`（Gemini 3）、`nano-banana-2`（Gemini 3.1）、`nano-banana-2.1`。完整清单见管理端模型页或 `/v1/models`。路由的上游模型是 Adobe 的 `modelId/版本`（如 `veo/3.1-generate`），Adobe 改显示名时只改对外名（旧名留作别名），路由、绑定与价格都保留。
-- **请求体**：按模型 schema 填字段，再按官网前端的按模型规则放置比例、分辨率与参考图用途（首帧 `frame`、参考图 `subject` / `style` / `asset` / `general`、蒙版 `mask`），最后丢弃 schema 之外的字段。
-- **新模型核对**：按模型规则（`patches.go`）是从官网前端手抄的，schema 里没有。线上出现内嵌快照之外的模型时，刷新会记一条 `adobe_catalog_unreviewed_models` 警告：这些模型只按 schema 通用规则拼请求体，需要特殊填法的会被上游 400 拒绝。核对官网后补 `patches.go` 并更新 `discovery.json`；更新快照后 `TestSnapshotModelsAreReviewed` 会要求同步已核对清单。
+| 类型 | 对外名 | 上游（`modelId/版本`） |
+|---|---|---|
+| 视频 | `veo-3.1`、`veo-3.1-fast`、`veo-3.1-lite` | `veo/3.1-generate`、`veo/3.1-fast-generate`、`veo/3.1-lite-generate` |
+| 视频 | `seedance-2.0`、`seedance-2.0-fast`、`seedance-2.5` | `seedance/seedance_2.0`、`seedance/seedance_2.0_fast`、`seedance/seedance_2.5` |
+| 视频 | `kling-3.0`、`kling-3.0-omni`、`kling-video-2.5-turbo` | `kling/kling_v3`、`kling/kling_v3_omni`、`kling/kling_v2_5_turbo_pro_i2v` |
+| 图像 | `nano-banana-pro`（Gemini 3）、`nano-banana-2`（Gemini 3.1）、`nano-banana-2.1` | `gemini-flash/nano-banana-2`、`gemini-flash/nano-banana-3`、`gemini-flash/nano-banana-2026-09` |
+| 图像 | `gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst` | `gpt-image/2`、`gpt-image/gpt-image-2.5-flare`、`gpt-image/gpt-image-2.5-prism` |
+
+- **路由**：启动时按表同步，表外模型的路由删除。视频模型有视频路由，图像模型有文生图与改图路由。上游模型（也是价格的键）是 `modelId/版本`。
+- **请求体**：按表里的字段和取值填，再按官网前端的规则放置比例、分辨率与参考图用途（首帧 `frame`、参考图 `subject` / `style` / `general`、gpt-image 输入图 `source`、蒙版 `mask`）；表里没列的字段不发。
+- **维护**：加模型、或 Adobe 改了取值时改 `models.go`。可选核对测试对照官网 discovery，列出下架、取值变化和同家族的新版本（默认跳过，需联网）：
+
+  ```bash
+  cd backend && ADOBE_DISCOVERY_CHECK=1 go test ./internal/infra/provider/adobe -run TestCatalogMatchesDiscovery
+  ```
+
+  核对官网后改表，并用线上条目更新 `testdata/discovery-reviewed.json`。
 - **参数校验**：
   - 图像：显式给出但模型不支持的 `aspect_ratio` / `resolution`、超过 schema 上限的 `n`、不支持的输入图 / 蒙版 / 透明背景直接 400；未给比例时按 `size` 取最接近的比例。不支持 `stream` / `partial_images`。
-  - 视频：首帧（`image`）、尾帧（`last_frame`，必须同时给 `image`，只有 schema 里 frame 上限 ≥2 的模型接受，如 Veo 3.1 全系、Kling 3.0 / Omni、Seedance、LTX；Luma Ray 的参考素材总数上限是 1，只能单帧）、参考图与参考视频（`reference_videos`）按 schema 的能力、数量与参考素材总数上限校验；`duration` / `aspect_ratio` / `resolution` 没传时用模型默认值（时长取 schema 默认，如 Luma Ray / Kling 5 秒、Veo 8 秒、Seedance 4 秒；比例 16:9；分辨率通常 720p），传了但不支持的就近对齐；入队前就选定实际值，任务记录、计费与结果里的 `video.duration` 都用它。参考视频只对 Seedance 2.0 / 2.0 Fast / 2.5 与 Gemini Omni Flash / 1.1 开放（MP4 或 QuickTime，上传到 `/v2/storage/video`，以 `source` 用途引用；Luma 的源视频是"修改视频"编辑用途，不开放）。Seedance 与 Veo 3.1 的首尾帧不能与参考图、参考视频同时使用（与官网一致），Gemini Omni 可以；Seedance 2.5 按官网只开放 9 张参考图、3 个参考视频、合计 12 个。Seedance 官方要求参考视频 480–720p、总时长 2–15 秒，由 Adobe 校验并返回原因。不支持 `reference_audios` 与视频编辑。
+  - 视频：首帧（`image`）、尾帧（`last_frame`，必须同时给 `image`）、参考图与参考视频（`reference_videos`）按表里的数量与素材总数上限校验；`duration` / `aspect_ratio` / `resolution` 没传时用模型默认值（Kling 5 秒、Veo 8 秒、Seedance 4 秒；比例 16:9；分辨率通常 720p），传了但不支持的就近对齐；入队前就选定实际值，任务记录、计费与结果里的 `video.duration` 都用它。参考视频只对 Seedance 2.0 / 2.0 Fast / 2.5 开放（MP4 或 QuickTime，上传到 `/v2/storage/video`，以 `source` 用途引用）。Seedance 与 Veo 3.1 的首尾帧不能与参考图、参考视频同时使用（与官网一致）；Seedance 2.5 按官网只开放 9 张参考图、3 个参考视频、合计 12 个。Seedance 官方要求参考视频 480–720p、总时长 2–15 秒，由 Adobe 校验并返回原因。不支持 `reference_audios` 与视频编辑。
 - 输入图支持 Base64 data URI 与 `https` URL（经带 SSRF 防护的下载器，不走账号出口），只接受 PNG/JPEG/WebP。
-- 参考图用途按 schema 的弃用声明走替代用途（如 gpt-image 的输入图发 `source`）。Veo 3.1 带参考图时固定 16:9、8 秒，Veo 3.1 Fast 不接受参考图；`generateAudio` 按 schema 默认值（Kling 关闭，其余开启）。图像 4K：Nano Banana Pro / 2 / 2.1 按 schema 的 4K 尺寸（如 16:9 为 5504×3072）；GPT Image 2 / 2.5 的 4K 取 schema 上限内的最大尺寸（边长 ≤3840、总像素 ≤8,294,400，如 16:9 为 3840×2160、1:1 为 2880×2880），官网前端只开放到 1K/2K；推导尺寸超限时按比例缩进上限。Flux 2 最大 1920、其余模型 2K 以内，不支持 4K。
+- Veo 3.1 带参考图时固定 16:9、8 秒，Veo 3.1 Fast 不接受参考图；`generateAudio` 按 schema 默认值（Kling 3.0 / Omni 关闭，其余开启）。图像 4K：Nano Banana Pro / 2 / 2.1 按 schema 的 4K 尺寸（如 16:9 为 5504×3072）；GPT Image 2 / 2.5 的 4K 取 schema 上限内的最大尺寸（边长 ≤3840、总像素 ≤8,294,400，如 16:9 为 3840×2160、1:1 为 2880×2880），官网前端只开放到 1K/2K；推导尺寸超限时按比例缩进上限。
 - 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"；价格按上游模型（`modelId/版本`）存储。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口，所有 Adobe 路由都消费它。
 
 ### 失败处理

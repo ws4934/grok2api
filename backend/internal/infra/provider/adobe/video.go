@@ -22,7 +22,7 @@ type videoCheckpoint struct {
 // 没传的用模型默认值，传了但模型不支持的就近对齐；参考图模式下 Veo 固定 16:9、8 秒。
 // 未知模型原样返回，由随后的 ValidateVideoRequest 拒绝。
 func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
-	v, ok := a.catalog.Load().lookup(options.UpstreamModel)
+	v, ok := lookup(options.UpstreamModel)
 	if !ok || !v.video || options.Operation != provider.VideoOperationGenerate {
 		return options, nil
 	}
@@ -32,13 +32,13 @@ func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (p
 	return options, nil
 }
 
-// ValidateVideoRequest 按模型 schema 校验视频请求：首帧图、参考图的支持与数量。
+// ValidateVideoRequest 按模型表校验视频请求：首帧图、参考图的支持与数量。
 // 时长、比例、分辨率由 NormalizeVideoRequest 对齐，不在这里拒绝。
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
 	if options.Operation != provider.VideoOperationGenerate {
 		return provider.ErrVideoOperationUnsupported
 	}
-	v, ok := a.catalog.Load().lookup(options.UpstreamModel)
+	v, ok := lookup(options.UpstreamModel)
 	if !ok || !v.video {
 		return fmt.Errorf("%w: 未知的 Adobe 视频模型 %s", provider.ErrVideoParameterInvalid, options.UpstreamModel)
 	}
@@ -51,27 +51,27 @@ func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) err
 	return nil
 }
 
-// checkVideoInputs 按 schema 的 x-capabilities 检查首帧、尾帧、参考图与参考视频。首尾帧
-// 共用 frame 用途，上限 2 的模型才收尾帧；参考素材另受总数上限约束。
+// checkVideoInputs 按表里的上限检查首帧、尾帧、参考图与参考视频。首尾帧共用 frame
+// 用途，上限 2 的模型才收尾帧；所有素材另受总数上限约束。
 func (v *modelVersion) checkVideoInputs(hasFrame, hasLastFrame bool, references, videos int) error {
 	frame, frameOK := v.refs["image:frame"]
 	frameLimit := frame.max
-	if limit := v.referenceBlobLimit(); limit > 0 && !v.patch.framesOutsidePool && (frameLimit == 0 || limit < frameLimit) {
-		frameLimit = limit // 帧也计入参考素材总数（Luma Ray 的总数上限是 1，只能单帧）
+	if limit := v.maxBlobs; limit > 0 && (frameLimit == 0 || limit < frameLimit) {
+		frameLimit = limit // 首尾帧也计入素材总数
 	}
 	switch {
 	case hasFrame && !frameOK:
 		return &requestError{msg: v.slug + " 不支持首帧图 image"}
-	case !hasFrame && (frame.min > 0 || v.patch.requireFrame):
+	case !hasFrame && (frame.min > 0 || v.requireFrame):
 		return &requestError{msg: v.slug + " 需要首帧图 image"}
 	case hasLastFrame && (!frameOK || (frameLimit > 0 && frameLimit < 2)):
 		return &requestError{msg: v.slug + " 不支持尾帧 last_frame"}
-	case v.patch.framesExclusive && (hasFrame || hasLastFrame) && references+videos > 0:
+	case v.framesExclusive && (hasFrame || hasLastFrame) && references+videos > 0:
 		return &requestError{msg: v.slug + " 的首尾帧不能与参考图、参考视频同时使用"}
 	}
 	if references > 0 {
 		usage, limit := v.referenceUsage()
-		if usage == "" || v.patch.noReferences {
+		if usage == "" || v.noReferences {
 			return &requestError{msg: v.slug + " 不支持 reference_images"}
 		}
 		if limit > 0 && references > limit {
@@ -80,18 +80,15 @@ func (v *modelVersion) checkVideoInputs(hasFrame, hasLastFrame bool, references,
 	}
 	if videos > 0 {
 		limit, ok := v.refs["video:source"]
-		if !ok || !v.patch.referenceVideos {
+		if !ok || !v.referenceVideos {
 			return &requestError{msg: v.slug + " 不支持 reference_videos"}
 		}
 		if limit.max > 0 && videos > limit.max {
 			return &requestError{msg: fmt.Sprintf("%s 最多支持 %d 个参考视频", v.slug, limit.max)}
 		}
 	}
-	if limit := v.referenceBlobLimit(); limit > 0 {
-		total := references + videos
-		if !v.patch.framesOutsidePool {
-			total += boolCount(hasFrame) + boolCount(hasLastFrame)
-		}
+	if limit := v.maxBlobs; limit > 0 {
+		total := references + videos + boolCount(hasFrame) + boolCount(hasLastFrame)
 		if total > limit {
 			return &requestError{msg: fmt.Sprintf("%s 最多支持 %d 个参考素材（参考图、参考视频与首尾帧合计）", v.slug, limit)}
 		}
@@ -112,7 +109,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	var v *modelVersion
 	if cp.PollURL == "" {
 		// 续跑已提交的任务不查目录：模型即使刚下架，已在跑的任务也要取回结果。
-		found, ok := a.catalog.Load().lookup(request.Model)
+		found, ok := lookup(request.Model)
 		if !ok || !found.video {
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, &requestError{msg: "未知的 Adobe 视频模型：" + request.Model})
 		}

@@ -31,90 +31,11 @@ var aspectCodes = []string{"1:1", "8:1", "4:1", "21:9", "16:9", "3:2", "4:3", "5
 
 func isAuto(aspect string) bool { return strings.EqualFold(strings.TrimSpace(aspect), "auto") }
 
-// --- 选项推导（schema + 补丁）---
-
-// sizes 是模型可用的具体尺寸：补丁替换或 schema 枚举，加补丁追加的尺寸。
-func (v *modelVersion) sizes() []pixels {
-	out := slices.Clone(v.patch.sizes)
-	if len(out) == 0 {
-		if size, ok := field(v.props, "size"); ok {
-			values, _ := size["enum"].([]any)
-			for _, value := range values {
-				m, _ := value.(map[string]any)
-				if p := (pixels{intOf(m["width"]), intOf(m["height"])}); p.width > 0 && p.height > 0 {
-					out = append(out, p)
-				}
-			}
-		}
-	}
-	return append(out, v.patch.extraSizes...)
-}
-
-// aspectOptions 是模型接受的比例：generationSettings.aspectRatio 枚举加尺寸表推出的比例。
-func (v *modelVersion) aspectOptions() []string {
-	var out []string
-	add := func(value string) {
-		if value != "" && !slices.ContainsFunc(out, func(s string) bool { return strings.EqualFold(s, value) }) {
-			out = append(out, value)
-		}
-	}
-	if ar, ok := nested(v.props, "generationSettings", "aspectRatio"); ok {
-		for _, value := range stringEnum(ar) {
-			add(value)
-		}
-	}
-	if v.patch.supportsAuto {
-		add("auto")
-	}
-	for _, size := range v.sizes() {
-		add(aspectCode(size))
-	}
-	for _, code := range aspectCodes {
-		if _, ok := v.patch.defaultSizes[code]; ok {
-			add(code)
-		}
-		if len(v.patch.sizeRange) > 0 {
-			if w, h := parsePair(code); math.Max(float64(w)/float64(h), float64(h)/float64(w)) <= 3 {
-				add(code)
-			}
-		}
-	}
-	return out
-}
-
-// resolutionOptions 是模型接受的档位：补丁或 schema 枚举，否则由尺寸推出。
-func (v *modelVersion) resolutionOptions() []string {
-	if len(v.patch.resolutions) > 0 {
-		return v.patch.resolutions
-	}
-	if res, ok := field(v.props, "resolution"); ok {
-		if values := stringEnum(res); len(values) > 0 {
-			return values
-		}
-	}
-	var out []string
-	for _, side := range v.patch.sizeRange {
-		out = append(out, side.label)
-	}
-	sizes := v.sizes()
-	for _, code := range aspectCodes {
-		if p, ok := v.patch.defaultSizes[code]; ok {
-			sizes = append(sizes, p)
-		}
-	}
-	for _, size := range sizes {
-		if tier := tierOf(size); !slices.Contains(out, tier) {
-			out = append(out, tier)
-		}
-	}
-	return out
-}
+// --- 默认值 ---
 
 func (v *modelVersion) defaultResolution(options []string) string {
-	if res, ok := field(v.props, "resolution"); ok {
-		if def, _ := res["default"].(string); def != "" && slices.Contains(options, def) {
-			return def
-		}
+	if v.tierDefault != "" && slices.Contains(options, v.tierDefault) {
+		return v.tierDefault
 	}
 	preferred := []string{"1K", "720p"}
 	if v.video {
@@ -132,14 +53,12 @@ func (v *modelVersion) defaultResolution(options []string) string {
 }
 
 func (v *modelVersion) defaultAspect(options []string) string {
-	// 官网视频默认取第一个比例（都是 16:9），不用 schema 默认（Ray 3.14 写的是 1:1）。
+	// 官网视频默认取第一个比例（都是 16:9），不用 schema 默认。
 	if v.video && slices.Contains(options, "16:9") {
 		return "16:9"
 	}
-	if ar, ok := nested(v.props, "generationSettings", "aspectRatio"); ok {
-		if def, _ := ar["default"].(string); def != "" && !isAuto(def) && slices.Contains(options, def) {
-			return def
-		}
+	if def := v.aspectDefault; def != "" && !isAuto(def) && slices.Contains(options, def) {
+		return def
 	}
 	if !v.video && slices.Contains(options, "1:1") {
 		return "1:1"
@@ -154,19 +73,19 @@ func (v *modelVersion) defaultAspect(options []string) string {
 
 // --- 参考图用途 ---
 
-// referenceUsage 是参考图/编辑输入图的用途：subject 优先（官网同样如此），否则用补丁
-// 的语义，再否则用 schema 里的 general / style / asset / source。
+// referenceUsage 是参考图/编辑输入图的用途：subject 优先（官网同样如此），否则用表里的
+// styleUsage，再否则用 general / style / asset / source。
 func (v *modelVersion) referenceUsage() (string, int) {
 	if limit, ok := v.refs["image:subject"]; ok {
 		return "subject", limit.max
 	}
-	if usage := v.patch.styleUsage; usage != "" {
+	if usage := v.styleUsage; usage != "" {
 		if limit, ok := v.refs["image:"+usage]; ok {
 			return usage, limit.max
 		}
 	}
 	for _, usage := range []string{"general", "style", "asset", "source"} {
-		if usage == "general" && v.patch.keyframeGeneral {
+		if usage == "general" && v.keyframeGeneral {
 			continue
 		}
 		if limit, ok := v.refs["image:"+usage]; ok {
@@ -174,14 +93,6 @@ func (v *modelVersion) referenceUsage() (string, int) {
 		}
 	}
 	return "", 0
-}
-
-// referenceBlobLimit 是参考素材的总数上限：补丁优先，否则 schema 的 referenceBlobs.maxItems。
-func (v *modelVersion) referenceBlobLimit() int {
-	if v.patch.maxReferenceBlobs > 0 {
-		return v.patch.maxReferenceBlobs
-	}
-	return v.maxBlobs
 }
 
 // requiresImageInput 报告模型是否必须带输入图（例如 Flux Fill）。
@@ -201,10 +112,10 @@ func (v *modelVersion) pickSize(aspect, tier string) (pixels, bool) {
 	if aspect == "" || isAuto(aspect) {
 		return pixels{}, false
 	}
-	if p, ok := v.patch.defaultSizes[aspect]; ok && (len(v.patch.sizeRange) == 0 || strings.EqualFold(tierOf(p), tier)) {
+	if p, ok := v.defaultSizes[aspect]; ok && (len(v.sizeRange) == 0 || strings.EqualFold(tierOf(p), tier)) {
 		return p, true
 	}
-	if sides := v.patch.sizeRange; len(sides) > 0 {
+	if sides := v.sizeRange; len(sides) > 0 {
 		short := sides[0].short
 		for _, side := range sides {
 			if strings.EqualFold(side.label, tier) {
@@ -217,10 +128,10 @@ func (v *modelVersion) pickSize(aspect, tier string) (pixels, bool) {
 		}
 		return rangeSize(float64(w)/float64(h), short), true
 	}
-	if v.patch.defaultSizes != nil {
+	if v.defaultSizes != nil {
 		return pixels{}, false
 	}
-	sizes := v.sizes()
+	sizes := v.sizes
 	for _, size := range sizes {
 		if strings.EqualFold(tierOf(size), tier) && aspectCode(size) == aspect {
 			return size, true
@@ -346,33 +257,28 @@ func formatResolution(size pixels) string {
 
 // --- 时长 ---
 
-// chooseDuration 把时长对齐到 schema 的枚举或范围；模型不收时长时返回 false。
+// chooseDuration 把时长对齐到模型的可选时长或范围；没传时用默认值；模型不收时长时返回 false。
 func (v *modelVersion) chooseDuration(requested int) (int, bool) {
-	schema, ok := field(v.props, "duration")
-	if !ok {
+	if !v.has("duration") {
 		return 0, false
 	}
 	if requested <= 0 {
-		requested = v.patch.defaultDuration
+		requested = v.defaultDuration
 	}
-	if requested <= 0 {
-		requested = intOf(schema["default"])
-	}
-	values, _ := schema["enum"].([]any)
-	if len(values) > 0 {
-		best := intOf(values[0])
-		for _, value := range values {
-			if n := intOf(value); abs(n-requested) < abs(best-requested) {
+	if len(v.durations) > 0 {
+		best := v.durations[0]
+		for _, n := range v.durations {
+			if abs(n-requested) < abs(best-requested) {
 				best = n
 			}
 		}
 		return best, true
 	}
-	if lo := intOf(schema["minimum"]); requested < lo {
-		requested = lo
+	if requested < v.minDuration {
+		requested = v.minDuration
 	}
-	if hi := intOf(schema["maximum"]); hi > 0 && requested > hi {
-		requested = hi
+	if v.maxDuration > 0 && requested > v.maxDuration {
+		requested = v.maxDuration
 	}
 	return requested, requested > 0
 }
@@ -387,10 +293,10 @@ func abs(v int) int {
 // --- 请求体 ---
 
 // detailLevel 把 quality 映射成 generationSettings.detailLevel（官网：low 1 / medium 3 /
-// high 5，默认 medium），并收进 schema 范围。
+// high 5，默认 medium），并收进模型的范围。
 func (v *modelVersion) detailLevel(quality string) (int, bool) {
-	schema, ok := nested(v.props, "generationSettings", "detailLevel")
-	if !ok {
+	lo, hi := v.detailRange[0], v.detailRange[1]
+	if hi == 0 {
 		return 0, false
 	}
 	level := 3
@@ -400,29 +306,18 @@ func (v *modelVersion) detailLevel(quality string) (int, bool) {
 	case "high":
 		level = 5
 	}
-	if lo := intOf(schema["minimum"]); lo > 0 && level < lo {
-		level = lo
-	}
-	if hi := intOf(schema["maximum"]); hi > 0 && level > hi {
-		level = hi
-	}
-	return level, true
+	return min(max(level, lo), hi), true
 }
 
-func (v *modelVersion) has(name string) bool {
-	_, ok := v.props[name]
-	return ok
-}
-
-// buildBody 按官网前端的规则（模块 461324 eW + 731058 构建器）拼请求体：先按 schema
-// 填字段，再按补丁放置比例与分辨率，最后丢掉 schema 之外的键。
+// buildBody 按官网前端的规则（模块 461324 eW + 731058 构建器）拼请求体：先填字段，
+// 再按表里的填法放置比例与分辨率，最后丢掉模型不接受的字段。
 func (v *modelVersion) buildBody(in genInput) map[string]any {
 	body := map[string]any{"prompt": in.prompt}
 	count := max(1, in.count)
 	if v.has("n") {
 		body["n"] = count
 	}
-	if v.has("seeds") || v.patch.seeds {
+	if v.has("seeds") || v.seeds {
 		seedValues := make([]int64, count)
 		for i := range seedValues {
 			seedValues[i] = randomSeed()
@@ -435,20 +330,19 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 	if duration, ok := v.chooseDuration(in.duration); ok {
 		body["duration"] = duration
 	}
-	if audio, ok := field(v.props, "generateAudio"); ok {
-		// schema 写了默认值就照办（Kling 为 false）；没写的保持开启，与 OpenAI 风格视频接口一致。
-		on, hasDefault := audio["default"].(bool)
-		body["generateAudio"] = on || !hasDefault
+	if v.has("generateAudio") {
+		// schema 默认关闭的照办（Kling 3.0）；其余开启，与 OpenAI 风格视频接口一致。
+		body["generateAudio"] = !v.audioOff
 	}
 	if v.has("resolution") && in.resolution != "" {
 		body["resolution"] = in.resolution
 	}
 
 	auto := isAuto(in.aspect)
-	explicitAuto := v.patch.explicitAuto && auto
-	omitAuto := v.patch.omitAuto && auto && !explicitAuto
+	explicitAuto := v.explicitAuto && auto
+	omitAuto := v.omitAuto && auto && !explicitAuto
 	size, hasSize := v.pickSize(in.aspect, in.resolution)
-	if !hasSize && len(v.aspectOptions()) == 0 && in.sizeHint.width > 0 {
+	if !hasSize && len(v.aspects) == 0 && in.sizeHint.width > 0 {
 		size, hasSize = in.sizeHint, true
 	}
 	if hasSize {
@@ -456,15 +350,14 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 	}
 
 	settings, specific := map[string]any{}, map[string]any{}
-	_, settingsAspect := nested(v.props, "generationSettings", "aspectRatio")
 	switch {
 	case explicitAuto:
 		settings["aspectRatio"] = "auto"
-	case in.aspect != "" && !auto && !v.patch.computedAspect && settingsAspect:
+	case in.aspect != "" && !auto && !v.computedAspect && v.settingsAspect:
 		settings["aspectRatio"] = in.aspect
 	}
 	if hasSize && !omitAuto {
-		if v.patch.resolutionInPayload {
+		if v.resolutionInPayload {
 			res := in.resolution
 			if res == "" {
 				res = formatResolution(size)
@@ -475,21 +368,21 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 		if code == "" || auto {
 			code = aspectCode(size)
 		}
-		if v.patch.aspectInPayload {
+		if v.aspectInPayload {
 			specific["aspect_ratio"] = code
 		}
-		if v.patch.computedAspect {
+		if v.computedAspect {
 			settings["aspectRatio"] = code
 		}
 	}
-	if v.patch.aspectInSpecific && in.aspect != "" && !omitAuto {
+	if v.aspectInSpecific && in.aspect != "" && !omitAuto {
 		specific["aspectRatio"] = in.aspect
 	}
-	if omitAuto || v.patch.excludeSize {
+	if omitAuto || v.excludeSize {
 		delete(body, "size")
 	}
-	if v.patch.negativePrompt != "" {
-		specific["negative_prompt"] = v.patch.negativePrompt
+	if v.negativePrompt != "" {
+		specific["negative_prompt"] = v.negativePrompt
 	}
 	if level, ok := v.detailLevel(in.quality); ok {
 		settings["detailLevel"] = level
@@ -511,12 +404,12 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 	if v.video {
 		module, submodule = "text2video", "ff-video-generate"
 	}
-	if v.patch.module != "" {
-		module = v.patch.module
+	if v.module != "" {
+		module = v.module
 	}
 	body["generationMetadata"] = map[string]any{"module": module, "submodule": submodule}
 	for key := range body {
-		if !v.has(key) && key != "prompt" && key != "generationMetadata" && !(key == "seeds" && v.patch.seeds) {
+		if !v.has(key) && key != "prompt" && key != "generationMetadata" && !(key == "seeds" && v.seeds) {
 			delete(body, key)
 		}
 	}
@@ -556,14 +449,14 @@ func randomSeed() int64 {
 // imagePlan 校验图像请求并选定比例与档位。显式给出但模型不支持的值直接拒绝。
 func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, background string, count, inputs int, mask bool) (genInput, error) {
 	in := genInput{prompt: prompt, count: max(1, count), quality: quality}
-	if nSchema, ok := field(v.props, "n"); ok {
-		if hi := intOf(nSchema["maximum"]); hi > 0 && in.count > hi {
-			return in, &requestError{msg: fmt.Sprintf("%s 每次最多生成 %d 张", v.slug, hi)}
+	if v.has("n") {
+		if v.maxCount > 0 && in.count > v.maxCount {
+			return in, &requestError{msg: fmt.Sprintf("%s 每次最多生成 %d 张", v.slug, v.maxCount)}
 		}
 	} else if in.count > 1 {
 		return in, &requestError{msg: v.slug + " 每次只能生成 1 张"}
 	}
-	if inputs == 0 && (v.editOnly || v.requiresImageInput()) {
+	if inputs == 0 && v.requiresImageInput() {
 		return in, &requestError{msg: v.slug + " 需要输入图片"}
 	}
 	if inputs > 0 {
@@ -578,17 +471,17 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 	if _, ok := v.refs["image:mask"]; mask && !ok {
 		return in, &requestError{msg: v.slug + " 不支持 mask"}
 	}
-	if limit := v.referenceBlobLimit(); limit > 0 && inputs+boolCount(mask) > limit {
+	if limit := v.maxBlobs; limit > 0 && inputs+boolCount(mask) > limit {
 		return in, &requestError{msg: fmt.Sprintf("%s 最多支持 %d 张输入图（含 mask）", v.slug, limit)}
 	}
 	if strings.EqualFold(strings.TrimSpace(background), "transparent") {
-		if _, ok := nested(v.props, "generationSettings", "transparentBackground"); !ok {
+		if !v.transparent {
 			return in, &requestError{msg: v.slug + " 不支持透明背景"}
 		}
 		in.transparent = true
 	}
 
-	options := v.aspectOptions()
+	options := v.aspects
 	w, h := parsePair(size)
 	in.sizeHint = pixels{w, h}
 	switch requested := strings.TrimSpace(aspect); {
@@ -606,7 +499,7 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 		in.aspect = v.defaultAspect(options)
 	}
 
-	tiers := v.resolutionOptions()
+	tiers := v.tiers
 	switch requested := strings.TrimSpace(resolution); {
 	case requested != "":
 		match, ok := findFold(tiers, requested)
@@ -630,24 +523,24 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 // 就近对齐而不是拒绝；参考图的支持与数量已在 ValidateVideoRequest 校验。
 func (v *modelVersion) videoPlan(prompt, aspect, resolution string, duration int, hasFrame, hasRefs bool) genInput {
 	in := genInput{prompt: prompt, count: 1, duration: duration}
-	if hasRefs && v.patch.referenceDuration > 0 {
-		in.duration = v.patch.referenceDuration
+	if hasRefs && v.referenceDuration > 0 {
+		in.duration = v.referenceDuration
 	}
 	switch {
-	case hasRefs && v.patch.referenceAspect != "":
-		aspect = v.patch.referenceAspect
-	case hasFrame && v.patch.autoWithFrame:
+	case hasRefs && v.referenceAspect != "":
+		aspect = v.referenceAspect
+	case hasFrame && v.autoWithFrame:
 		aspect = "auto"
 	}
-	options := withoutAuto(v.aspectOptions())
+	options := withoutAuto(v.aspects)
 	if w, h := parsePair(aspect); w > 0 && h > 0 && len(options) > 0 {
 		in.aspect = closestRatio(w, h, options)
-	} else if isAuto(aspect) && slices.ContainsFunc(v.aspectOptions(), isAuto) {
+	} else if isAuto(aspect) && slices.ContainsFunc(v.aspects, isAuto) {
 		in.aspect = "auto"
 	} else {
 		in.aspect = v.defaultAspect(options)
 	}
-	tiers := v.resolutionOptions()
+	tiers := v.tiers
 	if match, ok := findFold(tiers, resolution); ok {
 		in.resolution = match
 	} else if want := videoLines(resolution); want > 0 && len(tiers) > 0 {

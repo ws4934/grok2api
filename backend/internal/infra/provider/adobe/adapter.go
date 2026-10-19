@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
-	"sync/atomic"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
@@ -29,9 +28,7 @@ type Adapter struct {
 	assets      provider.ImageAssetStore
 	fetchRemote RemoteFetcher
 	sherlock    *sherlockService
-	// catalog 是当前模型目录：启动时来自内嵌快照，之后由 RefreshCatalog 替换。
-	catalog atomic.Pointer[catalog]
-	logger  *slog.Logger
+	logger      *slog.Logger
 }
 
 // NewAdapter 构造 Adobe Provider 适配器。assets 把生成的图像归档为网关可稳定
@@ -39,7 +36,6 @@ type Adapter struct {
 func NewAdapter(cfg Config, egress *infraegress.Manager, cipher *security.Cipher, assets provider.ImageAssetStore, fetchRemote RemoteFetcher) *Adapter {
 	a := &Adapter{cfg: cfg, egress: egress, cipher: cipher, assets: assets, fetchRemote: fetchRemote}
 	a.sherlock = newSherlockService(a.config)
-	a.catalog.Store(mustSnapshot())
 	return a
 }
 

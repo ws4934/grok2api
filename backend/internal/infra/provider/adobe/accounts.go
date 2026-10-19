@@ -254,7 +254,7 @@ func (a *Adapter) fetchCreditsWindow(ctx context.Context, credential account.Cre
 
 // --- 模型目录（ModelCatalogAdapter）---
 
-// ListModels 不按账号发现模型：目录来自全局 discovery，每个账号都服务全部模型
+// ListModels 不按账号发现模型：目录是全局手写表（models.go），每个账号都服务全部模型
 // （StaticModel）。返回空可避免账号同步把模型登记成对话路由。
 func (a *Adapter) ListModels(ctx context.Context, credential account.Credential) ([]string, error) {
 	return nil, nil

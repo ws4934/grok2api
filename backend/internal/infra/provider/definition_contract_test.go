@@ -165,13 +165,13 @@ func TestRegistryNormalizesVideoParametersPerProvider(t *testing.T) {
 			}
 		}
 	}
-	ray := provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: "luma/3.0-ray"}
-	if got, err := registry.NormalizeVideoRequest(account.ProviderAdobe, ray); err != nil || got.AspectRatio != "16:9" || got.Resolution != "720p" || got.Duration != 5 {
-		t.Fatalf("ray3 defaults = %+v, %v", got, err)
+	seedance := provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: "seedance/seedance_2.0"}
+	if got, err := registry.NormalizeVideoRequest(account.ProviderAdobe, seedance); err != nil || got.AspectRatio != "16:9" || got.Resolution != "720p" || got.Duration != 4 {
+		t.Fatalf("seedance defaults = %+v, %v", got, err)
 	}
-	ray.AspectRatio, ray.Resolution, ray.Duration = "21:9", "4k", 8
-	if got, err := registry.NormalizeVideoRequest(account.ProviderAdobe, ray); err != nil || got.AspectRatio != "21:9" || got.Resolution != "4K" || got.Duration != 10 {
-		t.Fatalf("ray3 explicit = %+v, %v", got, err)
+	seedance.AspectRatio, seedance.Resolution, seedance.Duration = "21:9", "4k", 30
+	if got, err := registry.NormalizeVideoRequest(account.ProviderAdobe, seedance); err != nil || got.AspectRatio != "21:9" || got.Resolution != "1080p" || got.Duration != 15 {
+		t.Fatalf("seedance explicit = %+v, %v", got, err)
 	}
 }
 

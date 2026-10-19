@@ -1,13 +1,11 @@
 package adobe
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -420,47 +418,42 @@ func TestSyncQuotaModeNeverInventsEmptyWindow(t *testing.T) {
 	}
 }
 
-// --- schema 驱动的目录与请求体 ---
+// --- 目录与请求体 ---
 
-func TestSnapshotCatalogMatchesOfficialModels(t *testing.T) {
-	c := mustSnapshot()
-	slugs := map[string]bool{}
-	for _, v := range c.versions {
-		slugs[v.slug] = true
+// 手写目录：用户要的 15 个模型，路由的上游是 modelId/version；图像模型都能文生图与改图。
+func TestCatalogModels(t *testing.T) {
+	var slugs []string
+	for _, v := range models {
+		slugs = append(slugs, v.slug)
 	}
-	for _, slug := range []string{"nano-banana-pro", "nano-banana-2", "nano-banana-2.1", "gpt-image-1", "gpt-image-1.5", "gpt-image-2",
-		"gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "veo-3.1", "veo-3.1-fast", "veo-3.1-lite", "kling-3.0", "kling-3.0-omni",
-		"seedance-2.0", "seedance-2.0-fast", "seedance-2.5", "gemini-omni-flash", "ray3.14", "flux-kontext-pro"} {
-		if !slugs[slug] {
-			t.Errorf("catalog lacks %s", slug)
-		}
-	}
-	for _, v := range c.versions {
-		// 下架（Sora、Imagen、Veo 2/3）、增强类（Topaz）、Gemini 2.5、Kling 拆分版本与视频编辑版本都不应出现。
-		if v.slug == "nano-banana" || strings.Contains(v.slug, "sora") || strings.Contains(v.slug, "imagen") || strings.Contains(v.slug, "topaz") ||
-			strings.Contains(v.version, "_t2v") || strings.Contains(v.version, "v2v") || strings.Contains(v.version, "editing") || v.version == "3.0-generate" {
-			t.Errorf("unexpected model %s (%s/%s)", v.slug, v.modelID, v.version)
-		}
+	want := []string{"veo-3.1", "veo-3.1-fast", "veo-3.1-lite", "seedance-2.0", "seedance-2.0-fast", "seedance-2.5",
+		"kling-3.0", "kling-3.0-omni", "kling-video-2.5-turbo", "nano-banana-pro", "nano-banana-2", "nano-banana-2.1",
+		"gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"}
+	if !slices.Equal(slugs, want) {
+		t.Fatalf("catalog = %q", slugs)
 	}
 	caps := map[string][]modeldomain.Capability{}
-	for _, route := range c.routes() {
-		caps[strings.TrimPrefix(route.PublicID, "adobe/")] = append(caps[strings.TrimPrefix(route.PublicID, "adobe/")], route.Capability)
-		if route.UpstreamModel == "" || !strings.Contains(route.UpstreamModel, "/") {
-			t.Errorf("route %s upstream %q is not modelId/version", route.PublicID, route.UpstreamModel)
+	for _, route := range Routes() {
+		slug := strings.TrimPrefix(route.PublicID, "adobe/")
+		caps[slug] = append(caps[slug], route.Capability)
+		if v, ok := lookup(route.UpstreamModel); !ok || v.slug != slug {
+			t.Errorf("route %s upstream %q does not resolve", route.PublicID, route.UpstreamModel)
 		}
 	}
-	if got := caps["flux-1.1-pro-fill"]; len(got) != 1 || got[0] != modeldomain.CapabilityImageEdit {
-		t.Errorf("inpainting-only model capabilities = %v, want image_edit only", got)
-	}
-	if got := caps["humain-image-1"]; len(got) != 1 || got[0] != modeldomain.CapabilityImage {
-		t.Errorf("model without input images capabilities = %v, want image only", got)
+	for _, v := range models {
+		want := []modeldomain.Capability{modeldomain.CapabilityImage, modeldomain.CapabilityImageEdit}
+		if v.video {
+			want = []modeldomain.Capability{modeldomain.CapabilityVideo}
+		}
+		if !slices.Equal(caps[v.slug], want) {
+			t.Errorf("%s capabilities = %v, want %v", v.slug, caps[v.slug], want)
+		}
 	}
 }
 
 // 没传的参数用模型默认值，传了不支持的就近对齐；参考图模式与首帧的强制规则照官网。
 func TestNormalizeVideoRequest(t *testing.T) {
 	a := &Adapter{}
-	a.catalog.Store(mustSnapshot())
 	for _, test := range []struct {
 		name     string
 		in       provider.VideoRequestOptions
@@ -482,48 +475,9 @@ func TestNormalizeVideoRequest(t *testing.T) {
 	}
 }
 
-// 更新 discovery.json 后这里会失败：先对照官网核对新增或变化的模型（patches.go 里的字段
-// 放置、参考图用途、尺寸表），再同步清单。线上新出现的模型会记 adobe_catalog_unreviewed_models。
-func TestSnapshotModelsAreReviewed(t *testing.T) {
-	reviewed := []string{
-		"flux/1.1", "flux/2", "flux/flex-2", "flux/fluxFillPro", "flux/fluxKontextMax", "flux/fluxKontextPro", "flux/fluxPro-2", "flux/fluxUltra",
-		"flux2-klein/klein_4b", "gemini-flash/nano-banana-2", "gemini-flash/nano-banana-2026-09", "gemini-flash/nano-banana-3",
-		"gemini-omni/omni-flash", "gemini-omni/omni-flash-1.1", "gpt-4o-image/default", "gpt-image/1.5", "gpt-image/2",
-		"gpt-image/gpt-image-2.5-flare", "gpt-image/gpt-image-2.5-prism", "humain/humain_image",
-		"kling/kling_v2_5_turbo_pro_i2v", "kling/kling_v3", "kling/kling_v3_omni", "ltx/ltx-2.3-fast",
-		"luma/2.0-ray", "luma/2.0-ray-flash", "luma/3.0-ray", "luma/3.0-ray-hdr", "luma/3.14-ray", "luma/3.14-ray-hdr",
-		"runway/gen4.5", "runway/gen4_image", "runway/gen4_turbo", "seedance/seedance_2.0", "seedance/seedance_2.0_fast", "seedance/seedance_2.5",
-		"veo/3.1-fast-generate", "veo/3.1-generate", "veo/3.1-lite-generate",
-	}
-	var got []string
-	for _, v := range mustSnapshot().versions {
-		got = append(got, v.upstream())
-	}
-	added := slices.DeleteFunc(slices.Clone(got), func(s string) bool { return slices.Contains(reviewed, s) })
-	removed := slices.DeleteFunc(slices.Clone(reviewed), func(s string) bool { return slices.Contains(got, s) })
-	if len(added)+len(removed) > 0 {
-		t.Fatalf("快照模型有变化，先对照官网核对 patches.go 再同步清单：新增 %q，移除 %q", added, removed)
-	}
-}
-
-func TestWarnUnreviewedModels(t *testing.T) {
-	var logs bytes.Buffer
-	a := &Adapter{logger: slog.New(slog.NewTextHandler(&logs, nil))}
-	a.warnUnreviewed(mustSnapshot())
-	if logs.Len() != 0 {
-		t.Fatalf("snapshot models logged as unreviewed: %s", logs.String())
-	}
-	next := mustSnapshot()
-	next.versions = append(next.versions, &modelVersion{modelID: "brand-new", version: "1"})
-	a.warnUnreviewed(next)
-	if !strings.Contains(logs.String(), "adobe_catalog_unreviewed_models") || !strings.Contains(logs.String(), "brand-new/1") || strings.Contains(logs.String(), "veo/") {
-		t.Fatalf("log = %s", logs.String())
-	}
-}
-
 func mustVersion(t *testing.T, slug string) *modelVersion {
 	t.Helper()
-	for _, v := range mustSnapshot().versions {
+	for _, v := range models {
 		if v.slug == slug {
 			return v
 		}
@@ -619,17 +573,14 @@ func TestImagePlanRejectsUnsupportedParameters(t *testing.T) {
 	if err != nil || !in.transparent || in.aspect != "3:2" {
 		t.Errorf("gpt-image-2.5-flare plan = %+v, %v", in, err)
 	}
-	if _, err := mustVersion(t, "humain-image-1").imagePlan("x", "", "", "", "", "", 2, 0, false); err == nil {
-		t.Error("model without n accepted 2 images")
-	}
 }
 
-// 视频的首帧/参考图按 schema 能力校验，时长与分辨率就近对齐（网关默认 8 秒、720p）。
+// 视频的首帧/参考图按模型能力校验，分辨率就近对齐。
 func TestVideoInputsFollowSchema(t *testing.T) {
 	adapter := NewAdapter(Config{}, nil, nil, nil, nil)
 	check := func(slug string, hasImage bool, refs int) error {
 		upstream := slug
-		for _, v := range mustSnapshot().versions {
+		for _, v := range models {
 			if v.slug == slug {
 				upstream = v.upstream()
 			}
@@ -658,43 +609,10 @@ func TestVideoInputsFollowSchema(t *testing.T) {
 	if in.resolution != "1080p" {
 		t.Errorf("1080p-only model resolution = %q", in.resolution)
 	}
-	if body := mustVersion(t, "gemini-omni-flash").buildBody(mustVersion(t, "gemini-omni-flash").videoPlan("x", "16:9", "1080p", 15, false, false)); body["duration"] != 10 || body["resolution"] != "720p" {
-		t.Errorf("omni-flash duration/resolution = %v / %v", body["duration"], body["resolution"])
-	}
 }
 
-func TestRefreshCatalogSwapsAndGuardsShrink(t *testing.T) {
-	payload := discoverySnapshot
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(payload)
-	}))
-	defer server.Close()
-	previous := discoveryURL
-	discoveryURL = server.URL
-	t.Cleanup(func() { discoveryURL = previous })
-	_, adapter, _ := newFakeAdobe(t)
-	routes, err := adapter.RefreshCatalog(context.Background())
-	if err != nil || len(routes) == 0 || len(routes) != len(adapter.catalog.Load().routes()) {
-		t.Fatalf("refresh = %d routes, %v", len(routes), err)
-	}
-	payload = []byte(`{"models":[],"commonRequestSchema":{}}`)
-	if _, err := adapter.RefreshCatalog(context.Background()); err == nil {
-		t.Fatal("an empty discovery must not replace the catalog")
-	}
-	if len(adapter.catalog.Load().routes()) != len(routes) {
-		t.Fatal("a rejected refresh changed the catalog")
-	}
-}
-
-// 审查修复：deprecated 用途走 replacement；Veo 参考图约束；gpt-image-2.5 尺寸上限；
-// 音频默认值跟随 schema；Seedance 2.5 带首帧时比例为 auto。
+// 官网约束：Veo 参考图规则；gpt-image-2.5 尺寸上限；音频默认值；Seedance 2.5 带首帧时比例为 auto。
 func TestOfficialConstraintsFromReview(t *testing.T) {
-	if usage, _ := mustVersion(t, "runway-gen-4-video").referenceUsage(); usage != "" {
-		t.Errorf("runway general is deprecated (now frame), reference usage = %q", usage)
-	}
-	if usage, _ := mustVersion(t, "flux-1.1-pro").referenceUsage(); usage != "style" {
-		t.Errorf("flux-1.1-pro reference usage = %q, want style", usage)
-	}
 	if err := mustVersion(t, "veo-3.1-fast").checkVideoInputs(false, false, 1, 0); err == nil {
 		t.Error("veo-3.1-fast accepted reference images")
 	}
@@ -749,9 +667,6 @@ func TestImage4K(t *testing.T) {
 			t.Errorf("%s %s@%s size = %v, want %v", tc.slug, tc.aspect, tc.resolution, got, tc.want)
 		}
 	}
-	if _, err := mustVersion(t, "flux-2-pro").imagePlan("x", "", "", "4K", "", "", 1, 0, false); err == nil {
-		t.Error("flux-2-pro (max 1920) accepted 4K")
-	}
 }
 
 func intOf2(v any) int {
@@ -761,10 +676,9 @@ func intOf2(v any) int {
 
 // 尾帧：frame 上限 ≥2 的模型才收，作为 order 2 的 frame 发送。
 func TestVideoLastFrame(t *testing.T) {
-	// Luma Ray 的参考素材总数上限是 1 且帧计入，只能单帧。
-	for slug, ok := range map[string]bool{"veo-3.1": true, "veo-3.1-lite": true, "kling-3.0": true, "seedance-2.0": true, "gemini-omni-flash": false, "runway-gen-4.5": false, "ray2": false, "ray3.14": false} {
-		if err := mustVersion(t, slug).checkVideoInputs(true, true, 0, 0); (err == nil) != ok {
-			t.Errorf("%s last frame accepted = %v, want %v (%v)", slug, err == nil, ok, err)
+	for _, slug := range []string{"veo-3.1", "veo-3.1-lite", "kling-3.0", "seedance-2.0"} {
+		if err := mustVersion(t, slug).checkVideoInputs(true, true, 0, 0); err != nil {
+			t.Errorf("%s rejected a last frame: %v", slug, err)
 		}
 	}
 	veo := mustVersion(t, "veo-3.1")
@@ -799,8 +713,7 @@ func TestVideoMIME(t *testing.T) {
 	}
 }
 
-// 参考视频：只有 schema 带 video:source 且补丁确认是生成参考的模型接受，按数量上限与
-// 参考素材总数上限校验。
+// 参考视频：只有 Seedance 接受，按数量上限与参考素材总数上限校验。
 func TestReferenceVideoLimits(t *testing.T) {
 	cases := []struct {
 		slug        string
@@ -814,13 +727,7 @@ func TestReferenceVideoLimits(t *testing.T) {
 		{"seedance-2.5", false, 9, 3, true}, // 官网 UI 只开放 9 张图、3 个视频
 		{"seedance-2.5", false, 0, 4, false},
 		{"seedance-2.5", false, 10, 0, false},
-		{"gemini-omni-flash", false, 3, 1, true},
-		{"gemini-omni-flash", true, 3, 1, true},   // Omni 的首帧不计入参考素材池
-		{"gemini-omni-flash", false, 4, 1, false}, // 官网总数上限 4
-		{"gemini-omni-flash", false, 0, 2, false},
-		{"gemini-omni-flash-1.1", true, 8, 2, false}, // schema 总数上限 10，首帧计入
 		{"veo-3.1", false, 0, 1, false},
-		{"ray3", false, 0, 1, false}, // Luma 的源视频是编辑用途
 	}
 	for _, tc := range cases {
 		err := mustVersion(t, tc.slug).checkVideoInputs(tc.frame, false, tc.refs, tc.clips)
