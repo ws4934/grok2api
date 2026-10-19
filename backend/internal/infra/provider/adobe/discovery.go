@@ -453,7 +453,24 @@ func (a *Adapter) RefreshCatalog(ctx context.Context) ([]modeldomain.Route, erro
 		return nil, fmt.Errorf("adobe discovery 返回 %d 个模型，疑似异常，保留现有目录", len(next.versions))
 	}
 	a.catalog.Store(next)
+	a.warnUnreviewed(next)
 	return next.routes(), nil
+}
+
+// warnUnreviewed 记下内嵌快照里没有的模型：它们没对照官网核对过，只按 schema 通用规则
+// 拼请求体，需要特殊填法的会被上游 400 拒绝或被误解。核对后在 patches.go 补规则并
+// 更新 discovery.json（TestSnapshotModelsAreReviewed 会要求同步清单）。
+func (a *Adapter) warnUnreviewed(next *catalog) {
+	reviewed := mustSnapshot()
+	var models []string
+	for _, v := range next.versions {
+		if _, ok := reviewed.lookup(v.upstream()); !ok {
+			models = append(models, v.upstream())
+		}
+	}
+	if len(models) > 0 {
+		a.log().Warn("adobe_catalog_unreviewed_models", "models", models)
+	}
 }
 
 // SnapshotRoutes 是内嵌快照的路由，线上拉取失败时用于只增不删地补齐路由。

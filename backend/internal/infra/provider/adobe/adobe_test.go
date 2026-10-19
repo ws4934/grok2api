@@ -1,13 +1,16 @@
 package adobe
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -476,6 +479,45 @@ func TestNormalizeVideoRequest(t *testing.T) {
 		if err != nil || got.AspectRatio != test.aspect || got.Resolution != test.tier || got.Duration != test.duration {
 			t.Errorf("%s = %s %s %ds (%v), want %s %s %ds", test.name, got.AspectRatio, got.Resolution, got.Duration, err, test.aspect, test.tier, test.duration)
 		}
+	}
+}
+
+// 更新 discovery.json 后这里会失败：先对照官网核对新增或变化的模型（patches.go 里的字段
+// 放置、参考图用途、尺寸表），再同步清单。线上新出现的模型会记 adobe_catalog_unreviewed_models。
+func TestSnapshotModelsAreReviewed(t *testing.T) {
+	reviewed := []string{
+		"flux/1.1", "flux/2", "flux/flex-2", "flux/fluxFillPro", "flux/fluxKontextMax", "flux/fluxKontextPro", "flux/fluxPro-2", "flux/fluxUltra",
+		"flux2-klein/klein_4b", "gemini-flash/nano-banana-2", "gemini-flash/nano-banana-2026-09", "gemini-flash/nano-banana-3",
+		"gemini-omni/omni-flash", "gemini-omni/omni-flash-1.1", "gpt-4o-image/default", "gpt-image/1.5", "gpt-image/2",
+		"gpt-image/gpt-image-2.5-flare", "gpt-image/gpt-image-2.5-prism", "humain/humain_image",
+		"kling/kling_v2_5_turbo_pro_i2v", "kling/kling_v3", "kling/kling_v3_omni", "ltx/ltx-2.3-fast",
+		"luma/2.0-ray", "luma/2.0-ray-flash", "luma/3.0-ray", "luma/3.0-ray-hdr", "luma/3.14-ray", "luma/3.14-ray-hdr",
+		"runway/gen4.5", "runway/gen4_image", "runway/gen4_turbo", "seedance/seedance_2.0", "seedance/seedance_2.0_fast", "seedance/seedance_2.5",
+		"veo/3.1-fast-generate", "veo/3.1-generate", "veo/3.1-lite-generate",
+	}
+	var got []string
+	for _, v := range mustSnapshot().versions {
+		got = append(got, v.upstream())
+	}
+	added := slices.DeleteFunc(slices.Clone(got), func(s string) bool { return slices.Contains(reviewed, s) })
+	removed := slices.DeleteFunc(slices.Clone(reviewed), func(s string) bool { return slices.Contains(got, s) })
+	if len(added)+len(removed) > 0 {
+		t.Fatalf("快照模型有变化，先对照官网核对 patches.go 再同步清单：新增 %q，移除 %q", added, removed)
+	}
+}
+
+func TestWarnUnreviewedModels(t *testing.T) {
+	var logs bytes.Buffer
+	a := &Adapter{logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	a.warnUnreviewed(mustSnapshot())
+	if logs.Len() != 0 {
+		t.Fatalf("snapshot models logged as unreviewed: %s", logs.String())
+	}
+	next := mustSnapshot()
+	next.versions = append(next.versions, &modelVersion{modelID: "brand-new", version: "1"})
+	a.warnUnreviewed(next)
+	if !strings.Contains(logs.String(), "adobe_catalog_unreviewed_models") || !strings.Contains(logs.String(), "brand-new/1") || strings.Contains(logs.String(), "veo/") {
+		t.Fatalf("log = %s", logs.String())
 	}
 }
 
