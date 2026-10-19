@@ -201,6 +201,9 @@ func (m *Manager) FeedbackForScope(ctx context.Context, scope domain.Scope, node
 	if succeeded && m.cachedNodeIsHealthy(nodeID) {
 		return
 	}
+	// Callers pass a detached context; bound the read and update.
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
 	value, err := m.repository.GetEgressNode(ctx, nodeID)
 	if err != nil {
 		return
