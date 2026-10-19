@@ -369,20 +369,73 @@ func replace(targets, sources []string, parkSuffix string) error {
 		}
 	}
 	for index, target := range targets {
-		err := os.Rename(target, target+parkSuffix)
+		err := move(target, target+parkSuffix)
 		if err == nil {
-			if err = os.Rename(sources[index], target); err != nil {
-				err = errors.Join(err, os.Rename(target+parkSuffix, target))
+			if err = move(sources[index], target); err != nil {
+				err = errors.Join(err, move(target+parkSuffix, target))
 			}
 		}
 		if err != nil {
 			for undo := index - 1; undo >= 0; undo-- {
-				err = errors.Join(err, os.Rename(targets[undo], sources[undo]), os.Rename(targets[undo]+parkSuffix, targets[undo]))
+				err = errors.Join(err, move(targets[undo], sources[undo]), move(targets[undo]+parkSuffix, targets[undo]))
 			}
 			return fmt.Errorf("替换安装文件失败：%w", err)
 		}
 	}
 	return nil
+}
+
+// rename is os.Rename; tests replace it to simulate overlay filesystems.
+var rename = os.Rename
+
+// move renames src to dst. Docker's overlay filesystem cannot rename a
+// directory that comes from an image layer (EXDEV), nor can a rename cross
+// filesystems, so such a directory is copied and the original removed.
+func move(src, dst string) error {
+	err := rename(src, dst)
+	if !errors.Is(err, syscall.EXDEV) {
+		return err
+	}
+	if err := copyTree(src, dst); err != nil {
+		return errors.Join(err, os.RemoveAll(dst))
+	}
+	return os.RemoveAll(src)
+}
+
+// copyTree copies directories and regular files, keeping their modes.
+func copyTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, relative)
+		switch {
+		case entry.IsDir():
+			return os.Mkdir(target, info.Mode().Perm())
+		case info.Mode().IsRegular():
+			in, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer in.Close()
+			out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(out, in)
+			return errors.Join(err, out.Close())
+		default:
+			return fmt.Errorf("不支持复制 %s", path)
+		}
+	})
 }
 
 func executablePath() string {
