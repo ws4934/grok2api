@@ -368,9 +368,9 @@ func (r *MediaJobRepository) CreateMediaJob(ctx context.Context, value media.Job
 		if !providerValue.IsValid() || (value.EgressScope != "" && scope != providerValue) {
 			return errors.New("unsupported image provider or primary egress scope")
 		}
-	} else if (value.Provider != "" && !providerValue.IsLegacy()) || (value.EgressScope != "" && !scope.IsLegacy()) {
-		// Video jobs belong to the Grok video workflow; open provider syntax is
-		// not video capability.
+	} else if (value.Provider != "" && !providerValue.IsValid()) || (value.EgressScope != "" && !scope.IsLegacy() && scope != providerValue) {
+		// Video providers are admitted by the gateway's registry check too; a
+		// Grok job may run on another Grok provider's egress scope.
 		return errors.New("unsupported video provider or primary egress scope")
 	}
 	result := r.db.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(mediaJobFromDomain(value))

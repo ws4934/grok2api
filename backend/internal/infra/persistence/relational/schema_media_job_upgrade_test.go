@@ -63,7 +63,7 @@ func TestMediaJobModelTagsAllowAllVideoProvidersAndPrimaryScopes(t *testing.T) {
 		t.Fatalf("operation tag = %q", operationTag)
 	}
 	for fieldName, expected := range map[string]string{
-		"Seconds": "seconds BETWEEN 0 AND 15",
+		"Seconds": "seconds BETWEEN 0 AND 60",
 		"Size":    "length(trim(size)) BETWEEN 0 AND 32",
 		"Quality": "length(trim(quality)) BETWEEN 0 AND 32",
 	} {
@@ -310,11 +310,11 @@ func TestInitializeSchemaUpgradesMediaJobChecksForBuild(t *testing.T) {
 		t.Fatalf("console media job rejected: %v", err)
 	}
 
-	// 非法 provider / scope 仍应被拒绝。
+	// 非法 provider / scope 仍应被拒绝（是否支持视频由网关按注册表判断，这里只查写法）。
 	invalidProvider := legacyJob
 	invalidProvider.ID = "video_provider_blocked"
 	invalidProvider.RequestID = "request-provider-blocked"
-	invalidProvider.Provider = "invalid_provider"
+	invalidProvider.Provider = "Invalid-Provider"
 	if err := jobs.CreateMediaJob(ctx, invalidProvider); err == nil {
 		t.Fatal("invalid provider was accepted for media jobs")
 	}

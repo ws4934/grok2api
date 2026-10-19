@@ -444,7 +444,7 @@ type mediaJobModel struct {
 	Kind           string  `gorm:"size:16;not null;default:'video';check:chk_media_jobs_kind,kind IN ('video','image')"`
 	Operation      string  `gorm:"size:16;not null;default:'generate';check:chk_media_jobs_operation,(kind = 'video' AND operation IN ('generate','edit','extend')) OR (kind = 'image' AND operation IN ('generate','edit'))"`
 	Prompt         string  `gorm:"type:text;not null;check:chk_media_jobs_prompt,length(prompt) BETWEEN 0 AND 100000"`
-	Seconds        int     `gorm:"not null;check:chk_media_jobs_seconds,kind <> 'video' OR seconds BETWEEN 0 AND 15"`
+	Seconds        int     `gorm:"not null;check:chk_media_jobs_seconds,kind <> 'video' OR seconds BETWEEN 0 AND 60"`
 	Size           string  `gorm:"size:32;not null;default:'';check:chk_media_jobs_size,length(trim(size)) BETWEEN 0 AND 32"`
 	Quality        string  `gorm:"size:32;not null;default:'';check:chk_media_jobs_quality,length(trim(quality)) BETWEEN 0 AND 32"`
 	Status         string  `gorm:"size:32;not null;check:chk_media_jobs_status,status IN ('queued','in_progress','completed','failed','canceled','uncertain')"`
