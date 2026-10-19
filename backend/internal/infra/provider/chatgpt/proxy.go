@@ -10,9 +10,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/bdandy/go-socks4" // registers socks4/socks4a with golang.org/x/net/proxy
+	"github.com/chenyme/grok2api/backend/internal/pkg/socksproxy"
 	"github.com/chenyme/grok2api/backend/internal/pkg/tunnelproxy"
-	xproxy "golang.org/x/net/proxy"
 )
 
 // egressProxy is how a request reaches chatgpt.com through the selected egress.
@@ -36,11 +35,11 @@ func parseEgressProxy(raw string) (egressProxy, error) {
 	case scheme == "http" || scheme == "https":
 		return egressProxy{raw: raw, url: u}, nil
 	case scheme == "socks4" || scheme == "socks4a" || scheme == "socks5" || scheme == "socks5h":
-		dialer, err := xproxy.FromURL(u, &net.Dialer{Timeout: 20 * time.Second})
+		dial, err := socksproxy.NewDialContext(u, &net.Dialer{Timeout: 20 * time.Second}, 20*time.Second)
 		if err != nil {
 			return egressProxy{}, errors.New("invalid SOCKS egress proxy")
 		}
-		return egressProxy{raw: raw, dial: contextDial(dialer)}, nil
+		return egressProxy{raw: raw, dial: dial}, nil
 	case tunnelproxy.IsSupportedScheme(scheme):
 		dialer, err := tunnelproxy.NewDialer(raw)
 		if err != nil {
@@ -64,34 +63,6 @@ func (p egressProxy) apply(transport *http.Transport) {
 	case p.dial != nil:
 		transport.Proxy = nil
 		transport.DialContext = p.dial
-	}
-}
-
-func contextDial(dialer xproxy.Dialer) func(context.Context, string, string) (net.Conn, error) {
-	if contextual, ok := dialer.(xproxy.ContextDialer); ok {
-		return contextual.DialContext
-	}
-	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		type result struct {
-			conn net.Conn
-			err  error
-		}
-		done := make(chan result, 1)
-		go func() {
-			conn, err := dialer.Dial(network, address)
-			done <- result{conn, err}
-		}()
-		select {
-		case r := <-done:
-			return r.conn, r.err
-		case <-ctx.Done():
-			go func() {
-				if r := <-done; r.conn != nil {
-					_ = r.conn.Close()
-				}
-			}()
-			return nil, ctx.Err()
-		}
 	}
 }
 

@@ -1,7 +1,6 @@
 package egress
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,10 +8,9 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/bdandy/go-socks4"
 	"github.com/chenyme/grok2api/backend/internal/infra/buildtransport"
+	"github.com/chenyme/grok2api/backend/internal/pkg/socksproxy"
 	"github.com/chenyme/grok2api/backend/internal/pkg/tunnelproxy"
-	xproxy "golang.org/x/net/proxy"
 )
 
 // newBuildClient keeps Grok Build on the standard Go HTTP/TLS stack used by
@@ -55,11 +53,11 @@ func newBuildClientWithOptions(proxyURL string, responseHeaderTimeout time.Durat
 		case "http", "https":
 			transport.Proxy = http.ProxyURL(parsed)
 		case "socks4", "socks4a", "socks5", "socks5h":
-			dialer, err := xproxy.FromURL(parsed, direct)
+			dial, err := socksproxy.NewDialContext(parsed, direct, direct.Timeout)
 			if err != nil {
 				return nil, fmt.Errorf("创建 Grok Build SOCKS 代理: %w", err)
 			}
-			transport.DialContext = dialContext(dialer)
+			transport.DialContext = dial
 		case "trojan", "vless", "ss", "vmess":
 			dialer, err := tunnelproxy.NewDialer(proxyURL)
 			if err != nil {
@@ -79,33 +77,4 @@ func newBuildClientWithOptions(proxyURL string, responseHeaderTimeout time.Durat
 			return http.ErrUseLastResponse
 		},
 	}, nil
-}
-
-func dialContext(dialer xproxy.Dialer) func(context.Context, string, string) (net.Conn, error) {
-	if contextual, ok := dialer.(xproxy.ContextDialer); ok {
-		return contextual.DialContext
-	}
-	type result struct {
-		connection net.Conn
-		err        error
-	}
-	return func(ctx context.Context, network, address string) (net.Conn, error) {
-		completed := make(chan result, 1)
-		go func() {
-			connection, err := dialer.Dial(network, address)
-			completed <- result{connection: connection, err: err}
-		}()
-		select {
-		case value := <-completed:
-			return value.connection, value.err
-		case <-ctx.Done():
-			go func() {
-				value := <-completed
-				if value.connection != nil {
-					_ = value.connection.Close()
-				}
-			}()
-			return nil, ctx.Err()
-		}
-	}
 }

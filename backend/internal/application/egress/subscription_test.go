@@ -3,7 +3,6 @@ package egress
 import (
 	"context"
 	"encoding/base64"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -351,29 +350,6 @@ func TestValidatePublicSubscriptionTargetRejectsPrivateAddresses(t *testing.T) {
 		if err := validatePublicSubscriptionTarget(context.Background(), value); err != nil {
 			t.Fatalf("public subscription target rejected: %s: %v", value, err)
 		}
-	}
-}
-
-func TestSubscriptionProxyForwardDialerBoundsHandshakeConnection(t *testing.T) {
-	client, server := net.Pipe()
-	defer server.Close()
-	dialer := &subscriptionProxyForwardDialer{timeout: 20 * time.Millisecond}
-	connection, err := dialer.withDeadline(client, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer connection.Close()
-	started := time.Now()
-	buffer := make([]byte, 1)
-	_, err = connection.Read(buffer)
-	if err == nil {
-		t.Fatal("connection without peer data did not reach its handshake deadline")
-	}
-	if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
-		t.Fatalf("deadline error=%v", err)
-	}
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("handshake deadline took %s", elapsed)
 	}
 }
 
