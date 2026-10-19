@@ -79,6 +79,8 @@ type SwaggerImageEditRequest struct {
 // SwaggerVideoGenerationRequest 表示视频生成请求。
 // image 与 reference_images/reference_audios 互斥；参考图模式 resolution 最高 720p。
 // last_frame（尾帧）必须同时提供 image，目前仅 Adobe 支持首尾帧的模型接受。
+// reference_videos（参考视频，url 或 file_id，最多 10 个）需提供 prompt，目前仅 Adobe 的
+// Seedance、Gemini Omni 接受。
 type SwaggerVideoGenerationRequest struct {
 	Model            string                    `json:"model" example:"grok-imagine-video"`
 	Prompt           string                    `json:"prompt" example:"A cinematic tracking shot in the rain"`
@@ -89,6 +91,7 @@ type SwaggerVideoGenerationRequest struct {
 	LastFrame        *SwaggerVideoMediaInput   `json:"last_frame,omitempty"`
 	ReferenceImages  []SwaggerVideoMediaInput  `json:"reference_images,omitempty"`
 	ReferenceAudios  []SwaggerVideoAudioInput  `json:"reference_audios,omitempty"`
+	ReferenceVideos  []SwaggerVideoMediaInput  `json:"reference_videos,omitempty"`
 	Video            *SwaggerVideoMediaInput   `json:"video,omitempty"`
 }
 

@@ -264,6 +264,10 @@ definitions:
         items:
           $ref: '#/definitions/httpserver.SwaggerVideoMediaInput'
         type: array
+      reference_videos:
+        items:
+          $ref: '#/definitions/httpserver.SwaggerVideoMediaInput'
+        type: array
       resolution:
         example: 720p
         type: string

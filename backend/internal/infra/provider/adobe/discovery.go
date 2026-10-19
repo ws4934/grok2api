@@ -42,7 +42,11 @@ type modelVersion struct {
 	editOnly bool                  // 只做局部重绘/扩图（inpainting/outpainting），没有纯生成路由
 	props    map[string]any        // 已归一化的 requestSchema.properties
 	refs     map[string]usageLimit // "image:frame" 这类 mediaType:usageType
-	patch    patch
+	// fileBytes 是 schema 给每种媒体的单文件上限（maxFileSizeBytes），maxBlobs 是
+	// referenceBlobs 的总数上限；0 表示不限。
+	fileBytes map[string]int64
+	maxBlobs  int
+	patch     patch
 }
 
 // upstream 是路由的 upstream_model（也是价格的键）："modelId/modelVersion"。它不随
@@ -149,7 +153,7 @@ func newModelVersion(modelID, version string, raw discoveryVersion, common map[s
 	v.editOnly = len(raw.InputMediaUseCase) > 0 && !slices.ContainsFunc(raw.InputMediaUseCase, func(useCase string) bool {
 		return useCase != "inpainting" && useCase != "outpainting"
 	})
-	v.refs = referenceLimits(props)
+	v.refs, v.fileBytes, v.maxBlobs = referenceLimits(props)
 	if v.refs["video:source"].min > 0 || v.refs["video:general"].min > 0 {
 		return nil // 必须给源视频的版本
 	}
@@ -284,11 +288,11 @@ func lookupRef(common map[string]any, ref string) (map[string]any, bool) {
 // referenceLimits 读 referenceBlobs 的 x-capabilities：每种 mediaType:usageType 的数量
 // 限制。标了 deprecated 的用途跳过，由 schema 给出的 replacement 用途接替（例如
 // gpt-image 的 subject → source、Runway 的 general → frame）。
-func referenceLimits(props map[string]any) map[string]usageLimit {
-	limits := map[string]usageLimit{}
+func referenceLimits(props map[string]any) (map[string]usageLimit, map[string]int64, int) {
+	limits, fileBytes := map[string]usageLimit{}, map[string]int64{}
 	blobs, ok := field(props, "referenceBlobs")
 	if !ok {
-		return limits
+		return limits, fileBytes, 0
 	}
 	caps, _ := blobs["x-capabilities"].([]any)
 	if caps == nil {
@@ -299,6 +303,9 @@ func referenceLimits(props map[string]any) map[string]usageLimit {
 	for _, c := range caps {
 		capability, _ := c.(map[string]any)
 		media, _ := capability["mediaType"].(string)
+		if size := int64(intOf(capability["maxFileSizeBytes"])); media != "" && size > 0 {
+			fileBytes[media] = size
+		}
 		constraints, _ := capability["usageConstraints"].([]any)
 		for _, u := range constraints {
 			constraint, _ := u.(map[string]any)
@@ -309,7 +316,7 @@ func referenceLimits(props map[string]any) map[string]usageLimit {
 			limits[media+":"+usage] = usageLimit{min: intOf(constraint["minItems"]), max: intOf(constraint["maxItems"])}
 		}
 	}
-	return limits
+	return limits, fileBytes, intOf(blobs["maxItems"])
 }
 
 // --- schema 读取辅助 ---

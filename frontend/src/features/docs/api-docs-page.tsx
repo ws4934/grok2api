@@ -192,6 +192,7 @@ const endpoints: Record<string, EndpointDefinition> = {
       { name: "last_frame", descriptionKey: "docs.reference.fieldVideoLastFrame" },
       { name: "reference_images", descriptionKey: "docs.reference.fieldReferenceImages" },
       { name: "reference_audios", descriptionKey: "docs.reference.fieldReferenceAudios" },
+      { name: "reference_videos", descriptionKey: "docs.reference.fieldReferenceVideos" },
     ],
     noteKeys: ["docs.reference.noteVideoAsync", "docs.reference.noteVideoReference", "docs.reference.noteVideoStrict"],
     request: (model) => ({ model, prompt: "A paper airplane flying over a city", duration: 8, aspect_ratio: "16:9", resolution: "720p" }),

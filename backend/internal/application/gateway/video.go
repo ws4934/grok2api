@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,6 +49,8 @@ type VideoInput struct {
 	ImageURL string
 	// LastFrameURL is the optional last-frame image; it requires ImageURL.
 	LastFrameURL string
+	// ReferenceVideoURLs are optional reference videos for generation.
+	ReferenceVideoURLs []string
 	// ReferenceURLs are style/content references (official "reference_images").
 	ReferenceURLs []string
 	// ReferenceAudios are preset voice_ids for reference-to-video.
@@ -77,6 +80,16 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	hasLastFrame := strings.TrimSpace(input.LastFrameURL) != ""
 	if hasLastFrame && (operation != provider.VideoOperationGenerate || strings.TrimSpace(input.ImageURL) == "") {
 		return media.Job{}, fmt.Errorf("last_frame 只能用于视频生成，且必须同时提供 image（首帧）")
+	}
+	if len(input.ReferenceVideoURLs) > 0 {
+		switch {
+		case operation != provider.VideoOperationGenerate:
+			return media.Job{}, fmt.Errorf("reference_videos 只能用于视频生成")
+		case len(input.ReferenceVideoURLs) > media.MaxReferenceVideos:
+			return media.Job{}, fmt.Errorf("reference_videos 最多 %d 个", media.MaxReferenceVideos)
+		case strings.TrimSpace(input.Prompt) == "":
+			return media.Job{}, fmt.Errorf("参考视频生成必须提供 prompt")
+		}
 	}
 	if operation == provider.VideoOperationGenerate {
 		hasImage := strings.TrimSpace(input.ImageURL) != ""
@@ -140,20 +153,27 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err != nil {
 		return media.Job{}, err
 	}
-	routes, err = s.routesForVideoParameters(routes, operation, input.Resolution, strings.TrimSpace(input.ImageURL) != "", hasLastFrame, len(input.ReferenceURLs), input.Duration)
+	routes, err = s.routesForVideoParameters(routes, provider.VideoRequestOptions{
+		Operation: operation, Resolution: input.Resolution, HasImage: strings.TrimSpace(input.ImageURL) != "", HasLastFrame: hasLastFrame,
+		ReferenceImages: len(input.ReferenceURLs), ReferenceVideos: len(input.ReferenceVideoURLs), Duration: input.Duration,
+	})
 	if err != nil {
 		return media.Job{}, err
 	}
-	allRefs := videoInputReferences(input.ImageURL, input.LastFrameURL, input.ReferenceURLs)
-	if err := s.validateVideoInputReferences(ctx, allRefs, "image"); err != nil {
+	inputs := videoInputs{
+		imageURL: input.ImageURL, lastFrameURL: input.LastFrameURL, referenceURLs: input.ReferenceURLs,
+		referenceVideoURLs: input.ReferenceVideoURLs, referenceAudios: input.ReferenceAudios, videoURL: input.VideoURL,
+	}
+	// 图像与视频输入共用一个物化预算。
+	budget := videoInputJSONBaseBytes
+	if err := s.validateVideoInputBudget(ctx, inputs.imageRefs(), "image", &budget); err != nil {
 		return media.Job{}, err
 	}
-	if videoURL := strings.TrimSpace(input.VideoURL); videoURL != "" {
-		if err := s.validateVideoInputReferences(ctx, []string{videoURL}, "video"); err != nil {
-			return media.Job{}, err
-		}
+	videos := trimmedValues(append(slices.Clone(input.ReferenceVideoURLs), input.VideoURL))
+	if err := s.validateVideoInputBudget(ctx, videos, "video", &budget); err != nil {
+		return media.Job{}, err
 	}
-	inputJSON, err := encodeVideoInputFull(operation, input.ImageURL, input.LastFrameURL, input.ReferenceURLs, input.ReferenceAudios, input.VideoURL)
+	inputJSON, err := encodeVideoInputFull(operation, inputs)
 	if err != nil {
 		return media.Job{}, err
 	}
@@ -174,7 +194,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err := s.checkLedgerReady(); err != nil {
 		return media.Job{}, err
 	}
-	pricing, priced := s.resolveVideoPricing(operation, route.Provider, route.UpstreamModel, input.Resolution, input.Duration, len(allRefs))
+	pricing, priced := s.resolveVideoPricing(operation, route.Provider, route.UpstreamModel, input.Resolution, input.Duration, len(inputs.imageRefs()))
 	externalModel := model.ExternalPublicID(route.Provider, route.PublicID)
 	lease, err := selection.Acquire(ctx, nil, false)
 	if err != nil {
@@ -194,7 +214,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		AccountID: accountID, AccountName: lease.Credential.Name,
 		Provider: string(route.Provider), Model: externalModel, ModelRouteID: route.ID, UpstreamModel: model.DisplayUpstreamModel(route.Provider, route.UpstreamModel), Operation: operation, Prompt: input.Prompt,
 		Seconds: input.Duration, Size: input.AspectRatio, Quality: input.Resolution,
-		Status: media.StatusQueued, Progress: 0, InputJSON: inputJSON, InputImageCount: len(allRefs), CreatedAt: now, UpdatedAt: now,
+		Status: media.StatusQueued, Progress: 0, InputJSON: inputJSON, InputImageCount: len(inputs.imageRefs()), CreatedAt: now, UpdatedAt: now,
 		Price: &pricing, IdempotencyKey: input.IdempotencyKey, PayloadHash: hash,
 	}
 	reserved := false
@@ -224,15 +244,15 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 // routesForVideoParameters removes only routes that cannot accept this request.
 // Callers must first apply capability, client-key, and Provider eligibility:
 // the same public model may aggregate Console, Build, and Web routes with
-// different input contracts.
-func (s *Service) routesForVideoParameters(routes []model.Route, operation provider.VideoOperation, resolution string, hasImage, hasLastFrame bool, referenceCount, duration int) ([]model.Route, error) {
+// different input contracts. options.UpstreamModel is filled per route.
+func (s *Service) routesForVideoParameters(routes []model.Route, options provider.VideoRequestOptions) ([]model.Route, error) {
 	if len(routes) == 0 {
 		return routes, nil
 	}
 	compatible := make([]model.Route, 0, len(routes))
 	var firstErr error
 	for _, candidate := range routes {
-		if err := s.validateVideoRouteParameters(candidate.Provider, operation, candidate.UpstreamModel, resolution, hasImage, hasLastFrame, referenceCount, duration); err != nil {
+		if err := s.validateVideoRouteParameters(candidate.Provider, candidate.UpstreamModel, options); err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -250,11 +270,9 @@ func (s *Service) routesForVideoParameters(routes []model.Route, operation provi
 // the request. /v1/videos/generations is asynchronous, so a request the
 // upstream must fail is rejected here instead of as a failed job; the adapter
 // keeps the same checks at its outbound boundary.
-func (s *Service) validateVideoRouteParameters(providerValue account.Provider, operation provider.VideoOperation, upstreamModel, resolution string, hasImage, hasLastFrame bool, referenceCount, duration int) error {
-	return s.providers.ValidateVideoRequest(providerValue, provider.VideoRequestOptions{
-		Operation: operation, UpstreamModel: upstreamModel, Resolution: resolution,
-		HasImage: hasImage, HasLastFrame: hasLastFrame, ReferenceImages: referenceCount, Duration: duration,
-	})
+func (s *Service) validateVideoRouteParameters(providerValue account.Provider, upstreamModel string, options provider.VideoRequestOptions) error {
+	options.UpstreamModel = upstreamModel
+	return s.providers.ValidateVideoRequest(providerValue, options)
 }
 
 // routesForVideoOperation keeps the routes whose provider serves an edit or extension.

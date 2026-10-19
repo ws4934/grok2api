@@ -17,8 +17,8 @@ import (
 
 var scope = egressdomain.Scope(account.ProviderAdobe)
 
-// RemoteImageFetcher 下载客户端给的 https 输入图（需自带 SSRF 防护）。
-type RemoteImageFetcher func(ctx context.Context, rawURL string) ([]byte, error)
+// RemoteFetcher 下载客户端给的 https 输入图或参考视频（需自带 SSRF 防护）。
+type RemoteFetcher func(ctx context.Context, rawURL string) ([]byte, error)
 
 // Adapter 提供 Adobe Firefly 的图像与视频生成能力。
 type Adapter struct {
@@ -27,7 +27,7 @@ type Adapter struct {
 	egress      *infraegress.Manager
 	cipher      *security.Cipher
 	assets      provider.ImageAssetStore
-	fetchRemote RemoteImageFetcher
+	fetchRemote RemoteFetcher
 	sherlock    *sherlockService
 	// catalog 是当前模型目录：启动时来自内嵌快照，之后由 RefreshCatalog 替换。
 	catalog atomic.Pointer[catalog]
@@ -35,8 +35,8 @@ type Adapter struct {
 }
 
 // NewAdapter 构造 Adobe Provider 适配器。assets 把生成的图像归档为网关可稳定
-// 读取的本地资源；fetchRemote 为 nil 时只接受 data URI 输入图。
-func NewAdapter(cfg Config, egress *infraegress.Manager, cipher *security.Cipher, assets provider.ImageAssetStore, fetchRemote RemoteImageFetcher) *Adapter {
+// 读取的本地资源；fetchRemote 为 nil 时只接受 data URI 输入。
+func NewAdapter(cfg Config, egress *infraegress.Manager, cipher *security.Cipher, assets provider.ImageAssetStore, fetchRemote RemoteFetcher) *Adapter {
 	a := &Adapter{cfg: cfg, egress: egress, cipher: cipher, assets: assets, fetchRemote: fetchRemote}
 	a.sherlock = newSherlockService(a.config)
 	a.catalog.Store(mustSnapshot())

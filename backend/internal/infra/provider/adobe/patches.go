@@ -35,7 +35,13 @@ type patch struct {
 	referenceDuration int    // 带参考图时强制的时长（Veo 3.1）
 	referenceAspect   string // 带参考图时强制的比例（Veo 3.1 只支持横屏参考生成）
 	noReferences      bool   // 官网不给该版本开参考图（Veo 3.1 Fast）
-	requireFrame      bool   // 只做图生视频，必须带首帧（schema 没标 minItems）
+	// referenceVideos：schema 的 video:source 在该模型上是生成参考（Seedance、Gemini Omni）；
+	// Luma 的源视频是"修改视频"（编辑），不当参考视频用。
+	referenceVideos bool
+	// maxReferenceBlobs 覆盖 schema 的参考素材总数上限；framesOutsidePool 表示首尾帧不计入。
+	maxReferenceBlobs int
+	framesOutsidePool bool
+	requireFrame      bool // 只做图生视频，必须带首帧（schema 没标 minItems）
 }
 
 type pixels struct{ width, height int }
@@ -114,16 +120,20 @@ var patches = map[string]patch{
 	"kling/kling_v3": {name: "Kling 3.0", seeds: true, keyframeGeneral: true, aspectInPayload: true, resolutionInPayload: true,
 		defaultDuration: 5, sizes: klingSizes},
 	"kling/kling_v3_omni": {name: "Kling 3.0 Omni", seeds: true, keyframeGeneral: true, aspectInPayload: true, resolutionInPayload: true,
-		computedAspect: true, styleUsage: "style", defaultDuration: 5, sizes: klingSizes},
+		computedAspect: true, styleUsage: "style", defaultDuration: 5, sizes: klingSizes, maxReferenceBlobs: 4, framesOutsidePool: true},
 
 	"seedance/seedance_2.0": {seeds: true, styleUsage: "style", computedAspect: true, resolutions: []string{"480p", "720p", "1080p"},
+		referenceVideos: true, framesOutsidePool: true,
 		extraSizes: append(append(append([]pixels{}, seedance480...), seedance720...), px(2520, 1080, 1920, 1080, 1440, 1080, 1080, 1080, 1080, 1440, 1080, 1920)...)},
 	"seedance/seedance_2.0_fast": {seeds: true, styleUsage: "style", computedAspect: true, resolutions: []string{"480p", "720p"},
+		referenceVideos: true, framesOutsidePool: true,
 		extraSizes: append(append([]pixels{}, seedance480...), seedance720...)},
-	"seedance/seedance_2.5": {seeds: true, styleUsage: "style", explicitAuto: true, resolutionInPayload: true, autoWithFrame: true},
+	"seedance/seedance_2.5": {seeds: true, styleUsage: "style", explicitAuto: true, resolutionInPayload: true, autoWithFrame: true,
+		referenceVideos: true, framesOutsidePool: true},
 
-	"gemini-omni/omni-flash":     {seeds: true, styleUsage: "style", defaultDuration: 8},
-	"gemini-omni/omni-flash-1.1": {seeds: true, defaultDuration: 8},
+	"gemini-omni/omni-flash": {seeds: true, styleUsage: "style", defaultDuration: 8,
+		referenceVideos: true, maxReferenceBlobs: 4, framesOutsidePool: true},
+	"gemini-omni/omni-flash-1.1": {seeds: true, defaultDuration: 8, referenceVideos: true},
 
 	"luma/2.0-ray":       lumaRay,
 	"luma/2.0-ray-flash": lumaRay,

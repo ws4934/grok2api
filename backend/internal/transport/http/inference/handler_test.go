@@ -1961,3 +1961,31 @@ func TestLastFrameRequestValidation(t *testing.T) {
 		t.Fatalf("valid first+last frame status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestReferenceVideoRequestValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{maxBodyBytes: 1 << 20}
+	router := gin.New()
+	handler.Register(router.Group("/v1"))
+	post := func(path, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		return recorder
+	}
+	if rec := post("/v1/videos/generations", `{"model":"adobe/seedance-2.0","reference_videos":[{"url":"https://example.com/a.mp4"}]}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "prompt") {
+		t.Fatalf("reference video without prompt status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	many := strings.Repeat(`{"url":"https://example.com/a.mp4"},`, mediadomain.MaxReferenceVideos) + `{"url":"https://example.com/a.mp4"}`
+	if rec := post("/v1/videos/generations", `{"model":"adobe/seedance-2.0","prompt":"x","reference_videos":[`+many+`]}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "reference_videos") {
+		t.Fatalf("too many reference videos status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := post("/v1/videos/edits", `{"model":"grok-imagine-video","prompt":"x","video":{"url":"https://example.com/v.mp4"},"reference_videos":[{"url":"https://example.com/a.mp4"}]}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "reference_videos") {
+		t.Fatalf("edit with reference videos status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// 首帧 + 参考视频允许（Seedance/Omni 的首帧不占参考素材池）；参数合法时进入鉴权 → 401。
+	if rec := post("/v1/videos/generations", `{"model":"adobe/seedance-2.0","prompt":"x","image":{"url":"https://example.com/a.png"},"reference_videos":[{"file_id":"input_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}]}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("valid reference video status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

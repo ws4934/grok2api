@@ -239,7 +239,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	chatgptAdapter := chatgpt.NewAdapter(chatgptProviderConfig(cfg), egressManager, cipher, mediaService)
 	chatgptAdapter.SetLogger(logger)
 	egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(cfg))
-	adobeAdapter := adobe.NewAdapter(adobeProviderConfig(cfg), egressManager, cipher, mediaService, mediatransport.FetchRemoteImage)
+	adobeAdapter := adobe.NewAdapter(adobeProviderConfig(cfg), egressManager, cipher, mediaService, mediatransport.FetchRemoteMedia)
 	adobeAdapter.SetLogger(logger)
 	providers := provider.NewRegistry(cliAdapter, webAdapter, consoleAdapter, chatgptAdapter, adobeAdapter)
 	if err := providers.Validate(); err != nil {

@@ -1759,6 +1759,12 @@ const docTemplate = `{
                         "$ref": "#/definitions/httpserver.SwaggerVideoMediaInput"
                     }
                 },
+                "reference_videos": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpserver.SwaggerVideoMediaInput"
+                    }
+                },
                 "resolution": {
                     "type": "string",
                     "example": "720p"

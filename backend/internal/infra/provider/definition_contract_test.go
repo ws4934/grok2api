@@ -92,7 +92,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			capabilities: []modeldomain.Capability{modeldomain.CapabilityImage, modeldomain.CapabilityImageEdit, modeldomain.CapabilityVideo},
 			credential:   provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true},
 			conversation: provider.ConversationSurface{},
-			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true, VideoLastFrame: true},
+			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true, VideoLastFrame: true, VideoReferenceVideos: true},
 			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated},
 		},
 	}
@@ -143,7 +143,7 @@ func TestProviderDefinitionRejectsInconsistentMediaCapability(t *testing.T) {
 	}
 }
 
-// 尾帧只交给声明了 Media.VideoLastFrame 的 Provider；其余渠道在注册表层直接拒绝。
+// 尾帧与参考视频只交给声明了对应 Media 能力的 Provider；其余渠道在注册表层直接拒绝。
 func TestRegistryRejectsLastFrameForProvidersWithoutSupport(t *testing.T) {
 	registry := provider.NewRegistry(
 		webprovider.NewAdapter(webprovider.Config{}, nil, nil, nil, nil),
@@ -156,5 +156,14 @@ func TestRegistryRejectsLastFrameForProvidersWithoutSupport(t *testing.T) {
 	options.UpstreamModel = "veo/3.1-generate"
 	if err := registry.ValidateVideoRequest(account.ProviderAdobe, options); err != nil {
 		t.Fatalf("adobe veo last frame err = %v", err)
+	}
+
+	clips := provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: "grok-imagine-video", ReferenceVideos: 1, Duration: 6, Resolution: "720p"}
+	if err := registry.ValidateVideoRequest(account.ProviderWeb, clips); !errors.Is(err, provider.ErrVideoParameterInvalid) {
+		t.Fatalf("web reference videos err = %v", err)
+	}
+	clips.UpstreamModel = "seedance/seedance_2.0"
+	if err := registry.ValidateVideoRequest(account.ProviderAdobe, clips); err != nil {
+		t.Fatalf("adobe seedance reference videos err = %v", err)
 	}
 }

@@ -76,6 +76,9 @@ type MediaSurface struct {
 	// VideoLastFrame: video generation accepts a last-frame image next to the
 	// first frame; the registry rejects last frames for every other provider.
 	VideoLastFrame bool
+	// VideoReferenceVideos: video generation accepts reference videos; the
+	// registry rejects them for every other provider.
+	VideoReferenceVideos bool
 }
 
 // CredentialSurface 描述号池凭据的接入和维护方式。

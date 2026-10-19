@@ -39,6 +39,7 @@ type videoGenerationRequest struct {
 	LastFrame       *videoGenerationImage  `json:"last_frame"`
 	ReferenceImages []videoGenerationImage `json:"reference_images"`
 	ReferenceAudios []videoGenerationAudio `json:"reference_audios"`
+	ReferenceVideos []videoGenerationImage `json:"reference_videos"`
 	Video           *videoGenerationImage  `json:"video"`
 	Output          json.RawMessage        `json:"output"`
 	StorageOptions  json.RawMessage        `json:"storage_options"`
@@ -111,6 +112,7 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 	lastFrameURL := ""
 	referenceURLs := []string{}
 	referenceAudios := []string{}
+	referenceVideoURLs := []string{}
 	videoURL := ""
 
 	if operation == gatewayVideoOperationGenerate {
@@ -183,6 +185,21 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("reference_images 不能超过 %d 张", mediadomain.MaxInputImages))
 			return
 		}
+		if len(request.ReferenceVideos) > mediadomain.MaxReferenceVideos {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("reference_videos 不能超过 %d 个", mediadomain.MaxReferenceVideos))
+			return
+		}
+		for _, input := range request.ReferenceVideos {
+			value, ok := parseVideoImage(input, "reference_videos")
+			if !ok {
+				return
+			}
+			referenceVideoURLs = append(referenceVideoURLs, value)
+		}
+		if len(referenceVideoURLs) > 0 && prompt == "" {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "参考视频生成必须提供 prompt")
+			return
+		}
 		hasReferenceMode := len(referenceURLs) > 0 || len(referenceAudios) > 0
 		if hasReferenceMode {
 			if prompt == "" {
@@ -216,8 +233,8 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 			return
 		}
 		videoURL = value
-		if request.Image != nil || request.LastFrame != nil || len(request.ReferenceImages) > 0 || len(request.ReferenceAudios) > 0 {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"不支持 image、last_frame、reference_images 或 reference_audios")
+		if request.Image != nil || request.LastFrame != nil || len(request.ReferenceImages) > 0 || len(request.ReferenceAudios) > 0 || len(request.ReferenceVideos) > 0 {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"不支持 image、last_frame、reference_images、reference_videos 或 reference_audios")
 			return
 		}
 		if strings.TrimSpace(request.AspectRatio) != "" || strings.TrimSpace(request.Resolution) != "" {
@@ -265,7 +282,8 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 		RequestID: requestID, ClientKey: clientKey, PublicModel: model,
 		Operation: op,
 		Prompt:    prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
-		ImageURL: imageURL, LastFrameURL: lastFrameURL, ReferenceURLs: referenceURLs, ReferenceAudios: referenceAudios, VideoURL: videoURL,
+		ImageURL: imageURL, LastFrameURL: lastFrameURL, ReferenceURLs: referenceURLs, ReferenceVideoURLs: referenceVideoURLs,
+		ReferenceAudios: referenceAudios, VideoURL: videoURL,
 	})
 	if err != nil {
 		writeGatewayError(c, err)

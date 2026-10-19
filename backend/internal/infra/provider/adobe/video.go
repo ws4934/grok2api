@@ -29,15 +29,15 @@ func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) err
 	if !ok || !v.video {
 		return fmt.Errorf("%w: 未知的 Adobe 视频模型 %s", provider.ErrVideoParameterInvalid, options.UpstreamModel)
 	}
-	if err := v.checkVideoInputs(options.HasImage, options.HasLastFrame, options.ReferenceImages); err != nil {
+	if err := v.checkVideoInputs(options.HasImage, options.HasLastFrame, options.ReferenceImages, options.ReferenceVideos); err != nil {
 		return fmt.Errorf("%w: %s", provider.ErrVideoParameterInvalid, err.Error())
 	}
 	return nil
 }
 
-// checkVideoInputs 按 schema 的 x-capabilities 检查首帧、尾帧与参考图。首尾帧共用
-// frame 用途，上限 2 的模型才收尾帧。
-func (v *modelVersion) checkVideoInputs(hasFrame, hasLastFrame bool, references int) error {
+// checkVideoInputs 按 schema 的 x-capabilities 检查首帧、尾帧、参考图与参考视频。首尾帧
+// 共用 frame 用途，上限 2 的模型才收尾帧；参考素材另受总数上限约束。
+func (v *modelVersion) checkVideoInputs(hasFrame, hasLastFrame bool, references, videos int) error {
 	frame, frameOK := v.refs["image:frame"]
 	switch {
 	case hasFrame && !frameOK:
@@ -54,6 +54,24 @@ func (v *modelVersion) checkVideoInputs(hasFrame, hasLastFrame bool, references 
 		}
 		if limit > 0 && references > limit {
 			return &requestError{msg: fmt.Sprintf("%s 最多支持 %d 张参考图", v.slug, limit)}
+		}
+	}
+	if videos > 0 {
+		limit, ok := v.refs["video:source"]
+		if !ok || !v.patch.referenceVideos {
+			return &requestError{msg: v.slug + " 不支持 reference_videos"}
+		}
+		if limit.max > 0 && videos > limit.max {
+			return &requestError{msg: fmt.Sprintf("%s 最多支持 %d 个参考视频", v.slug, limit.max)}
+		}
+	}
+	if limit := v.referenceBlobLimit(); limit > 0 {
+		total := references + videos
+		if !v.patch.framesOutsidePool {
+			total += boolCount(hasFrame) + boolCount(hasLastFrame)
+		}
+		if total > limit {
+			return &requestError{msg: fmt.Sprintf("%s 最多支持 %d 个参考素材（参考图、参考视频与首尾帧合计）", v.slug, limit)}
 		}
 	}
 	return nil
@@ -77,7 +95,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, &requestError{msg: "未知的 Adobe 视频模型：" + request.Model})
 		}
 		hasFrame := strings.TrimSpace(request.ImageURL) != ""
-		if err := found.checkVideoInputs(hasFrame, strings.TrimSpace(request.LastFrameURL) != "", len(request.ReferenceURLs)); err != nil {
+		if err := found.checkVideoInputs(hasFrame, strings.TrimSpace(request.LastFrameURL) != "", len(request.ReferenceURLs), len(request.ReferenceVideoURLs)); err != nil {
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 		}
 		v = found
@@ -113,25 +131,26 @@ func (a *Adapter) createVideo(ctx context.Context, c *client, v *modelVersion, r
 	}
 	in := v.videoPlan(request.Prompt, request.AspectRatio, request.Resolution, request.Duration, strings.TrimSpace(request.ImageURL) != "", len(request.ReferenceURLs) > 0)
 	// 首帧 order 1、尾帧 order 2（官网 keyFrames 的顺序）。
-	for _, ref := range []string{request.ImageURL, request.LastFrameURL} {
-		if strings.TrimSpace(ref) == "" {
-			continue
-		}
-		id, err := a.uploadImage(ctx, c, ref)
-		if err != nil {
-			return "", preSubmitFailure(err)
-		}
-		in.frames = append(in.frames, id)
+	uploads := []struct {
+		refs []string
+		kind string
+		ids  *[]string
+	}{
+		{[]string{request.ImageURL, request.LastFrameURL}, "image", &in.frames},
+		{request.ReferenceURLs, "image", &in.references},
+		{request.ReferenceVideoURLs, "video", &in.videos},
 	}
-	for _, ref := range request.ReferenceURLs {
-		if strings.TrimSpace(ref) == "" {
-			continue
+	for _, group := range uploads {
+		for _, ref := range group.refs {
+			if strings.TrimSpace(ref) == "" {
+				continue
+			}
+			id, err := a.uploadInput(ctx, c, v, ref, group.kind)
+			if err != nil {
+				return "", preSubmitFailure(err)
+			}
+			*group.ids = append(*group.ids, id)
 		}
-		id, err := a.uploadImage(ctx, c, ref)
-		if err != nil {
-			return "", preSubmitFailure(err)
-		}
-		in.references = append(in.references, id)
 	}
 	if err := a.useSherlock(ctx, c); err != nil {
 		return "", preSubmitFailure(err)

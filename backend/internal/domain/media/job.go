@@ -39,6 +39,9 @@ const MaxInputJSONBytes = 32 << 20
 // MaxInputImages is the maximum number of reference images accepted for a video job.
 const MaxInputImages = 8
 
+// MaxReferenceVideos is the maximum number of reference videos accepted for a video job.
+const MaxReferenceVideos = 10
+
 // MaxInputAssetBytes limits each temporary image or video input to 20 MiB.
 const MaxInputAssetBytes = 20 << 20
 

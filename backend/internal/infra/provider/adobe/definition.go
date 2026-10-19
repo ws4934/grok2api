@@ -33,7 +33,7 @@ func (a *Adapter) Definition() provider.Definition {
 		},
 		Media: provider.MediaSurface{
 			ImageGeneration: true, ImageEdit: true, VideoGeneration: true,
-			ImageGenerationModelPriced: true, VideoLastFrame: true,
+			ImageGenerationModelPriced: true, VideoLastFrame: true, VideoReferenceVideos: true,
 		},
 		Inference: provider.InferencePolicy{Usage: provider.UsageEstimated},
 	}

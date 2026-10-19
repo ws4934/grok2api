@@ -180,6 +180,12 @@ func isImportRedirect(status int) bool {
 // fetchRemoteImage 抓取远端图片字节，读取上限 ingestMaxImageBytes，超限返回 errImageTooLarge。
 // 目标地址被 SSRF 防护拒绝时返回 errFetchBlocked。
 func fetchRemoteImage(ctx context.Context, rawURL string) ([]byte, error) {
+	return fetchRemote(ctx, rawURL, "image/*")
+}
+
+// fetchRemote 带 SSRF 防护地下载一个公网 URL（每一跳都解析、校验并固定 IP），大小受
+// ingestMaxImageBytes 限制。
+func fetchRemote(ctx context.Context, rawURL, accept string) ([]byte, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || !isValidRedirectURL(parsed) {
 		return nil, errFetchBlocked
@@ -197,7 +203,7 @@ func fetchRemoteImage(ctx context.Context, rawURL string) ([]byte, error) {
 			return nil, err
 		}
 		req.Host = target.hostHeader
-		req.Header.Set("Accept", "image/*")
+		req.Header.Set("Accept", accept)
 		req.Header.Set("User-Agent", "grok2api-media-importer/1.0")
 
 		client, transport := newIngestHTTPClient(target)
@@ -398,7 +404,8 @@ func (h *Handler) acquireIngest(c *gin.Context) bool {
 
 func (h *Handler) releaseIngest() { <-h.ingestSlots }
 
-// FetchRemoteImage shares the existing DNS-pinned import checks with channel inputs.
-func FetchRemoteImage(ctx context.Context, rawURL string) ([]byte, error) {
-	return fetchRemoteImage(ctx, rawURL)
+// FetchRemoteMedia shares the DNS-pinned import checks with provider inputs
+// (images and reference videos up to the input asset size limit).
+func FetchRemoteMedia(ctx context.Context, rawURL string) ([]byte, error) {
+	return fetchRemote(ctx, rawURL, "image/*, video/*")
 }

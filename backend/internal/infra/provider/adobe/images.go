@@ -70,7 +70,7 @@ func (a *Adapter) runSyncImage(ctx context.Context, credential account.Credentia
 	var delivered int
 	accepted := false
 	err := a.withClient(ctx, credential, func(ctx context.Context, c *client) error {
-		if err := a.prepareImage(ctx, c, &in, imageURLs, maskURL); err != nil {
+		if err := a.prepareImage(ctx, c, v, &in, imageURLs, maskURL); err != nil {
 			return err
 		}
 		sub, err := a.submit(ctx, c, func() (submission, error) {
@@ -144,7 +144,7 @@ func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequ
 		return cp, err
 	}
 	err = a.withClient(ctx, request.Credential, func(ctx context.Context, c *client) error {
-		if err := a.prepareImage(ctx, c, &in, request.ImageURLs, request.MaskURL); err != nil {
+		if err := a.prepareImage(ctx, c, v, &in, request.ImageURLs, request.MaskURL); err != nil {
 			return err
 		}
 		// 不可逆的提交发生前先落盘 Submitted 标记。
@@ -205,19 +205,19 @@ func (a *Adapter) ImageUsage(prompt string, inputImages int, quality string, out
 
 // prepareImage 完成不可逆提交之前的全部步骤：检查 token、上传输入图与蒙版、
 // 取全局 x-arp-session-id。这里的失败都不会在 Adobe 生成任何东西。
-func (a *Adapter) prepareImage(ctx context.Context, c *client, in *genInput, imageURLs []string, maskURL string) error {
+func (a *Adapter) prepareImage(ctx context.Context, c *client, v *modelVersion, in *genInput, imageURLs []string, maskURL string) error {
 	if c.rc.token == "" {
 		return errNoToken
 	}
 	for _, ref := range imageURLs {
-		id, err := a.uploadImage(ctx, c, ref)
+		id, err := a.uploadInput(ctx, c, v, ref, "image")
 		if err != nil {
 			return err
 		}
 		in.references = append(in.references, id)
 	}
 	if strings.TrimSpace(maskURL) != "" {
-		id, err := a.uploadImage(ctx, c, maskURL)
+		id, err := a.uploadInput(ctx, c, v, maskURL, "image")
 		if err != nil {
 			return err
 		}
@@ -226,25 +226,41 @@ func (a *Adapter) prepareImage(ctx context.Context, c *client, in *genInput, ima
 	return a.useSherlock(ctx, c)
 }
 
-// uploadImage 读取客户端给的输入图并上传到 Adobe 存储，返回 asset id。
-func (a *Adapter) uploadImage(ctx context.Context, c *client, ref string) (string, error) {
-	data, mime, err := a.inputImage(ctx, ref)
+// uploadInput 读取客户端给的输入（kind 为 "image" 或 "video"），按 schema 的单文件
+// 上限检查后上传到 Adobe 存储，返回 asset id。
+func (a *Adapter) uploadInput(ctx context.Context, c *client, v *modelVersion, ref, kind string) (string, error) {
+	data, mime, err := a.readInput(ctx, ref, kind)
 	if err != nil {
 		return "", err
 	}
-	return c.upload(ctx, endpoints.imageUpload, data, mime, "image")
+	if limit := v.fileBytes[kind]; limit > 0 && int64(len(data)) > limit {
+		return "", &requestError{msg: fmt.Sprintf("%s 的%s不能超过 %d MB", v.slug, inputLabel(kind), limit>>20)}
+	}
+	uploadURL := endpoints.imageUpload
+	if kind == "video" {
+		uploadURL = endpoints.videoUpload
+	}
+	return c.upload(ctx, uploadURL, data, mime, kind)
 }
 
-// inputImage 读取 data URI 或 https 输入图。https 只经带 SSRF 防护的 fetchRemote
-// 下载，绝不通过账号出口去访问客户端指定的地址。输入有问题是请求本身的错。
-func (a *Adapter) inputImage(ctx context.Context, ref string) ([]byte, string, error) {
+func inputLabel(kind string) string {
+	if kind == "video" {
+		return "参考视频"
+	}
+	return "输入图片"
+}
+
+// readInput 读取 data URI 或 https 输入。https 只经带 SSRF 防护的 fetchRemote 下载，
+// 绝不通过账号出口去访问客户端指定的地址。输入有问题是请求本身的错。
+func (a *Adapter) readInput(ctx context.Context, ref, kind string) ([]byte, string, error) {
+	label := inputLabel(kind)
 	ref = strings.TrimSpace(ref)
 	var data []byte
 	switch meta, payload, _ := strings.Cut(ref, ","); {
 	case strings.HasPrefix(meta, "data:") && strings.HasSuffix(meta, ";base64"):
 		raw, err := base64.StdEncoding.DecodeString(payload)
 		if err != nil {
-			return nil, "", &requestError{msg: "输入图片的 data URI 不是有效的 Base64"}
+			return nil, "", &requestError{msg: label + "的 data URI 不是有效的 Base64"}
 		}
 		data = raw
 	case strings.HasPrefix(ref, "https://") && a.fetchRemote != nil:
@@ -253,19 +269,39 @@ func (a *Adapter) inputImage(ctx context.Context, ref string) ([]byte, string, e
 			if ctx.Err() != nil {
 				return nil, "", ctx.Err()
 			}
-			return nil, "", &requestError{msg: "无法下载输入图片（需可公网访问的 https 地址）"}
+			return nil, "", &requestError{msg: "无法下载" + label + "（需可公网访问的 https 地址）"}
 		}
 		data = raw
 	default:
-		return nil, "", &requestError{msg: "输入图片必须是 Base64 data URI 或 https URL"}
+		return nil, "", &requestError{msg: label + "必须是 Base64 data URI 或 https URL"}
 	}
-	mime := http.DetectContentType(data)
-	switch mime {
+	if kind == "video" {
+		if mime := videoMIME(data); mime != "" {
+			return data, mime, nil
+		}
+		return nil, "", &requestError{msg: "参考视频只支持 MP4、WebM 或 QuickTime"}
+	}
+	switch mime := http.DetectContentType(data); mime {
 	case "image/png", "image/jpeg", "image/webp":
 		return data, mime, nil
-	default:
-		return nil, "", &requestError{msg: "输入图片只支持 PNG、JPEG 或 WebP"}
 	}
+	return nil, "", &requestError{msg: "输入图片只支持 PNG、JPEG 或 WebP"}
+}
+
+// videoMIME 识别视频格式：MP4/WebM 用标准嗅探；没有 mp4 品牌的 ISO BMFF 看 ftyp 盒，
+// 品牌 "qt" 是 QuickTime。
+func videoMIME(data []byte) string {
+	switch sniffed := http.DetectContentType(data); sniffed {
+	case "video/mp4", "video/webm":
+		return sniffed
+	}
+	if len(data) >= 12 && string(data[4:8]) == "ftyp" {
+		if string(data[8:10]) == "qt" {
+			return "video/quicktime"
+		}
+		return "video/mp4"
+	}
+	return ""
 }
 
 func jsonResponse(status int, body any) *provider.Response {

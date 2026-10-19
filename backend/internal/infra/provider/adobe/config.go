@@ -26,10 +26,12 @@ var endpoints = struct {
 	imageSubmit string
 	videoSubmit string
 	imageUpload string
+	videoUpload string
 }{
 	imageSubmit: "https://firefly-3p.ff.adobe.io/v2/3p-images/generate-async",
 	videoSubmit: "https://firefly-3p.ff.adobe.io/v2/3p-videos/generate-async",
 	imageUpload: "https://firefly-3p.ff.adobe.io/v2/storage/image",
+	videoUpload: "https://firefly-3p.ff.adobe.io/v2/storage/video",
 }
 
 // Config 保存适配器每次请求读取的 Adobe 运行时设置。

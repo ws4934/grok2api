@@ -19,8 +19,9 @@ type genInput struct {
 	quality     string
 	transparent bool
 	duration    int
-	frames      []string // 首帧（视频）
+	frames      []string // 首帧、尾帧（视频）
 	references  []string // 参考图 / 编辑输入图
+	videos      []string // 参考视频
 	mask        string
 	sizeHint    pixels // 无比例选项、只给尺寸范围的模型直接用客户端尺寸
 }
@@ -167,6 +168,14 @@ func (v *modelVersion) referenceUsage() (string, int) {
 		}
 	}
 	return "", 0
+}
+
+// referenceBlobLimit 是参考素材的总数上限：补丁优先，否则 schema 的 referenceBlobs.maxItems。
+func (v *modelVersion) referenceBlobLimit() int {
+	if v.patch.maxReferenceBlobs > 0 {
+		return v.patch.maxReferenceBlobs
+	}
+	return v.maxBlobs
 }
 
 // requiresImageInput 报告模型是否必须带输入图（例如 Flux Fill）。
@@ -519,6 +528,9 @@ func (v *modelVersion) referenceBlobs(in genInput) []any {
 	for _, id := range in.references {
 		refs = append(refs, map[string]any{"id": id, "usage": usage})
 	}
+	for _, id := range in.videos {
+		refs = append(refs, map[string]any{"id": id, "usage": "source"})
+	}
 	if in.mask != "" {
 		refs = append(refs, map[string]any{"id": in.mask, "usage": "mask"})
 	}
@@ -559,6 +571,9 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 	}
 	if _, ok := v.refs["image:mask"]; mask && !ok {
 		return in, &requestError{msg: v.slug + " 不支持 mask"}
+	}
+	if limit := v.referenceBlobLimit(); limit > 0 && inputs+boolCount(mask) > limit {
+		return in, &requestError{msg: fmt.Sprintf("%s 最多支持 %d 张输入图（含 mask）", v.slug, limit)}
 	}
 	if strings.EqualFold(strings.TrimSpace(background), "transparent") {
 		if _, ok := nested(v.props, "generationSettings", "transparentBackground"); !ok {
@@ -665,4 +680,11 @@ func findFold(options []string, value string) (string, bool) {
 
 func withoutAuto(options []string) []string {
 	return slices.DeleteFunc(slices.Clone(options), isAuto)
+}
+
+func boolCount(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

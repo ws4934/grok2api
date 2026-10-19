@@ -5,9 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -244,6 +246,10 @@ type fakeAdobe struct {
 	submitStatus int
 	submits      atomic.Int32
 	mintDown     bool
+
+	mu        sync.Mutex
+	uploads   []string       // 上传路径与 Content-Type
+	videoBody map[string]any // 最近一次视频提交的请求体
 }
 
 func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
@@ -269,14 +275,32 @@ func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "succeeded", "outputs": []any{map[string]any{"image": map[string]any{"presignedUrl": "http://" + r.Host + "/out.png"}}}})
 		case r.URL.Path == "/out.png":
 			_, _ = w.Write([]byte("PNGDATA"))
+		case strings.HasPrefix(r.URL.Path, "/storage/"):
+			fake.mu.Lock()
+			fake.uploads = append(fake.uploads, r.URL.Path+" "+r.Header.Get("Content-Type"))
+			n := len(fake.uploads)
+			fake.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": fmt.Sprintf("asset%d", n)})
+		case r.URL.Path == "/generate-video":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			fake.mu.Lock()
+			fake.videoBody = body
+			fake.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"links": map[string]any{"result": "http://" + r.Host + "/status/video1"}})
+		case r.URL.Path == "/status/video1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "succeeded", "outputs": []any{map[string]any{"video": map[string]any{"presignedUrl": "http://" + r.Host + "/out.mp4"}}}})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	t.Cleanup(fake.Close)
-	previous := endpoints.imageSubmit
+	previous := endpoints
 	endpoints.imageSubmit = fake.URL + "/generate-async"
-	t.Cleanup(func() { endpoints.imageSubmit = previous })
+	endpoints.videoSubmit = fake.URL + "/generate-video"
+	endpoints.imageUpload = fake.URL + "/storage/image"
+	endpoints.videoUpload = fake.URL + "/storage/video"
+	t.Cleanup(func() { endpoints = previous })
 	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
 	if err != nil {
 		t.Fatal(err)
@@ -601,7 +625,7 @@ func TestOfficialConstraintsFromReview(t *testing.T) {
 	if usage, _ := mustVersion(t, "flux-1.1-pro").referenceUsage(); usage != "style" {
 		t.Errorf("flux-1.1-pro reference usage = %q, want style", usage)
 	}
-	if err := mustVersion(t, "veo-3.1-fast").checkVideoInputs(false, false, 1); err == nil {
+	if err := mustVersion(t, "veo-3.1-fast").checkVideoInputs(false, false, 1, 0); err == nil {
 		t.Error("veo-3.1-fast accepted reference images")
 	}
 	if in := mustVersion(t, "veo-3.1").videoPlan("x", "9:16", "720p", 4, false, true); in.aspect != "16:9" || in.duration != 8 {
@@ -668,7 +692,7 @@ func intOf2(v any) int {
 // 尾帧：frame 上限 ≥2 的模型才收，作为 order 2 的 frame 发送。
 func TestVideoLastFrame(t *testing.T) {
 	for slug, ok := range map[string]bool{"veo-3.1": true, "veo-3.1-lite": true, "kling-3.0": true, "seedance-2.0": true, "gemini-omni-flash": false, "runway-gen-4.5": false} {
-		if err := mustVersion(t, slug).checkVideoInputs(true, true, 0); (err == nil) != ok {
+		if err := mustVersion(t, slug).checkVideoInputs(true, true, 0, 0); (err == nil) != ok {
 			t.Errorf("%s last frame accepted = %v, want %v (%v)", slug, err == nil, ok, err)
 		}
 	}
@@ -678,5 +702,80 @@ func TestVideoLastFrame(t *testing.T) {
 	refs, _ := veo.buildBody(in)["referenceBlobs"].([]any)
 	if len(refs) != 2 || get(refs[1].(map[string]any), "order") != 2 || get(refs[1].(map[string]any), "usage") != "frame" {
 		t.Fatalf("frames = %v", refs)
+	}
+}
+
+// mp4Header 是一个最小的 MP4 ftyp 盒（isom 主品牌，兼容 mp41），后面补些数据。
+func mp4Header() []byte {
+	box := []byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm', 0, 0, 2, 0, 'i', 's', 'o', 'm', 'm', 'p', '4', '1'}
+	return append(box, make([]byte, 64)...)
+}
+
+func TestVideoMIME(t *testing.T) {
+	quicktime := append([]byte{0, 0, 0, 20, 'f', 't', 'y', 'p', 'q', 't', ' ', ' ', 0, 0, 0, 0, 'q', 't', ' ', ' '}, make([]byte, 32)...)
+	for name, tc := range map[string]struct {
+		data []byte
+		want string
+	}{
+		"mp4": {mp4Header(), "video/mp4"}, "quicktime": {quicktime, "video/quicktime"}, "png": {[]byte("\x89PNG\r\n\x1a\n0000"), ""},
+	} {
+		if got := videoMIME(tc.data); got != tc.want {
+			t.Errorf("%s: videoMIME = %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// 参考视频：只有 schema 带 video:source 且补丁确认是生成参考的模型接受，按数量上限与
+// 参考素材总数上限校验。
+func TestReferenceVideoLimits(t *testing.T) {
+	cases := []struct {
+		slug        string
+		frame       bool
+		refs, clips int
+		ok          bool
+	}{
+		{"seedance-2.0", false, 0, 3, true},
+		{"seedance-2.0", false, 0, 4, false},
+		{"seedance-2.0", true, 0, 3, true}, // 首帧不计入 Seedance 的参考素材池
+		{"seedance-2.5", false, 9, 10, true},
+		{"gemini-omni-flash", false, 3, 1, true},
+		{"gemini-omni-flash", false, 4, 1, false}, // 官网总数上限 4
+		{"gemini-omni-flash", false, 0, 2, false},
+		{"gemini-omni-flash-1.1", true, 8, 2, false}, // schema 总数上限 10，首帧计入
+		{"veo-3.1", false, 0, 1, false},
+		{"ray3", false, 0, 1, false}, // Luma 的源视频是编辑用途
+	}
+	for _, tc := range cases {
+		err := mustVersion(t, tc.slug).checkVideoInputs(tc.frame, false, tc.refs, tc.clips)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s frame=%v refs=%d videos=%d: err=%v, want ok=%v", tc.slug, tc.frame, tc.refs, tc.clips, err, tc.ok)
+		}
+	}
+}
+
+// 端到端：参考视频上传到 /v2/storage/video，并以 source 用途进入提交的请求体。
+func TestGenerateVideoUploadsReferenceVideos(t *testing.T) {
+	previous := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = previous })
+	fake, adapter, credential := newFakeAdobe(t)
+	clip := "data:video/mp4;base64," + base64.StdEncoding.EncodeToString(mp4Header())
+	upstream := mustVersion(t, "seedance-2.0").upstream()
+	result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Model: upstream, Prompt: "dance like the clip", Duration: 5, AspectRatio: "16:9", Resolution: "720p",
+		ReferenceVideoURLs: []string{clip},
+	})
+	if err != nil || !strings.HasSuffix(result.URL, "/out.mp4") {
+		t.Fatalf("GenerateVideo = %+v, %v", result, err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.uploads) != 1 || fake.uploads[0] != "/storage/video video/mp4" {
+		t.Fatalf("uploads = %v", fake.uploads)
+	}
+	refs, _ := fake.videoBody["referenceBlobs"].([]any)
+	if len(refs) != 1 || get(refs[0].(map[string]any), "usage") != "source" || get(refs[0].(map[string]any), "id") != "asset1" ||
+		fake.videoBody["modelVersion"] != "seedance_2.0" {
+		t.Fatalf("submitted body = %v", fake.videoBody)
 	}
 }
