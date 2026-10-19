@@ -179,131 +179,161 @@ func (a *responseAttempt) discardFallback(recordDegraded bool) {
 	a.fallback = nil
 }
 
-// handOff wraps a delivered upstream response in a Result whose Finalize
-// releases the lease and writes health, ownership, quota and audit state once.
+// responseHandoff is a delivered upstream response whose lease, health,
+// ownership, quota and audit state are settled once when it finishes.
+type responseHandoff struct {
+	a                 *responseAttempt
+	response          *provider.Response
+	lease             *accountLease
+	credential        accountdomain.Credential
+	accountID         uint64
+	upstreamStartedAt time.Time
+	once              sync.Once
+}
+
+// handOff wraps a delivered upstream response in a Result. Generation timing
+// is finished by the Result's Finalize from here on.
 func (a *responseAttempt) handOff(response *provider.Response, lease *accountLease, credential accountdomain.Credential, upstreamStartedAt time.Time) *Result {
-	s, input, route, operation, timing := a.s, a.input, a.route, a.operation, a.timing
-	accountID := credential.ID
-	var once sync.Once
-	finalize := func(usage Usage, responseID, errorCode string) {
-		once.Do(func() {
-			// HTTP 状态码保留线上真实值；流在 2xx 响应头之后失败时由 errorCode
-			// 决定最终结果，避免把协议状态与业务结果混为一谈。
-			successful := auditRequestSucceeded(response.StatusCode, errorCode)
-			lease.completeSelectorObservation(successful)
-			budget := newFinalizationBudget(string(operation), string(route.Provider))
-			if isUpstreamStreamFailure(errorCode) {
-				status, retryAfter := streamFailureHealthPenalty(errorCode, usage, s.qualityRetryConfig().IdleAccountCooldown)
-				if err := budget.run("account_health", finalizationHealthBudget, func(stageCtx context.Context) error {
-					return s.selector.MarkFailureAfterSuccess(stageCtx, credential, status, retryAfter)
-				}); err != nil {
-					s.logger.Warn("stream_failure_health_write_failed", "account_id", credential.ID, "provider", credential.Provider, "error", err)
-				}
-			}
-			lease.Release()
-			now := time.Now().UTC()
-			record := a.auditBase
-			if usage.Reported {
-				record.UsageSource = a.usageSource
-			}
-			record.AccountID = &accountID
-			record.AccountName = credential.Name
-			record.StatusCode = response.StatusCode
-			record.InputTokens = usage.InputTokens
-			record.CachedInputTokens = usage.CachedInputTokens
-			record.OutputTokens = usage.OutputTokens
-			record.ReasoningTokens = usage.ReasoningTokens
-			record.TotalTokens = usage.TotalTokens
-			record.CostInUSDTicks = usage.CostInUSDTicks
-			imagePricing, imagePriced := s.pricing.QuoteImage(route.Provider, a.pricingModel, "", "", response.QuotaUnits)
-			if imagePriced {
-				record.MediaOutputImages = int64(max(0, response.QuotaUnits))
-			}
-			tokenPricing, tokenPriced := s.pricing.QuoteText(route.Provider, a.pricingModel, usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.ContextInputTokens)
-			if successful && imagePriced {
-				imagePricing.Apply(&record)
-			} else if tokenPriced {
-				tokenPricing.Apply(&record)
-			}
-			record.NumSourcesUsed = usage.NumSourcesUsed
-			record.NumServerSideToolsUsed = usage.NumServerSideToolsUsed
-			record.ContextInputTokens = usage.ContextInputTokens
-			record.ContextOutputTokens = usage.ContextOutputTokens
-			if successful && input.Streaming {
-				record.FirstTokenMS = a.firstToken.milliseconds()
-			}
-			record.DurationMS = time.Since(a.startedAt).Milliseconds()
-			record.ErrorCode = errorCode
-			if !successful && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
-				a.failureAttempts.ensureStreamFailureAttempt(credential, upstreamStartedAt, response, errorCode)
-			}
-			attempts := a.failureAttempts.snapshot()
-			if !successful || len(attempts) > 0 {
-				record.Attempts = attempts
-			}
-			record.CreatedAt = now
-			applyAuditEgress(&record, a.egressTrace, route.Provider)
-			if s.providers.Inference(credential.Provider).QualityAutoDisable {
-				if err := budget.run("quality_disable", finalizationHealthBudget, func(stageCtx context.Context) error {
-					return s.applyOutputSpeedPenalty(stageCtx, record, credential, a.holdCfg, input.ForcedEgressNodeID != 0)
-				}); err != nil {
-					s.logger.Error("quality_degraded_penalty_failed", "request_id", input.RequestID, "account_id", credential.ID, "error", err)
-				}
-			}
-			if a.supportsStoredResponses && operation == audit.OperationResponses && responseID != "" && successful {
-				err := budget.run("response_ownership", finalizationOwnershipBudget, func(stageCtx context.Context) error {
-					return s.responses.Save(stageCtx, inferencedomain.ResponseOwnership{ResponseID: responseID, AccountID: accountID, ClientKeyID: input.ClientKey.ID, ModelRouteID: route.ID, Provider: route.Provider, PromptCacheKey: a.ownershipPromptCacheKey, ReasoningReplayKey: a.reasoningReplayKey, ExpiresAt: now.Add(responseOwnershipTTL), CreatedAt: now, UpdatedAt: now})
-				})
-				if err != nil {
-					s.logger.Error("response_ownership_save_failed", "response_id", responseID, "client_key_id", input.ClientKey.ID, "account_id", accountID, "provider", route.Provider, "error", err)
-				}
-			}
-			if successful && lease.QuotaMode != "" {
-				if lease.QuotaMode != "weekly" {
-					units := max(1, response.QuotaUnits)
-					var updated bool
-					err := budget.run("quota_decrement", finalizationQuotaBudget, func(stageCtx context.Context) error {
-						var decrementErr error
-						updated, decrementErr = s.accounts.DecrementQuota(stageCtx, accountID, lease.QuotaMode, units)
-						return decrementErr
-					})
-					if err != nil {
-						s.logger.Warn("provider_quota_decrement_failed", "provider", credential.Provider, "account_id", accountID, "mode", lease.QuotaMode, "units", units, "error", err)
-					} else if updated {
-						s.selector.ConsumeQuota(credential.Provider, accountID, lease.QuotaMode, units)
-					}
-				}
-			}
-			if err := budget.run("audit", finalizationAuditBudget, func(stageCtx context.Context) error {
-				return s.audits.Create(stageCtx, record)
-			}); err != nil {
-				s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", input.RequestID, "error", err)
-			}
-			if usage.ResponseModel != "" {
-				_ = budget.run("observed_model", finalizationMetadataBudget, func(stageCtx context.Context) error {
-					return s.accounts.ObserveResponseModel(stageCtx, accountID, usage.ResponseModel)
-				})
-			}
-			if successful && lease.QuotaMode != "" {
-				if quotaKind, _ := s.providers.QuotaKind(credential.Provider); quotaKind == provider.QuotaRemoteWindow {
-					s.accounts.QueueQuotaRefresh(accountID, lease.QuotaMode)
-				}
-			}
-			outcome := "failed"
-			if successful {
-				outcome = "success"
-			}
-			timing.finish(s.logger, outcome)
-		})
-	}
-	response.Body = &firstByteReadCloser{ReadCloser: response.Body, mark: timing.markFirstBody}
-	recordStreamFailure := func(diagnostic StreamFailureDiagnostic) {
-		a.failureAttempts.captureStreamFailure(credential, upstreamStartedAt, response, diagnostic)
-	}
+	h := &responseHandoff{a: a, response: response, lease: lease, credential: credential, accountID: credential.ID, upstreamStartedAt: upstreamStartedAt}
+	response.Body = &firstByteReadCloser{ReadCloser: response.Body, mark: a.timing.markFirstBody}
 	var markFirstToken func()
 	if a.firstToken != nil {
 		markFirstToken = a.firstToken.mark
 	}
 	a.timingHandedOff = true
-	return &Result{StatusCode: response.StatusCode, Status: response.Status, Header: response.Header, Body: &finalizingBody{ReadCloser: response.Body, finalize: func() { finalize(Usage{}, "", "stream_closed") }}, MarkFirstToken: markFirstToken, RecordStreamFailure: recordStreamFailure, Finalize: finalize}
+	return &Result{StatusCode: response.StatusCode, Status: response.Status, Header: response.Header, Body: &finalizingBody{ReadCloser: response.Body, finalize: func() { h.finalize(Usage{}, "", "stream_closed") }}, MarkFirstToken: markFirstToken, RecordStreamFailure: h.recordStreamFailure, Finalize: h.finalize}
+}
+
+// recordStreamFailure records a failure event the stream returned after its
+// 2xx headers.
+func (h *responseHandoff) recordStreamFailure(diagnostic StreamFailureDiagnostic) {
+	h.a.failureAttempts.captureStreamFailure(h.credential, h.upstreamStartedAt, h.response, diagnostic)
+}
+
+// finalize settles the response once; later calls do nothing.
+func (h *responseHandoff) finalize(usage Usage, responseID, errorCode string) {
+	h.once.Do(func() { h.settle(usage, responseID, errorCode) })
+}
+
+func (h *responseHandoff) settle(usage Usage, responseID, errorCode string) {
+	a, s, lease, credential, accountID := h.a, h.a.s, h.lease, h.credential, h.accountID
+	input, route := a.input, a.route
+	// HTTP 状态码保留线上真实值；流在 2xx 响应头之后失败时由 errorCode
+	// 决定最终结果，避免把协议状态与业务结果混为一谈。
+	successful := auditRequestSucceeded(h.response.StatusCode, errorCode)
+	lease.completeSelectorObservation(successful)
+	budget := newFinalizationBudget(string(a.operation), string(route.Provider))
+	if isUpstreamStreamFailure(errorCode) {
+		status, retryAfter := streamFailureHealthPenalty(errorCode, usage, s.qualityRetryConfig().IdleAccountCooldown)
+		if err := budget.run("account_health", finalizationHealthBudget, func(stageCtx context.Context) error {
+			return s.selector.MarkFailureAfterSuccess(stageCtx, credential, status, retryAfter)
+		}); err != nil {
+			s.logger.Warn("stream_failure_health_write_failed", "account_id", credential.ID, "provider", credential.Provider, "error", err)
+		}
+	}
+	lease.Release()
+	now := time.Now().UTC()
+	record := h.auditRecord(usage, errorCode, successful, now)
+	if s.providers.Inference(credential.Provider).QualityAutoDisable {
+		if err := budget.run("quality_disable", finalizationHealthBudget, func(stageCtx context.Context) error {
+			return s.applyOutputSpeedPenalty(stageCtx, record, credential, a.holdCfg, input.ForcedEgressNodeID != 0)
+		}); err != nil {
+			s.logger.Error("quality_degraded_penalty_failed", "request_id", input.RequestID, "account_id", credential.ID, "error", err)
+		}
+	}
+	if a.supportsStoredResponses && a.operation == audit.OperationResponses && responseID != "" && successful {
+		err := budget.run("response_ownership", finalizationOwnershipBudget, func(stageCtx context.Context) error {
+			return s.responses.Save(stageCtx, inferencedomain.ResponseOwnership{ResponseID: responseID, AccountID: accountID, ClientKeyID: input.ClientKey.ID, ModelRouteID: route.ID, Provider: route.Provider, PromptCacheKey: a.ownershipPromptCacheKey, ReasoningReplayKey: a.reasoningReplayKey, ExpiresAt: now.Add(responseOwnershipTTL), CreatedAt: now, UpdatedAt: now})
+		})
+		if err != nil {
+			s.logger.Error("response_ownership_save_failed", "response_id", responseID, "client_key_id", input.ClientKey.ID, "account_id", accountID, "provider", route.Provider, "error", err)
+		}
+	}
+	if successful && lease.QuotaMode != "" && lease.QuotaMode != "weekly" {
+		h.decrementQuota(budget)
+	}
+	if err := budget.run("audit", finalizationAuditBudget, func(stageCtx context.Context) error {
+		return s.audits.Create(stageCtx, record)
+	}); err != nil {
+		s.logger.Error("request_usage_write_failed", "event_id", record.EventID, "request_id", input.RequestID, "error", err)
+	}
+	if usage.ResponseModel != "" {
+		_ = budget.run("observed_model", finalizationMetadataBudget, func(stageCtx context.Context) error {
+			return s.accounts.ObserveResponseModel(stageCtx, accountID, usage.ResponseModel)
+		})
+	}
+	if successful && lease.QuotaMode != "" {
+		if quotaKind, _ := s.providers.QuotaKind(credential.Provider); quotaKind == provider.QuotaRemoteWindow {
+			s.accounts.QueueQuotaRefresh(accountID, lease.QuotaMode)
+		}
+	}
+	outcome := "failed"
+	if successful {
+		outcome = "success"
+	}
+	a.timing.finish(s.logger, outcome)
+}
+
+// auditRecord builds the request's audit record for the settled response.
+func (h *responseHandoff) auditRecord(usage Usage, errorCode string, successful bool, now time.Time) audit.Record {
+	a, s, response, route := h.a, h.a.s, h.response, h.a.route
+	record := a.auditBase
+	if usage.Reported {
+		record.UsageSource = a.usageSource
+	}
+	record.AccountID = &h.accountID
+	record.AccountName = h.credential.Name
+	record.StatusCode = response.StatusCode
+	record.InputTokens = usage.InputTokens
+	record.CachedInputTokens = usage.CachedInputTokens
+	record.OutputTokens = usage.OutputTokens
+	record.ReasoningTokens = usage.ReasoningTokens
+	record.TotalTokens = usage.TotalTokens
+	record.CostInUSDTicks = usage.CostInUSDTicks
+	imagePricing, imagePriced := s.pricing.QuoteImage(route.Provider, a.pricingModel, "", "", response.QuotaUnits)
+	if imagePriced {
+		record.MediaOutputImages = int64(max(0, response.QuotaUnits))
+	}
+	tokenPricing, tokenPriced := s.pricing.QuoteText(route.Provider, a.pricingModel, usage.InputTokens, usage.CachedInputTokens, usage.OutputTokens, usage.ContextInputTokens)
+	if successful && imagePriced {
+		imagePricing.Apply(&record)
+	} else if tokenPriced {
+		tokenPricing.Apply(&record)
+	}
+	record.NumSourcesUsed = usage.NumSourcesUsed
+	record.NumServerSideToolsUsed = usage.NumServerSideToolsUsed
+	record.ContextInputTokens = usage.ContextInputTokens
+	record.ContextOutputTokens = usage.ContextOutputTokens
+	if successful && a.input.Streaming {
+		record.FirstTokenMS = a.firstToken.milliseconds()
+	}
+	record.DurationMS = time.Since(a.startedAt).Milliseconds()
+	record.ErrorCode = errorCode
+	if !successful && response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+		a.failureAttempts.ensureStreamFailureAttempt(h.credential, h.upstreamStartedAt, response, errorCode)
+	}
+	attempts := a.failureAttempts.snapshot()
+	if !successful || len(attempts) > 0 {
+		record.Attempts = attempts
+	}
+	record.CreatedAt = now
+	applyAuditEgress(&record, a.egressTrace, route.Provider)
+	return record
+}
+
+// decrementQuota consumes the delivered response's quota units on the account.
+func (h *responseHandoff) decrementQuota(budget finalizationBudget) {
+	s, lease, credential, accountID := h.a.s, h.lease, h.credential, h.accountID
+	units := max(1, h.response.QuotaUnits)
+	var updated bool
+	err := budget.run("quota_decrement", finalizationQuotaBudget, func(stageCtx context.Context) error {
+		var decrementErr error
+		updated, decrementErr = s.accounts.DecrementQuota(stageCtx, accountID, lease.QuotaMode, units)
+		return decrementErr
+	})
+	if err != nil {
+		s.logger.Warn("provider_quota_decrement_failed", "provider", credential.Provider, "account_id", accountID, "mode", lease.QuotaMode, "units", units, "error", err)
+	} else if updated {
+		s.selector.ConsumeQuota(credential.Provider, accountID, lease.QuotaMode, units)
+	}
 }
