@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -55,8 +56,6 @@ func (r *DashboardRepository) Snapshot(ctx context.Context, window repository.Da
 	bucketBoundaries := window.BucketBoundaries
 	start := bucketBoundaries[0]
 	end := bucketBoundaries[len(bucketBoundaries)-1]
-	bucketExpression, bucketArgs := dashboardBucketExpression(bucketBoundaries)
-	activityExpression, activityArgs := dashboardBucketExpression(window.ActivityBoundaries)
 	result := dashboarddomain.Aggregate{}
 	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var accounts struct {
@@ -107,51 +106,57 @@ func (r *DashboardRepository) Snapshot(ctx context.Context, window repository.Da
 		result.Resources.ActiveClientKeys = clientKeys.Active
 		result.Resources.TotalClientKeys = clientKeys.Total
 
+		// 总量和趋势桶共用一次扫描：先按 UTC 时间片分组，再在 Go 里折叠到本地时间桶。
+		usageSlot, usageArgs, usageGroup, usageKeys := r.dashboardSlots(bucketBoundaries)
+		var usageSlots []struct {
+			Slot string
+			dashboarddomain.Usage
+		}
 		if err := tx.Model(&requestAuditModel{}).
-			Select(dashboardUsageAggregateSelect).
+			Select(usageSlot+" AS slot, "+dashboardUsageAggregateSelect, usageArgs...).
 			Where("created_at >= ? AND created_at < ?", start, end).
-			Scan(&result.Usage).Error; err != nil {
+			Group(usageGroup).
+			Scan(&usageSlots).Error; err != nil {
 			return err
+		}
+		bucketUsage := make([]dashboarddomain.Usage, len(bucketBoundaries)-1)
+		for _, slot := range usageSlots {
+			addDashboardUsage(&result.Usage, slot.Usage)
+			if index := dashboardSlotIndex(usageKeys, slot.Slot); index >= 0 && index < len(bucketUsage) {
+				addDashboardUsage(&bucketUsage[index], slot.Usage)
+			}
 		}
 		result.Usage.FailedRequests = result.Usage.Requests - result.Usage.SuccessfulRequests
-		var buckets []struct {
-			BucketIndex        int `gorm:"column:bucket_index"`
-			Requests           int64
-			InputTokens        int64
-			CachedInputTokens  int64
-			OutputTokens       int64
-			ReasoningTokens    int64
-			Tokens             int64
-			BilledCostUSDTicks int64
-		}
-		if err := tx.Model(&requestAuditModel{}).
-			Select(bucketExpression+" AS bucket_index, COUNT(*) AS requests, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens, COALESCE(SUM(total_tokens), 0) AS tokens, COALESCE(SUM(CASE WHEN price_id = 0 AND cost_in_usd_ticks > 0 THEN cost_in_usd_ticks ELSE estimated_cost_in_usd_ticks END), 0) AS billed_cost_usd_ticks", bucketArgs...).
-			Where("created_at >= ? AND created_at < ?", start, end).
-			Group("bucket_index").
-			Order("bucket_index ASC").
-			Scan(&buckets).Error; err != nil {
-			return err
-		}
-		result.Buckets = make([]dashboarddomain.Bucket, 0, len(buckets))
-		for _, bucket := range buckets {
-			result.Buckets = append(result.Buckets, dashboarddomain.Bucket{Index: bucket.BucketIndex, Requests: bucket.Requests, InputTokens: bucket.InputTokens, CachedInputTokens: bucket.CachedInputTokens, OutputTokens: bucket.OutputTokens, ReasoningTokens: bucket.ReasoningTokens, Tokens: bucket.Tokens, BilledCostUSDTicks: bucket.BilledCostUSDTicks})
+		result.Buckets = make([]dashboarddomain.Bucket, 0, len(bucketUsage))
+		for index, bucket := range bucketUsage {
+			if bucket.Requests > 0 {
+				result.Buckets = append(result.Buckets, dashboarddomain.Bucket{Index: index, Requests: bucket.Requests, InputTokens: bucket.InputTokens, CachedInputTokens: bucket.CachedInputTokens, OutputTokens: bucket.OutputTokens, ReasoningTokens: bucket.ReasoningTokens, Tokens: bucket.Tokens, BilledCostUSDTicks: bucket.BilledCostUSDTicks})
+			}
 		}
 
-		var activityBuckets []struct {
-			BucketIndex int `gorm:"column:bucket_index"`
-			Requests    int64
+		activitySlot, activityArgs, activityGroup, activityKeys := r.dashboardSlots(window.ActivityBoundaries)
+		var activitySlots []struct {
+			Slot     string
+			Requests int64
 		}
 		if err := tx.Model(&requestAuditModel{}).
-			Select(activityExpression+" AS bucket_index, COUNT(*) AS requests", activityArgs...).
+			Select(activitySlot+" AS slot, COUNT(*) AS requests", activityArgs...).
 			Where("created_at >= ? AND created_at < ?", window.ActivityBoundaries[0], window.ActivityBoundaries[len(window.ActivityBoundaries)-1]).
-			Group("bucket_index").
-			Order("bucket_index ASC").
-			Scan(&activityBuckets).Error; err != nil {
+			Group(activityGroup).
+			Scan(&activitySlots).Error; err != nil {
 			return err
 		}
-		result.ActivityBuckets = make([]dashboarddomain.ActivityBucket, 0, len(activityBuckets))
-		for _, bucket := range activityBuckets {
-			result.ActivityBuckets = append(result.ActivityBuckets, dashboarddomain.ActivityBucket{Index: bucket.BucketIndex, Requests: bucket.Requests})
+		activityRequests := make([]int64, len(window.ActivityBoundaries)-1)
+		for _, slot := range activitySlots {
+			if index := dashboardSlotIndex(activityKeys, slot.Slot); index >= 0 && index < len(activityRequests) {
+				activityRequests[index] += slot.Requests
+			}
+		}
+		result.ActivityBuckets = make([]dashboarddomain.ActivityBucket, 0, len(activityRequests))
+		for index, requests := range activityRequests {
+			if requests > 0 {
+				result.ActivityBuckets = append(result.ActivityBuckets, dashboarddomain.ActivityBucket{Index: index, Requests: requests})
+			}
 		}
 
 		var providers []struct {
@@ -244,14 +249,68 @@ func validateDashboardBoundaries(boundaries []time.Time) error {
 	return nil
 }
 
-func dashboardBucketExpression(boundaries []time.Time) (string, []any) {
-	var expression strings.Builder
-	expression.WriteString("CASE")
-	args := make([]any, 0)
-	for index := 0; index < len(boundaries)-1; index++ {
-		expression.WriteString(" WHEN created_at >= ? AND created_at < ? THEN ?")
-		args = append(args, boundaries[index], boundaries[index+1], index)
+// dashboardSlots 返回取时间片键的表达式及其参数、分组表达式和各边界对应的键。边界都是 UTC 整点时按小时、
+// 都在 UTC 刻钟上（+05:30、+05:45 这类时区）时按刻钟分组，Go 侧再把时间片折叠进桶，不必逐行求值
+// N 分支的 CASE。SQLite 的 created_at 是 "2006-01-02 15:04:05..." 形式的 UTC 文本，取前缀分组与逐行
+// 比较文本的结果一致；键按字典序就是时间顺序。其他边界退回逐行 CASE，直接取所在桶的键。
+func (r *DashboardRepository) dashboardSlots(boundaries []time.Time) (string, []any, string, []string) {
+	hourly, quarterly := true, true
+	for _, boundary := range boundaries {
+		quarterly = quarterly && boundary.Location() == time.UTC && boundary.Truncate(15*time.Minute).Equal(boundary)
+		hourly = hourly && quarterly && boundary.Truncate(time.Hour).Equal(boundary)
 	}
-	expression.WriteString(" ELSE -1 END")
-	return expression.String(), args
+	group, format, layout := "slot", "", "2006-01-02 15:04"
+	switch {
+	case !quarterly:
+		layout = "2006-01-02 15:04:05.000000000"
+	case r.db.dialect == "postgres" && hourly:
+		group, format, layout = "date_trunc('hour', created_at AT TIME ZONE 'UTC')", "YYYY-MM-DD HH24", "2006-01-02 15"
+	case r.db.dialect == "postgres":
+		group, format = "date_trunc('hour', created_at AT TIME ZONE 'UTC') + (date_part('minute', created_at AT TIME ZONE 'UTC')::int / 15) * INTERVAL '15 minutes'", "YYYY-MM-DD HH24:MI"
+	case hourly:
+		group, layout = "substr(created_at, 1, 13)", "2006-01-02 15"
+	default:
+		group = "substr(created_at, 1, 14) || CASE WHEN substr(created_at, 15, 2) < '15' THEN '00' WHEN substr(created_at, 15, 2) < '30' THEN '15' WHEN substr(created_at, 15, 2) < '45' THEN '30' ELSE '45' END"
+	}
+	keys := make([]string, len(boundaries))
+	for index, boundary := range boundaries {
+		keys[index] = boundary.UTC().Format(layout)
+	}
+	if !quarterly {
+		var expression strings.Builder
+		var args []any
+		expression.WriteString("CASE")
+		for index := 0; index < len(boundaries)-1; index++ {
+			expression.WriteString(" WHEN created_at >= ? AND created_at < ? THEN ?")
+			args = append(args, boundaries[index], boundaries[index+1], keys[index])
+		}
+		expression.WriteString(" ELSE '' END")
+		return expression.String(), args, group, keys
+	}
+	if format != "" {
+		// PostgreSQL 按时间值分组，每组只格式化一次键。
+		return "to_char(" + group + ", '" + format + "')", nil, group, keys
+	}
+	return group, nil, group, keys
+}
+
+// dashboardSlotIndex 返回时间片所在桶的下标；keys 是 dashboardSlots 返回的边界键。
+func dashboardSlotIndex(keys []string, slot string) int {
+	return sort.Search(len(keys), func(index int) bool { return keys[index] > slot }) - 1
+}
+
+func addDashboardUsage(target *dashboarddomain.Usage, value dashboarddomain.Usage) {
+	target.Requests += value.Requests
+	target.SuccessfulRequests += value.SuccessfulRequests
+	target.InputTokens += value.InputTokens
+	target.CachedInputTokens += value.CachedInputTokens
+	target.OutputTokens += value.OutputTokens
+	target.ReasoningTokens += value.ReasoningTokens
+	target.Tokens += value.Tokens
+	target.BilledCostUSDTicks += value.BilledCostUSDTicks
+	target.FirstTokenSamples += value.FirstTokenSamples
+	target.FirstTokenTotalMS += value.FirstTokenTotalMS
+	target.ThroughputSamples += value.ThroughputSamples
+	target.ThroughputTokens += value.ThroughputTokens
+	target.GenerationTotalMS += value.GenerationTotalMS
 }

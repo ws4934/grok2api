@@ -3,7 +3,9 @@ package relational
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -327,6 +329,113 @@ func testDashboardWindow(boundaries []time.Time) repository.DashboardSnapshotWin
 	return repository.DashboardSnapshotWindow{
 		BucketBoundaries:   boundaries,
 		ActivityBoundaries: boundaries,
+	}
+}
+
+// Snapshot groups audits by UTC hour or quarter hour and folds the slots into
+// local buckets; each bucket must still match a direct comparison against its
+// boundaries, including +05:30/+05:45 zones, a DST change and boundaries off
+// the quarter hours.
+func TestDashboardRepositoryFoldsUTCSlotsIntoLocalBuckets(t *testing.T) {
+	assertDashboardLocalBuckets(t, openTestDatabase(t))
+}
+
+func TestPostgresDashboardFoldsUTCSlotsIntoLocalBuckets(t *testing.T) {
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not configured")
+	}
+	database, err := OpenPostgres(context.Background(), dsn, 4, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Close after the helper's cleanup has removed its rows from the shared database.
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.InitializeSchema(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertDashboardLocalBuckets(t, database)
+}
+
+func assertDashboardLocalBuckets(t *testing.T, database *Database) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Date(2031, 11, 3, 10, 7, 0, 0, time.UTC)
+	var audits []requestAuditModel
+	add := func(createdAt time.Time) {
+		audits = append(audits, requestAuditModel{RequestID: fmt.Sprintf("fold-%d", len(audits)), ClientKeyID: 1, ModelRouteID: 1, Provider: "grok_build", Operation: "responses", UsageSource: "upstream", StatusCode: 200, TotalTokens: int64(len(audits) + 1), CreatedAt: createdAt.UTC()})
+	}
+	for createdAt := now.Add(-9 * 24 * time.Hour); createdAt.Before(now); createdAt = createdAt.Add(7*time.Minute + 13*time.Second) {
+		add(createdAt)
+	}
+	var windows [][2][]time.Time
+	for _, zone := range []string{"UTC", "Asia/Kolkata", "Asia/Kathmandu", "America/New_York"} {
+		location, err := time.LoadLocation(zone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		local := now.In(location)
+		hour := time.Date(local.Year(), local.Month(), local.Day(), local.Hour(), 0, 0, 0, location)
+		tomorrow := time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, location)
+		var hours, days []time.Time
+		for index := -23; index <= 1; index++ {
+			hours = append(hours, hour.Add(time.Duration(index)*time.Hour).UTC())
+		}
+		for index := -7; index <= 0; index++ {
+			days = append(days, tomorrow.AddDate(0, 0, index).UTC())
+		}
+		var shifted []time.Time
+		for _, boundary := range hours {
+			shifted = append(shifted, boundary.Add(7*time.Minute+13500*time.Millisecond))
+		}
+		windows = append(windows, [2][]time.Time{hours, days}, [2][]time.Time{days, days}, [2][]time.Time{shifted, days})
+		for _, boundary := range append(append(hours, days...), shifted...) {
+			add(boundary)
+			add(boundary.Add(-time.Microsecond))
+		}
+	}
+	if err := database.db.WithContext(ctx).CreateInBatches(audits, 200).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := database.db.Where("request_id LIKE ?", "fold-%").Delete(&requestAuditModel{}).Error; err != nil {
+			t.Error(err)
+		}
+	})
+	expected := func(boundaries []time.Time) map[int][2]int64 {
+		buckets := make(map[int][2]int64)
+		for _, audit := range audits {
+			for index := 0; index+1 < len(boundaries); index++ {
+				if !audit.CreatedAt.Before(boundaries[index]) && audit.CreatedAt.Before(boundaries[index+1]) {
+					bucket := buckets[index]
+					buckets[index] = [2]int64{bucket[0] + 1, bucket[1] + audit.TotalTokens}
+				}
+			}
+		}
+		return buckets
+	}
+	for _, window := range windows {
+		snapshot, err := NewDashboardRepository(database).Snapshot(ctx, repository.DashboardSnapshotWindow{BucketBoundaries: window[0], ActivityBoundaries: window[1]}, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		buckets := make(map[int][2]int64)
+		var total [2]int64
+		for _, bucket := range snapshot.Buckets {
+			buckets[bucket.Index] = [2]int64{bucket.Requests, bucket.Tokens}
+			total = [2]int64{total[0] + bucket.Requests, total[1] + bucket.Tokens}
+		}
+		activity := make(map[int][2]int64)
+		for _, bucket := range snapshot.ActivityBuckets {
+			activity[bucket.Index] = [2]int64{bucket.Requests}
+		}
+		wantActivity := expected(window[1])
+		for index, bucket := range wantActivity {
+			wantActivity[index] = [2]int64{bucket[0]}
+		}
+		if want := expected(window[0]); !reflect.DeepEqual(buckets, want) || total != [2]int64{snapshot.Usage.Requests, snapshot.Usage.Tokens} || !reflect.DeepEqual(activity, wantActivity) {
+			t.Fatalf("window %s..%s: buckets %v want %v, usage %+v, activity %v want %v", window[0][0], window[0][len(window[0])-1], buckets, want, snapshot.Usage, activity, wantActivity)
+		}
 	}
 }
 
