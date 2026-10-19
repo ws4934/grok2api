@@ -103,6 +103,14 @@ const availableRoutePredicate = `
 const modelAccountBuildSuperPredicate = `(EXISTS (SELECT 1 FROM account_billing_snapshots billing WHERE billing.account_id = account.id AND ` + accountPaidBillingSignals + `) OR (account.provider = 'grok_build' AND account.build_super_entitled = TRUE))`
 const modelPeerBuildSuperPredicate = `(EXISTS (SELECT 1 FROM account_billing_snapshots billing WHERE billing.account_id = peer.id AND ` + accountPaidBillingSignals + `) OR (peer.provider = 'grok_build' AND peer.build_super_entitled = TRUE))`
 
+// modelBuildSuperAccounts lists the accounts matching modelAccountBuildSuperPredicate
+// once per account (billing holds at most one row per account), so joined
+// aggregates avoid a billing probe per row; the per-row EXISTS also made
+// PostgreSQL estimate enough cost to JIT-compile the query.
+const modelBuildSuperAccounts = `SELECT account.id FROM provider_accounts account
+	LEFT JOIN account_billing_snapshots billing ON billing.account_id = account.id
+	WHERE (billing.account_id IS NOT NULL AND ` + accountPaidBillingSignals + `) OR (account.provider = 'grok_build' AND account.build_super_entitled = TRUE)`
+
 const modelSharedPaidBuildSupportSortExpression = `(model_routes.provider = 'grok_build'
 	AND ` + modelAccountBuildSuperPredicate + `
 	AND EXISTS (
@@ -110,18 +118,6 @@ const modelSharedPaidBuildSupportSortExpression = `(model_routes.provider = 'gro
 		FROM provider_accounts peer
 		JOIN account_model_capabilities peer_capability ON peer_capability.account_id = peer.id AND peer_capability.upstream_model = model_routes.upstream_model
 		WHERE peer.provider = model_routes.provider
-			AND peer.enabled = TRUE
-			AND peer.auth_status = 'active'
-			AND ` + modelPeerBuildSuperPredicate + `
-	))`
-
-const modelSharedPaidBuildSupportAvailabilityExpression = `(route.provider = 'grok_build'
-	AND ` + modelAccountBuildSuperPredicate + `
-	AND EXISTS (
-		SELECT 1
-		FROM provider_accounts peer
-		JOIN account_model_capabilities peer_capability ON peer_capability.account_id = peer.id AND peer_capability.upstream_model = route.upstream_model
-		WHERE peer.provider = route.provider
 			AND peer.enabled = TRUE
 			AND peer.auth_status = 'active'
 			AND ` + modelPeerBuildSuperPredicate + `
@@ -330,29 +326,60 @@ func (r *ModelRepository) annotateAvailability(ctx context.Context, values []mod
 	if r.db.dialect == "postgres" {
 		lastSyncedExpression = "CAST(MAX(EXTRACT(EPOCH FROM sync.last_success_at)) AS BIGINT)"
 	}
+	// Counts are aggregated per provider (stats), per provider and upstream model
+	// (support) and per bound route (bound), then combined per route. Joining
+	// every route with every provider account took ~1 s at 2,000 accounts.
+	// An unbound route counts every active account when its catalog entry is
+	// statically supported; otherwise the active accounts reporting the model,
+	// plus, on Build, every active Super account once an active Super peer
+	// reports it.
 	err := r.db.db.WithContext(ctx).Raw(fmt.Sprintf(`
 		SELECT route.id AS route_id,
-			CASE WHEN COUNT(DISTINCT binding.account_id) > 0
-				THEN COUNT(DISTINCT CASE WHEN account.enabled = TRUE AND account.auth_status = ? AND binding.account_id IS NOT NULL THEN account.id END)
-				ELSE COUNT(DISTINCT CASE WHEN account.enabled = TRUE AND account.auth_status = ? AND (`+modelConsoleStaticSupportAvailabilityExpression+` OR `+modelWebBasicMediaStaticSupportAvailabilityExpression+` OR capability.account_id IS NOT NULL OR `+modelSharedPaidBuildSupportAvailabilityExpression+`) THEN account.id END)
+			CASE WHEN COALESCE(bound.total_accounts, 0) > 0 THEN bound.supported_accounts
+				WHEN `+modelConsoleStaticSupportAvailabilityExpression+` OR `+modelWebBasicMediaStaticSupportAvailabilityExpression+` THEN COALESCE(stats.total_accounts, 0)
+				WHEN route.provider = 'grok_build' AND support.super_accounts > 0 THEN support.supported_accounts + stats.super_accounts - support.super_accounts
+				ELSE COALESCE(support.supported_accounts, 0)
 			END AS supported_accounts,
-			CASE WHEN COUNT(DISTINCT binding.account_id) > 0
-				THEN COUNT(DISTINCT CASE WHEN account.enabled = TRUE AND account.auth_status = ? AND binding.account_id IS NOT NULL AND sync.last_success_at IS NOT NULL THEN account.id END)
-				ELSE COUNT(DISTINCT CASE WHEN account.enabled = TRUE AND account.auth_status = ? AND sync.last_success_at IS NOT NULL THEN account.id END)
-			END AS synced_accounts,
-			CASE WHEN COUNT(DISTINCT binding.account_id) > 0
-				THEN COUNT(DISTINCT binding.account_id)
-				ELSE COUNT(DISTINCT CASE WHEN account.enabled = TRUE AND account.auth_status = ? THEN account.id END)
-			END AS total_accounts,
-			%s AS last_synced_unix
+			CASE WHEN COALESCE(bound.total_accounts, 0) > 0 THEN bound.synced_accounts ELSE COALESCE(stats.synced_accounts, 0) END AS synced_accounts,
+			CASE WHEN COALESCE(bound.total_accounts, 0) > 0 THEN bound.total_accounts ELSE COALESCE(stats.total_accounts, 0) END AS total_accounts,
+			stats.last_synced_unix
 		FROM model_routes route
-		LEFT JOIN provider_accounts account ON account.provider = route.provider
-		LEFT JOIN model_route_accounts binding ON binding.model_route_id = route.id AND binding.account_id = account.id
-		LEFT JOIN account_model_sync_states sync ON sync.account_id = account.id
-		LEFT JOIN account_model_capabilities capability ON capability.account_id = account.id AND capability.upstream_model = route.upstream_model
+		LEFT JOIN (
+			SELECT account.provider,
+				COUNT(CASE WHEN account.enabled = TRUE AND account.auth_status = ? THEN 1 END) AS total_accounts,
+				COUNT(CASE WHEN account.enabled = TRUE AND account.auth_status = ? AND sync.last_success_at IS NOT NULL THEN 1 END) AS synced_accounts,
+				COUNT(CASE WHEN account.enabled = TRUE AND account.auth_status = ? AND super_account.id IS NOT NULL THEN 1 END) AS super_accounts,
+				%s AS last_synced_unix
+			FROM provider_accounts account
+			LEFT JOIN account_model_sync_states sync ON sync.account_id = account.id
+			LEFT JOIN (`+modelBuildSuperAccounts+`) super_account ON super_account.id = account.id
+			GROUP BY account.provider
+		) stats ON stats.provider = route.provider
+		LEFT JOIN (
+			SELECT account.provider, capability.upstream_model,
+				COUNT(*) AS supported_accounts,
+				COUNT(super_account.id) AS super_accounts
+			FROM account_model_capabilities capability
+			JOIN provider_accounts account ON account.id = capability.account_id
+			LEFT JOIN (`+modelBuildSuperAccounts+`) super_account ON super_account.id = account.id
+			WHERE account.enabled = TRUE AND account.auth_status = ?
+				AND capability.upstream_model IN (SELECT upstream_model FROM model_routes WHERE id IN ?)
+			GROUP BY account.provider, capability.upstream_model
+		) support ON support.provider = route.provider AND support.upstream_model = route.upstream_model
+		LEFT JOIN (
+			SELECT binding.model_route_id,
+				COUNT(*) AS total_accounts,
+				COUNT(CASE WHEN account.enabled = TRUE AND account.auth_status = ? THEN 1 END) AS supported_accounts,
+				COUNT(CASE WHEN account.enabled = TRUE AND account.auth_status = ? AND sync.last_success_at IS NOT NULL THEN 1 END) AS synced_accounts
+			FROM model_route_accounts binding
+			JOIN model_routes bound_route ON bound_route.id = binding.model_route_id
+			JOIN provider_accounts account ON account.id = binding.account_id AND account.provider = bound_route.provider
+			LEFT JOIN account_model_sync_states sync ON sync.account_id = account.id
+			WHERE binding.model_route_id IN ?
+			GROUP BY binding.model_route_id
+		) bound ON bound.model_route_id = route.id
 		WHERE route.id IN ?
-		GROUP BY route.id
-	`, lastSyncedExpression), account.AuthStatusActive, account.AuthStatusActive, account.AuthStatusActive, account.AuthStatusActive, account.AuthStatusActive, ids).Scan(&rows).Error
+	`, lastSyncedExpression), account.AuthStatusActive, account.AuthStatusActive, account.AuthStatusActive, account.AuthStatusActive, ids, account.AuthStatusActive, account.AuthStatusActive, ids, ids).Scan(&rows).Error
 	if err != nil {
 		return err
 	}
