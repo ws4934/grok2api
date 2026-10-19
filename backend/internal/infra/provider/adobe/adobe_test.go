@@ -80,7 +80,7 @@ func TestClientSubmitPollDownload(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c := &client{do: server.Client(), rc: requestContext{token: "t", sherlock: "s", apiKey: "k", userAgent: defaultUserAgent}}
+	c := &client{do: server.Client(), rc: requestContext{token: "t", sherlock: "s", apiKey: "k", userAgent: infraegress.DefaultUserAgent}}
 	sub, err := c.submitJob(context.Background(), server.URL+"/v2/3p-images/generate-async", map[string]any{"prompt": "x"}, "x")
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func TestClientImsRefreshAndCredits(t *testing.T) {
 		refreshURL = "https://adobeid-na1.services.adobe.com/ims/check/v6/token?jslVersion=v2-v0.48.0-1-g1e322cb"
 		creditsURL = "https://firefly.adobe.io/v1/credits/balance"
 	}()
-	c := &client{do: server.Client(), rc: requestContext{apiKey: "clio-playground-web", userAgent: defaultUserAgent}}
+	c := &client{do: server.Client(), rc: requestContext{apiKey: "clio-playground-web", userAgent: infraegress.DefaultUserAgent}}
 	token, expiresAt, err := c.imsRefresh(context.Background(), validCookie())
 	if err != nil || token != "fresh" || expiresAt.IsZero() {
 		t.Fatalf("imsRefresh: token=%q exp=%v err=%v", token, expiresAt, err)
@@ -251,12 +251,18 @@ type fakeAdobe struct {
 	mu        sync.Mutex
 	uploads   []string       // 上传路径与 Content-Type
 	videoBody map[string]any // 最近一次视频提交的请求体
+	agents    []string       // 发往 Adobe（mint 除外）的每个请求的 User-Agent 与 sec-ch-ua
 }
 
 func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
 	t.Helper()
 	fake := &fakeAdobe{}
 	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/mint" {
+			fake.mu.Lock()
+			fake.agents = append(fake.agents, r.Header.Get("User-Agent")+" | "+r.Header.Get("sec-ch-ua"))
+			fake.mu.Unlock()
+		}
 		switch {
 		case r.URL.Path == "/mint":
 			if fake.mintDown {
@@ -302,6 +308,10 @@ func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
 	endpoints.imageUpload = fake.URL + "/storage/image"
 	endpoints.videoUpload = fake.URL + "/storage/video"
 	t.Cleanup(func() { endpoints = previous })
+	// 与生产一致：adobe 是扩展出口作用域，客户端在第一次请求时才建。
+	scopes := egressdomain.ExtensionScopes()
+	egressdomain.SetExtensionScopes([]egressdomain.Scope{scope})
+	t.Cleanup(func() { egressdomain.SetExtensionScopes(scopes) })
 	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
 	if err != nil {
 		t.Fatal(err)
@@ -374,6 +384,20 @@ func TestGenerateImageRejectionsBecomeResponses(t *testing.T) {
 	response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image/2", Prompt: "cat"})
 	if err != nil || response.StatusCode != http.StatusOK || response.QuotaUnits != 1 {
 		t.Fatalf("success => response %+v err %v", response, err)
+	}
+}
+
+// 每个发往 Adobe 的请求都带出口租约的 UA 与对应的客户端提示：出口按同一个 UA 选 TLS 指纹。
+func TestRequestsCarryTheLeaseUserAgent(t *testing.T) {
+	fake, adapter, credential := newFakeAdobe(t)
+	if _, err := adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image/2", Prompt: "cat"}); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	want := infraegress.DefaultUserAgent + ` | "Chromium";v="146", "Google Chrome";v="146", "Not/A)Brand";v="99"`
+	if len(fake.agents) < 3 || slices.ContainsFunc(fake.agents, func(got string) bool { return got != want }) {
+		t.Fatalf("request agents = %q, want all %q", fake.agents, want)
 	}
 }
 

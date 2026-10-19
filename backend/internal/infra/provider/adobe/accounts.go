@@ -266,7 +266,7 @@ func (a *Adapter) ListModels(ctx context.Context, credential account.Credential)
 // Cookie 永久失效，返回永久错误让账号转入需重新导入状态。
 func (c *client) imsRefresh(ctx context.Context, cookie string) (string, time.Time, error) {
 	body := url.Values{"client_id": {c.rc.apiKey}, "guest_allowed": {"true"}, "scope": {refreshScope}}
-	headers := c.browserHeaders()
+	headers := map[string]string{}
 	headers["Accept"] = "*/*"
 	headers["Accept-Language"] = "en-US,en;q=0.9"
 	headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"

@@ -210,6 +210,9 @@ func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credenti
 		lease.Release()
 		return nil, "", 0, err
 	}
+	for k, v := range browserHeaders(lease.UserAgent) {
+		req.Header.Set(k, v)
+	}
 	req.Header.Set("Accept", "*/*")
 	resp, err := lease.Do(req)
 	if err != nil {

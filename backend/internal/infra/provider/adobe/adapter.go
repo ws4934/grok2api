@@ -65,7 +65,7 @@ func (a *Adapter) config() Config {
 // requestContextFor 把存储的 token 解密成单次调用的凭据。x-arp-session-id 只在
 // 提交前由 useSherlock 取，轮询/下载/续期不碰 mint。
 func (a *Adapter) requestContextFor(credential account.Credential) (requestContext, error) {
-	rc := requestContext{apiKey: defaultAPIKey, userAgent: defaultUserAgent, timeout: a.config().requestTimeout()}
+	rc := requestContext{apiKey: defaultAPIKey, timeout: a.config().requestTimeout()}
 	if credential.EncryptedAccessToken != "" {
 		token, err := a.cipher.Decrypt(credential.EncryptedAccessToken)
 		if err != nil {
@@ -88,6 +88,7 @@ func (a *Adapter) withClient(ctx context.Context, credential account.Credential,
 	if err != nil {
 		return err
 	}
+	rc.userAgent = lease.UserAgent // 出口按这个 UA 选 TLS 指纹，请求头必须一致
 	runErr := fn(ctx, &client{do: lease, rc: rc})
 	a.report(ctx, lease, runErr)
 	return runErr

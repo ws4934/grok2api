@@ -5,8 +5,7 @@ import "time"
 // Firefly 公网 Web 客户端身份。同一个值既是用 Cookie 续期的 IMS OAuth
 // client_id，也是每次生成请求携带的 x-api-key。
 const (
-	defaultAPIKey    = "clio-playground-web"
-	defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+	defaultAPIKey = "clio-playground-web"
 
 	refreshScope = "AdobeID,firefly_api,openid,pps.read,pps.write,additional_info.projectedProductContext,additional_info.ownerOrg,uds_read,uds_write,ab.manage,read_organizations,additional_info.roles,account_cluster.read,creative_production,profile"
 )

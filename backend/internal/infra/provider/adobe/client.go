@@ -64,10 +64,10 @@ type client struct {
 
 var chromeVersion = regexp.MustCompile(`Chrome/(\d+)`)
 
-// browserHeaders 返回稳定的 Chrome 客户端提示头。
-func (c *client) browserHeaders() map[string]string {
-	ua := c.rc.userAgent
-	version := "145"
+// browserHeaders 是浏览器每个请求都带的头：User-Agent 与 Chrome 客户端提示。ua 取自
+// 出口租约，出口的 TLS 指纹也按它选 Chrome 版本，两者保持一致。
+func browserHeaders(ua string) map[string]string {
+	version := "146"
 	if m := chromeVersion.FindStringSubmatch(ua); len(m) == 2 {
 		version = m[1]
 	}
@@ -90,7 +90,7 @@ func (c *client) browserHeaders() map[string]string {
 }
 
 func (c *client) submitHeaders(noncePrompt string) map[string]string {
-	headers := c.browserHeaders()
+	headers := map[string]string{}
 	headers["Authorization"] = "Bearer " + c.rc.token
 	headers["x-api-key"] = c.rc.apiKey
 	headers["Content-Type"] = "application/json"
@@ -108,7 +108,7 @@ func (c *client) submitHeaders(noncePrompt string) map[string]string {
 }
 
 func (c *client) pollHeaders() map[string]string {
-	headers := c.browserHeaders()
+	headers := map[string]string{}
 	headers["Authorization"] = "Bearer " + c.rc.token
 	headers["Accept"] = "*/*"
 	headers["Origin"] = "https://firefly.adobe.com"
@@ -126,6 +126,9 @@ func (c *client) send(ctx context.Context, method, rawURL string, body io.Reader
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
 	if err != nil {
 		return nil, nil, &transportError{err: err}
+	}
+	for k, v := range browserHeaders(c.rc.userAgent) {
+		req.Header.Set(k, v)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -280,7 +283,7 @@ func transient(err error) bool {
 }
 
 func (c *client) upload(ctx context.Context, uploadURL string, data []byte, mime, kind string) (string, error) {
-	headers := c.browserHeaders()
+	headers := map[string]string{}
 	headers["Authorization"] = "Bearer " + c.rc.token
 	headers["x-api-key"] = c.rc.apiKey
 	headers["Content-Type"] = mime
