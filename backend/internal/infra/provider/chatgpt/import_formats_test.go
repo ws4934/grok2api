@@ -54,11 +54,16 @@ func TestImportDetectsIssuingClient(t *testing.T) {
 // Each refresh token is renewed by the client that issued it, in the form
 // that client uses.
 func TestRefreshUsesIssuingClient(t *testing.T) {
-	for profile, want := range map[string]struct{ clientID, scope, origin string }{
-		codexProfile: {codexClientID, "openid profile email", ""},
-		oauthProfile: {oauthClientID, "", "https://platform.openai.com"},
+	for name, test := range map[string]struct {
+		accessToken, profile, clientID, scope, origin string
+	}{
+		"codex":    {"AT", codexProfile, codexClientID, "openid profile email", ""},
+		"platform": {"AT", oauthProfile, oauthClientID, "", "https://platform.openai.com"},
+		// Accounts imported before profiles were derived have none stored.
+		"stored without profile": {testJWT(map[string]any{"client_id": oauthClientID}), "", oauthClientID, "", "https://platform.openai.com"},
 	} {
-		t.Run(profile, func(t *testing.T) {
+		want := test
+		t.Run(name, func(t *testing.T) {
 			var body map[string]string
 			var origin string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +73,7 @@ func TestRefreshUsesIssuingClient(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 			a, _ := newTestAdapter(t, server)
-			credential := testCredential(t, a, credentials{AccessToken: "AT", RefreshToken: "RT", ClientProfile: profile})
+			credential := testCredential(t, a, credentials{AccessToken: want.accessToken, RefreshToken: "RT", ClientProfile: want.profile})
 			if _, err := a.RefreshCredential(context.Background(), credential); err != nil {
 				t.Fatal(err)
 			}

@@ -48,6 +48,15 @@ func refreshBody(c credentials) map[string]string {
 	return body
 }
 
+func profileOfClient(id string) string {
+	for profile, client := range oauthClients {
+		if client.id == id {
+			return profile
+		}
+	}
+	return ""
+}
+
 func canRefresh(c credentials) bool {
 	_, ok := oauthClients[c.ClientProfile]
 	return c.RefreshToken != "" && ok
@@ -88,11 +97,16 @@ type credentials struct {
 }
 
 func credentialsOf(accessToken, refreshToken string, state map[string]string) credentials {
-	return credentials{
+	c := credentials{
 		AccessToken: accessToken, RefreshToken: refreshToken, ExpiresAt: tokenExpiry(accessToken),
 		IDToken: state["id_token"], ClientProfile: state["client_profile"], DeviceID: state["device_id"],
 		SessionID: state["session_id"], BrowserProfile: state["browser_profile"],
 	}
+	if c.ClientProfile == "" {
+		// Earlier imports stored no profile; the tokens still name their client.
+		c.ClientProfile = profileOfClient(tokenClientID(accessToken, c.IDToken))
+	}
+	return c
 }
 
 func (c credentials) state() map[string]string {
@@ -274,11 +288,7 @@ func parseImportRecord(raw json.RawMessage) (provider.CredentialSeed, error) {
 			// Both tools log in through the Codex client unless told otherwise.
 			clientID = codexClientID
 		}
-		for profile, client := range oauthClients {
-			if client.id == clientID {
-				c.ClientProfile = profile
-			}
-		}
+		c.ClientProfile = profileOfClient(clientID)
 	}
 	if len(c.AccessToken) > 32000 || len(c.RefreshToken) > 16000 || len(c.IDToken) > 16000 {
 		return provider.CredentialSeed{}, errors.New("credential exceeds size limit")
