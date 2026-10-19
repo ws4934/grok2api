@@ -348,6 +348,11 @@ func (a *responseAttempt) forward(lease *accountLease, credential accountdomain.
 	a.auditBase.ReasoningEffort = a.normalizedMetadata.ReasoningEffort
 	err = a.failureAttempts.captureResponse(credential, started, response, err)
 	a.timing.markUpstream(time.Since(started))
+	if err != nil && response != nil && response.Body != nil {
+		// A failed call delivers no response; close any body it came with.
+		_ = response.Body.Close()
+		response = nil
+	}
 	return response, err
 }
 
@@ -375,6 +380,9 @@ type responseTry struct {
 	lease      *accountLease
 	credential accountdomain.Credential
 	response   *provider.Response
+	// terminalForbidden: this response is a request-scoped 403 the client gets
+	// unchanged. It is set per response, never carried from an earlier attempt.
+	terminalForbidden bool
 }
 
 // try runs one pass of the attempt loop. A non-nil Result is the response to
@@ -510,6 +518,7 @@ func (a *responseAttempt) applyQuotaProbe(lease *accountLease) attemptStep {
 func (a *responseAttempt) handleResponse(t *responseTry) (*Result, attemptStep) {
 	s := a.s
 	for {
+		t.terminalForbidden = false
 		if t.response.ModelCatalogChanged {
 			s.queueAccountModelSync(t.credential.ID)
 		}
@@ -526,7 +535,7 @@ func (a *responseAttempt) handleResponse(t *responseTry) (*Result, attemptStep) 
 			}
 		}
 		// A terminal 403 is already prepared as the response for the client.
-		if !isTerminalRequestForbidden(a.failurePolicy, a.lastFailure) && isRetryableResponse(t.response, a.failurePolicy) && !finalEgressForbidden {
+		if !t.terminalForbidden && isRetryableResponse(t.response, a.failurePolicy) && !finalEgressForbidden {
 			if step := a.handleRetryableResponse(t); step != attemptReplay {
 				return nil, step
 			}
@@ -536,6 +545,11 @@ func (a *responseAttempt) handleResponse(t *responseTry) (*Result, attemptStep) 
 			if step := a.acceptSuccess(t); step != attemptProceed {
 				return nil, step
 			}
+		}
+		if t.terminalForbidden {
+			// The client gets the request-scoped 403 unchanged, not an earlier
+			// degraded answer to a request the upstream refuses.
+			a.discardFallback(true)
 		}
 		if a.fallback != nil && a.holdCfg.OnExhausted == qualityRetryFailOpen {
 			_ = t.response.Body.Close()

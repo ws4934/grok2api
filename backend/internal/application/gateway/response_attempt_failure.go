@@ -135,6 +135,11 @@ func (a *responseAttempt) recoverUnauthorized(t *responseTry) attemptStep {
 		a.lastFailure = newHTTPUpstreamFailure(http.StatusUnauthorized, body, t.credential.ID, t.credential.Name)
 		return attemptNext
 	}
+	// The replayed response is classified on from here; like any response it
+	// may report a changed model catalog.
+	if t.response.ModelCatalogChanged {
+		s.queueAccountModelSync(t.credential.ID)
+	}
 	return attemptProceed
 }
 
@@ -151,6 +156,7 @@ func (a *responseAttempt) classifyForbidden(t *responseTry, egressForbidden, fin
 	if isTerminalRequestForbidden(a.failurePolicy, a.lastFailure) {
 		// Deterministic request-scoped 403: restore the original body and return it
 		// without OAuth refresh, account rotation, cooldown, or invalidation.
+		t.terminalForbidden = true
 		response.Body = io.NopCloser(bytes.NewReader(body))
 		lease.completeSelectorObservation(false)
 		lease.Release()
