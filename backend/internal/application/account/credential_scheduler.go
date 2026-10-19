@@ -63,7 +63,7 @@ func (s *Service) RecoverCriticalCredentials(ctx context.Context, expiresWithin 
 			return s.MarkReauthRequired(taskCtx, id, permanentRefreshExpiredReason)
 		}
 		// 临界凭据不受进程内强制刷新节流影响；分布式账号锁和旋转 Token 比对仍避免重复 OAuth。
-		_, refreshErr := s.ensureCredential(taskCtx, credential, ensureCredentialOptions{force: true, bypassCooldown: true})
+		_, refreshErr := s.renewer.ensure(taskCtx, credential, ensureCredentialOptions{force: true, bypassCooldown: true})
 		return refreshErr
 	})
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
@@ -139,7 +139,7 @@ func (s *Service) refreshDueCredentials(ctx context.Context) error {
 			if credential.RefreshDueAt != nil && credential.RefreshDueAt.After(s.now()) {
 				return nil
 			}
-			_, err = s.ensureCredential(taskCtx, credential, ensureCredentialOptions{force: true, respectSchedule: true})
+			_, err = s.renewer.ensure(taskCtx, credential, ensureCredentialOptions{force: true, respectSchedule: true})
 			return err
 		})
 		if batchErr != nil {

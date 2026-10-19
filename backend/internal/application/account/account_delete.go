@@ -75,7 +75,7 @@ func (s *Service) finishLinkedDelete(ctx context.Context, deletedIDs []uint64) {
 		s.logger.Warn("linked_account_runtime_cleanup_failed", "accounts", len(deletedIDs), "failures", failures, "error", err)
 	}
 	for _, id := range deletedIDs {
-		s.clearRefreshState(id)
+		s.renewer.forget(id)
 	}
 }
 

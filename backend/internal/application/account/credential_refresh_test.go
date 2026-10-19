@@ -56,7 +56,7 @@ func TestEnsureCredentialReusesRotatedTokenAndThrottlesForcedRefresh(t *testing.
 		t.Fatalf("refresh after cooldown = %#v, count = %d", afterCooldown, adapter.refreshCount.Load())
 	}
 
-	manual, err := service.ensureCredential(ctx, afterCooldown, ensureCredentialOptions{force: true, bypassCooldown: true, retryPermanentOnce: true})
+	manual, err := service.renewer.ensure(ctx, afterCooldown, ensureCredentialOptions{force: true, bypassCooldown: true, retryPermanentOnce: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestCredentialRefreshFailureDistinguishesTransientAndPermanent(t *testing.T
 		t.Fatalf("transient state = %#v", transient)
 	}
 
-	service.clearRefreshState(credential.ID)
+	service.renewer.forget(credential.ID)
 	adapter.refreshErr = &provider.CredentialRefreshError{Status: 400, Code: "invalid_grant", Message: "Refresh token has expired", Response: `{"error":"invalid_grant","error_description":"Refresh token has expired"}`, Permanent: true}
 	if _, err := service.EnsureCredential(ctx, transient, true); err == nil {
 		t.Fatal("permanent refresh unexpectedly succeeded")
@@ -438,7 +438,7 @@ func TestCredentialRefreshFailureDistinguishesTransientAndPermanent(t *testing.T
 		t.Fatalf("permanent refresh state retried or changed: %#v, refresh count = %d", permanent, adapter.refreshCount.Load())
 	}
 
-	service.clearRefreshState(credential.ID)
+	service.renewer.forget(credential.ID)
 	expiredCredential := permanent
 	expiredCredential.ExpiresAt = now.Add(-time.Minute)
 	if _, err := service.accounts.UpdateTokens(ctx, permanent.ID, permanent.EncryptedAccessToken, permanent.EncryptedRefreshToken, "", expiredCredential.ExpiresAt, 0); err != nil {
@@ -461,7 +461,7 @@ func TestCredentialRefreshFailureDistinguishesTransientAndPermanent(t *testing.T
 	}
 	manualCount := adapter.refreshCount.Load()
 	manualOptions := ensureCredentialOptions{force: true, bypassCooldown: true, retryPermanentOnce: true}
-	if _, err := service.ensureCredential(ctx, finalState, manualOptions); err == nil {
+	if _, err := service.renewer.ensure(ctx, finalState, manualOptions); err == nil {
 		t.Fatal("manual retry should surface the repeated invalid_grant")
 	}
 	if adapter.refreshCount.Load() != manualCount+1 {
@@ -472,7 +472,7 @@ func TestCredentialRefreshFailureDistinguishesTransientAndPermanent(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := service.ensureCredential(ctx, latest, manualOptions)
+	recovered, err := service.renewer.ensure(ctx, latest, manualOptions)
 	if err != nil {
 		t.Fatalf("manual retry did not recover credential: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestCredentialRefreshRejectsFalsePermanentClassification(t *testing.T) {
 
 	current := credential
 	for attempt := 0; attempt < credentialUnclassifiedAuthLimit+1; attempt++ {
-		service.clearRefreshState(credential.ID)
+		service.renewer.forget(credential.ID)
 		if _, err := service.EnsureCredential(ctx, current, true); err == nil {
 			t.Fatal("refresh unexpectedly succeeded")
 		}
@@ -514,7 +514,7 @@ func TestCredentialRefreshConvergesRepeatedUnclassifiedAuthRejectionAfterExpiry(
 
 	current := credential
 	for attempt := 1; attempt <= credentialUnclassifiedAuthLimit; attempt++ {
-		service.clearRefreshState(credential.ID)
+		service.renewer.forget(credential.ID)
 		if _, err := service.EnsureCredential(ctx, current, true); err == nil {
 			t.Fatalf("refresh attempt %d unexpectedly succeeded", attempt)
 		}
@@ -529,7 +529,7 @@ func TestCredentialRefreshConvergesRepeatedUnclassifiedAuthRejectionAfterExpiry(
 	}
 
 	service.now = func() time.Time { return credential.ExpiresAt.Add(time.Minute) }
-	service.clearRefreshState(credential.ID)
+	service.renewer.forget(credential.ID)
 	if _, err := service.EnsureCredential(ctx, current, true); err == nil {
 		t.Fatal("expired unclassified rejection unexpectedly succeeded")
 	}
@@ -542,8 +542,8 @@ func TestCredentialRefreshConvergesRepeatedUnclassifiedAuthRejectionAfterExpiry(
 	}
 
 	adapter.refreshErr = nil
-	service.clearRefreshState(credential.ID)
-	recovered, err := service.ensureCredential(ctx, converged, ensureCredentialOptions{force: true, bypassCooldown: true, retryPermanentOnce: true})
+	service.renewer.forget(credential.ID)
+	recovered, err := service.renewer.ensure(ctx, converged, ensureCredentialOptions{force: true, bypassCooldown: true, retryPermanentOnce: true})
 	if err != nil {
 		t.Fatalf("manual refresh did not recover unclassified reauth state: %v", err)
 	}
@@ -561,7 +561,7 @@ func TestCredentialRefreshUnclassifiedAuthCountResetsOnDifferentFailureAndSucces
 
 	adapter.refreshErr = &provider.CredentialRefreshError{Status: 400, Code: "oauth_http_400"}
 	for attempt := 1; attempt <= 2; attempt++ {
-		service.clearRefreshState(credential.ID)
+		service.renewer.forget(credential.ID)
 		if _, err := service.EnsureCredential(ctx, current, true); err == nil {
 			t.Fatal("unclassified refresh unexpectedly succeeded")
 		}
@@ -576,7 +576,7 @@ func TestCredentialRefreshUnclassifiedAuthCountResetsOnDifferentFailureAndSucces
 	}
 
 	adapter.refreshErr = &provider.CredentialRefreshError{Status: 503, Code: "temporarily_unavailable"}
-	service.clearRefreshState(credential.ID)
+	service.renewer.forget(credential.ID)
 	if _, err := service.EnsureCredential(ctx, current, true); err == nil {
 		t.Fatal("transient refresh unexpectedly succeeded")
 	}
@@ -590,7 +590,7 @@ func TestCredentialRefreshUnclassifiedAuthCountResetsOnDifferentFailureAndSucces
 	}
 
 	adapter.refreshErr = &provider.CredentialRefreshError{Status: 400, Code: "oauth_http_400"}
-	service.clearRefreshState(credential.ID)
+	service.renewer.forget(credential.ID)
 	if _, err := service.EnsureCredential(ctx, current, true); err == nil {
 		t.Fatal("unclassified refresh unexpectedly succeeded")
 	}
@@ -603,7 +603,7 @@ func TestCredentialRefreshUnclassifiedAuthCountResetsOnDifferentFailureAndSucces
 	}
 
 	adapter.refreshErr = nil
-	service.clearRefreshState(credential.ID)
+	service.renewer.forget(credential.ID)
 	recovered, err := service.EnsureCredential(ctx, current, true)
 	if err != nil {
 		t.Fatalf("successful refresh failed: %v", err)
@@ -654,7 +654,7 @@ func TestCredentialDecryptFailedAllowsRetryAfterKeyRecovery(t *testing.T) {
 
 	// 密钥恢复后：手动 force 必须能再次发起刷新。
 	adapter.refreshErr = nil
-	service.clearRefreshState(credential.ID)
+	service.renewer.forget(credential.ID)
 	recovered, err := service.EnsureCredential(ctx, stuck, true)
 	if err != nil {
 		t.Fatalf("force refresh after decrypt_failed should retry: %v", err)
@@ -664,7 +664,7 @@ func TestCredentialDecryptFailedAllowsRetryAfterKeyRecovery(t *testing.T) {
 	}
 
 	// invalid_grant 仍须保持永久阻断。
-	service.clearRefreshState(credential.ID)
+	service.renewer.forget(credential.ID)
 	adapter.refreshErr = &provider.CredentialRefreshError{Status: 400, Code: "invalid_grant", Permanent: true}
 	if _, err := service.EnsureCredential(ctx, recovered, true); err == nil {
 		t.Fatal("invalid_grant should fail")

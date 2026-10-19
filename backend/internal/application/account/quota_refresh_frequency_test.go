@@ -120,7 +120,7 @@ func TestForcedRefreshWaitsOutAFailedRenewal(t *testing.T) {
 		t.Fatalf("20 renewals after 401s made %d OAuth calls", calls)
 	}
 	latest, _ := service.accounts.Get(ctx, credential.ID)
-	service.clearRefreshState(credential.ID)
+	service.renewer.forget(credential.ID)
 	if _, err := service.EnsureCredential(ctx, latest, true); errors.As(err, &deferred) || adapter.refreshCount.Load() != 2 {
 		t.Fatalf("manual forced renewal = %v, calls %d", err, adapter.refreshCount.Load())
 	}

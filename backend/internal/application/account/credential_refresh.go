@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -18,9 +20,42 @@ var ErrCredentialRefreshPermanent = errors.New("OAuth refresh token 已永久失
 
 const permanentRefreshExpiredReason = "OAuth refresh token 已永久失效且 access token 已过期"
 
+// credentialRenewalAccounts is the account storage credential renewal reads and writes.
+type credentialRenewalAccounts interface {
+	Get(ctx context.Context, id uint64) (accountdomain.Credential, error)
+	UpdateTokens(ctx context.Context, id uint64, accessToken, refreshToken, state string, expiresAt time.Time, buildBotFlagSource int) (accountdomain.Credential, error)
+	UpdateCredentialRefreshFailure(ctx context.Context, id uint64, failure repository.CredentialRefreshFailure) error
+}
+
+// credentialRefreshProviders is the provider registry subset credential renewal uses.
+type credentialRefreshProviders interface {
+	SupportsCredentialRefresh(accountdomain.Provider) bool
+	CredentialRefresh(accountdomain.Provider) (provider.CredentialRefreshAdapter, bool)
+	CredentialMetadata(accountdomain.Credential) provider.CredentialMetadata
+}
+
+// credentialRenewer exchanges refresh tokens: one exchange per account across
+// concurrent callers (singleflight) and instances (distributed lock), a
+// cooldown between forced renewals, and persisted failure backoff.
+type credentialRenewer struct {
+	refreshes     singleflight.Group
+	mu            sync.Mutex
+	lastRefreshAt map[uint64]time.Time
+
+	accounts  credentialRenewalAccounts
+	providers credentialRefreshProviders
+	lock      repository.DistributedLock
+	// Hooks into Service state the renewer does not own.
+	markReauthRequired func(ctx context.Context, id uint64, reason string) error
+	invalidateBotFlags func()
+	wakeScheduler      func()
+	logger             *slog.Logger
+	now                func() time.Time
+}
+
 // EnsureCredential 在即将过期时刷新 token，同一账号并发请求只执行一次刷新。
 func (s *Service) EnsureCredential(ctx context.Context, value accountdomain.Credential, force bool) (accountdomain.Credential, error) {
-	return s.ensureCredential(ctx, value, ensureCredentialOptions{force: force})
+	return s.renewer.ensure(ctx, value, ensureCredentialOptions{force: force})
 }
 
 type ensureCredentialOptions struct {
@@ -36,18 +71,18 @@ type ensureCredentialOptions struct {
 // (401). After a failed renewal it waits for the scheduled retry instead of
 // spending another OAuth call on every rejected request.
 func (s *Service) RenewRejectedCredential(ctx context.Context, value accountdomain.Credential) (accountdomain.Credential, error) {
-	return s.ensureCredential(ctx, value, ensureCredentialOptions{force: true, waitFailedRenewal: true})
+	return s.renewer.ensure(ctx, value, ensureCredentialOptions{force: true, waitFailedRenewal: true})
 }
 
-func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Credential, options ensureCredentialOptions) (accountdomain.Credential, error) {
-	if s.providers == nil || !s.providers.SupportsCredentialRefresh(value.Provider) {
+func (r *credentialRenewer) ensure(ctx context.Context, value accountdomain.Credential, options ensureCredentialOptions) (accountdomain.Credential, error) {
+	if r.providers == nil || !r.providers.SupportsCredentialRefresh(value.Provider) {
 		if options.force {
 			return accountdomain.Credential{}, ErrUnsupported
 		}
 		return value, nil
 	}
-	now := s.now()
-	if credential, err, handled := s.resolvePermanentRefreshFailure(ctx, value, now, options.force, options.retryPermanentOnce); handled {
+	now := r.now()
+	if credential, err, handled := r.resolvePermanentFailure(ctx, value, now, options.force, options.retryPermanentOnce); handled {
 		return credential, err
 	}
 	if !options.force && value.ExpiresAt.IsZero() && value.EncryptedAccessToken != "" {
@@ -65,13 +100,13 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 	}
 	// The shared refresh runs on its own goroutine so a caller can stop waiting
 	// while a started token exchange still completes and is persisted.
-	shared := s.refreshes.DoChan(refreshKey, func() (any, error) {
-		latest, err := s.accounts.Get(ctx, value.ID)
+	shared := r.refreshes.DoChan(refreshKey, func() (any, error) {
+		latest, err := r.accounts.Get(ctx, value.ID)
 		if err != nil {
 			return nil, err
 		}
-		currentTime := s.now()
-		if credential, err, handled := s.resolvePermanentRefreshFailure(ctx, latest, currentTime, options.force, options.retryPermanentOnce); handled {
+		currentTime := r.now()
+		if credential, err, handled := r.resolvePermanentFailure(ctx, latest, currentTime, options.force, options.retryPermanentOnce); handled {
 			if err != nil {
 				return nil, err
 			}
@@ -86,7 +121,7 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 		if !options.force && latest.EncryptedAccessToken != "" && !latest.ExpiresAt.IsZero() && currentTime.Add(credentialRefreshAdvance).Before(latest.ExpiresAt) {
 			return latest, nil
 		}
-		if options.force && !options.bypassCooldown && s.credentialRefreshCoolingDown(latest, currentTime) {
+		if options.force && !options.bypassCooldown && r.coolingDown(latest, currentTime) {
 			return latest, nil
 		}
 		if options.waitFailedRenewal {
@@ -94,18 +129,18 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 				return nil, err
 			}
 		}
-		release, err := s.acquireRefreshLock(ctx, latest.ID)
+		release, err := r.acquireLock(ctx, latest.ID)
 		if err != nil {
 			return nil, err
 		}
 		if release != nil {
 			defer release()
-			latest, err = s.accounts.Get(ctx, value.ID)
+			latest, err = r.accounts.Get(ctx, value.ID)
 			if err != nil {
 				return nil, err
 			}
-			currentTime = s.now()
-			if credential, err, handled := s.resolvePermanentRefreshFailure(ctx, latest, currentTime, options.force, options.retryPermanentOnce); handled {
+			currentTime = r.now()
+			if credential, err, handled := r.resolvePermanentFailure(ctx, latest, currentTime, options.force, options.retryPermanentOnce); handled {
 				if err != nil {
 					return nil, err
 				}
@@ -114,7 +149,7 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 			if options.respectSchedule && latest.RefreshDueAt != nil && latest.RefreshDueAt.After(currentTime) {
 				return latest, nil
 			}
-			if options.force && !options.bypassCooldown && s.credentialRefreshCoolingDown(latest, currentTime) {
+			if options.force && !options.bypassCooldown && r.coolingDown(latest, currentTime) {
 				return latest, nil
 			}
 			if options.waitFailedRenewal {
@@ -129,7 +164,7 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 				return latest, nil
 			}
 		}
-		adapter, ok := s.providers.CredentialRefresh(latest.Provider)
+		adapter, ok := r.providers.CredentialRefresh(latest.Provider)
 		if !ok {
 			return nil, fmt.Errorf("Provider %s 未注册", latest.Provider)
 		}
@@ -141,21 +176,21 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 		cancelRefresh()
 		if err != nil {
 			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), credentialRefreshStateTTL)
-			s.recordCredentialRefreshFailure(persistCtx, latest, err, !options.retryPermanentOnce, release != nil)
+			r.recordFailure(persistCtx, latest, err, !options.retryPermanentOnce, release != nil)
 			cancel()
 			return nil, err
 		}
 		riskCredential := latest
 		riskCredential.EncryptedAccessToken = refreshed.EncryptedAccessToken
 		botFlagSource := latest.BuildBotFlagSource
-		if metadata := s.credentialMetadata(riskCredential); metadata.BuildBotFlagInspected {
+		if metadata := r.providers.CredentialMetadata(riskCredential); metadata.BuildBotFlagInspected {
 			botFlagSource = metadata.BuildBotFlagSource
 		}
 		persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), credentialStateWriteTimeout)
-		updated, err := s.accounts.UpdateTokens(persistCtx, latest.ID, refreshed.EncryptedAccessToken, refreshed.EncryptedRefreshToken, refreshed.EncryptedState, refreshed.ExpiresAt, botFlagSource)
+		updated, err := r.accounts.UpdateTokens(persistCtx, latest.ID, refreshed.EncryptedAccessToken, refreshed.EncryptedRefreshToken, refreshed.EncryptedState, refreshed.ExpiresAt, botFlagSource)
 		cancelPersist()
 		if err != nil {
-			s.logger.Error("credential_refresh_token_write_failed",
+			r.logger.Error("credential_refresh_token_write_failed",
 				"account_id", latest.ID,
 				"provider", latest.Provider,
 				"refresh_token_rotated", refreshed.RefreshTokenRotated,
@@ -166,9 +201,9 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 			)
 			return nil, err
 		}
-		s.invalidateBuildBotFlagCache()
-		s.markRefreshSuccess(latest.ID, currentTime)
-		s.WakeCredentialRefresh()
+		r.invalidateBotFlags()
+		r.markSuccess(latest.ID, currentTime)
+		r.wakeScheduler()
 		return updated, nil
 	})
 	var result singleflight.Result
@@ -187,16 +222,16 @@ func (s *Service) ensureCredential(ctx context.Context, value accountdomain.Cred
 	return credential, nil
 }
 
-// acquireRefreshLock 在 Redis 模式下等待其他实例完成刷新，锁租约过期后可自动接管。
-func (s *Service) acquireRefreshLock(ctx context.Context, accountID uint64) (func(), error) {
-	if s.refreshLock == nil {
+// acquireLock 在 Redis 模式下等待其他实例完成刷新，锁租约过期后可自动接管。
+func (r *credentialRenewer) acquireLock(ctx context.Context, accountID uint64) (func(), error) {
+	if r.lock == nil {
 		return nil, nil
 	}
 	key := "credential-refresh:" + strconv.FormatUint(accountID, 10)
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		release, acquired, err := s.refreshLock.Acquire(ctx, key, 2*time.Minute)
+		release, acquired, err := r.lock.Acquire(ctx, key, 2*time.Minute)
 		if err != nil {
 			return nil, err
 		}
@@ -216,16 +251,16 @@ func (s *Service) RefreshToken(ctx context.Context, id uint64) (View, error) {
 	if err != nil {
 		return View{}, mapRepositoryError(err)
 	}
-	if _, err := s.ensureCredential(ctx, value, ensureCredentialOptions{force: true, bypassCooldown: true, retryPermanentOnce: true}); err != nil {
+	if _, err := s.renewer.ensure(ctx, value, ensureCredentialOptions{force: true, bypassCooldown: true, retryPermanentOnce: true}); err != nil {
 		return View{}, err
 	}
 	return s.Get(ctx, id)
 }
 
-func (s *Service) refreshCoolingDown(accountID uint64, now time.Time) bool {
-	s.refreshMu.Lock()
-	defer s.refreshMu.Unlock()
-	last := s.lastRefreshAt[accountID]
+func (r *credentialRenewer) refreshedRecently(accountID uint64, now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	last := r.lastRefreshAt[accountID]
 	return !last.IsZero() && now.Sub(last) < forcedRefreshMinInterval
 }
 
@@ -249,29 +284,29 @@ func refreshDeferred(credential accountdomain.Credential, now time.Time) error {
 	return &CredentialRefreshDeferredError{Until: *credential.RefreshDueAt}
 }
 
-func (s *Service) credentialRefreshCoolingDown(credential accountdomain.Credential, now time.Time) bool {
+func (r *credentialRenewer) coolingDown(credential accountdomain.Credential, now time.Time) bool {
 	if credential.LastRefreshAt != nil {
 		age := now.Sub(*credential.LastRefreshAt)
 		if age >= 0 && age < forcedRefreshMinInterval {
 			return true
 		}
 	}
-	return s.refreshCoolingDown(credential.ID, now)
+	return r.refreshedRecently(credential.ID, now)
 }
 
-func (s *Service) markRefreshSuccess(accountID uint64, now time.Time) {
-	s.refreshMu.Lock()
-	s.lastRefreshAt[accountID] = now
-	s.refreshMu.Unlock()
+func (r *credentialRenewer) markSuccess(accountID uint64, now time.Time) {
+	r.mu.Lock()
+	r.lastRefreshAt[accountID] = now
+	r.mu.Unlock()
 }
 
-func (s *Service) clearRefreshState(accountID uint64) {
-	s.refreshMu.Lock()
-	delete(s.lastRefreshAt, accountID)
-	s.refreshMu.Unlock()
+func (r *credentialRenewer) forget(accountID uint64) {
+	r.mu.Lock()
+	delete(r.lastRefreshAt, accountID)
+	r.mu.Unlock()
 }
 
-func (s *Service) recordCredentialRefreshFailure(ctx context.Context, credential accountdomain.Credential, refreshErr error, preservePermanent, distributedLock bool) {
+func (r *credentialRenewer) recordFailure(ctx context.Context, credential accountdomain.Credential, refreshErr error, preservePermanent, distributedLock bool) {
 	if errors.Is(refreshErr, context.Canceled) || errors.Is(refreshErr, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.Canceled) {
 		return
 	}
@@ -310,7 +345,7 @@ func (s *Service) recordCredentialRefreshFailure(ctx context.Context, credential
 	if preservePermanent && credential.RefreshPermanent && !isRecoverableRefreshErrorCode(credential.LastRefreshErrorCode) && !isRecoverableRefreshErrorCode(errorCode) {
 		permanent = true
 	}
-	now := s.now()
+	now := r.now()
 	unclassifiedAuthFailure := provider.IsUnclassifiedCredentialAuthRejection(errorStatus, errorCode)
 	configurationError := provider.IsCredentialRefreshConfigurationErrorCode(errorCode)
 	unclassifiedAuthFailureCount := 0
@@ -332,14 +367,14 @@ func (s *Service) recordCredentialRefreshFailure(ctx context.Context, credential
 	} else if permanent {
 		retryAt = now
 	}
-	if err := s.accounts.UpdateCredentialRefreshFailure(ctx, credential.ID, repository.CredentialRefreshFailure{
+	if err := r.accounts.UpdateCredentialRefreshFailure(ctx, credential.ID, repository.CredentialRefreshFailure{
 		Count: failureCount, UnclassifiedAuthFailureCount: unclassifiedAuthFailureCount,
 		RetryAt: retryAt, Status: errorStatus, Code: errorCode,
 		Message: errorMessage, Response: errorResponse, Permanent: permanent,
 	}); err != nil {
-		s.logger.Warn("credential_refresh_state_write_failed", "account_id", credential.ID, "error", err)
+		r.logger.Warn("credential_refresh_state_write_failed", "account_id", credential.ID, "error", err)
 	}
-	s.logger.Warn("credential_refresh_failed",
+	r.logger.Warn("credential_refresh_failed",
 		"account_id", credential.ID,
 		"provider", credential.Provider,
 		"http_status", errorStatus,
@@ -359,22 +394,22 @@ func (s *Service) recordCredentialRefreshFailure(ctx context.Context, credential
 		"distributed_lock", distributedLock,
 	)
 	if permanent && accessTokenAlive {
-		s.logger.Warn("credential_refresh_permanent_but_token_alive", "account_id", credential.ID, "error_code", errorCode, "expires_at", credential.ExpiresAt, "retry_at", retryAt)
-		s.WakeCredentialRefresh()
+		r.logger.Warn("credential_refresh_permanent_but_token_alive", "account_id", credential.ID, "error_code", errorCode, "expires_at", credential.ExpiresAt, "retry_at", retryAt)
+		r.wakeScheduler()
 		return
 	}
 	if permanent {
-		if err := s.MarkReauthRequired(ctx, credential.ID, "OAuth refresh failed: "+errorCode); err != nil {
-			s.logger.Warn("credential_refresh_reauth_mark_failed", "account_id", credential.ID, "error", err)
+		if err := r.markReauthRequired(ctx, credential.ID, "OAuth refresh failed: "+errorCode); err != nil {
+			r.logger.Warn("credential_refresh_reauth_mark_failed", "account_id", credential.ID, "error", err)
 		}
 		return
 	}
 	if requiresReauth {
-		if err := s.MarkReauthRequired(ctx, credential.ID, "OAuth refresh repeatedly rejected without a classifiable error"); err != nil {
-			s.logger.Warn("credential_refresh_unclassified_reauth_mark_failed", "account_id", credential.ID, "error", err)
+		if err := r.markReauthRequired(ctx, credential.ID, "OAuth refresh repeatedly rejected without a classifiable error"); err != nil {
+			r.logger.Warn("credential_refresh_unclassified_reauth_mark_failed", "account_id", credential.ID, "error", err)
 			return
 		}
-		s.logger.Warn("credential_refresh_unclassified_reauth_required",
+		r.logger.Warn("credential_refresh_unclassified_reauth_required",
 			"account_id", credential.ID,
 			"http_status", errorStatus,
 			"error_code", errorCode,
@@ -382,8 +417,8 @@ func (s *Service) recordCredentialRefreshFailure(ctx context.Context, credential
 		)
 		return
 	}
-	s.logger.Warn("credential_refresh_deferred", "account_id", credential.ID, "failure_count", failureCount, "retry_at", retryAt, "error_code", errorCode)
-	s.WakeCredentialRefresh()
+	r.logger.Warn("credential_refresh_deferred", "account_id", credential.ID, "failure_count", failureCount, "retry_at", retryAt, "error_code", errorCode)
+	r.wakeScheduler()
 }
 
 func normalizeCredentialRefreshErrorMessage(value string) string {
@@ -419,10 +454,10 @@ func normalizeCredentialRefreshErrorResponse(value string) string {
 	return value
 }
 
-// resolvePermanentRefreshFailure 阻止自动链路再次请求已确认失效的 refresh token，
+// resolvePermanentFailure 阻止自动链路再次请求已确认失效的 refresh token，
 // 并在 access token 到期后收敛账号状态。管理员显式刷新可通过
 // retryPermanentOnce 绕过一次；credential_decrypt_failed 等可恢复本地错误不受阻断。
-func (s *Service) resolvePermanentRefreshFailure(ctx context.Context, credential accountdomain.Credential, now time.Time, force, retryPermanentOnce bool) (accountdomain.Credential, error, bool) {
+func (r *credentialRenewer) resolvePermanentFailure(ctx context.Context, credential accountdomain.Credential, now time.Time, force, retryPermanentOnce bool) (accountdomain.Credential, error, bool) {
 	if !credential.RefreshPermanent {
 		return accountdomain.Credential{}, nil, false
 	}
@@ -438,7 +473,7 @@ func (s *Service) resolvePermanentRefreshFailure(ctx context.Context, credential
 		return credential, nil, true
 	}
 	if !accessTokenAlive {
-		if err := s.MarkReauthRequired(ctx, credential.ID, permanentRefreshExpiredReason); err != nil {
+		if err := r.markReauthRequired(ctx, credential.ID, permanentRefreshExpiredReason); err != nil {
 			return accountdomain.Credential{}, err, true
 		}
 	}
@@ -495,7 +530,7 @@ func (s *Service) refreshTokens(ctx context.Context, ids []uint64, progress Batc
 	return s.runAccountBatch(ctx, "credential_refresh", ids, s.refreshPool, progress, func(workCtx context.Context, id uint64) error {
 		value, err := s.accounts.Get(workCtx, id)
 		if err == nil {
-			_, err = s.ensureCredential(workCtx, value, ensureCredentialOptions{force: true, bypassCooldown: true, retryPermanentOnce: true})
+			_, err = s.renewer.ensure(workCtx, value, ensureCredentialOptions{force: true, bypassCooldown: true, retryPermanentOnce: true})
 		}
 		return err
 	})

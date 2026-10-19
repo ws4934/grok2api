@@ -99,16 +99,14 @@ type Service struct {
 	quotaQueue          repository.QuotaRecoveryQueue
 	providers           *provider.Registry
 	cipher              *security.Cipher
-	refreshes           singleflight.Group
 	billingSyncs        singleflight.Group
 	quotaSyncs          singleflight.Group
 	identitySyncs       singleflight.Group
 	observedModelWrites singleflight.Group
 	observedModelStore  repository.ObservedModelStateRepository
-	refreshMu           sync.Mutex
-	lastRefreshAt       map[uint64]time.Time
 	observedModelShards [observedModelLockShards]observedModelShard
 	quotaRefresh        quotaRefreshQueue
+	renewer             credentialRenewer
 	conversionPool      *batch.Pool
 	syncPool            *batch.Pool
 	refreshPool         *batch.Pool
@@ -147,7 +145,6 @@ func NewService(accounts repository.AccountRepository, audits repository.AuditRe
 	s := &Service{
 		accounts: accounts, audits: audits, deviceSessions: deviceSessions, sticky: sticky,
 		providers: providers, cipher: cipher, refreshLock: refreshLock,
-		lastRefreshAt:         make(map[uint64]time.Time),
 		credentialRefreshWake: make(chan struct{}, 1),
 		autoClean: AutoCleanConfig{
 			Enabled: false, Interval: 10 * time.Minute, MinAge: time.Hour, IncludeDisabled: false,
@@ -167,6 +164,15 @@ func NewService(accounts repository.AccountRepository, audits repository.AuditRe
 		accounts: accounts, lock: refreshLock,
 		syncMode: s.syncQueuedQuota, isSnapshotMode: s.snapshotQuotaMode, isDeclaredMode: s.isDeclaredQuotaMode,
 		logger: s.logger, now: clock,
+	}
+	s.renewer = credentialRenewer{
+		lastRefreshAt: make(map[uint64]time.Time),
+		accounts:      accounts, lock: refreshLock,
+		markReauthRequired: s.MarkReauthRequired, invalidateBotFlags: s.invalidateBuildBotFlagCache, wakeScheduler: s.WakeCredentialRefresh,
+		logger: s.logger, now: clock,
+	}
+	if providers != nil { // a nil registry must stay a nil interface
+		s.renewer.providers = providers
 	}
 	return s
 }
@@ -201,6 +207,7 @@ func (s *Service) SetLogger(logger *slog.Logger) {
 	if logger != nil {
 		s.logger = logger
 		s.quotaRefresh.logger = logger
+		s.renewer.logger = logger
 	}
 }
 
