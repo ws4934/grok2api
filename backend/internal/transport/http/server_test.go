@@ -1,8 +1,10 @@
 package httpserver
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -135,6 +137,50 @@ func TestFrontendStaticFilesAndSPAFallback(t *testing.T) {
 				t.Fatalf("cache-control = %q", recorder.Header().Get("Cache-Control"))
 			}
 		})
+	}
+}
+
+func TestFrontendAssetsAreGzippedForCapableClients(t *testing.T) {
+	root := t.TempDir()
+	script := strings.Repeat("console.log('app');", 200)
+	if err := os.MkdirAll(filepath.Join(root, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<html>app</html>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "assets", "app.js"), []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deps := testDependencies()
+	deps.Logger = slog.Default()
+	deps.FrontendStaticPath = root
+	router := New(deps)
+
+	for range 2 { // the second request is served from the cache
+		request := httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
+		request.Header.Set("Accept-Encoding", "gzip, deflate, br")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK || recorder.Header().Get("Content-Encoding") != "gzip" || recorder.Header().Get("Vary") != "Accept-Encoding" {
+			t.Fatalf("status %d, headers %v", recorder.Code, recorder.Header())
+		}
+		if !strings.HasPrefix(recorder.Header().Get("Content-Type"), "text/javascript") || recorder.Body.Len() >= len(script) {
+			t.Fatalf("content-type %q, %d bytes for %d", recorder.Header().Get("Content-Type"), recorder.Body.Len(), len(script))
+		}
+		reader, err := gzip.NewReader(recorder.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body, _ := io.ReadAll(reader); string(body) != script {
+			t.Fatalf("decoded %d bytes", len(body))
+		}
+	}
+
+	plain := httptest.NewRecorder()
+	router.ServeHTTP(plain, httptest.NewRequest(http.MethodGet, "/assets/app.js", nil))
+	if plain.Header().Get("Content-Encoding") != "" || plain.Body.String() != script {
+		t.Fatalf("plain response encoding %q, %d bytes", plain.Header().Get("Content-Encoding"), plain.Body.Len())
 	}
 }
 

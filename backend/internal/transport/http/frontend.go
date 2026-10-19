@@ -1,11 +1,15 @@
 package httpserver
 
 import (
+	"bytes"
+	"compress/gzip"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,6 +21,7 @@ func registerFrontend(router *gin.Engine, staticPath string) {
 		return
 	}
 	files := http.FileServer(http.Dir(root))
+	var gzipped sync.Map // relative path → gzip bytes
 	router.NoRoute(func(c *gin.Context) {
 		requestPath := c.Request.URL.Path
 		if (c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead) || isBackendPath(requestPath) {
@@ -26,6 +31,9 @@ func registerFrontend(router *gin.Engine, staticPath string) {
 		if filePath, exists := frontendFile(root, requestPath); exists {
 			if strings.HasPrefix(path.Clean(requestPath), "/assets/") {
 				c.Header("Cache-Control", "public, max-age=31536000, immutable")
+				if serveGzipAsset(c, &gzipped, root, filePath) {
+					return
+				}
 			} else {
 				c.Header("Cache-Control", "no-cache")
 			}
@@ -40,6 +48,34 @@ func registerFrontend(router *gin.Engine, staticPath string) {
 		c.Header("Cache-Control", "no-cache")
 		http.ServeFile(c.Writer, c.Request, indexPath)
 	})
+}
+
+// serveGzipAsset answers a gzip-capable client with a compressed script or
+// stylesheet. Asset names carry a content hash, so the copy cached on first
+// request never goes stale.
+func serveGzipAsset(c *gin.Context, cache *sync.Map, root, relative string) bool {
+	if ext := path.Ext(relative); ext != ".js" && ext != ".css" {
+		return false
+	}
+	c.Header("Vary", "Accept-Encoding")
+	if !strings.Contains(c.GetHeader("Accept-Encoding"), "gzip") {
+		return false
+	}
+	compressed, ok := cache.Load(relative)
+	if !ok {
+		raw, err := os.ReadFile(filepath.Join(root, relative))
+		if err != nil {
+			return false
+		}
+		var buffer bytes.Buffer
+		writer, _ := gzip.NewWriterLevel(&buffer, gzip.BestCompression)
+		_, _ = writer.Write(raw)
+		_ = writer.Close()
+		compressed, _ = cache.LoadOrStore(relative, buffer.Bytes())
+	}
+	c.Header("Content-Encoding", "gzip")
+	http.ServeContent(c.Writer, c.Request, relative, time.Time{}, bytes.NewReader(compressed.([]byte)))
+	return true
 }
 
 func frontendRoot(staticPath string) (string, string, bool) {
