@@ -53,6 +53,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/pkg/reasoningreplay"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	httpserver "github.com/chenyme/grok2api/backend/internal/transport/http"
+	mediatransport "github.com/chenyme/grok2api/backend/internal/transport/http/media"
 	httpmiddleware "github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 )
 
@@ -237,7 +238,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	chatgptAdapter := chatgpt.NewAdapter(chatgptProviderConfig(cfg), egressManager, cipher, mediaService)
 	chatgptAdapter.SetLogger(logger)
 	egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(cfg))
-	adobeAdapter := adobe.NewAdapter(adobeProviderConfig(cfg), egressManager, cipher, mediaService)
+	adobeAdapter := adobe.NewAdapter(adobeProviderConfig(cfg), egressManager, cipher, mediaService, mediatransport.FetchRemoteImage)
 	adobeAdapter.SetLogger(logger)
 	providers := provider.NewRegistry(cliAdapter, webAdapter, consoleAdapter, chatgptAdapter, adobeAdapter)
 	if err := providers.Validate(); err != nil {
@@ -444,6 +445,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		egressManager.UpdateClearanceConfig(clearanceConfig(next))
 		consoleAdapter.UpdateConfig(consoleProviderConfig(next))
 		chatgptAdapter.UpdateConfig(chatgptProviderConfig(next))
+		adobeAdapter.UpdateConfig(adobeProviderConfig(next))
 		gatewayService.UpdateDefaultImageModel(cmp.Or(next.Provider.ChatGPT.DefaultImageModel, chatgpt.DefaultImageModel))
 		egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(next))
 		mediaService.UpdateConfig(mediaConfig(next))

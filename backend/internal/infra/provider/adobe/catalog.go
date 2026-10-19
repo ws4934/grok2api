@@ -4,6 +4,8 @@
 package adobe
 
 import (
+	"math"
+	"slices"
 	"strings"
 )
 
@@ -75,71 +77,84 @@ func videoModelByID(id string) (videoModel, bool) {
 	return videoModel{}, false
 }
 
-// imageRatios 列出映射到 Firefly aspectRatio 的客户端比例。
-var imageRatios = map[string]bool{
-	"1:1": true, "16:9": true, "9:16": true, "4:3": true, "3:4": true,
-	"5:4": true, "4:5": true, "3:2": true, "2:3": true, "21:9": true,
-}
+// imageRatios 列出 Firefly 图像接受的 aspectRatio（顺序即平局时的优先级）。
+var imageRatios = []string{"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"}
 
 // nanoExtraRatios 是只有 nano-banana-3 系列接受的极端比例。
-var nanoExtraRatios = map[string]bool{"1:8": true, "1:4": true, "4:1": true, "8:1": true}
+var nanoExtraRatios = []string{"4:1", "1:4", "8:1", "1:8"}
+
+func imageRatioChoices(nano bool) []string {
+	if nano {
+		return append(slices.Clone(imageRatios), nanoExtraRatios...)
+	}
+	return imageRatios
+}
 
 func supportedImageRatio(ratio string, nano bool) bool {
-	if imageRatios[ratio] {
-		return true
-	}
-	return nano && nanoExtraRatios[ratio]
+	return slices.Contains(imageRatioChoices(nano), ratio)
 }
 
-// normalizeRatio 保留受支持的比例，"auto" 映射为 1:1，否则回退到模型默认值。
-func normalizeRatio(value, fallback string, nano bool) string {
-	candidate := strings.ToLower(strings.TrimSpace(value))
-	if candidate == "auto" {
+// closestRatio 在 choices 里挑与 w:h 最接近的比例（对数距离，2:1 与 1:2 离 1:1 一样远）。
+func closestRatio(w, h int, choices []string) string {
+	best, bestDiff := "", math.Inf(1)
+	for _, choice := range choices {
+		cw, ch := parsePair(choice)
+		if cw == 0 || ch == 0 {
+			continue
+		}
+		if diff := math.Abs(math.Log(float64(w*ch) / float64(h*cw))); diff < bestDiff {
+			best, bestDiff = choice, diff
+		}
+	}
+	return best
+}
+
+// ratioFromSize 把 OpenAI 风格的 size（WIDTHxHEIGHT）映射到最接近的受支持比例；
+// 缺省或 auto 为 1:1。
+func ratioFromSize(size string, nano bool) string {
+	w, h := parsePair(size)
+	if w == 0 || h == 0 {
 		return "1:1"
 	}
-	if supportedImageRatio(candidate, nano) {
-		return candidate
-	}
-	return fallback
+	return closestRatio(w, h, imageRatioChoices(nano))
 }
 
-// normalizeResolution 保留 1K/2K/4K 档位，否则回退到模型默认值。
-func normalizeResolution(value, fallback string) string {
-	candidate := strings.ToUpper(strings.TrimSpace(value))
-	switch candidate {
-	case "1K", "2K", "4K":
-		return candidate
-	default:
+// nearestRatio 把客户端比例对齐到模型支持的最接近比例；无法解析时用 fallback。
+func nearestRatio(value string, choices []string, fallback string) string {
+	w, h := parsePair(value)
+	if w == 0 || h == 0 || len(choices) == 0 {
 		return fallback
 	}
+	return closestRatio(w, h, choices)
 }
 
-// ratioFromSize 从 OpenAI 风格的 size 字符串推断比例。
-func ratioFromSize(size string) string {
-	switch strings.TrimSpace(size) {
-	case "1024x1792", "1536x2752", "1080x1920":
-		return "9:16"
-	case "1792x1024", "2752x1536", "1920x1080":
-		return "16:9"
-	case "2048x1536", "2400x1792":
-		return "4:3"
-	case "1536x2048", "1792x2400":
-		return "3:4"
-	default:
-		return "1:1"
+// nearestDuration 把时长对齐到模型支持的最接近秒数（等距取较短）；未指定时用 fallback。
+func nearestDuration(value int, choices []int, fallback int) int {
+	if value <= 0 || len(choices) == 0 {
+		return fallback
 	}
+	best := choices[0]
+	for _, choice := range choices {
+		if abs(choice-value) < abs(best-value) {
+			best = choice
+		}
+	}
+	return best
 }
 
-// tierFromSize 在未显式指定分辨率时，用 size 的长边推断 1K/2K/4K 档位。
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// tierFromSize 在未显式指定分辨率时，用 size 的长边推断 1K/2K/4K 档位，缺省 2K。
 func tierFromSize(size string) string {
-	w, h := parseSize(size)
-	side := w
-	if h > side {
-		side = h
-	}
-	switch {
+	w, h := parsePair(size)
+	switch side := max(w, h); {
 	case side == 0:
-		return ""
+		return "2K"
 	case side < 1500:
 		return "1K"
 	case side < 2700:
@@ -149,11 +164,12 @@ func tierFromSize(size string) string {
 	}
 }
 
-func parseSize(size string) (int, int) {
-	size = strings.TrimSpace(size)
-	for _, sep := range []string{"x", "X", "*", "×"} {
-		if i := strings.Index(size, sep); i > 0 {
-			return atoi(size[:i]), atoi(size[i+len(sep):])
+// parsePair 解析 "1024x768"、"16:9" 这类由两个正整数组成的值；无效时返回 0, 0。
+func parsePair(value string) (int, int) {
+	value = strings.TrimSpace(value)
+	for _, sep := range []string{"x", "X", "*", "×", ":"} {
+		if i := strings.Index(value, sep); i > 0 {
+			return atoi(value[:i]), atoi(value[i+len(sep):])
 		}
 	}
 	return 0, 0

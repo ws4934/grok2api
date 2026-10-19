@@ -29,7 +29,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 		webprovider.NewAdapter(webprovider.Config{}, nil, nil, nil, nil),
 		consoleprovider.NewAdapter(consoleprovider.Config{}, nil, nil, nil),
 		chatgptprovider.NewAdapter(chatgptprovider.Config{}, nil, nil, nil),
-		adobeprovider.NewAdapter(adobeprovider.Config{}, nil, nil, nil),
+		adobeprovider.NewAdapter(adobeprovider.Config{}, nil, nil, nil, nil),
 	)
 	if err := registry.Validate(); err != nil {
 		t.Fatalf("production registry validation failed: %v", err)

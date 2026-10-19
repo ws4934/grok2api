@@ -2,8 +2,9 @@ package adobe
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,28 +15,8 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 )
 
-// quotaModeCredits 是账号积分余额的展示窗口；没有路由会消费它。
+// quotaModeCredits 是账号积分余额窗口；所有 Adobe 路由都消费它。
 const quotaModeCredits = "credits"
-
-// validSherlock 校验 x-arp-session-id 的结构是否完整。
-func validSherlock(value string) bool {
-	raw, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		if raw, err = base64.RawStdEncoding.DecodeString(value); err != nil {
-			return false
-		}
-	}
-	var fields struct {
-		SID string `json:"sid"`
-		ARK string `json:"ark"`
-		BFP string `json:"bfp"`
-		FTR string `json:"ftr"`
-	}
-	if json.Unmarshal(raw, &fields) != nil {
-		return false
-	}
-	return fields.SID != "" && fields.ARK != "" && fields.BFP != "" && fields.FTR != ""
-}
 
 // --- 凭据导入 / 导出（CredentialCodecAdapter）---
 
@@ -46,8 +27,8 @@ type importRecord struct {
 	Name        string `json:"name"`
 }
 
-// ParseImportedCredentials 接受每行一个 Adobe refreshprofile Cookie，或 JSON/
-// JSONL 记录。只有能从 Cookie 里解出完整 Sherlock 的记录才被接受。
+// ParseImportedCredentials 接受每行一个 Adobe Cookie，或 JSON/JSONL 记录。
+// Cookie 是否可用由 PrepareImportedCredential 的 IMS 续期来验证。
 func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSeed, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {
@@ -55,7 +36,9 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 	}
 	var records []importRecord
 	if trimmed[0] == '[' {
-		_ = json.Unmarshal(data, &records)
+		if err := json.Unmarshal([]byte(trimmed), &records); err != nil {
+			return nil, errors.New("invalid JSON array")
+		}
 	} else {
 		// 逐行解析：以 '{' 开头的行按 JSON 记录处理，其余按裸 Cookie 处理。
 		for _, line := range strings.Split(trimmed, "\n") {
@@ -76,7 +59,7 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 	seeds := make([]provider.CredentialSeed, 0, len(records))
 	for _, record := range records {
 		cookie := strings.TrimSpace(record.Cookie)
-		if cookie == "" || extractSherlock(cookie) == "" {
+		if !looksLikeCookie(cookie) {
 			continue
 		}
 		seeds = append(seeds, provider.CredentialSeed{
@@ -89,7 +72,16 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 			AccessToken:  strings.TrimSpace(record.AccessToken),
 		})
 	}
+	if len(seeds) == 0 {
+		return nil, errors.New("没有找到有效的 Adobe Cookie（形如 name=value; name2=value2）")
+	}
 	return seeds, nil
+}
+
+// looksLikeCookie 粗筛一行是否是 Cookie 头（至少一个 name=value）。
+func looksLikeCookie(value string) bool {
+	name, _, ok := strings.Cut(value, "=")
+	return ok && strings.TrimSpace(name) != "" && !strings.ContainsAny(value, "\r\n")
 }
 
 // MarshalCredentials 把凭据按 JSONL 导出，Cookie 放在 refresh token 字段里。
@@ -111,7 +103,7 @@ func (a *Adapter) MarshalCredentials(values []provider.CredentialSeed) ([]byte, 
 // 让账号导入后立即可用。
 func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.CredentialSeed) (provider.CredentialSeed, error) {
 	cookie := strings.TrimSpace(seed.RefreshToken)
-	if cookie == "" || extractSherlock(cookie) == "" {
+	if !looksLikeCookie(cookie) {
 		return seed, &provider.CredentialRefreshError{Status: http.StatusBadRequest, Code: "adobe_cookie_invalid", Message: "缺少有效的 Adobe Cookie"}
 	}
 	pending := a.pendingCredential(ctx, seed.SourceKey)
@@ -204,10 +196,15 @@ func (a *Adapter) SyncAccountIdentity(ctx context.Context, credential account.Cr
 	return identity, nil
 }
 
-// --- 额度（QuotaAdapter）：积分余额仅用于展示 ---
+// --- 额度（QuotaAdapter）：积分余额作为 credits 窗口 ---
 
+// SyncQuota 查询积分余额。查询失败返回错误（不写任何窗口）；拿不到数值时不发
+// 窗口，账号按未限制处理。
 func (a *Adapter) SyncQuota(ctx context.Context, credential account.Credential) (provider.QuotaSnapshot, error) {
-	window, ok := a.fetchCreditsWindow(ctx, credential)
+	window, ok, err := a.fetchCreditsWindow(ctx, credential)
+	if err != nil {
+		return provider.QuotaSnapshot{}, err
+	}
 	snapshot := provider.QuotaSnapshot{SyncedAt: time.Now().UTC()}
 	if ok {
 		snapshot.Windows = []account.QuotaWindow{window}
@@ -215,32 +212,34 @@ func (a *Adapter) SyncQuota(ctx context.Context, credential account.Credential) 
 	return snapshot, nil
 }
 
+// SyncQuotaMode 刷新 credits 窗口。绝不返回凭空的零值窗口：落库时它会被记成
+// 上游来源的"余额 0"，账号就被误判为积分耗尽。
 func (a *Adapter) SyncQuotaMode(ctx context.Context, credential account.Credential, mode string) (account.QuotaWindow, error) {
-	if window, ok := a.fetchCreditsWindow(ctx, credential); ok {
-		return window, nil
+	window, ok, err := a.fetchCreditsWindow(ctx, credential)
+	if err != nil {
+		return account.QuotaWindow{}, err
 	}
-	return account.QuotaWindow{Mode: quotaModeCredits}, nil
+	if !ok {
+		return account.QuotaWindow{}, fmt.Errorf("%w: %s", account.ErrQuotaNotLimited, quotaModeCredits)
+	}
+	return window, nil
 }
 
-// fetchCreditsWindow 查询积分余额并映射成展示窗口；失败时返回 false（不影响调度）。
-func (a *Adapter) fetchCreditsWindow(ctx context.Context, credential account.Credential) (account.QuotaWindow, bool) {
+// fetchCreditsWindow 查询积分余额并映射成 credits 窗口；解析不到任何数值时 ok 为 false。
+func (a *Adapter) fetchCreditsWindow(ctx context.Context, credential account.Credential) (account.QuotaWindow, bool, error) {
 	accountID := credential.UserID
 	var window account.QuotaWindow
 	var ok bool
-	_ = a.withClient(ctx, credential, func(ctx context.Context, c *client) error {
+	err := a.withClient(ctx, credential, func(ctx context.Context, c *client) error {
 		if c.rc.token == "" {
-			return nil
+			return errNoToken
 		}
 		if accountID == "" {
 			accountID = firstString(decodeJWTClaims(c.rc.token), "user_id", "aa_id", "sub")
 		}
 		total, available, err := c.creditBalance(ctx, accountID)
-		if err != nil {
+		if err != nil || (total <= 0 && available <= 0) {
 			return err
-		}
-		// 解析不到任何积分数值时不发窗口，避免把账号误判为耗尽（路由按"无窗口=可用"处理）。
-		if total <= 0 && available <= 0 {
-			return nil
 		}
 		now := time.Now().UTC()
 		window = account.QuotaWindow{Mode: quotaModeCredits, Total: total, Remaining: available, Source: account.QuotaSourceUpstream, SyncedAt: &now}
@@ -250,7 +249,7 @@ func (a *Adapter) fetchCreditsWindow(ctx context.Context, credential account.Cre
 		ok = true
 		return nil
 	})
-	return window, ok
+	return window, ok, err
 }
 
 // --- 模型目录（ModelCatalogAdapter）：静态目录，每个账号都具备全部媒体模型 ---

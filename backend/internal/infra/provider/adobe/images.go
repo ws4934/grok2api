@@ -16,42 +16,51 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
-var errNoToken = errors.New("adobe account has no usable access token")
-
-// pollInterval 是阻塞轮询两次 GET 之间的间隔。
-const pollInterval = 3 * time.Second
-
-// buildImageInput 把网关的图像请求参数解析成上游 payload 的基础输入。
+// buildImageInput 把网关的图像请求参数解析成上游 payload 的基础输入。显式给出但
+// 该模型不支持的比例或分辨率直接拒绝，不静默替换。
 func (a *Adapter) buildImageInput(model, prompt, size, aspectRatio, resolution, outputFormat, background string) (imagePayloadInput, error) {
-	id := strings.TrimSpace(model)
-	m, ok := imageModelByID(id)
+	m, ok := imageModelByID(strings.TrimSpace(model))
 	if !ok {
-		return imagePayloadInput{}, &requestError{msg: fmt.Sprintf("未知的 Adobe 图像模型：%s", id)}
+		return imagePayloadInput{}, &requestError{msg: fmt.Sprintf("未知的 Adobe 图像模型：%s", model)}
 	}
-	ratioCandidate := strings.TrimSpace(aspectRatio)
-	if ratioCandidate == "" {
-		ratioCandidate = ratioFromSize(size)
+	ratio := strings.ToLower(strings.TrimSpace(aspectRatio))
+	switch {
+	case ratio == "" || ratio == "auto":
+		ratio = ratioFromSize(size, m.nanoRatios)
+	case !supportedImageRatio(ratio, m.nanoRatios):
+		return imagePayloadInput{}, &requestError{msg: fmt.Sprintf("%s 不支持 aspect_ratio %s", m.id, aspectRatio)}
 	}
-	ratio := normalizeRatio(ratioCandidate, "16:9", m.nanoRatios)
-	res := strings.TrimSpace(resolution)
-	if res == "" {
+	res := strings.ToUpper(strings.TrimSpace(resolution))
+	switch res {
+	case "":
 		res = tierFromSize(size)
-	}
-	if res == "" {
-		res = "2K"
+	case "1K", "2K", "4K":
+	default:
+		return imagePayloadInput{}, &requestError{msg: "resolution 只支持 1K、2K 或 4K"}
 	}
 	return imagePayloadInput{
-		model: m, prompt: prompt, aspectRatio: ratio, resolution: normalizeResolution(res, "2K"),
+		model: m, prompt: prompt, aspectRatio: ratio, resolution: res, count: 1,
 		outputFormat: outputFormat, background: background,
 	}, nil
 }
 
-// ValidateImageRequest 拒绝 Adobe 不支持的请求参数。
+// ValidateImageRequest 拒绝 Adobe 不支持的请求参数（与模型相关的比例在 buildImageInput 里校验）。
 func (a *Adapter) ValidateImageRequest(options provider.ImageRequestOptions) error {
-	if options.ResponseFormat != "" && options.ResponseFormat != "url" && options.ResponseFormat != "b64_json" {
+	switch {
+	case options.Streaming || options.PartialImages != 0:
+		return &requestError{msg: "Adobe 不支持 stream 或 partial_images"}
+	case options.ResponseFormat != "" && options.ResponseFormat != "url" && options.ResponseFormat != "b64_json":
 		return &requestError{msg: "response_format 只支持 url 或 b64_json"}
 	}
-	return nil
+	if ratio := strings.ToLower(strings.TrimSpace(options.AspectRatio)); ratio != "" && ratio != "auto" && !supportedImageRatio(ratio, true) {
+		return &requestError{msg: "Adobe 不支持 aspect_ratio " + options.AspectRatio}
+	}
+	switch strings.ToUpper(strings.TrimSpace(options.Resolution)) {
+	case "", "1K", "2K", "4K":
+		return nil
+	default:
+		return &requestError{msg: "resolution 只支持 1K、2K 或 4K"}
+	}
 }
 
 // --- 同步图像（ImageGenerationAdapter / ImageEditAdapter）---
@@ -59,59 +68,61 @@ func (a *Adapter) ValidateImageRequest(options provider.ImageRequestOptions) err
 func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGenerationRequest) (*provider.Response, error) {
 	in, err := a.buildImageInput(request.Model, request.Prompt, request.Size, request.AspectRatio, request.Resolution, request.OutputFormat, request.Background)
 	if err != nil {
-		return nil, err
+		return syncFailure(err, false)
 	}
-	in.count = imageCount(request.Count)
-	in.quality = request.Quality
-	return a.runSyncImage(ctx, request.Credential, in, request.ResponseFormat)
+	in.count, in.quality = max(1, request.Count), request.Quality
+	return a.runSyncImage(ctx, request.Credential, in, nil, "", request.ResponseFormat)
 }
 
 func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditRequest) (*provider.Response, error) {
 	in, err := a.buildImageInput(request.Model, request.Prompt, request.Size, request.AspectRatio, request.Resolution, request.OutputFormat, request.Background)
 	if err != nil {
-		return nil, err
+		return syncFailure(err, false)
 	}
-	in.count = imageCount(request.Count)
-	in.quality = request.Quality
-	return a.runSyncImageEdit(ctx, request.Credential, in, request.ImageURLs, request.MaskURL, request.ResponseFormat)
+	in.count, in.quality = max(1, request.Count), request.Quality
+	return a.runSyncImage(ctx, request.Credential, in, request.ImageURLs, request.MaskURL, request.ResponseFormat)
 }
 
-func (a *Adapter) runSyncImage(ctx context.Context, credential account.Credential, in imagePayloadInput, responseFormat string) (*provider.Response, error) {
-	return a.runSyncImageEdit(ctx, credential, in, nil, "", responseFormat)
-}
-
-func (a *Adapter) runSyncImageEdit(ctx context.Context, credential account.Credential, in imagePayloadInput, imageURLs []string, maskURL, responseFormat string) (*provider.Response, error) {
+// runSyncImage 在一次请求内 submit→poll→download。Adobe 接受任务前的明确拒绝转成
+// 响应交给网关处理；接受之后的失败保持为错误，网关不会重新提交。
+func (a *Adapter) runSyncImage(ctx context.Context, credential account.Credential, in imagePayloadInput, imageURLs []string, maskURL, responseFormat string) (*provider.Response, error) {
 	var body map[string]any
+	var delivered int
+	accepted := false
 	err := a.withClient(ctx, credential, func(ctx context.Context, c *client) error {
-		if c.rc.token == "" {
-			return &transportError{err: errNoToken}
-		}
-		if err := a.resolveInputs(ctx, c, &in, imageURLs, maskURL); err != nil {
+		if err := a.prepareImage(ctx, c, &in, imageURLs, maskURL); err != nil {
 			return err
 		}
-		sub, err := a.submitImageRemint(ctx, c, endpoints.imageSubmit, buildImagePayloads(in), in.prompt)
+		sub, err := a.submit(ctx, c, func() (submission, error) {
+			return c.submitImage(ctx, endpoints.imageSubmit, buildImagePayloads(in), in.prompt)
+		})
 		if err != nil {
 			return err
 		}
-		urls, err := pollAllUntilDone(ctx, c, sub.pollURL, "image")
+		accepted = true
+		urls, err := pollUntilDone(ctx, c, sub.pollURL, "image", nil)
 		if err != nil {
 			return err
 		}
 		images := make([][]byte, 0, len(urls))
 		for _, url := range urls {
-			data, _, err := c.download(ctx, url)
+			data, err := c.download(ctx, url)
 			if err != nil {
 				return err
 			}
 			images = append(images, data)
 		}
 		body, err = a.imageResponseBody(ctx, in, images, responseFormat)
+		delivered = len(images)
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return syncFailure(err, accepted)
 	}
-	return jsonResponse(body), nil
+	response := jsonResponse(http.StatusOK, body)
+	// Adobe 可能少出几张：只按实际交付的张数计费。
+	response.QuotaUnits = delivered
+	return response, nil
 }
 
 // imageResponseBody 渲染 OpenAI Images 风格的响应体（可含多张）。
@@ -137,46 +148,37 @@ func (a *Adapter) imageResponseBody(ctx context.Context, in imagePayloadInput, i
 	}, nil
 }
 
-// imageCount 规范化请求张数（至少 1）。
-func imageCount(n int) int {
-	if n < 1 {
-		return 1
-	}
-	return n
-}
-
 // --- 异步图像任务（AsyncImageAdapter）---
 
 func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequest, save func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error) {
-	in, err := a.buildImageInput(request.Model, request.Prompt, request.Size, "", "", request.OutputFormat, request.Background)
-	if err != nil {
-		return provider.ImageCheckpoint{}, err
-	}
-	in.count = 1
-	in.quality = request.Quality
 	var cp provider.ImageCheckpoint
-	err = a.withClient(ctx, request.Credential, func(ctx context.Context, c *client) error {
-		if c.rc.token == "" {
-			return &transportError{err: errNoToken}
-		}
-		if err := a.resolveInputs(ctx, c, &in, request.ImageURLs, request.MaskURL); err != nil {
-			return err
-		}
-		// 不可逆的提交发生前先落盘 Submitted 标记。
-		if err := save(provider.ImageCheckpoint{Submitted: true}); err != nil {
-			return err
-		}
-		sub, err := a.submitImageRemint(ctx, c, endpoints.imageSubmit, buildImagePayloads(in), in.prompt)
-		if err != nil {
-			return err
-		}
-		cp = provider.ImageCheckpoint{Submitted: true, UpstreamID: sub.pollURL}
-		return save(cp)
-	})
+	in, err := a.buildImageInput(request.Model, request.Prompt, request.Size, "", "", request.OutputFormat, request.Background)
 	if err != nil {
 		return cp, err
 	}
-	return cp, nil
+	in.quality = request.Quality
+	err = a.withClient(ctx, request.Credential, func(ctx context.Context, c *client) error {
+		if err := a.prepareImage(ctx, c, &in, request.ImageURLs, request.MaskURL); err != nil {
+			return err
+		}
+		// 不可逆的提交发生前先落盘 Submitted 标记。
+		next := provider.ImageCheckpoint{Submitted: true}
+		if err := save(next); err != nil {
+			return err
+		}
+		cp = next
+		sub, err := a.submit(ctx, c, func() (submission, error) {
+			return c.submitImage(ctx, endpoints.imageSubmit, buildImagePayloads(in), in.prompt)
+		})
+		if err != nil {
+			// 明确的 4xx 拒绝没有生成任务，网关可清掉标记换账号；其余结果未知。
+			cp.Submitted = !rejected(err)
+			return err
+		}
+		cp.UpstreamID = sub.pollURL
+		return save(cp)
+	})
+	return cp, err
 }
 
 func (a *Adapter) PollImage(ctx context.Context, request provider.ImageJobRequest, cp provider.ImageCheckpoint) (provider.ImageCheckpoint, error) {
@@ -187,11 +189,11 @@ func (a *Adapter) PollImage(ctx context.Context, request provider.ImageJobReques
 		return cp, errors.New("image checkpoint has no polling URL")
 	}
 	err := a.withClient(ctx, request.Credential, func(ctx context.Context, c *client) error {
-		outputURL, err := pollUntilDone(ctx, c, cp.UpstreamID, "image", nil)
+		urls, err := pollUntilDone(ctx, c, cp.UpstreamID, "image", nil)
 		if err != nil {
 			return err
 		}
-		cp.Outputs = []string{outputURL}
+		cp.Outputs = urls
 		return nil
 	})
 	return cp, err
@@ -203,12 +205,9 @@ func (a *Adapter) FetchImage(ctx context.Context, request provider.ImageJobReque
 	}
 	var data []byte
 	err := a.withClient(ctx, request.Credential, func(ctx context.Context, c *client) error {
-		raw, _, err := c.download(ctx, cp.Outputs[0])
-		if err != nil {
-			return err
-		}
-		data = raw
-		return nil
+		var err error
+		data, err = c.download(ctx, cp.Outputs[0])
+		return err
 	})
 	return data, err
 }
@@ -218,111 +217,74 @@ func (a *Adapter) ImageUsage(prompt string, inputImages int, quality string, out
 	return map[string]any{"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 }
 
-// resolveInputs 把编辑用的输入图与蒙版上传到 Adobe 存储，并记录其 id。
-func (a *Adapter) resolveInputs(ctx context.Context, c *client, in *imagePayloadInput, imageURLs []string, maskURL string) error {
+// prepareImage 完成不可逆提交之前的全部步骤：检查 token、上传输入图与蒙版、
+// 取全局 x-arp-session-id。这里的失败都不会在 Adobe 生成任何东西。
+func (a *Adapter) prepareImage(ctx context.Context, c *client, in *imagePayloadInput, imageURLs []string, maskURL string) error {
+	if c.rc.token == "" {
+		return errNoToken
+	}
 	for _, ref := range imageURLs {
-		id, err := a.uploadRef(ctx, c, ref, endpoints.imageUpload, "image")
+		id, err := a.uploadImage(ctx, c, ref)
 		if err != nil {
 			return err
 		}
 		in.sourceImageID = append(in.sourceImageID, id)
 	}
 	if strings.TrimSpace(maskURL) != "" {
-		id, err := a.uploadRef(ctx, c, maskURL, endpoints.imageUpload, "image")
+		id, err := a.uploadImage(ctx, c, maskURL)
 		if err != nil {
 			return err
 		}
 		in.maskID = id
 	}
-	return nil
+	return a.useSherlock(ctx, c)
 }
 
-// uploadRef 取回 data URI 或 https 引用的字节并上传到 Adobe 存储，返回 asset id。
-func (a *Adapter) uploadRef(ctx context.Context, c *client, ref, uploadURL, kind string) (string, error) {
-	data, mime, err := fetchRefBytes(ctx, c, ref)
+// uploadImage 读取客户端给的输入图并上传到 Adobe 存储，返回 asset id。
+func (a *Adapter) uploadImage(ctx context.Context, c *client, ref string) (string, error) {
+	data, mime, err := a.inputImage(ctx, ref)
 	if err != nil {
 		return "", err
 	}
-	return c.upload(ctx, uploadURL, data, mime, kind)
+	return c.upload(ctx, endpoints.imageUpload, data, mime, "image")
 }
 
-func fetchRefBytes(ctx context.Context, c *client, ref string) ([]byte, string, error) {
+// inputImage 读取 data URI 或 https 输入图。https 只经带 SSRF 防护的 fetchRemote
+// 下载，绝不通过账号出口去访问客户端指定的地址。输入有问题是请求本身的错。
+func (a *Adapter) inputImage(ctx context.Context, ref string) ([]byte, string, error) {
 	ref = strings.TrimSpace(ref)
-	if strings.HasPrefix(ref, "data:") {
-		comma := strings.IndexByte(ref, ',')
-		if comma < 0 {
-			return nil, "", errors.New("invalid data URI")
-		}
-		meta, payload := ref[5:comma], ref[comma+1:]
-		mime := "image/png"
-		if i := strings.IndexByte(meta, ';'); i >= 0 {
-			mime = meta[:i]
-		} else if meta != "" {
-			mime = meta
-		}
+	var data []byte
+	switch meta, payload, _ := strings.Cut(ref, ","); {
+	case strings.HasPrefix(meta, "data:") && strings.HasSuffix(meta, ";base64"):
 		raw, err := base64.StdEncoding.DecodeString(payload)
 		if err != nil {
-			return nil, "", err
+			return nil, "", &requestError{msg: "输入图片的 data URI 不是有效的 Base64"}
 		}
-		return raw, mime, nil
-	}
-	return c.download(ctx, ref)
-}
-
-// pollAllUntilDone 阻塞轮询直到成功，返回全部输出 URL（多图）。
-func pollAllUntilDone(ctx context.Context, c *client, pollURL, kind string) ([]string, error) {
-	for {
-		result, err := c.poll(ctx, pollURL, kind)
+		data = raw
+	case strings.HasPrefix(ref, "https://") && a.fetchRemote != nil:
+		raw, err := a.fetchRemote(ctx, ref)
 		if err != nil {
-			return nil, err
-		}
-		switch result.status {
-		case "SUCCEEDED":
-			if len(result.outputURLs) == 0 {
-				return nil, &upstreamError{stage: "poll", status: 502, body: "no output URL"}
+			if ctx.Err() != nil {
+				return nil, "", ctx.Err()
 			}
-			return result.outputURLs, nil
-		case "FAILED":
-			return nil, &upstreamError{stage: "poll", status: 502, body: "generation failed"}
+			return nil, "", &requestError{msg: "无法下载输入图片：" + err.Error()}
 		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(pollInterval):
-		}
+		data = raw
+	default:
+		return nil, "", &requestError{msg: "输入图片必须是 Base64 data URI 或 https URL"}
+	}
+	mime := http.DetectContentType(data)
+	switch mime {
+	case "image/png", "image/jpeg", "image/webp":
+		return data, mime, nil
+	default:
+		return nil, "", &requestError{msg: "输入图片只支持 PNG、JPEG 或 WebP"}
 	}
 }
 
-// pollUntilDone 阻塞轮询直到任务成功、失败或上下文结束。
-func pollUntilDone(ctx context.Context, c *client, pollURL, kind string, progress func(int)) (string, error) {
-	for {
-		result, err := c.poll(ctx, pollURL, kind)
-		if err != nil {
-			return "", err
-		}
-		if progress != nil && result.progress > 0 {
-			progress(result.progress)
-		}
-		switch result.status {
-		case "SUCCEEDED":
-			if result.outputURL == "" {
-				return "", &upstreamError{stage: "poll", status: 502, body: "no output URL"}
-			}
-			return result.outputURL, nil
-		case "FAILED":
-			return "", &upstreamError{stage: "poll", status: 502, body: "generation failed"}
-		}
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(pollInterval):
-		}
-	}
-}
-
-func jsonResponse(body map[string]any) *provider.Response {
+func jsonResponse(status int, body any) *provider.Response {
 	encoded, _ := json.Marshal(body)
 	header := http.Header{}
 	header.Set("Content-Type", "application/json")
-	return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: header, Body: io.NopCloser(strings.NewReader(string(encoded)))}
+	return &provider.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Header: header, Body: io.NopCloser(strings.NewReader(string(encoded)))}
 }

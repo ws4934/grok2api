@@ -19,124 +19,113 @@ type videoCheckpoint struct {
 	Submitting bool   `json:"submitting,omitempty"`
 }
 
-// ValidateVideoRequest 校验 Adobe 视频请求的模型与参数。
+// ValidateVideoRequest 校验 Adobe 视频请求的模型与参数。时长和比例不在这里拒绝：
+// 网关对未填的 duration 默认填 8 秒，GenerateVideo 会就近对齐到模型支持的值。
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
 	if options.Operation != provider.VideoOperationGenerate {
 		return provider.ErrVideoOperationUnsupported
 	}
-	m, ok := videoModelByID(a.resolveVideoModelID(options.UpstreamModel))
+	m, ok := videoModelByID(strings.TrimSpace(options.UpstreamModel))
 	if !ok {
 		return fmt.Errorf("%w: 未知的 Adobe 视频模型 %s", provider.ErrVideoParameterInvalid, options.UpstreamModel)
 	}
-	if options.Duration > 0 && len(m.durations) > 0 && !slices.Contains(m.durations, options.Duration) {
-		return fmt.Errorf("%w: %s 不支持 %d 秒", provider.ErrVideoParameterInvalid, m.id, options.Duration)
-	}
-	if r := strings.TrimSpace(options.Resolution); r != "" && len(m.resolutions) > 0 && !slices.Contains(m.resolutions, strings.ToLower(r)) {
-		return fmt.Errorf("%w: %s 不支持分辨率 %s", provider.ErrVideoParameterInvalid, m.id, r)
+	if r := strings.ToLower(strings.TrimSpace(options.Resolution)); r != "" && !slices.Contains(m.resolutions, r) {
+		return fmt.Errorf("%w: %s 不支持分辨率 %s", provider.ErrVideoParameterInvalid, m.id, options.Resolution)
 	}
 	return nil
-}
-
-func (a *Adapter) resolveVideoModelID(model string) string {
-	return strings.TrimSpace(model)
 }
 
 // GenerateVideo 创建并等待一个 Adobe 视频任务，返回结果的预签名 URL。
 func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
-	m, ok := videoModelByID(a.resolveVideoModelID(request.Model))
+	m, ok := videoModelByID(strings.TrimSpace(request.Model))
 	if !ok {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, fmt.Errorf("未知的 Adobe 视频模型：%s", request.Model))
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, &requestError{msg: "未知的 Adobe 视频模型：" + request.Model})
 	}
-
+	if len(request.ReferenceAudios) > 0 {
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, &requestError{msg: "Adobe 视频不支持 reference_audios"})
+	}
 	var cp videoCheckpoint
 	_ = json.Unmarshal([]byte(request.Checkpoint), &cp)
-
-	lease, err := a.egress.AcquireCredential(ctx, scope, request.Credential)
-	if err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
-	}
-	defer lease.Release()
-	rc, err := a.requestContextFor(ctx, request.Credential)
-	if err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
-	}
-	if rc.token == "" {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, errNoToken)
-	}
-	c := &client{do: lease, rc: rc}
-
-	// 已有轮询 URL：仅结果下载丢失，继续等待即可。
-	if cp.PollURL != "" {
-		outputURL, pollErr := pollUntilDone(ctx, c, cp.PollURL, "video", request.Progress)
-		if pollErr != nil {
-			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, pollErr)
-		}
-		return provider.VideoResult{URL: outputURL, ContentType: "video/mp4"}, nil
-	}
-	if cp.Submitting {
+	if cp.PollURL == "" && cp.Submitting {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, fmt.Errorf("Adobe 视频已提交但未取得任务 ID，无法安全重建"))
 	}
-
-	in := videoPayloadInput{
-		model: m, prompt: request.Prompt, aspectRatio: normalizeRatio(request.AspectRatio, m.defaultRatio, false),
-		duration: request.Duration, resolution: strings.TrimSpace(request.Resolution), generateAudio: m.genAudio,
-		sourceAudioID: request.ReferenceAudios,
+	var result provider.VideoResult
+	err := a.withClient(ctx, request.Credential, func(ctx context.Context, c *client) error {
+		// 已有轮询 URL：上次只丢了结果，继续等待即可，不重复创建。
+		if cp.PollURL == "" {
+			pollURL, err := a.createVideo(ctx, c, m, request)
+			if err != nil {
+				return err
+			}
+			cp.PollURL = pollURL
+		}
+		urls, err := pollUntilDone(ctx, c, cp.PollURL, "video", request.Progress)
+		if err != nil {
+			return provider.WrapVideoStage(provider.VideoStagePoll, 0, err)
+		}
+		result = provider.VideoResult{URL: urls[0], ContentType: "video/mp4"}
+		return nil
+	})
+	if err != nil {
+		// 已带阶段的错误原样返回；出口租约或解密失败发生在提交之前。
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 	}
-	if in.duration == 0 {
-		in.duration = m.defaultDur
+	return result, nil
+}
+
+// createVideo 准备输入并提交任务，返回轮询 URL。提交前先取 x-arp-session-id，
+// 再落盘 Submitting 标记，保证标记只出现在真的发出了请求之后。
+func (a *Adapter) createVideo(ctx context.Context, c *client, m videoModel, request provider.VideoRequest) (string, error) {
+	if c.rc.token == "" {
+		return "", preSubmitFailure(errNoToken)
+	}
+	in := videoPayloadInput{
+		model: m, prompt: request.Prompt,
+		aspectRatio:   nearestRatio(request.AspectRatio, m.ratios, m.defaultRatio),
+		duration:      nearestDuration(request.Duration, m.durations, m.defaultDur),
+		resolution:    strings.ToLower(strings.TrimSpace(request.Resolution)),
+		generateAudio: m.genAudio,
 	}
 	if in.resolution == "" {
 		in.resolution = m.defaultRes
 	}
-	// 上传首帧图、参考图与参考视频。
-	if err := a.uploadVideoRefs(ctx, c, &in, request); err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
-	}
-
-	if err := provider.SaveVideoCheckpoint(request, videoCheckpoint{Submitting: true}); err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
-	}
-	sub, err := a.submitVideoRemint(ctx, c, endpoints.videoSubmit, buildVideoPayload(in))
-	a.report(ctx, lease, err)
-	if err != nil {
-		return provider.VideoResult{}, provider.VideoCreateFailed(request, err)
-	}
-	if err := provider.SaveVideoCheckpoint(request, videoCheckpoint{PollURL: sub.pollURL}); err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, err)
-	}
-	outputURL, err := pollUntilDone(ctx, c, sub.pollURL, "video", request.Progress)
-	if err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, err)
-	}
-	return provider.VideoResult{URL: outputURL, ContentType: "video/mp4"}, nil
-}
-
-func (a *Adapter) uploadVideoRefs(ctx context.Context, c *client, in *videoPayloadInput, request provider.VideoRequest) error {
-	if ref := strings.TrimSpace(request.ImageURL); ref != "" {
-		id, err := a.uploadRef(ctx, c, ref, endpoints.imageUpload, "image")
-		if err != nil {
-			return err
-		}
-		in.sourceImageID = append(in.sourceImageID, id)
-	}
-	for _, ref := range request.ReferenceURLs {
+	// 首帧图与参考图都上传成 Adobe 存储里的图像。
+	for _, ref := range append([]string{request.ImageURL}, request.ReferenceURLs...) {
 		if strings.TrimSpace(ref) == "" {
 			continue
 		}
-		id, err := a.uploadRef(ctx, c, ref, endpoints.imageUpload, "image")
+		id, err := a.uploadImage(ctx, c, ref)
 		if err != nil {
-			return err
+			return "", preSubmitFailure(err)
 		}
 		in.sourceImageID = append(in.sourceImageID, id)
 	}
-	if ref := strings.TrimSpace(request.VideoURL); ref != "" {
-		id, err := a.uploadRef(ctx, c, ref, endpoints.videoUpload, "video")
-		if err != nil {
-			return err
-		}
-		in.sourceVideoID = append(in.sourceVideoID, id)
+	if err := a.useSherlock(ctx, c); err != nil {
+		return "", preSubmitFailure(err)
 	}
-	return nil
+	if err := provider.SaveVideoCheckpoint(request, videoCheckpoint{Submitting: true}); err != nil {
+		return "", provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
+	}
+	sub, err := a.submit(ctx, c, func() (submission, error) {
+		return c.submitVideo(ctx, endpoints.videoSubmit, buildVideoPayload(in))
+	})
+	if err != nil {
+		return "", provider.VideoCreateFailed(request, err)
+	}
+	if err := provider.SaveVideoCheckpoint(request, videoCheckpoint{PollURL: sub.pollURL}); err != nil {
+		return "", provider.WrapVideoStage(provider.VideoStagePoll, 0, err)
+	}
+	return sub.pollURL, nil
+}
+
+// preSubmitFailure 给提交之前的失败标阶段：账号问题（401 凭据、429 积分）可换账号
+// 重试，其余（输入无效、mint 不可用、网络）结束任务。
+func preSubmitFailure(err error) error {
+	stage := provider.VideoStagePrepare
+	if status := provider.ErrorHTTPStatusOrZero(err); status == http.StatusUnauthorized || status == http.StatusTooManyRequests {
+		stage = provider.VideoStageCreate
+	}
+	return provider.WrapVideoStage(stage, 0, err)
 }
 
 // DownloadVideo 用创建任务的凭据读取完成的视频内容。调用方必须先校验任务归属。
@@ -153,9 +142,10 @@ func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credenti
 	req.Header.Set("Accept", "*/*")
 	resp, err := lease.Do(req)
 	if err != nil {
-		a.report(ctx, lease, &transportError{err: err})
+		err = &transportError{err: err}
+		a.report(ctx, lease, err)
 		lease.Release()
-		return nil, "", 0, &transportError{err: err}
+		return nil, "", 0, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
@@ -166,22 +156,13 @@ func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credenti
 	if contentType == "" {
 		contentType = "video/mp4"
 	}
-	// 包装 Body：关闭时释放出口租约。
-	return &leasedBody{ReadCloser: resp.Body, lease: lease}, contentType, resp.ContentLength, nil
-}
-
-// leasedBody 在响应体关闭时释放出口租约。
-type leasedBody struct {
-	io.ReadCloser
-	lease interface{ Release() }
-	once  bool
-}
-
-func (b *leasedBody) Close() error {
-	err := b.ReadCloser.Close()
-	if !b.once {
-		b.once = true
-		b.lease.Release()
-	}
-	return err
+	// 读完或关闭时反馈出口健康度并释放租约。
+	body := provider.NewCompletionReadCloser(resp.Body, func(readErr error, _ bool) {
+		if readErr != nil {
+			readErr = &transportError{err: readErr}
+		}
+		a.report(ctx, lease, readErr)
+		lease.Release()
+	})
+	return body, contentType, resp.ContentLength, nil
 }

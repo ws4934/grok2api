@@ -7,11 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // doer 通过绑定的出口发起一次 HTTP 请求；egress 的 Lease 即实现了它。
@@ -25,27 +27,40 @@ type requestContext struct {
 	sherlock  string
 	apiKey    string
 	userAgent string
+	// timeout 限制一次上游调用（含读完响应体）；0 不限制。
+	timeout time.Duration
 }
 
-const maxResponseBytes = 16 << 20
+const (
+	maxResponseBytes = 16 << 20
+	// maxDownloadBytes 容纳 4K PNG；超出时报错而不是静默截断成坏图。
+	maxDownloadBytes = 64 << 20
+	// pollTransientLimit 是轮询容忍的连续瞬时失败次数（传输错误、429、5xx）：
+	// 任务已经在 Adobe 上跑，网络抖一下不该让已扣的积分白花。
+	pollTransientLimit = 5
+)
+
+// pollInterval 是阻塞轮询两次 GET 之间的间隔（测试会调小）。
+var pollInterval = 3 * time.Second
 
 type submission struct {
-	pollURL        string
-	upstreamTaskID string
+	pollURL string
 }
 
 type pollResult struct {
 	status     string // IN_PROGRESS | SUCCEEDED | FAILED
 	progress   int
-	outputURL  string
 	outputURLs []string
-	mimeType   string
+	// failure 是 FAILED 时 Adobe 给出的原因。
+	failure string
 }
 
 type client struct {
 	do doer
 	rc requestContext
 }
+
+var chromeVersion = regexp.MustCompile(`Chrome/(\d+)`)
 
 // browserHeaders 返回稳定的 Chrome 客户端提示头。
 func (c *client) browserHeaders() map[string]string {
@@ -72,10 +87,7 @@ func (c *client) browserHeaders() map[string]string {
 	}
 }
 
-func (c *client) submitHeaders(prompt string, video bool) (map[string]string, error) {
-	if c.rc.sherlock == "" {
-		return nil, &upstreamError{stage: "submit", status: 503, body: "missing x-arp-session-id", retryable: true}
-	}
+func (c *client) submitHeaders(prompt string, video bool) map[string]string {
 	headers := c.browserHeaders()
 	headers["Authorization"] = "Bearer " + c.rc.token
 	headers["x-api-key"] = c.rc.apiKey
@@ -90,7 +102,7 @@ func (c *client) submitHeaders(prompt string, video bool) (map[string]string, er
 			headers["x-nonce"] = nonce
 		}
 	}
-	return headers, nil
+	return headers
 }
 
 func (c *client) pollHeaders() map[string]string {
@@ -102,24 +114,44 @@ func (c *client) pollHeaders() map[string]string {
 	return headers
 }
 
-// request 发起一次调用，返回解码后的 JSON 体、状态码与响应头。传输失败包装成
-// *transportError；非 2xx 状态由调用方归类。
-func (c *client) request(ctx context.Context, method, rawURL string, body io.Reader, headers map[string]string) (int, map[string]any, http.Header, error) {
+// send 在单次调用超时内发出请求并读完响应体（最多 limit 字节，超出报错）。
+func (c *client) send(ctx context.Context, method, rawURL string, body io.Reader, headers map[string]string, limit int64) (*http.Response, []byte, error) {
+	if c.rc.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.rc.timeout)
+		defer cancel()
+	}
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
 	if err != nil {
-		return 0, nil, nil, &transportError{err: err}
+		return nil, nil, &transportError{err: err}
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 	resp, err := c.do.Do(req)
 	if err != nil {
-		return 0, nil, nil, &transportError{err: err}
+		return nil, nil, &transportError{err: err}
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
-		return resp.StatusCode, nil, resp.Header, &transportError{err: err}
+		return resp, nil, &transportError{err: err}
+	}
+	if int64(len(raw)) > limit {
+		return resp, nil, &upstreamError{stage: "response", status: http.StatusBadGateway, body: fmt.Sprintf("response exceeds %d MiB", limit>>20)}
+	}
+	return resp, raw, nil
+}
+
+// request 发起一次 JSON 调用，返回解码后的响应体、状态码与响应头。传输失败
+// 包装成 *transportError；非 2xx 状态由调用方归类。
+func (c *client) request(ctx context.Context, method, rawURL string, body io.Reader, headers map[string]string) (int, map[string]any, http.Header, error) {
+	resp, raw, err := c.send(ctx, method, rawURL, body, headers, maxResponseBytes)
+	if err != nil {
+		if resp == nil {
+			return 0, nil, nil, err
+		}
+		return resp.StatusCode, nil, resp.Header, err
 	}
 	var data map[string]any
 	if len(bytes.TrimSpace(raw)) > 0 {
@@ -132,10 +164,7 @@ func (c *client) request(ctx context.Context, method, rawURL string, body io.Rea
 }
 
 func (c *client) submitImage(ctx context.Context, submitURL string, payloads []map[string]any, prompt string) (submission, error) {
-	headers, err := c.submitHeaders(prompt, false)
-	if err != nil {
-		return submission{}, err
-	}
+	headers := c.submitHeaders(prompt, false)
 	var last error
 	for _, payload := range payloads {
 		encoded, _ := json.Marshal(payload)
@@ -149,12 +178,11 @@ func (c *client) submitImage(ctx context.Context, submitURL string, payloads []m
 			if link == "" {
 				return submission{}, &upstreamError{stage: "submit", status: 502, body: "no polling URL"}
 			}
-			return submission{pollURL: link, upstreamTaskID: jobIDFromURL(link)}, nil
+			return submission{pollURL: link}, nil
 		}
-		ue := classifyUpstream("submit", status, bodyText(data))
-		last = ue
+		last = classifyUpstream("submit", status, bodyText(data))
 		// 只有普通 4xx 拒绝才停止尝试后续候选 payload。
-		if status == 401 || status == 403 || (status < 500 && status != 429 && status != 451) {
+		if status < 500 && status != 429 && status != 451 {
 			break
 		}
 	}
@@ -165,12 +193,8 @@ func (c *client) submitImage(ctx context.Context, submitURL string, payloads []m
 }
 
 func (c *client) submitVideo(ctx context.Context, submitURL string, payload map[string]any) (submission, error) {
-	headers, err := c.submitHeaders("", true)
-	if err != nil {
-		return submission{}, err
-	}
 	encoded, _ := json.Marshal(payload)
-	status, data, hdr, reqErr := c.request(ctx, http.MethodPost, submitURL, bytes.NewReader(encoded), headers)
+	status, data, hdr, reqErr := c.request(ctx, http.MethodPost, submitURL, bytes.NewReader(encoded), c.submitHeaders("", true))
 	if reqErr != nil {
 		return submission{}, reqErr
 	}
@@ -181,7 +205,7 @@ func (c *client) submitVideo(ctx context.Context, submitURL string, payload map[
 	if link == "" {
 		return submission{}, &upstreamError{stage: "submit_video", status: 502, body: "no polling URL"}
 	}
-	return submission{pollURL: link, upstreamTaskID: jobIDFromURL(link)}, nil
+	return submission{pollURL: link}, nil
 }
 
 func (c *client) poll(ctx context.Context, pollURL, kind string) (pollResult, error) {
@@ -214,19 +238,55 @@ func (c *client) poll(ctx context.Context, pollURL, kind string) (pollResult, er
 			}
 		}
 	}
-	mime := "image/png"
-	if kind == "video" {
-		mime = "video/mp4"
-	}
 	if len(urls) > 0 {
-		return pollResult{status: "SUCCEEDED", progress: 100, outputURL: urls[0], outputURLs: urls, mimeType: mime}, nil
+		return pollResult{status: "SUCCEEDED", progress: 100, outputURLs: urls}, nil
 	}
 	switch taskStatus {
 	case "FAILED", "CANCELLED", "ERROR":
-		return pollResult{status: "FAILED", progress: progress}, nil
+		failure := upstreamReason(bodyText(data))
+		if failure == "" {
+			failure = truncate(bodyText(data), 300)
+		}
+		return pollResult{status: "FAILED", progress: progress, failure: failure}, nil
 	default:
 		return pollResult{status: "IN_PROGRESS", progress: progress}, nil
 	}
+}
+
+// pollUntilDone 阻塞轮询直到任务成功（返回全部输出 URL）、失败或上下文结束。
+// 连续的瞬时失败在 pollTransientLimit 次内只重试，不放弃已提交的任务。
+func pollUntilDone(ctx context.Context, c *client, pollURL, kind string, progress func(int)) ([]string, error) {
+	failures := 0
+	for {
+		result, err := c.poll(ctx, pollURL, kind)
+		switch {
+		case err != nil:
+			if failures++; !transient(err) || failures >= pollTransientLimit || ctx.Err() != nil {
+				return nil, err
+			}
+		case result.status == "SUCCEEDED":
+			return result.outputURLs, nil
+		case result.status == "FAILED":
+			return nil, &upstreamError{stage: "poll", status: 502, body: "generation failed: " + result.failure, reason: result.failure}
+		default:
+			failures = 0
+			if progress != nil && result.progress > 0 {
+				progress(result.progress)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// transient 判断一次失败是否可能自行恢复（传输错误、429、5xx）。
+func transient(err error) bool {
+	var te *transportError
+	var ue *upstreamError
+	return errors.As(err, &te) || (errors.As(err, &ue) && (ue.status == http.StatusTooManyRequests || ue.status >= 500))
 }
 
 func (c *client) upload(ctx context.Context, uploadURL string, data []byte, mime, kind string) (string, error) {
@@ -248,25 +308,16 @@ func (c *client) upload(ctx context.Context, uploadURL string, data []byte, mime
 	return "", &upstreamError{stage: "upload_" + kind, status: 502, body: "no asset ID"}
 }
 
-func (c *client) download(ctx context.Context, outputURL string) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, outputURL, nil)
+// download 读取 Adobe 的预签名结果链接。
+func (c *client) download(ctx context.Context, outputURL string) ([]byte, error) {
+	resp, raw, err := c.send(ctx, http.MethodGet, outputURL, nil, map[string]string{"Accept": "*/*"}, maxDownloadBytes)
 	if err != nil {
-		return nil, "", &transportError{err: err}
-	}
-	req.Header.Set("Accept", "*/*")
-	resp, err := c.do.Do(req)
-	if err != nil {
-		return nil, "", &transportError{err: err}
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-	if err != nil {
-		return nil, "", &transportError{err: err}
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", classifyUpstream("download", resp.StatusCode, truncate(string(raw), 300))
+		return nil, classifyUpstream("download", resp.StatusCode, truncate(string(raw), 300))
 	}
-	return raw, resp.Header.Get("Content-Type"), nil
+	return raw, nil
 }
 
 // --- 解析辅助 ---
@@ -308,18 +359,6 @@ func resultLink(headers http.Header, data map[string]any) string {
 		return stringField(result, "href")
 	}
 	return ""
-}
-
-func jobIDFromURL(value string) string {
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return ""
-	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	if len(parts) == 0 {
-		return ""
-	}
-	return parts[len(parts)-1]
 }
 
 func progressValue(value any) int {

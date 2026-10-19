@@ -5,8 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"regexp"
-	"strings"
 	"sync"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -18,21 +16,25 @@ import (
 
 var scope = egressdomain.Scope(account.ProviderAdobe)
 
+// RemoteImageFetcher 下载客户端给的 https 输入图（需自带 SSRF 防护）。
+type RemoteImageFetcher func(ctx context.Context, rawURL string) ([]byte, error)
+
 // Adapter 提供 Adobe Firefly 的图像与视频生成能力。
 type Adapter struct {
-	mu       sync.RWMutex
-	cfg      Config
-	egress   *infraegress.Manager
-	cipher   *security.Cipher
-	assets   provider.ImageAssetStore
-	sherlock *sherlockService
-	logger   *slog.Logger
+	mu          sync.RWMutex
+	cfg         Config
+	egress      *infraegress.Manager
+	cipher      *security.Cipher
+	assets      provider.ImageAssetStore
+	fetchRemote RemoteImageFetcher
+	sherlock    *sherlockService
+	logger      *slog.Logger
 }
 
 // NewAdapter 构造 Adobe Provider 适配器。assets 把生成的图像归档为网关可稳定
-// 读取的本地资源。
-func NewAdapter(cfg Config, egress *infraegress.Manager, cipher *security.Cipher, assets provider.ImageAssetStore) *Adapter {
-	a := &Adapter{cfg: cfg, egress: egress, cipher: cipher, assets: assets}
+// 读取的本地资源；fetchRemote 为 nil 时只接受 data URI 输入图。
+func NewAdapter(cfg Config, egress *infraegress.Manager, cipher *security.Cipher, assets provider.ImageAssetStore, fetchRemote RemoteImageFetcher) *Adapter {
+	a := &Adapter{cfg: cfg, egress: egress, cipher: cipher, assets: assets, fetchRemote: fetchRemote}
 	a.sherlock = newSherlockService(a.config)
 	return a
 }
@@ -60,20 +62,16 @@ func (a *Adapter) config() Config {
 	return a.cfg
 }
 
-// requestContextFor 把存储的 token 解密成单次调用的凭据，并取全局 x-arp-session-id
-// （不需要它的调用即使取不到也不受影响）。
-func (a *Adapter) requestContextFor(ctx context.Context, credential account.Credential) (requestContext, error) {
-	cfg := a.config()
-	rc := requestContext{apiKey: cfg.apiKey(), userAgent: cfg.userAgent()}
+// requestContextFor 把存储的 token 解密成单次调用的凭据。x-arp-session-id 只在
+// 提交前由 useSherlock 取，轮询/下载/续期不碰 mint。
+func (a *Adapter) requestContextFor(credential account.Credential) (requestContext, error) {
+	rc := requestContext{apiKey: defaultAPIKey, userAgent: defaultUserAgent, timeout: a.config().requestTimeout()}
 	if credential.EncryptedAccessToken != "" {
 		token, err := a.cipher.Decrypt(credential.EncryptedAccessToken)
 		if err != nil {
 			return requestContext{}, err
 		}
 		rc.token = token
-	}
-	if token, err := a.sherlock.current(ctx); err == nil {
-		rc.sherlock = token
 	}
 	return rc, nil
 }
@@ -86,7 +84,7 @@ func (a *Adapter) withClient(ctx context.Context, credential account.Credential,
 		return err
 	}
 	defer lease.Release()
-	rc, err := a.requestContextFor(ctx, credential)
+	rc, err := a.requestContextFor(credential)
 	if err != nil {
 		return err
 	}
@@ -116,49 +114,39 @@ func (a *Adapter) pendingCredential(ctx context.Context, key string) account.Cre
 	return account.Credential{Provider: account.ProviderAdobe, EgressIdentity: "adobe_pending_" + security.HashToken(key)[:24]}
 }
 
-// submitImageRemint 提交图像；若被 408 拒绝则刷新 x-arp-session-id 后重试一次。
-func (a *Adapter) submitImageRemint(ctx context.Context, c *client, submitURL string, payloads []map[string]any, prompt string) (submission, error) {
-	sub, err := c.submitImage(ctx, submitURL, payloads, prompt)
-	if err == nil || !staleSherlock(err) {
-		return sub, err
+// useSherlock 在提交前取全局 x-arp-session-id。取不到时请求还没发出，返回
+// 请求级 503（换账号无济于事）。
+func (a *Adapter) useSherlock(ctx context.Context, c *client) error {
+	token, err := a.sherlock.current(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		a.log().Warn("adobe_sherlock_unavailable", "error", err)
+		return errMintUnavailable
 	}
-	if fresh, mintErr := a.sherlock.forceMint(ctx); mintErr == nil && fresh != "" {
-		c.rc.sherlock = fresh
-		return c.submitImage(ctx, submitURL, payloads, prompt)
-	}
-	return sub, err
+	c.rc.sherlock = token
+	return nil
 }
 
-// submitVideoRemint 同 submitImageRemint，用于视频提交。
-func (a *Adapter) submitVideoRemint(ctx context.Context, c *client, submitURL string, payload map[string]any) (submission, error) {
-	sub, err := c.submitVideo(ctx, submitURL, payload)
-	if err == nil || !staleSherlock(err) {
-		return sub, err
-	}
-	if fresh, mintErr := a.sherlock.forceMint(ctx); mintErr == nil && fresh != "" {
-		c.rc.sherlock = fresh
-		return c.submitVideo(ctx, submitURL, payload)
-	}
-	return sub, err
-}
-
-// staleSherlock 判断提交失败是否可重试刷新 x-arp-session-id（408/503）。
-func staleSherlock(err error) bool {
+// submit 发送一次提交；Adobe 以 408/503 拒绝过期的 x-arp-session-id 时强制重铸
+// 后再发一次。
+func (a *Adapter) submit(ctx context.Context, c *client, send func() (submission, error)) (submission, error) {
+	sub, err := send()
 	var ue *upstreamError
-	return errors.As(err, &ue) && (ue.status == 408 || ue.status == 503)
+	if err == nil || !errors.As(err, &ue) || (ue.status != http.StatusRequestTimeout && ue.status != http.StatusServiceUnavailable) {
+		return sub, err
+	}
+	fresh, mintErr := a.sherlock.forceMint(ctx)
+	if mintErr != nil {
+		return sub, err
+	}
+	c.rc.sherlock = fresh
+	return send()
 }
 
-var sherlockCookiePattern = regexp.MustCompile(`(?:^|;\s*)sherlockToken=([^;]+)`)
-
-// extractSherlock 从导入 Cookie 中读取 x-arp-session-id（仅用于导入时校验 Cookie 有效）。
-func extractSherlock(cookie string) string {
-	m := sherlockCookiePattern.FindStringSubmatch(cookie)
-	if len(m) != 2 {
-		return ""
-	}
-	value := strings.TrimSpace(m[1])
-	if !validSherlock(value) {
-		return ""
-	}
-	return value
+// rejected 判断提交是否被 Adobe 明确拒绝（4xx）：此时没有生成任务，可以换账号重试。
+func rejected(err error) bool {
+	var ue *upstreamError
+	return errors.As(err, &ue) && ue.status >= 400 && ue.status < 500
 }

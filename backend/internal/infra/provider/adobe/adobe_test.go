@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,8 +13,12 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
+	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
 // validCookie 构造一个带完整 Sherlock 四字段的 refreshprofile Cookie。
@@ -23,7 +28,7 @@ func validCookie() string {
 }
 
 func TestDefinitionValidatesInRegistry(t *testing.T) {
-	adapter := NewAdapter(Config{}, nil, nil, nil)
+	adapter := NewAdapter(Config{}, nil, nil, nil, nil)
 	if err := adapter.Definition().Validate(); err != nil {
 		t.Fatalf("definition invalid: %v", err)
 	}
@@ -48,21 +53,8 @@ func TestRoutesCoverEveryModel(t *testing.T) {
 	}
 }
 
-func TestExtractSherlock(t *testing.T) {
-	if got := extractSherlock(validCookie()); got == "" || !validSherlock(got) {
-		t.Fatalf("valid cookie yielded %q", got)
-	}
-	bad := "sherlockToken=" + base64.StdEncoding.EncodeToString([]byte(`{"sid":"s"}`))
-	if got := extractSherlock(bad); got != "" {
-		t.Fatalf("incomplete sherlock accepted: %q", got)
-	}
-	if got := extractSherlock("nocookie=1"); got != "" {
-		t.Fatalf("missing sherlock accepted: %q", got)
-	}
-}
-
 func TestParseImportedCredentials(t *testing.T) {
-	adapter := NewAdapter(Config{}, nil, nil, nil)
+	adapter := NewAdapter(Config{}, nil, nil, nil, nil)
 	cookie := validCookie()
 	data := cookie + "\n" + `{"cookie":"` + cookie + `","email":"a@b.com"}` + "\n" + "invalid-no-sherlock\n"
 	seeds, err := adapter.ParseImportedCredentials([]byte(data))
@@ -164,22 +156,12 @@ func TestClientSubmitPollDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := pollUntilDone(context.Background(), c, sub.pollURL, "image", nil)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || len(out) != 1 {
+		t.Fatalf("poll = %v, %v", out, err)
 	}
-	data, mime, err := c.download(context.Background(), out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "PNGDATA" || !strings.HasPrefix(mime, "image/png") {
-		t.Fatalf("download = %q %q", data, mime)
-	}
-}
-
-func TestClientSubmitRequiresSherlock(t *testing.T) {
-	c := &client{do: http.DefaultClient, rc: requestContext{token: "t", apiKey: "k"}}
-	if _, err := c.submitImage(context.Background(), "http://127.0.0.1:0/x", []map[string]any{{}}, "p"); err == nil {
-		t.Fatal("submit without sherlock must fail")
+	data, err := c.download(context.Background(), out[0])
+	if err != nil || string(data) != "PNGDATA" {
+		t.Fatalf("download = %q %v", data, err)
 	}
 }
 
@@ -214,24 +196,33 @@ func TestClientImsRefreshAndCredits(t *testing.T) {
 	}
 }
 
-func TestClassifyUpstream(t *testing.T) {
+// 网关只看 HTTPStatusCode / ErrUnauthorized / RequestScopedFailure 决策，状态必须如实上报。
+func TestClassifyUpstreamReportsGatewayStatus(t *testing.T) {
 	cases := []struct {
-		status                  int
-		body                    string
-		permanent, quota, retry bool
+		status        int
+		body          string
+		wantStatus    int
+		requestScoped bool
 	}{
-		{401, "", true, false, false},
-		{403, "", true, false, false},
-		{402, "", false, true, false},
-		{200, "insufficient credits", false, true, false},
-		{429, "", false, false, true},
-		{503, "", false, false, true},
+		{401, "", 401, false},
+		{402, "", 429, false},
+		{400, `{"message":"Insufficient credits"}`, 429, false},
+		{403, `{"message":"insufficient permissions"}`, 403, false},
+		{400, `{"message":"prompt blocked"}`, 400, true},
+		{429, "", 429, false},
+		{503, "", 503, false},
 	}
 	for _, tc := range cases {
 		err := classifyUpstream("submit", tc.status, tc.body)
-		if err.permanent != tc.permanent || err.quota != tc.quota || err.retryable != tc.retry {
-			t.Fatalf("status %d body %q => %+v", tc.status, tc.body, err)
+		if got := provider.ErrorHTTPStatusOrZero(err); got != tc.wantStatus || provider.IsRequestScopedError(err) != tc.requestScoped {
+			t.Fatalf("status %d body %q => status %d scoped %v", tc.status, tc.body, got, provider.IsRequestScopedError(err))
 		}
+	}
+	if !errors.Is(classifyUpstream("submit", 401, ""), provider.ErrUnauthorized) {
+		t.Fatal("401 must match provider.ErrUnauthorized")
+	}
+	if reason := classifyUpstream("submit", 400, `{"message":"prompt blocked"}`).reason; reason != "prompt blocked" {
+		t.Fatalf("reason = %q", reason)
 	}
 }
 
@@ -318,5 +309,194 @@ func TestKlingO3ModuleFollowsReference(t *testing.T) {
 	}
 	if p["modelVersion"] != "kling_o3_pro_reference_to_video" {
 		t.Fatalf("kling-o3 modelVersion = %v", p["modelVersion"])
+	}
+}
+
+// --- 与网关对接的流程测试 ---
+
+type egressRepositoryStub struct{}
+
+func (egressRepositoryStub) ListEgressNodes(context.Context, egressdomain.Scope, repository.SortQuery) ([]egressdomain.Node, error) {
+	return nil, nil
+}
+func (egressRepositoryStub) GetEgressNode(context.Context, uint64) (egressdomain.Node, error) {
+	return egressdomain.Node{}, errors.New("not found")
+}
+func (egressRepositoryStub) CreateEgressNode(context.Context, egressdomain.Node) (egressdomain.Node, error) {
+	return egressdomain.Node{}, errors.New("unsupported")
+}
+func (egressRepositoryStub) UpdateEgressNode(context.Context, egressdomain.Node) (egressdomain.Node, error) {
+	return egressdomain.Node{}, errors.New("unsupported")
+}
+func (egressRepositoryStub) DeleteEgressNode(context.Context, uint64) error {
+	return errors.New("unsupported")
+}
+
+// fakeAdobe 是一个可编排的 Adobe + mint 测试服务；submitStatus 为 0 表示接受任务。
+type fakeAdobe struct {
+	*httptest.Server
+	submitStatus int
+	submits      atomic.Int32
+	mintDown     bool
+}
+
+func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
+	t.Helper()
+	fake := &fakeAdobe{}
+	fake.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/mint":
+			if fake.mintDown {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": validSherlockToken()})
+		case r.URL.Path == "/generate-async":
+			fake.submits.Add(1)
+			if fake.submitStatus != 0 {
+				w.WriteHeader(fake.submitStatus)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": "prompt blocked"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"links": map[string]any{"result": "http://" + r.Host + "/status/job1"}})
+		case r.URL.Path == "/status/job1":
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "succeeded", "outputs": []any{map[string]any{"image": map[string]any{"presignedUrl": "http://" + r.Host + "/out.png"}}}})
+		case r.URL.Path == "/out.png":
+			_, _ = w.Write([]byte("PNGDATA"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	previous := endpoints.imageSubmit
+	endpoints.imageSubmit = fake.URL + "/generate-async"
+	t.Cleanup(func() { endpoints.imageSubmit = previous })
+	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := cipher.Encrypt("header.e30.sig")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := NewAdapter(Config{SherlockMintAPI: fake.URL}, infraegress.NewManager(egressRepositoryStub{}, cipher), cipher, nil, nil)
+	return fake, adapter, account.Credential{ID: 1, Provider: account.ProviderAdobe, AuthType: account.AuthTypeOAuth, EncryptedAccessToken: token}
+}
+
+// Submitted 标记只在请求可能已被 Adobe 接受时保留：明确 4xx 清掉（网关可换账号），
+// 5xx 保留（结果未知，网关不会重提）。
+func TestSubmitImageCheckpointSemantics(t *testing.T) {
+	cases := []struct {
+		submitStatus  int
+		wantSubmitted bool
+		wantUpstream  bool
+	}{{0, true, true}, {400, false, false}, {500, true, false}}
+	for _, tc := range cases {
+		fake, adapter, credential := newFakeAdobe(t)
+		fake.submitStatus = tc.submitStatus
+		var saves []provider.ImageCheckpoint
+		cp, err := adapter.SubmitImage(context.Background(), provider.ImageJobRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"}, func(cp provider.ImageCheckpoint) error {
+			saves = append(saves, cp)
+			return nil
+		})
+		if (err == nil) != (tc.submitStatus == 0) || cp.Submitted != tc.wantSubmitted || (cp.UpstreamID != "") != tc.wantUpstream {
+			t.Fatalf("status %d: cp=%+v err=%v", tc.submitStatus, cp, err)
+		}
+		if len(saves) == 0 || !saves[0].Submitted {
+			t.Fatalf("status %d: Submitted must be saved before the send, saves=%+v", tc.submitStatus, saves)
+		}
+		if tc.submitStatus == 400 && !provider.IsRequestScopedError(err) {
+			t.Fatalf("a rejected prompt must be request-scoped: %v", err)
+		}
+	}
+}
+
+// 同步路径：Adobe 接受任务前的拒绝必须是响应（网关据此刷新凭据/换账号），
+// mint 不可用时请求根本不发出。
+func TestGenerateImageRejectionsBecomeResponses(t *testing.T) {
+	fake, adapter, credential := newFakeAdobe(t)
+	fake.submitStatus = http.StatusUnauthorized
+	response, err := adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"})
+	if err != nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("401 submit => response %v err %v", response, err)
+	}
+
+	fake, adapter, credential = newFakeAdobe(t)
+	fake.mintDown = true
+	response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"})
+	if err != nil || response.StatusCode != http.StatusServiceUnavailable || fake.submits.Load() != 0 {
+		t.Fatalf("mint down => response %v err %v submits %d", response, err, fake.submits.Load())
+	}
+
+	fake, adapter, credential = newFakeAdobe(t)
+	response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "cat"})
+	if err != nil || response.StatusCode != http.StatusOK || response.QuotaUnits != 1 {
+		t.Fatalf("success => response %+v err %v", response, err)
+	}
+}
+
+func TestPollToleratesTransientErrorsAndReportsFailure(t *testing.T) {
+	previous := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = previous })
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) <= 2 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "FAILED", "message": "content policy"})
+	}))
+	defer server.Close()
+	c := &client{do: server.Client(), rc: requestContext{token: "t"}}
+	_, err := pollUntilDone(context.Background(), c, server.URL, "image", nil)
+	if err == nil || !strings.Contains(err.Error(), "content policy") || hits.Load() != 3 {
+		t.Fatalf("poll err = %v after %d hits", err, hits.Load())
+	}
+}
+
+func TestRatioAndDurationSnapping(t *testing.T) {
+	ratios := map[string]string{"": "1:1", "auto": "1:1", "1024x1024": "1:1", "1536x1024": "3:2", "1024x1536": "2:3", "1792x1024": "16:9", "4096x1024": "21:9"}
+	for size, want := range ratios {
+		if got := ratioFromSize(size, false); got != want {
+			t.Fatalf("ratioFromSize(%q) = %s, want %s", size, got, want)
+		}
+	}
+	if got := ratioFromSize("1024x4096", true); got != "1:4" {
+		t.Fatalf("nano tall ratio = %s", got)
+	}
+	if got := nearestRatio("1:1", []string{"16:9", "9:16"}, "16:9"); got != "16:9" {
+		t.Fatalf("nearestRatio = %s", got)
+	}
+	if got := nearestRatio("2:3", []string{"16:9", "9:16"}, "16:9"); got != "9:16" {
+		t.Fatalf("portrait nearestRatio = %s", got)
+	}
+	if got := nearestDuration(8, []int{5, 10, 15}, 5); got != 10 {
+		t.Fatalf("nearestDuration = %d", got)
+	}
+	// 网关对未填 duration 默认 8 秒：kling 不能因此被拒。
+	if err := NewAdapter(Config{}, nil, nil, nil, nil).ValidateVideoRequest(provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: "kling3", Duration: 8, Resolution: "720p"}); err != nil {
+		t.Fatalf("kling3 default duration rejected: %v", err)
+	}
+}
+
+// 积分接口拿不到数值时不能写出"余额 0"窗口（落库会被当成上游耗尽）。
+func TestSyncQuotaModeNeverInventsEmptyWindow(t *testing.T) {
+	status := http.StatusOK
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	previous := creditsURL
+	creditsURL = server.URL
+	t.Cleanup(func() { creditsURL = previous })
+	_, adapter, credential := newFakeAdobe(t)
+	if _, err := adapter.SyncQuotaMode(context.Background(), credential, quotaModeCredits); !errors.Is(err, account.ErrQuotaNotLimited) {
+		t.Fatalf("no balance => %v, want ErrQuotaNotLimited", err)
+	}
+	status = http.StatusInternalServerError
+	if window, err := adapter.SyncQuotaMode(context.Background(), credential, quotaModeCredits); err == nil {
+		t.Fatalf("credits 500 => window %+v without error", window)
 	}
 }
