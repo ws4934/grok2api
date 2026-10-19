@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -340,25 +339,21 @@ func TestVideo1080pValidationUsesResolvedUpstreamModel(t *testing.T) {
 }
 
 func TestEncodeVideoInputEnforcesPersistedLimit(t *testing.T) {
-	// image_url and combined image_urls both store the same value, so the URL is counted twice.
-	base := `{"image_url":"","image_urls":[""]}`
-	overhead := len(base)
-	urlLen := (media.MaxInputJSONBytes - overhead) / 2
-	atLimit := strings.Repeat("A", urlLen)
-	encoded, err := encodeVideoInput(atLimit, nil)
+	atLimit := strings.Repeat("A", media.MaxInputJSONBytes-len(`{"image_url":""}`))
+	encoded, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{imageURL: atLimit})
 	if err != nil {
 		t.Fatalf("encode at limit: %v", err)
 	}
-	if len(encoded) > media.MaxInputJSONBytes {
-		t.Fatalf("encoded len=%d exceeds limit", len(encoded))
+	if len(encoded) != media.MaxInputJSONBytes {
+		t.Fatalf("encoded len=%d, want exactly the limit", len(encoded))
 	}
-	if _, err := encodeVideoInput(atLimit+"AA", nil); !errors.Is(err, ErrVideoInputTooLarge) {
+	if _, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{imageURL: atLimit + "A"}); !errors.Is(err, ErrVideoInputTooLarge) {
 		t.Fatalf("oversized input error = %v", err)
 	}
 }
 
 func TestEncodeDecodeVideoInputPreservesImageAndReferences(t *testing.T) {
-	encoded, err := encodeVideoInput("https://example.com/first.png", []string{"https://example.com/ref.png"})
+	encoded, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{imageURL: "https://example.com/first.png", referenceURLs: []string{"https://example.com/ref.png"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +363,7 @@ func TestEncodeDecodeVideoInputPreservesImageAndReferences(t *testing.T) {
 		t.Fatalf("decoded split = %q %#v from %s", imageURL, refs, encoded)
 	}
 
-	encoded, err = encodeVideoInput("", []string{"https://example.com/ref-only.png"})
+	encoded, err = encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{referenceURLs: []string{"https://example.com/ref-only.png"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,20 +372,9 @@ func TestEncodeDecodeVideoInputPreservesImageAndReferences(t *testing.T) {
 	if imageURL != "" || len(refs) != 1 || refs[0] != "https://example.com/ref-only.png" {
 		t.Fatalf("single reference decoded = %q %#v from %s", imageURL, refs, encoded)
 	}
-
-	decoded = decodeVideoInputs(`{"image_urls":["https://legacy/one.png"]}`)
-	imageURL, refs = decoded.imageURL, decoded.referenceURLs
-	if imageURL != "https://legacy/one.png" || len(refs) != 0 {
-		t.Fatalf("legacy single = %q %#v", imageURL, refs)
-	}
-	decoded = decodeVideoInputs(`{"image_urls":["https://legacy/a.png","https://legacy/b.png"]}`)
-	imageURL, refs = decoded.imageURL, decoded.referenceURLs
-	if imageURL != "" || len(refs) != 2 || refs[0] != "https://legacy/a.png" || refs[1] != "https://legacy/b.png" {
-		t.Fatalf("legacy multi = %q %#v", imageURL, refs)
-	}
 }
 
-// 尾帧单独保存，参与临时输入的物化与回收，但不进入旧版 image_urls（旧读者会把唯一一张当首帧）。
+// 尾帧单独保存，参与临时输入的物化与回收。
 func TestEncodeDecodeVideoInputPreservesLastFrame(t *testing.T) {
 	encoded, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{imageURL: "https://example.com/first.png", lastFrameURL: media.InputReference("last")})
 	if err != nil {
@@ -403,16 +387,9 @@ func TestEncodeDecodeVideoInputPreservesLastFrame(t *testing.T) {
 	if all := decodeVideoInput(encoded); len(all) != 2 || all[1] != media.InputReference("last") {
 		t.Fatalf("job inputs = %#v, want first and last frame", all)
 	}
-	var stored struct {
-		ImageURLs []string `json:"image_urls"`
-	}
-	if err := json.Unmarshal([]byte(encoded), &stored); err != nil || len(stored.ImageURLs) != 1 {
-		t.Fatalf("legacy image_urls = %#v, %v", stored.ImageURLs, err)
-	}
 }
 
-// 参考视频单独保存：参与物化与回收，不进入旧版 image_urls；只有参考视频的任务也不能被
-// 当成旧格式解析丢掉。
+// 参考视频单独保存，参与物化与回收。
 func TestEncodeDecodeVideoInputPreservesReferenceVideos(t *testing.T) {
 	encoded, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{referenceVideoURLs: []string{media.InputReference("clip"), " https://example.com/b.mp4 "}})
 	if err != nil {
@@ -424,9 +401,6 @@ func TestEncodeDecodeVideoInputPreservesReferenceVideos(t *testing.T) {
 	}
 	if all := decodeVideoInput(encoded); len(all) != 2 || all[0] != media.InputReference("clip") {
 		t.Fatalf("job inputs = %#v", all)
-	}
-	if strings.Contains(encoded, "image_urls") {
-		t.Fatalf("reference videos leaked into legacy image_urls: %s", encoded)
 	}
 }
 

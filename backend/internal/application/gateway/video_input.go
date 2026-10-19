@@ -152,10 +152,6 @@ func (in videoInputs) all() []string {
 	return values
 }
 
-func encodeVideoInput(imageURL string, referenceURLs []string) (string, error) {
-	return encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{imageURL: imageURL, referenceURLs: referenceURLs})
-}
-
 func encodeVideoInputFull(operation provider.VideoOperation, in videoInputs) (string, error) {
 	payload := map[string]any{}
 	if operation == "" {
@@ -181,12 +177,6 @@ func encodeVideoInputFull(operation provider.VideoOperation, in videoInputs) (st
 	}
 	if value := strings.TrimSpace(in.videoURL); value != "" {
 		payload["video_url"] = value
-	}
-	// Keep a combined image_urls field for older readers/tools that only
-	// understand the pre-split shape (first frame + references). New workers
-	// prefer the split fields.
-	if combined := (videoInputs{imageURL: in.imageURL, referenceURLs: in.referenceURLs}).imageRefs(); len(combined) > 0 {
-		payload["image_urls"] = combined
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -219,28 +209,13 @@ func decodeVideoInputs(value string) videoInputs {
 		ReferenceURLs      []string `json:"reference_urls"`
 		ReferenceVideoURLs []string `json:"reference_video_urls"`
 		ReferenceAudios    []string `json:"reference_audios"`
-		ImageURLs          []string `json:"image_urls"`
 		VideoURL           string   `json:"video_url"`
 	}
 	_ = json.Unmarshal([]byte(value), &input)
-	out := videoInputs{
+	return videoInputs{
 		imageURL: strings.TrimSpace(input.ImageURL), lastFrameURL: strings.TrimSpace(input.LastFrameURL),
 		videoURL: strings.TrimSpace(input.VideoURL), referenceURLs: trimmedValues(input.ReferenceURLs),
 		referenceVideoURLs: trimmedValues(input.ReferenceVideoURLs), referenceAudios: normalizeVideoReferenceAudios(input.ReferenceAudios),
-	}
-	if out.imageURL != "" || out.lastFrameURL != "" || out.videoURL != "" || len(out.referenceURLs) > 0 ||
-		len(out.referenceVideoURLs) > 0 || len(out.referenceAudios) > 0 || strings.TrimSpace(input.Operation) != "" {
-		return out
-	}
-	// Legacy jobs stored a flat image_urls list. Preserve historical mapping:
-	// one URL was treated as the first-frame image; multiple URLs were references.
-	switch legacy := trimmedValues(input.ImageURLs); len(legacy) {
-	case 0:
-		return videoInputs{}
-	case 1:
-		return videoInputs{imageURL: legacy[0]}
-	default:
-		return videoInputs{referenceURLs: legacy}
 	}
 }
 

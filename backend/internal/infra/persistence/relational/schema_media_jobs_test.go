@@ -158,7 +158,7 @@ func verifyMediaJobKindUpgrade(t *testing.T, database *Database) {
 	if input, err := jobs.GetMediaJobInput(ctx, legacy.ID); err != nil || input != legacy.InputJSON {
 		t.Fatalf("upgraded input = %q err = %v", input, err)
 	}
-	for name, marker := range map[string]string{"chk_media_jobs_operation": "kind", "chk_media_jobs_seconds": "60", "chk_media_jobs_status": "uncertain", "chk_media_jobs_kind": "image"} {
+	for name, marker := range map[string]string{"chk_media_jobs_operation": "kind", "chk_media_jobs_seconds": "kind", "chk_media_jobs_status": "uncertain", "chk_media_jobs_kind": "image"} {
 		definition, err := database.constraintDefinition(ctx, consoleConstraint{model: &mediaJobModel{}, table: "media_jobs", name: name})
 		if err != nil || !strings.Contains(definition, marker) {
 			t.Fatalf("%s = %q err = %v", name, definition, err)

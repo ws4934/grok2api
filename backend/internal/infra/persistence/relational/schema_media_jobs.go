@@ -7,14 +7,13 @@ const mediaJobIdempotencyIndex = "CREATE UNIQUE INDEX IF NOT EXISTS uidx_media_j
 
 // ensureMediaJobKindConstraints upgrades the video-only CHECKs once
 // AutoMigrate has added kind (default 'video'): operation and seconds become
-// kind-aware (seconds up to 60: Grok stops at 15, Adobe models reach 30) and
-// the status set gains canceled/uncertain. Existing rows are
+// kind-aware and the status set gains canceled/uncertain. Existing rows are
 // video jobs and satisfy the new definitions unchanged; SQLite rebuilds the
 // table, PostgreSQL replaces the constraints in place.
 func (d *Database) ensureMediaJobKindConstraints(ctx context.Context) error {
 	for _, constraint := range []struct{ name, marker string }{
 		{"chk_media_jobs_operation", "kind"},
-		{"chk_media_jobs_seconds", "60"},
+		{"chk_media_jobs_seconds", "kind"},
 		{"chk_media_jobs_status", "uncertain"},
 	} {
 		if err := d.ensureNamedConstraints(ctx, []consoleConstraint{

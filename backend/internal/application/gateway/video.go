@@ -27,7 +27,7 @@ const (
 	videoOutputAttempts      = 3
 	// Base64 物化会同时持有原图和编码后字符串，单独限流避免高 mediaConcurrency 放大内存峰值。
 	videoInputMaterializeConcurrency = 4
-	videoInputJSONBaseBytes          = int64(len(`{"image_urls":[]}`))
+	videoInputJSONBaseBytes          = int64(len(`{}`))
 )
 
 // VideoInputFileReference 将本地临时 file_id 编码为只在 Gateway 内部解释的引用。
