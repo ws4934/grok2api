@@ -1,6 +1,7 @@
 package chatgpt
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt/browserprofile"
+	"golang.org/x/crypto/sha3"
 )
 
 func TestSentinelProofCancellationAndBudget(t *testing.T) {
@@ -27,6 +29,53 @@ func TestSentinelProofCancellationAndBudget(t *testing.T) {
 		t.Fatal("malformed difficulty accepted")
 	}
 }
+// marshalProof is the loop solveProof replaced: it marshals config per attempt.
+func marshalProof(ctx context.Context, seed string, target []byte, config []any) string {
+	for i := 0; i < 500000; i++ {
+		if i%256 == 0 && ctx.Err() != nil {
+			return ""
+		}
+		config[3] = i
+		config[9] = i >> 1
+		raw, _ := json.Marshal(config)
+		encoded := base64.StdEncoding.EncodeToString(raw)
+		sum := sha3.Sum512(append([]byte(seed), []byte(encoded)...))
+		if len(target) <= len(sum) && bytes.Compare(sum[:len(target)], target) <= 0 {
+			return "gAAAAAB" + encoded
+		}
+	}
+	return ""
+}
+
+func TestSentinelProofMatchesMarshalLoop(t *testing.T) {
+	p := browserprofile.Default()
+	// The same shape as buildProofToken's config; the script and build carry
+	// characters json.Marshal escapes.
+	config := func() []any {
+		return []any{
+			"1920x1080", "Mon Oct 19 2026 10:00:00 GMT+0000 (Coordinated Universal Time)", p.JSHeapSizeLimit, 0, p.UserAgent,
+			"https://cdn.example/sdk.js?a=1&b=<2>", "prod-\"é\"", p.NavigatorLanguage, p.NavigatorLanguagesValue(), 0.5, "webdriver-false", "location", "navigator",
+			0, "8f9a6c1e-2b3d-4e5f-8a7b-9c0d1e2f3a4b", "", p.HardwareConcurrency, int64(1760868000000), 0, 0, 0, 0, 0, 0, 0, 0,
+		}
+	}
+	for _, difficulty := range []string{"ff", "0fffff", "03ffff", "00ffff", "003fff", "0003ff"} {
+		target, err := hexBytes(difficulty)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range 6 {
+			seed := "0." + strconv.Itoa(7919*(i+1))
+			want := marshalProof(context.Background(), seed, target, config())
+			if got := solveProof(context.Background(), seed, target, config()); want == "" || got != want {
+				t.Fatalf("difficulty %s seed %s: got %q, want %q", difficulty, seed, got, want)
+			}
+		}
+	}
+	if solveProof(context.Background(), "seed", make([]byte, 65), config()) != "" {
+		t.Fatal("target longer than the sum was met")
+	}
+}
+
 func TestSentinelUnknownAndGlobalStepBudget(t *testing.T) {
 	encode := func(ops []any) string {
 		raw, _ := json.Marshal(ops)

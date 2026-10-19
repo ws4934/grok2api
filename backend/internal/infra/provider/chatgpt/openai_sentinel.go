@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -198,17 +199,36 @@ func buildProofToken(ctx context.Context, seed, difficulty string, profile brows
 		build, profile.NavigatorLanguage, profile.NavigatorLanguagesValue(), 0.5, "webdriver-false", "location", "navigator",
 		0, firstUUID(), "", profile.HardwareConcurrency, zone.at.UnixMilli(), 0, 0, 0, 0, 0, 0, 0, 0,
 	}
+	return solveProof(ctx, seed, target, config)
+}
+
+// solveProof finds the attempt i, written to config[3] with i>>1 in config[9],
+// whose SHA3-512 of seed and the base64 JSON config is at most target. The JSON
+// around the two numbers is rendered once and the buffers are reused, so an
+// attempt builds the same bytes as json.Marshal without allocating.
+func solveProof(ctx context.Context, seed string, target []byte, config []any) string {
+	// A SHA3-512 sum is 64 bytes: a longer target can never be met.
+	if len(target) > 64 {
+		return ""
+	}
+	inner := func(values []any) []byte {
+		raw, _ := json.Marshal(values)
+		return raw[1 : len(raw)-1]
+	}
+	head := append(append([]byte("["), inner(config[:3])...), ',')
+	middle := append(append([]byte(","), inner(config[4:9])...), ',')
+	tail := append(append([]byte(","), inner(config[10:])...), ']')
+	var raw, input []byte
 	for i := 0; i < 500000; i++ {
 		if i%256 == 0 && ctx.Err() != nil {
 			return ""
 		}
-		config[3] = i
-		config[9] = i >> 1
-		raw, _ := json.Marshal(config)
-		encoded := base64.StdEncoding.EncodeToString(raw)
-		sum := sha3.Sum512(append([]byte(seed), []byte(encoded)...))
-		if len(target) <= len(sum) && bytes.Compare(sum[:len(target)], target) <= 0 {
-			return "gAAAAAB" + encoded
+		raw = strconv.AppendInt(append(raw[:0], head...), int64(i), 10)
+		raw = strconv.AppendInt(append(raw, middle...), int64(i>>1), 10)
+		raw = append(raw, tail...)
+		input = base64.StdEncoding.AppendEncode(append(input[:0], seed...), raw)
+		if sum := sha3.Sum512(input); bytes.Compare(sum[:len(target)], target) <= 0 {
+			return "gAAAAAB" + string(input[len(seed):])
 		}
 	}
 	return ""
