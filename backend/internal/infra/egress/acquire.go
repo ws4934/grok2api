@@ -279,10 +279,15 @@ func (m *Manager) leaseForNodeWithOptions(ctx context.Context, scope domain.Scop
 	if scope != domain.ScopeConsoleAsset {
 		accountIdentity = isolationAccountIdentity(ctx, scope, affinity)
 	}
-	// Extension channels build their own transports from ProxyURL; a Grok
-	// browser client per lease would only fill the shared client cache.
+	// Most extension channels build their own transports from ProxyURL, so an
+	// extension lease builds its browser client only when Do is first called.
 	var client cachedClient
-	if !domain.IsExtensionScope(scope) {
+	var newClient func() (cachedClient, error)
+	if domain.IsExtensionScope(scope) {
+		newClient = func() (cachedClient, error) {
+			return m.clientForWithOptions(selected.ID, scope, proxyURL, userAgent, cookies, sticky, accountIdentity, options)
+		}
+	} else {
 		client, err = m.clientForWithOptions(selected.ID, scope, proxyURL, userAgent, cookies, sticky, accountIdentity, options)
 		if err != nil {
 			return nil, false, err
@@ -291,7 +296,7 @@ func (m *Manager) leaseForNodeWithOptions(ctx context.Context, scope domain.Scop
 	m.incrementInflight(selected.ID)
 	recordSelection(ctx, Selection{NodeID: selected.ID, NodeName: selected.Name, Scope: scope, Proxied: proxyURL != ""})
 	var once sync.Once
-	return &Lease{NodeID: selected.ID, NodeName: selected.Name, Scope: scope, ProxyURL: proxyURL, UserAgent: userAgent, CFCookies: cookies, client: client.client, browser: client.browser, sticky: sticky, proxyPool: proxyPool, freshTunnel: freshTunnel, clearanceKey: clearanceKey, clearanceManager: m, release: func() {
+	return &Lease{NodeID: selected.ID, NodeName: selected.Name, Scope: scope, ProxyURL: proxyURL, UserAgent: userAgent, CFCookies: cookies, client: client.client, browser: client.browser, newClient: newClient, sticky: sticky, proxyPool: proxyPool, freshTunnel: freshTunnel, clearanceKey: clearanceKey, clearanceManager: m, release: func() {
 		once.Do(func() {
 			m.decrementInflight(selected.ID)
 		})

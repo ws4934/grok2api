@@ -60,6 +60,9 @@ type Lease struct {
 	CFCookies        string
 	client           requestClient
 	browser          *browserClient
+	newClient        func() (cachedClient, error) // extension scopes: built on first Do
+	clientOnce       sync.Once
+	clientErr        error
 	sticky           bool
 	proxyPool        bool
 	freshTunnel      bool
@@ -92,6 +95,16 @@ func (l *Lease) DoDeferredForbidden(request *http.Request) (*http.Response, erro
 }
 
 func (l *Lease) doRequest(request *http.Request, invalidateForbidden bool) (*http.Response, error) {
+	if l != nil && l.newClient != nil {
+		l.clientOnce.Do(func() {
+			var client cachedClient
+			client, l.clientErr = l.newClient()
+			l.client, l.browser = client.client, client.browser
+		})
+		if l.clientErr != nil {
+			return nil, l.clientErr
+		}
+	}
 	if l == nil || l.client == nil {
 		return nil, errors.New("出口客户端未初始化")
 	}

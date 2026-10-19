@@ -2,6 +2,8 @@ package egress
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +49,33 @@ func TestExtensionScopeLeasesItsOwnProxyNodes(t *testing.T) {
 	defer direct.Release()
 	if direct.ProxyURL != "" {
 		t.Fatalf("extension scope borrowed another scope's proxy: %q", direct.ProxyURL)
+	}
+}
+
+// A channel that sends through the lease (Adobe) gets the browser TLS client on
+// its first request; before that nothing is built or cached.
+func TestExtensionLeaseBuildsBrowserClientOnFirstRequest(t *testing.T) {
+	domain.SetExtensionScopes([]domain.Scope{"adobe"})
+	t.Cleanup(func() { domain.SetExtensionScopes(nil) })
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	manager := NewManager(egressRepositoryTestStub{}, nil) // no nodes: direct egress
+	lease, err := manager.AcquireCredential(context.Background(), "adobe", accountdomain.Credential{ID: 7, Provider: "adobe"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	if len(manager.clients) != 0 {
+		t.Fatal("client built before the first request")
+	}
+	request, _ := http.NewRequest(http.MethodGet, server.URL, nil)
+	response, err := lease.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if lease.browser == nil || len(manager.clients) != 1 {
+		t.Fatalf("after the first request: browser client=%v cached=%d", lease.browser != nil, len(manager.clients))
 	}
 }
 
