@@ -64,6 +64,9 @@ func (s *Service) Apply(ctx context.Context) (InstallResult, error) {
 		return InstallResult{}, ErrBusy
 	}
 	defer s.installing.Unlock()
+	if reason := s.installBlocker(); reason != "" {
+		return InstallResult{}, blockedError(reason)
+	}
 	snapshot := s.Check(ctx)
 	switch {
 	case snapshot.Status == StatusCheckFailed:

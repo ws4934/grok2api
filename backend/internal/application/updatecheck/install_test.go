@@ -325,6 +325,16 @@ func TestConcurrentApplyIsBusy(t *testing.T) {
 	}
 }
 
+func TestApplyRefusesDevelopmentBuild(t *testing.T) {
+	service := NewService("dev", "", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("development build reached the network")
+		return nil, nil
+	})})
+	if _, err := service.Apply(context.Background()); !errors.Is(err, ErrBlocked) || err.Error() != "源码运行/开发版本不支持在线更新" {
+		t.Fatalf("Apply() error = %v", err)
+	}
+}
+
 func TestApplyWithoutUpdateFails(t *testing.T) {
 	archive := buildArchive(t, releaseEntries("v3.0.0")...)
 	service, dir := newInstall(t, (&fakeGitHub{tag: "v3.0.0", assets: releaseAssets("v3.0.0", archive), redirectHost: "release-assets.githubusercontent.com"}).client(t))

@@ -77,16 +77,14 @@ func TestHandlerReturnsAndChecksVersion(t *testing.T) {
 	}
 }
 
-func TestHandlerRejectsInstallWithoutUpdateOrBackup(t *testing.T) {
+func TestHandlerMapsInstallRefusalsToConflict(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"tag_name":"v3.0.0"}`))}, nil
-	})}
 	router := gin.New()
-	NewHandler(nil, updatecheckapp.NewService("v3.0.0", "", client)).Register(router.Group("/api/admin/v1"))
+	// 测试二进制旁没有 VERSION 与前端目录，不是可在线更新的安装。
+	NewHandler(nil, updatecheckapp.NewService("v3.0.0", "", nil)).Register(router.Group("/api/admin/v1"))
 
 	for path, code := range map[string]string{
-		"/api/admin/v1/system/update/apply":    "updateNotAvailable",
+		"/api/admin/v1/system/update/apply":    "updateBlocked",
 		"/api/admin/v1/system/update/rollback": "rollbackUnavailable",
 	} {
 		recorder := httptest.NewRecorder()
