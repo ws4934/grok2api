@@ -90,7 +90,7 @@ services:
     environment:
       TZ: "${TZ:-Asia/Shanghai}"
       # 可选：mint 容器出站代理。留空为直连。
-      # http(s):// 或无认证 socks5:// 直传；带认证 socks5://user:pass@host:port 走内置中转。
+      # http(s)://[user:pass@]host:port 或 socks5://[user:pass@]host:port（带认证的 socks5 走内置中转）。
       MINT_PROXY: "${MINT_PROXY:-}"
     restart: unless-stopped
     init: true

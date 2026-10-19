@@ -197,7 +197,7 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 
 ### 账号与凭据
 
-- **导入**（账号页 → Adobe 标签）：登录 `https://firefly.adobe.com`，复制完整浏览器 Cookie（需含 `sherlockToken`），每行一个粘贴；也支持 JSON/JSONL。Cookie 存入 refresh token 字段。
+- **导入**（账号页 → Adobe 标签）：登录 `https://firefly.adobe.com`，复制该站完整的浏览器 Cookie，每行一个粘贴；也支持 JSON/JSONL。导入时用 Cookie 换取 access token 验证，Cookie 存入 refresh token 字段。
 - **续期**：access token（IMS JWT）约 1 小时过期，网关用 Cookie 调 `adobeid-na1.services.adobe.com/ims/check/v6/token` 自动续期；Cookie 失效（401/403）→ 账号转入需重新导入。没有注册新账号的能力——账号始终靠导入 Cookie。
 
 ### 全局 x-arp-session-id（mint sidecar）
@@ -209,7 +209,7 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
   ```
 
 - grok2api 默认指向 compose 的 `mint` 服务（`provider.adobe.sherlockMintAPI=http://mint:8777`），定期自动刷新并缓存；非 compose 部署需自行提供可达的 mint 地址。
-- mint 容器可选出站代理 `MINT_PROXY`：`http(s)://` 或无认证 `socks5://` 直传，带认证 `socks5://user:pass@host` 走容器内置中转。
+- mint 容器可选出站代理 `MINT_PROXY`：`http(s)://`（可带 `user:pass@`，由页面应答代理认证）或 `socks5://`（带认证时走容器内置中转）。
 - 账号始终靠导入 Cookie，无自动注册。
 
 ### 模型
@@ -218,7 +218,16 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 
 - 图像（各含生成 + 编辑）：`nano-banana-pro`、`nano-banana`、`nano-banana2`、`gpt-image-2`、`gpt-image-2.5`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`。多图 `n` 在一次请求里用 seeds 数组出多张。
 - 视频：`sora2`、`sora2-pro`、`veo31`、`veo31-ref`、`gemini-omni`、`kling-o3`、`kling3`、`seedance20`、`seedance20-fast`。参考图/视频/音频上传到 `/v2/storage/*` 后引用。
-- 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口展示。
+- 视频的 `duration` / `aspect_ratio` 会就近对齐到该模型支持的值（网关对未填的 `duration` 默认 8 秒，例如 `kling3` 取 10 秒）；不支持的 `resolution` 在建任务时拒绝。不支持 `reference_audios`。
+- 图像不支持 `stream` / `partial_images`；显式给出但模型不支持的 `aspect_ratio` / `resolution`（只有 `1K`/`2K`/`4K`）直接 400。未给比例时按 `size` 取最接近的比例。
+- 输入图支持 Base64 data URI 与 `https` URL（经带 SSRF 防护的下载器，不走账号出口），只接受 PNG/JPEG/WebP。
+- 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口，所有 Adobe 路由都消费它。
+
+### 失败处理
+
+- 提交前的失败（上传、mint 不可用、Adobe 明确 4xx 拒绝）不会生成任务：401 先续期重试，积分不足耗尽该账号 `credits` 窗口后换号，参数或内容被拒（400/422）直接返回原因、不换号。
+- 提交后的失败（5xx、网络中断）结果未知，任务标记为不确定，绝不重提，避免重复扣积分。轮询容忍连续 5 次瞬时失败。
+- mint 不可用时返回 503，不换号（换号也拿不到 `x-arp-session-id`）。
 
 ### 出口
 

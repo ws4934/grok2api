@@ -2645,9 +2645,9 @@ Object.assign(resources["zh-CN"].translation.accounts as unknown as Record<strin
   },
   adobe: {
     quickImport: "快速导入 Cookie",
-    quickImportDescription: "登录 https://firefly.adobe.com 后，从浏览器复制完整 Cookie（需包含 sherlockToken），每行一个；也可粘贴 JSON / JSONL。access token 会用该 Cookie 自动续期。",
+    quickImportDescription: "登录 https://firefly.adobe.com 后，从浏览器复制该站完整的 Cookie，每行一个；也可粘贴 JSON / JSONL。导入时会用 Cookie 换取 access token 验证，之后自动续期。",
     tokens: "Firefly Cookie",
-    tokenPlaceholder: "sherlockToken=…; other=…\n{\"cookie\":\"sherlockToken=…\",\"email\":\"a@b.com\"}",
+    tokenPlaceholder: "name=value; name2=value2…\n{\"cookie\":\"name=value; …\",\"email\":\"a@b.com\"}",
   },
 });
 Object.assign(resources.en.translation.accounts as unknown as Record<string, unknown>, {
@@ -2678,9 +2678,9 @@ Object.assign(resources.en.translation.accounts as unknown as Record<string, unk
   },
   adobe: {
     quickImport: "Quick import cookies",
-    quickImportDescription: "Sign in at https://firefly.adobe.com, then copy the full browser cookie (it must include sherlockToken), one per line; JSON / JSONL also works. The access token is refreshed automatically from the cookie.",
+    quickImportDescription: "Sign in at https://firefly.adobe.com, then copy the site's full browser cookie, one per line; JSON / JSONL also works. Import exchanges the cookie for an access token to verify it, then refreshes it automatically.",
     tokens: "Firefly cookie",
-    tokenPlaceholder: "sherlockToken=…; other=…\n{\"cookie\":\"sherlockToken=…\",\"email\":\"a@b.com\"}",
+    tokenPlaceholder: "name=value; name2=value2…\n{\"cookie\":\"name=value; …\",\"email\":\"a@b.com\"}",
   },
 });
 function readStoredLanguage(): string | null {
