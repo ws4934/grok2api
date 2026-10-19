@@ -104,17 +104,20 @@ func (a *Adapter) runSyncImage(ctx context.Context, credential account.Credentia
 		if err != nil {
 			return err
 		}
+		// 图已生成：之后的下载/存储失败不换账号重画，也不扣账号健康度。
 		images := make([][]byte, 0, len(urls))
 		for _, url := range urls {
 			data, err := c.download(ctx, url)
 			if err != nil {
-				return err
+				return provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, err)
 			}
 			images = append(images, data)
 		}
-		body, err = a.imageResponseBody(ctx, in, images, responseFormat)
+		if body, err = a.imageResponseBody(ctx, in, images, responseFormat); err != nil {
+			return provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
+		}
 		delivered = len(images)
-		return err
+		return nil
 	})
 	if err != nil {
 		return syncFailure(err, accepted)
