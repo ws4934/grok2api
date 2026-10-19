@@ -199,6 +199,7 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 
 - **导入**（账号页 → Adobe 标签）：登录 `https://firefly.adobe.com`，复制该站完整的浏览器 Cookie，每行一个粘贴；也支持 JSON/JSONL。导入时用 Cookie 换取 access token 验证，Cookie 存入 refresh token 字段。
 - **续期**：access token（IMS JWT）约 1 小时过期，网关用 Cookie 调 `adobeid-na1.services.adobe.com/ims/check/v6/token` 自动续期；Cookie 失效（401/403）→ 账号转入需重新导入。没有注册新账号的能力——账号始终靠导入 Cookie。
+- **浏览器身份**（与 ChatGPT 账号同理）：导入时给每个账号随机分一个 Chrome UA（146 / 144 × Windows / macOS，都是 tls-client 有对应指纹的版本），存进凭据状态。该账号的所有请求都用它：出口按这个 UA 选 TLS 指纹，`User-Agent` 与客户端提示也由它推出。重新导入沿用原身份；导出文件带 `user_agent` 字段，导回来不变。
 
 ### 全局 x-arp-session-id（mint sidecar）
 
@@ -248,4 +249,4 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 
 ### 出口
 
-使用作用域 `adobe` 的出口节点（HTTP/SOCKS/Trojan）。提交、上传下载、IMS 续期都走账号绑定的节点；传输失败时按出口问题反馈健康度。
+使用作用域 `adobe` 的出口节点（HTTP/SOCKS/Trojan）。提交、上传下载、IMS 续期都走账号绑定的节点，连接用出口的浏览器 TLS 客户端（tls-client）；节点上配置的 UA 对 Adobe 不生效，用账号自己的浏览器身份。传输失败时按出口问题反馈健康度。
