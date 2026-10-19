@@ -106,7 +106,13 @@ func (a *Adapter) NormalizeAccountModelCapabilities(models []string, _ *account.
 			result = append(result, item.id)
 		}
 	}
-	if codexPlan(credential.Plan) {
+	plan := credential.Plan
+	if a.cipher != nil && credential.EncryptedAccessToken != "" {
+		if c, err := a.decrypt(credential); err == nil {
+			plan = planOf(credential, c)
+		}
+	}
+	if codexPlan(plan) {
 		result = append(result, codexImageModels...)
 	}
 	return result

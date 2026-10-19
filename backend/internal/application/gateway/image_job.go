@@ -14,6 +14,7 @@ import (
 	_ "image/png"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -197,7 +198,7 @@ func (s *Service) hasAsyncImageRoute(ctx context.Context, name string, imageOnly
 		if imageOnly && route.Capability != modeldomain.CapabilityImage && route.Capability != modeldomain.CapabilityImageEdit {
 			continue
 		}
-		if _, ok := s.providers.AsyncImages(route.Provider); ok {
+		if s.providers.AsyncImageModel(route.Provider, route.UpstreamModel) {
 			return true
 		}
 	}
@@ -263,6 +264,15 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 	routes, err := s.models.GetByPublicIDCandidates(ctx, input.PublicModel)
 	if err != nil {
 		return media.Job{}, ErrModelNotFound
+	}
+	// Drop routes whose provider draws jobs but answers this model only
+	// synchronously (ChatGPT Codex images).
+	routes = slices.DeleteFunc(routes, func(route modeldomain.Route) bool {
+		_, async := s.providers.AsyncImages(route.Provider)
+		return async && !s.providers.AsyncImageModel(route.Provider, route.UpstreamModel)
+	})
+	if len(routes) == 0 {
+		return media.Job{}, &ImageRequestRejectedError{Err: errors.New("该模型不支持异步生图任务，请使用 Images API")}
 	}
 	options := provider.ImageRequestOptions{
 		Edit: edit, Count: count, InputImages: len(input.ImageURLs), HasMask: input.MaskURL != "",

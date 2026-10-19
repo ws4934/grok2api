@@ -102,9 +102,10 @@ func credentialsOf(accessToken, refreshToken string, state map[string]string) cr
 		IDToken: state["id_token"], ClientProfile: state["client_profile"], DeviceID: state["device_id"],
 		SessionID: state["session_id"], BrowserProfile: state["browser_profile"],
 	}
-	if c.ClientProfile == "" {
-		// Earlier imports stored no profile; the tokens still name their client.
-		c.ClientProfile = profileOfClient(tokenClientID(accessToken, c.IDToken))
+	// The tokens name the client that issued them; a stored or imported label
+	// may be missing or wrong, and another client can revoke the refresh token.
+	if id := tokenClientID(accessToken, c.IDToken); id != "" {
+		c.ClientProfile = profileOfClient(id)
 	}
 	return c
 }
@@ -234,7 +235,7 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 	out := make([]provider.CredentialSeed, 0, len(values))
 	for index, raw := range values {
 		seed, err := parseImportRecord(raw)
-		if errors.Is(err, errOtherPlatform) {
+		if errors.Is(err, errSkippedRecord) {
 			continue
 		}
 		if err != nil {
@@ -242,24 +243,31 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 		}
 		out = append(out, seed)
 	}
-	if len(out) == 0 {
-		return nil, errors.New("no OpenAI OAuth account to import")
-	}
 	return out, nil
 }
 
-// errOtherPlatform skips the accounts of other platforms in a sub2api export.
-var errOtherPlatform = errors.New("not an OpenAI OAuth account")
+// errSkippedRecord skips what another tool exports beside ChatGPT logins:
+// other platforms of a sub2api export, other providers' CPA files, and their
+// records without tokens.
+var errSkippedRecord = errors.New("not a ChatGPT login")
+
+// cpaOtherTypes are the CLIProxyAPI credential file types of other providers.
+// chatgpt2api exports use "type" for the plan, so only these are skipped.
+var cpaOtherTypes = map[string]bool{"claude": true, "gemini": true, "gemini-cli": true, "antigravity": true, "qwen": true, "iflow": true, "kimi": true, "kimi-ai": true, "vertex": true, "aistudio": true, "xai": true, "devin": true, "meta": true}
 
 func parseImportRecord(raw json.RawMessage) (provider.CredentialSeed, error) {
+	var head struct{ Platform, Type string }
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return provider.CredentialSeed{}, errors.New("invalid credential record")
+	}
+	if (head.Platform != "" && (head.Platform != "openai" || head.Type != "oauth")) || cpaOtherTypes[head.Type] {
+		return provider.CredentialSeed{}, errSkippedRecord
+	}
 	var v importRecord
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return provider.CredentialSeed{}, errors.New("invalid credential record")
 	}
-	if v.Platform != "" && (v.Platform != "openai" || v.Type != "oauth") {
-		return provider.CredentialSeed{}, errOtherPlatform
-	}
-	name, sub2api, cpa := v.Name, v.Platform != "", v.Type == "codex" && !v.UseSIWC
+	name, sub2api, cpa := v.Name, v.Platform != "", v.Type == "codex"
 	if v.Credentials != nil {
 		v = *v.Credentials
 	}
@@ -280,18 +288,21 @@ func parseImportRecord(raw json.RawMessage) (provider.CredentialSeed, error) {
 		}
 	}
 	if c.AccessToken == "" && c.RefreshToken == "" {
-		return provider.CredentialSeed{}, errors.New("access_token or refresh_token is required")
-	}
-	if c.ClientProfile == "" {
-		clientID := firstNonEmptyString([]string{v.ClientID, tokenClientID(c.AccessToken, c.IDToken)}, "")
-		if clientID == "" && (sub2api || cpa) {
-			// Both tools log in through the Codex client unless told otherwise.
-			clientID = codexClientID
+		if sub2api || cpa {
+			return provider.CredentialSeed{}, errSkippedRecord
 		}
-		c.ClientProfile = profileOfClient(clientID)
+		return provider.CredentialSeed{}, errors.New("access_token or refresh_token is required")
 	}
 	if len(c.AccessToken) > 32000 || len(c.RefreshToken) > 16000 || len(c.IDToken) > 16000 {
 		return provider.CredentialSeed{}, errors.New("credential exceeds size limit")
+	}
+	// The issuing client: the tokens' claim, else the record's client_id, else
+	// the given label; sub2api and CPA log in through the Codex client unless
+	// told otherwise (CPA SIWC files use their own client).
+	if clientID := firstNonEmptyString([]string{tokenClientID(c.AccessToken, c.IDToken), v.ClientID}, ""); clientID != "" {
+		c.ClientProfile = profileOfClient(clientID)
+	} else if c.ClientProfile == "" && (sub2api || (cpa && !v.UseSIWC)) {
+		c.ClientProfile = codexProfile
 	}
 	if _, err := wire(context.Background(), c); err != nil {
 		return provider.CredentialSeed{}, err
@@ -368,11 +379,11 @@ func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.C
 		}
 		return err
 	}
-	canRefresh := canRefresh(c)
-	if c.AccessToken == "" && !canRefresh {
+	renewable := canRefresh(c)
+	if c.AccessToken == "" && !renewable {
 		return seed, errors.New("a refresh_token import needs the client that issued it (client_profile or client_id)")
 	}
-	if c.AccessToken == "" || (canRefresh && !c.ExpiresAt.IsZero() && !c.ExpiresAt.After(time.Now())) {
+	if c.AccessToken == "" || (renewable && !c.ExpiresAt.IsZero() && !c.ExpiresAt.After(time.Now())) {
 		if err := refresh(); err != nil {
 			return seed, err
 		}
@@ -380,7 +391,7 @@ func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.C
 	identity, err := a.identity(ctx, pending, c)
 	var upstream *upstreamError
 	if err != nil && !refreshed && errors.As(err, &upstream) && upstream.Status == http.StatusUnauthorized {
-		if !canRefresh {
+		if !renewable {
 			return seed, errors.New("access token was rejected by ChatGPT")
 		}
 		if err := refresh(); err != nil {
@@ -601,12 +612,12 @@ func (a *Adapter) CredentialMetadata(credential account.Credential) provider.Cre
 		return provider.CredentialMetadata{}
 	}
 	switch {
+	case c.RefreshToken == "":
+		return provider.CredentialMetadata{CredentialKind: "accessToken"}
 	case c.ClientProfile == codexProfile:
 		return provider.CredentialMetadata{CredentialKind: "codex"}
 	case c.ClientProfile == oauthProfile:
 		return provider.CredentialMetadata{CredentialKind: "platform"}
-	case c.RefreshToken == "":
-		return provider.CredentialMetadata{CredentialKind: "accessToken"}
 	default:
 		return provider.CredentialMetadata{CredentialKind: "otherClient", RefreshUnsupported: true}
 	}
@@ -684,14 +695,15 @@ func (a *Adapter) SyncQuota(ctx context.Context, credential account.Credential) 
 		}
 		snapshot.Windows = append(snapshot.Windows, window)
 	}
-	if codexPlan(credential.Plan) {
-		// A Codex outage must not hide the Web windows; Codex routes keep their
-		// last known window until the next sync.
-		if windows, err := a.codexQuotaWindows(ctx, credential, c, now); err == nil {
-			snapshot.Windows = append(snapshot.Windows, windows...)
-		} else {
-			a.log().Warn("chatgpt_codex_usage_failed", "account_id", credential.ID, "error", err)
+	if codexPlan(planOf(credential, c)) {
+		windows, err := a.codexQuotaWindows(ctx, credential, c, now)
+		if err != nil {
+			// The snapshot replaces every window: without the Codex ones an
+			// exhausted account would read as unlimited. Fail the sync so the
+			// stored windows stay (%v: not an account-level failure).
+			return provider.QuotaSnapshot{}, fmt.Errorf("Codex usage unavailable: %v", err)
 		}
+		snapshot.Windows = append(snapshot.Windows, windows...)
 	}
 	return snapshot, nil
 }

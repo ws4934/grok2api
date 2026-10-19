@@ -301,7 +301,8 @@ func IsPermanentCredentialRefreshErrorCode(code string) bool {
 		"expired_token",
 		"revoked_token",
 		"token_revoked",
-		"missing_refresh_token":
+		"missing_refresh_token",
+		"unsupported_client_profile":
 		return true
 	default:
 		return false
@@ -1617,6 +1618,19 @@ func (r *Registry) ImageEdit(value account.Provider) (ImageEditAdapter, bool) {
 }
 
 // AsyncImages returns the resumable image capability used by image jobs.
+// AsyncImageModel reports whether the provider draws upstreamModel as a
+// resumable image job; providers may exclude models answered synchronously.
+func (r *Registry) AsyncImageModel(value account.Provider, upstreamModel string) bool {
+	adapter, ok := r.AsyncImages(value)
+	if !ok {
+		return false
+	}
+	if filter, ok := adapter.(interface{ AsyncImageModel(string) bool }); ok {
+		return filter.AsyncImageModel(upstreamModel)
+	}
+	return true
+}
+
 func (r *Registry) AsyncImages(value account.Provider) (AsyncImageAdapter, bool) {
 	adapter, ok := r.Get(value)
 	if !ok {

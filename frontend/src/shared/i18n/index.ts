@@ -2545,7 +2545,7 @@ Object.assign(resources["zh-CN"].translation.accountCredential as unknown as Rec
   kinds: { platform: "Platform OAuth", codex: "Codex OAuth", accessToken: "仅 Access Token", otherClient: "其他客户端" },
   kindHints: {
     platform: "浏览器 OAuth 登录或 chatgpt2api 导出，由 Platform 客户端续期",
-    codex: "sub2api / CPA 导入，由 Codex 客户端续期",
+    codex: "由 Codex 客户端签发（如 sub2api / CPA 导入），由 Codex 客户端续期",
     accessToken: "没有 refresh token，过期后需重新导入",
     otherClient: "refresh token 来自不支持的客户端，无法续期",
   },
@@ -2554,7 +2554,7 @@ Object.assign(resources.en.translation.accountCredential as unknown as Record<st
   kinds: { platform: "Platform OAuth", codex: "Codex OAuth", accessToken: "Access token only", otherClient: "Other client" },
   kindHints: {
     platform: "Browser OAuth login or a chatgpt2api export; renewed by the Platform client",
-    codex: "Imported from sub2api or CPA; renewed by the Codex client",
+    codex: "Issued to the Codex client (e.g. sub2api or CPA imports); renewed by the Codex client",
     accessToken: "No refresh token; import again after it expires",
     otherClient: "The refresh token was issued to an unsupported client and cannot be renewed",
   },

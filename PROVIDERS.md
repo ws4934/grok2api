@@ -32,7 +32,8 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 1. **添加账号**（账号页 → ChatGPT 标签）：
    - **浏览器 OAuth**：打开授权链接并登录，把浏览器地址栏里的完整回调 URL（`https://platform.openai.com/auth/callback?code=…&state=…`）粘贴回来。会话 10 分钟内有效。
    - **导入**：JSON、JSONL，或每行一个 access token。只有 refresh token 的记录会在导入时换取 token。导入时会查询身份和套餐（plan）。
-   - **sub2api / CPA**：直接上传 sub2api 导出的账号文件（只取其中的 OpenAI OAuth 账号，其他平台跳过），或 CLIProxyAPI 的 `codex-*.json` 凭据文件（可多选）。这些 token 由 Codex CLI 的 OAuth 客户端签发，账号同样走 ChatGPT 网页接口。refresh token 只交回签发它的客户端续期：客户端从 access token 的 `client_id` 或 ID token 的 `aud` 读出，读不到时按这两个工具的默认值视为 Codex 客户端。
+   - **sub2api / CPA**：直接上传 sub2api 导出的账号文件（只取其中的 OpenAI OAuth 账号，其他平台跳过），或 CLIProxyAPI 的 `codex-*.json` 凭据文件（可多选）。这些 token 由 Codex CLI 的 OAuth 客户端签发，账号同样走 ChatGPT 网页接口。refresh token 只交回签发它的客户端续期：客户端以 access token 的 `client_id`（或 ID token 的 `aud`）为准，文件里写的标记与之不符时以 token 为准；读不到时按这两个工具的默认值视为 Codex 客户端。CPA 文件夹里其他服务（Claude、Gemini、Kimi 等）的文件和没有 token 的记录会被跳过。
+   - **同一份凭据不要两处同时使用**：refresh token 每次续期都会换新、旧的立即失效。在本服务续期后，留在 sub2api 或 CPA 里的那份就不能再续期了，反之亦然。
 2. **设置**（设置 → ChatGPT）：
    - **图片会话模型**：留空即可。留空时按账号自动选择 ChatGPT 会话模型：`gpt-image-2` 用 `gpt-5-3`；`gpt-image-2.5` 系列优先用 `gpt-6`，不可用时用 `auto`。只有在 `/backend-api/models` 里开启了生图工具（`image_gen_tool_enabled`）的模型才会被选用。填写后所有图片模型都改用该模型。
    - **输出上限**：默认 16,384。
@@ -118,10 +119,12 @@ ChatGPT 网页端不能执行客户端函数，网关用和 Grok Web 相同的�
 ### Codex 生图
 
 - **模型**：`codex-gpt-image-2`、`codex-gpt-image-2.5`、`codex-gpt-image-2.5-flare`、`codex-gpt-image-2.5-sunburst`，各有生图和编辑两条。请求走 Codex 后端的 Images API（`chatgpt.com/backend-api/codex/images/generations`、`/images/edits`），上游模型名是去掉 `codex-` 前缀后的名字，计费也按它。
-- **账号**：只调度到 Plus、Pro、Team、Business、Enterprise、Edu 套餐的账号，Free 账号会被上游拒绝（403）。凭据类型不限，浏览器 OAuth 登录的 Platform 账号也可以。
-- **额度**：不占网页的"生图"次数，按 Codex 的 5 小时和每周用量计算（百分比）。账号页显示这两个窗口；两者中剩余较少的那个决定账号能否接 Codex 生图请求，用满后等到重置。
+- **账号**：只调度到 Plus、Pro、Team、Business、Enterprise、Edu 套餐的账号，Free 账号会被上游拒绝（403）。套餐优先取 access token 里的声明（续期后会更新），否则用导入时查到的套餐。凭据类型不限，浏览器 OAuth 登录的 Platform 账号也可以。
+- **额度**：不占网页的"生图"次数，按 Codex 的 5 小时和每周用量计算（百分比）。账号页显示为一格"Codex"，悬停可看两个窗口；两者中剩余较少的那个决定账号能否接 Codex 生图请求，用满后等到重置。
+  - Codex 用量读取失败（网络、5xx、429）时，本次额度同步整体失败、保留原有窗口，稍后重试；Codex 拒绝该账号（其他 4xx）或返回的套餐已不是付费版时，账号不再接 Codex 生图请求，直到下次同步。
+- **失败处理**：上游 4xx 按未提交处理：401 先续期再重试，429 核对 Codex 额度后换账号，400 原样返回。已发出的生成请求在客户端断开后仍会完成并存入图库，单张最长等待 10 分钟。
 - **参数**：`size`、`quality`、`background`、`output_format` 原样传给上游；编辑的输入图和遮罩以 data URL 发送，遮罩沿用 Images API 的透明区域约定。实测请求 `1024x1024` 时返回过 `1254x1254` 和 `1312x1199`，上游并不保证精确尺寸。
-- **限制**：只支持同步的 Images API，不支持异步生图任务。
+- **限制**：只支持同步的 Images API。用 Codex 模型创建异步生图任务会直接返回 400（`invalid_parameter`）。
 
 ### 异步生图（Responses 官方格式）
 

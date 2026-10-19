@@ -120,3 +120,99 @@ func TestCodexImageRoutes(t *testing.T) {
 		t.Fatal("an image job accepted a Codex image model")
 	}
 }
+
+// A Codex rejection is a Response, so the gateway can refresh the credential
+// (401), reconcile the Codex window (429) or try another account.
+func TestCodexImageRejectionReachesTheGateway(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusTooManyRequests} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"error":{"message":"no"}}`))
+		}))
+		a, assets := newTestAdapter(t, server)
+		credential := testCredential(t, a, credentials{AccessToken: "AT"})
+		response, err := a.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "codex-gpt-image-2", Prompt: "a fox"})
+		server.Close()
+		if err != nil || response == nil || response.StatusCode != status || assets.saved != 0 {
+			t.Fatalf("status %d: response = %+v, err = %v", status, response, err)
+		}
+	}
+}
+
+// Codex usage that cannot be read keeps the stored windows (the sync fails);
+// a refusal or a plan without Codex images closes the routing window.
+func TestCodexQuotaWindowsWhenCodexIsUnavailable(t *testing.T) {
+	for name, test := range map[string]struct {
+		status int
+		body   string
+		closed bool
+	}{
+		"server error":            {http.StatusBadGateway, `{}`, false},
+		"forbidden":               {http.StatusForbidden, `{"detail":"Forbidden"}`, true},
+		"free plan":               {http.StatusOK, `{"plan_type":"free","rate_limit":{"allowed":true,"primary_window":{"used_percent":0,"limit_window_seconds":2592000,"reset_at":1792417225}}}`, true},
+		"limited without windows": {http.StatusOK, `{"plan_type":"plus","rate_limit":{"allowed":false,"limit_reached":true}}`, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			t.Cleanup(server.Close)
+			a, _ := newTestAdapter(t, server)
+			credential := testCredential(t, a, credentials{AccessToken: "AT"})
+			windows, err := a.codexQuotaWindows(context.Background(), credential, credentials{AccessToken: "AT"}, time.Now())
+			if !test.closed {
+				if err == nil {
+					t.Fatalf("windows = %+v, want an error", windows)
+				}
+				return
+			}
+			if err != nil || len(windows) != 1 || windows[0].Mode != quotaModeCodex || windows[0].Remaining != 0 {
+				t.Fatalf("windows = %+v, %v", windows, err)
+			}
+		})
+	}
+}
+
+// The quota snapshot replaces every stored window, so a failed Codex read
+// fails the whole sync instead of dropping the Codex windows.
+func TestSyncQuotaFailsWhenCodexUsageFails(t *testing.T) {
+	for _, usageStatus := range []int{http.StatusOK, http.StatusBadGateway} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/backend-api/conversation/init":
+				_, _ = w.Write([]byte(`{"limits_progress":[{"feature_name":"image_gen","remaining":5}]}`))
+			case "/backend-api/wham/usage":
+				w.WriteHeader(usageStatus)
+				_, _ = w.Write([]byte(`{"plan_type":"plus","rate_limit":{"allowed":true,"primary_window":{"used_percent":10,"limit_window_seconds":18000,"reset_at":1792417225}}}`))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		a, _ := newTestAdapter(t, server)
+		credential := testCredential(t, a, credentials{AccessToken: "AT"})
+		credential.Plan = "plus"
+		snapshot, err := a.SyncQuota(context.Background(), credential)
+		server.Close()
+		if usageStatus != http.StatusOK {
+			if err == nil {
+				t.Fatalf("snapshot = %+v, want an error", snapshot)
+			}
+			continue
+		}
+		modes := []string{}
+		for _, window := range snapshot.Windows {
+			modes = append(modes, window.Mode)
+		}
+		if err != nil || strings.Join(modes, ",") != "image_gen,codex_5h,codex" {
+			t.Fatalf("modes = %v, err = %v", modes, err)
+		}
+	}
+}
+
+func TestCodexModelsAreNotImageJobs(t *testing.T) {
+	a := NewAdapter(Config{}, nil, nil, nil)
+	if a.AsyncImageModel("codex-gpt-image-2") || !a.AsyncImageModel("gpt-image-2") {
+		t.Fatal("AsyncImageModel")
+	}
+}

@@ -54,6 +54,19 @@ func codexPlan(plan string) bool {
 	return false
 }
 
+// planOf prefers the plan the access token carries (Codex tokens do; it is
+// current after each refresh) over the plan stored at import.
+func planOf(credential account.Credential, c credentials) string {
+	return firstNonEmptyString([]string{claimsIdentity(c.AccessToken).Plan, credential.Plan}, "")
+}
+
+// AsyncImageModel reports whether a route can draw as a resumable image job.
+// The Codex Images API answers with the image itself; there is no job to resume.
+func (a *Adapter) AsyncImageModel(upstreamModel string) bool {
+	_, codex := codexImageEngine(upstreamModel)
+	return !codex
+}
+
 // codexAccountID is the workspace the Codex backend bills: the token's claim,
 // else the account found at import (platform tokens carry no claim).
 func codexAccountID(credential account.Credential, c credentials) string {
@@ -146,18 +159,32 @@ func (a *Adapter) generateCodexImage(ctx context.Context, credential account.Cre
 		if err := markSubmitted(ctx); err != nil {
 			return err
 		}
+		// The generation costs quota once sent: finish it even if the client
+		// went away, so the image still lands in the gallery.
+		drawCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.image.RequestTimeout)
+		defer cancel()
 		started := time.Now()
-		resp, err := a.codexDo(ctx, credential, c, http.MethodPost, path, payload)
+		resp, err := a.codexDo(drawCtx, credential, c, http.MethodPost, path, payload)
 		if err == nil {
 			raw, err = decodeCodexImage(resp)
 		}
 		a.logImageStage(ctx, credential, "codex", started, err, "engine", engine, "bytes", len(raw))
 		return err
 	})
+	var upstream *upstreamError
+	if errors.As(err, &upstream) && upstream.Status >= 400 && upstream.Status < 500 {
+		// Rejected before drawing: the gateway may refresh the credential on
+		// 401, reconcile the Codex window on 429 or try another account.
+		sent = false
+	}
 	if err != nil {
 		return imageOutput{}, sent, err
 	}
-	output, err := a.archiveImage(ctx, job, downloadedImage{raw: raw, mime: http.DetectContentType(raw)})
+	mime, decoded, err := decodeImageDownload(raw)
+	if err != nil {
+		return imageOutput{}, true, err
+	}
+	output, err := a.archiveImage(ctx, job, downloadedImage{raw: raw, mime: mime, decoded: decoded})
 	return output, true, err
 }
 
@@ -190,6 +217,7 @@ func decodeCodexImage(resp *http.Response) ([]byte, error) {
 // windows: Remaining and Total are percent points.
 func (a *Adapter) codexQuotaWindows(ctx context.Context, credential account.Credential, c credentials, now time.Time) ([]account.QuotaWindow, error) {
 	var usage struct {
+		PlanType  string `json:"plan_type"`
 		RateLimit struct {
 			Allowed      *bool             `json:"allowed"`
 			LimitReached bool              `json:"limit_reached"`
@@ -205,9 +233,19 @@ func (a *Adapter) codexQuotaWindows(ctx context.Context, credential account.Cred
 		defer resp.Body.Close()
 		return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&usage)
 	})
+	closed := []account.QuotaWindow{{AccountID: credential.ID, Mode: quotaModeCodex, Total: 100, UsagePercent: 100, SyncedAt: &now, Source: account.QuotaSourceUpstream, UpdatedAt: now}}
+	var upstream *upstreamError
+	if errors.As(err, &upstream) && !upstream.Challenge && upstream.Status >= 400 && upstream.Status < 500 && upstream.Status != http.StatusTooManyRequests {
+		// Codex refuses this login: close the Codex routes until the next sync.
+		return closed, nil
+	}
 	if err != nil {
 		return nil, err
 	}
+	if usage.PlanType != "" && !codexPlan(usage.PlanType) {
+		return closed, nil
+	}
+	limited := usage.RateLimit.LimitReached || (usage.RateLimit.Allowed != nil && !*usage.RateLimit.Allowed)
 	var windows []account.QuotaWindow
 	for _, item := range []struct {
 		mode   string
@@ -218,16 +256,20 @@ func (a *Adapter) codexQuotaWindows(ctx context.Context, credential account.Cred
 		}
 	}
 	if len(windows) == 0 {
+		if limited {
+			return closed, nil
+		}
 		return nil, nil
 	}
+	// The tighter window routes; when both are spent, the later reset frees it.
 	route := windows[0]
 	for _, window := range windows[1:] {
-		if window.Remaining < route.Remaining {
+		if window.Remaining < route.Remaining || (window.Remaining == route.Remaining && window.ResetAt != nil && (route.ResetAt == nil || window.ResetAt.After(*route.ResetAt))) {
 			route = window
 		}
 	}
 	route.Mode = quotaModeCodex
-	if usage.RateLimit.LimitReached || (usage.RateLimit.Allowed != nil && !*usage.RateLimit.Allowed) {
+	if limited {
 		route.Remaining, route.UsagePercent = 0, 100
 	}
 	return append(windows, route), nil

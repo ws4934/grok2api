@@ -148,7 +148,7 @@ func newImageJobFixture(t *testing.T, accounts int) *imageJobFixture {
 		credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderChatGPT, AuthType: account.AuthTypeOAuth, Name: name, UserID: name, SourceKey: name,
 			EncryptedAccessToken: token, ExpiresAt: time.Now().Add(24 * time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
-			MaxConcurrent: 1, Priority: 100 - index,
+			MaxConcurrent: 1, Priority: 100 - index, Plan: "plus", // Plus: the Codex image routes resolve too
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -733,5 +733,23 @@ func TestResumeOfMultiImageJobFetchesOnlyTheImageInFlight(t *testing.T) {
 	}
 	if _, ok := audits[imageUsageEventID(job.ID, 2)]; ok || len(audits) != 3 {
 		t.Fatalf("audits = %v", audits)
+	}
+}
+
+// Codex image models answer synchronously, so an image job for one is refused
+// before any reservation instead of failing after it starts.
+func TestCreateImageJobRefusesSynchronousOnlyModels(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	ctx := context.Background()
+	_, err := f.service.CreateImageJob(ctx, ImageJobInput{ClientKey: f.key, PublicModel: "codex-gpt-image-2", Prompt: "a fox"})
+	var rejected *ImageRequestRejectedError
+	if !errors.As(err, &rejected) {
+		t.Fatalf("err = %v, want a request rejection", err)
+	}
+	if _, reserved := f.billing(t); reserved != 0 {
+		t.Fatalf("reserved = %d", reserved)
+	}
+	if f.service.IsImageJobModel(ctx, "codex-gpt-image-2") || !f.service.IsImageJobModel(ctx, "gpt-image-2") {
+		t.Fatal("IsImageJobModel")
 	}
 }
