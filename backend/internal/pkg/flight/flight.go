@@ -3,6 +3,7 @@ package flight
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"golang.org/x/sync/singleflight"
@@ -18,7 +19,14 @@ func Do[T any](ctx context.Context, group *singleflight.Group, key string, timeo
 	if err := ctx.Err(); err != nil {
 		return zero, err
 	}
-	results := group.DoChan(key, func() (any, error) {
+	results := group.DoChan(key, func() (value any, err error) {
+		// DoChan re-panics in a fresh goroutine, which would crash the process
+		// instead of failing this request; report a panic as the load's error.
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("shared load %q panicked: %v", key, recovered)
+			}
+		}()
 		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 		defer cancel()
 		return load(loadCtx)
