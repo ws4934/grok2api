@@ -2,7 +2,6 @@ package adobe
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
 	"math/big"
 	"strings"
@@ -22,6 +21,12 @@ var imageSizes = map[string]map[string]pixels{
 }
 
 var nanoBananaSizes = map[string]pixels{"1K": {1024, 1024}, "2K": {2048, 2048}, "4K": {4096, 4096}}
+
+// nanoBanana25Sizes 是 Gemini 2.5 (Nano Banana) 唯一的 1K 档：官网按比例发实际尺寸。
+var nanoBanana25Sizes = map[string]pixels{
+	"1:1": {1024, 1024}, "4:3": {1184, 864}, "3:4": {864, 1184}, "16:9": {1344, 768}, "9:16": {768, 1344},
+	"21:9": {1536, 672}, "3:2": {1248, 832}, "2:3": {832, 1248}, "5:4": {1152, 896}, "4:5": {896, 1152},
+}
 
 var gptImageSizes = map[string]map[string]pixels{
 	"1K": {"1:1": {1024, 1024}, "5:4": {1120, 896}, "9:16": {720, 1280}, "21:9": {1456, 624}, "16:9": {1280, 720}, "4:3": {1152, 864}, "3:2": {1248, 832}, "4:5": {896, 1120}, "3:4": {864, 1152}, "2:3": {832, 1248}},
@@ -154,7 +159,9 @@ func buildImagePayloads(in imagePayloadInput) []map[string]any {
 	}
 
 	var size any
-	if in.model.upstreamID == "gemini-flash" {
+	if p, ok := in.model.ratioSizes[in.aspectRatio]; ok {
+		size = map[string]any{"width": p.width, "height": p.height}
+	} else if in.model.upstreamID == "gemini-flash" {
 		p, ok := nanoBananaSizes[in.resolution]
 		if !ok {
 			p = nanoBananaSizes["2K"]
@@ -287,7 +294,7 @@ func buildVideoPayload(in videoPayloadInput) map[string]any {
 			"generationMetadata":   map[string]any{"module": "text2video"},
 			"modelSpecificPayload": map[string]any{"parameters": map[string]any{"durationSeconds": in.duration, "aspectRatio": in.aspectRatio, "addWaterMark": false}},
 		}
-	case "kling-o3", "kling3":
+	default: // kling-o3 / kling3
 		hasRef := len(in.sourceImageID) > 0
 		var refs []any
 		for i, id := range clip(in.sourceImageID, 2) {
@@ -299,46 +306,25 @@ func buildVideoPayload(in videoPayloadInput) map[string]any {
 			module = "image2video"
 		}
 		ver := "kling_v3_standard_t2v"
+		// 官网对 Kling 在 modelSpecificPayload 里带 aspect_ratio，Kling 3.0 另带 resolution。
+		specific := map[string]any{"aspect_ratio": in.aspectRatio}
 		if in.model.engine == "kling-o3" {
 			ver = "kling_o3_pro_reference_to_video"
-		} else if hasRef {
-			ver = "kling_v3_standard_i2v"
+		} else {
+			specific["resolution"] = in.resolution
+			if hasRef {
+				ver = "kling_v3_standard_i2v"
+			}
 		}
 		return map[string]any{
 			"n": 1, "seeds": []int64{seed}, "modelId": "kling", "modelVersion": ver,
 			"output": map[string]any{"storeInputs": true}, "prompt": in.prompt, "size": sizeObj,
-			"generateAudio":      in.generateAudio,
-			"generationMetadata": map[string]any{"module": module},
-			"duration":           in.duration,
-			"generationSettings": map[string]any{"aspectRatio": in.aspectRatio},
-			"referenceBlobs":     refs,
-		}
-	default: // sora2 / sora2-pro
-		ver := "sora-2"
-		if in.model.engine == "sora2-pro" {
-			ver = "sora-2-pro"
-		}
-		module := "text2video"
-		if len(in.sourceImageID) > 0 {
-			module = "image2video"
-		}
-		promptObj := map[string]any{"id": 1, "duration_sec": in.duration, "prompt_text": in.prompt}
-		if in.negative != "" {
-			promptObj["negative_prompt"] = in.negative
-		}
-		promptJSON, _ := json.Marshal(promptObj)
-		var refs []any
-		for _, id := range clip(in.sourceImageID, 1) {
-			refs = append(refs, map[string]any{"id": id, "usage": "general", "promptReference": 1})
-		}
-		return map[string]any{
-			"n": 1, "seeds": []int64{seed}, "modelId": "sora", "modelVersion": ver,
-			"size": sizeObj, "duration": in.duration, "fps": 24, "prompt": string(promptJSON),
-			"generationMetadata": map[string]any{"module": module},
-			"model":              in.model.upstreamModel, "generateAudio": in.generateAudio,
-			"generateLoop": false, "transparentBackground": false, "seed": fmt.Sprintf("%d", seed),
-			"locale": "en-US", "negativePrompt": in.negative, "jobMode": "standard",
-			"referenceBlobs": refs, "output": map[string]any{"storeInputs": true},
+			"generateAudio":        in.generateAudio,
+			"generationMetadata":   map[string]any{"module": module},
+			"duration":             in.duration,
+			"generationSettings":   map[string]any{"aspectRatio": in.aspectRatio},
+			"modelSpecificPayload": specific,
+			"referenceBlobs":       refs,
 		}
 	}
 }

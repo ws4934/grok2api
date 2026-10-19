@@ -38,6 +38,12 @@ func (a *Adapter) buildImageInput(model, prompt, size, aspectRatio, resolution, 
 	default:
 		return imagePayloadInput{}, &requestError{msg: "resolution 只支持 1K、2K 或 4K"}
 	}
+	if m.ratioSizes != nil {
+		if res != "1K" && strings.TrimSpace(resolution) != "" {
+			return imagePayloadInput{}, &requestError{msg: m.id + " 只支持 1K"}
+		}
+		res = "1K"
+	}
 	return imagePayloadInput{
 		model: m, prompt: prompt, aspectRatio: ratio, resolution: res, count: 1,
 		outputFormat: outputFormat, background: background,

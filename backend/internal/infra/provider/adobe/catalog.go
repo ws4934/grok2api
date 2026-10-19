@@ -16,13 +16,17 @@ type imageModel struct {
 	id           string
 	upstreamID   string // modelId
 	upstreamVer  string // modelVersion
-	groundSearch bool   // sends groundSearch:false (nano-banana family)
+	groundSearch bool   // sends groundSearch:false（官网只对 Nano Banana Pro / 3.1 发送）
 	nanoRatios   bool   // nano-banana-3 also allows 1:8/1:4/4:1/8:1
+	// ratioSizes 非空表示模型只出 1K、尺寸随比例变化（Gemini 2.5 Nano Banana）。
+	ratioSizes map[string]pixels
 }
 
+// 模型版本号核对自 firefly.adobe.com 前端（2026-10-19）：nano-banana = Gemini 2.5，
+// nano-banana-2 = Gemini 3 (Nano Banana Pro)，nano-banana-3 = Gemini 3.1 (Nano Banana 2)。
 var imageModels = []imageModel{
 	{id: "nano-banana-pro", upstreamID: "gemini-flash", upstreamVer: "nano-banana-2", groundSearch: true},
-	{id: "nano-banana", upstreamID: "gemini-flash", upstreamVer: "nano-banana-2", groundSearch: true},
+	{id: "nano-banana", upstreamID: "gemini-flash", upstreamVer: "nano-banana", ratioSizes: nanoBanana25Sizes},
 	{id: "nano-banana2", upstreamID: "gemini-flash", upstreamVer: "nano-banana-3", groundSearch: true, nanoRatios: true},
 	{id: "gpt-image-2", upstreamID: "gpt-image", upstreamVer: "2"},
 	// gpt-image-2.5 是当前线上的 2.5 引擎（官网默认用 flare 变体）。
@@ -36,7 +40,6 @@ var imageModels = []imageModel{
 type videoModel struct {
 	id            string
 	engine        string
-	upstreamModel string // sora "model" field
 	defaultDur    int
 	defaultRatio  string
 	defaultRes    string // "" means the engine ignores a resolution tier
@@ -47,16 +50,15 @@ type videoModel struct {
 	resolutions   []string // empty means resolution is not a tier for this engine
 }
 
+// 视频引擎核对自 firefly.adobe.com 前端（2026-10-19）：Sora 已不在官网模型列表中。
 var videoModels = []videoModel{
-	{id: "sora2", engine: "sora2", upstreamModel: "openai:firefly:colligo:sora2", defaultDur: 8, defaultRatio: "16:9", defaultRes: "720p", genAudio: true, durations: []int{4, 8, 12}, ratios: []string{"16:9", "9:16"}, resolutions: []string{"720p"}},
-	{id: "sora2-pro", engine: "sora2-pro", upstreamModel: "openai:firefly:colligo:sora2-pro", defaultDur: 8, defaultRatio: "16:9", defaultRes: "720p", genAudio: true, durations: []int{4, 8, 12}, ratios: []string{"16:9", "9:16"}, resolutions: []string{"720p"}},
 	{id: "veo31", engine: "veo31-standard", defaultDur: 8, defaultRatio: "16:9", defaultRes: "720p", genAudio: true, durations: []int{4, 6, 8}, ratios: []string{"16:9", "9:16"}, resolutions: []string{"720p", "1080p"}},
 	{id: "veo31-ref", engine: "veo31-standard", referenceMode: "image", defaultDur: 8, defaultRatio: "16:9", defaultRes: "720p", genAudio: true, durations: []int{4, 6, 8}, ratios: []string{"16:9", "9:16"}, resolutions: []string{"720p", "1080p"}},
 	{id: "gemini-omni", engine: "gemini-omni", defaultDur: 8, defaultRatio: "16:9", defaultRes: "720p", durations: []int{4, 6, 8, 10}, ratios: []string{"16:9", "9:16"}, resolutions: []string{"720p", "1080p"}},
 	{id: "kling-o3", engine: "kling-o3", defaultDur: 5, defaultRatio: "16:9", defaultRes: "1080p", genAudio: true, durations: []int{5, 15}, ratios: []string{"16:9", "9:16"}, resolutions: []string{"720p", "1080p"}},
-	{id: "kling3", engine: "kling3", defaultDur: 5, defaultRatio: "16:9", defaultRes: "720p", genAudio: true, durations: []int{5, 10, 15}, ratios: []string{"16:9", "9:16"}, resolutions: []string{"720p", "1080p"}},
+	{id: "kling3", engine: "kling3", defaultDur: 5, defaultRatio: "16:9", defaultRes: "720p", genAudio: true, durations: []int{5, 10, 15}, ratios: []string{"16:9", "9:16", "1:1"}, resolutions: []string{"720p", "1080p"}},
 	{id: "seedance20", engine: "seedance", defaultDur: 5, defaultRatio: "16:9", defaultRes: "720p", genAudio: true, durations: []int{4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, ratios: []string{"21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}, resolutions: []string{"480p", "720p", "1080p"}},
-	{id: "seedance20-fast", engine: "seedance-fast", defaultDur: 5, defaultRatio: "16:9", defaultRes: "720p", genAudio: true, durations: []int{4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, ratios: []string{"21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}, resolutions: []string{"480p", "720p", "1080p"}},
+	{id: "seedance20-fast", engine: "seedance-fast", defaultDur: 5, defaultRatio: "16:9", defaultRes: "720p", genAudio: true, durations: []int{4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, ratios: []string{"21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}, resolutions: []string{"480p", "720p"}},
 }
 
 func imageModelByID(id string) (imageModel, bool) {

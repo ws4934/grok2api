@@ -217,7 +217,8 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 精简基础名 + 请求参数（`size`/`quality`/`aspect_ratio`/`resolution`/`duration`），不展开成几百个维度 ID：
 
 - 图像（各含生成 + 编辑）：`nano-banana-pro`、`nano-banana`、`nano-banana2`、`gpt-image-2`、`gpt-image-2.5`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`。多图 `n` 在一次请求里用 seeds 数组出多张。
-- 视频：`sora2`、`sora2-pro`、`veo31`、`veo31-ref`、`gemini-omni`、`kling-o3`、`kling3`、`seedance20`、`seedance20-fast`。参考图/视频/音频上传到 `/v2/storage/*` 后引用。
+- 视频：`veo31`、`veo31-ref`、`gemini-omni`、`kling-o3`、`kling3`、`seedance20`、`seedance20-fast`（Sora 已从 Firefly 下架，不再提供）。参考图上传到 `/v2/storage/image` 后引用。
+- `nano-banana` 是 Gemini 2.5，只出 1K；`nano-banana-pro` 是 Gemini 3；`nano-banana2` 是 Gemini 3.1。版本号与参数按 firefly.adobe.com 前端核对（2026-10-19）。
 - 视频的 `duration` / `aspect_ratio` 会就近对齐到该模型支持的值（网关对未填的 `duration` 默认 8 秒，例如 `kling3` 取 10 秒）；不支持的 `resolution` 在建任务时拒绝。不支持 `reference_audios`。
 - 图像不支持 `stream` / `partial_images`；显式给出但模型不支持的 `aspect_ratio` / `resolution`（只有 `1K`/`2K`/`4K`）直接 400。未给比例时按 `size` 取最接近的比例。
 - 输入图支持 Base64 data URI 与 `https` URL（经带 SSRF 防护的下载器，不走账号出口），只接受 PNG/JPEG/WebP。

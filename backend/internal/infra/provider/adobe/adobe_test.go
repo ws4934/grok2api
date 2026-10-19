@@ -116,19 +116,26 @@ func TestBuildImagePayloadsGPTImageEditFallbacks(t *testing.T) {
 }
 
 func TestBuildVideoPayloadEngines(t *testing.T) {
-	sora, _ := videoModelByID("sora2")
-	p := buildVideoPayload(videoPayloadInput{model: sora, prompt: "a cat", aspectRatio: "16:9", duration: 8, resolution: "720p"})
-	if p["modelId"] != "sora" || p["modelVersion"] != "sora-2" {
-		t.Fatalf("sora upstream = %v/%v", p["modelId"], p["modelVersion"])
+	veo, _ := videoModelByID("veo31")
+	p := buildVideoPayload(videoPayloadInput{model: veo, prompt: "a cat", aspectRatio: "16:9", duration: 8, resolution: "1080p"})
+	if p["modelId"] != "veo" || p["modelVersion"] != "3.1-generate" {
+		t.Fatalf("veo upstream = %v/%v", p["modelId"], p["modelVersion"])
 	}
-	if prompt, ok := p["prompt"].(string); !ok || !strings.Contains(prompt, "prompt_text") {
-		t.Fatalf("sora prompt must be JSON: %v", p["prompt"])
+	if size := p["size"].(map[string]any); size["width"] != 1920 {
+		t.Fatalf("veo 1080p size = %v", size)
 	}
 
 	kling, _ := videoModelByID("kling3")
 	i2v := buildVideoPayload(videoPayloadInput{model: kling, prompt: "move", aspectRatio: "9:16", duration: 5, resolution: "720p", sourceImageID: []string{"img"}})
 	if i2v["modelVersion"] != "kling_v3_standard_i2v" {
 		t.Fatalf("kling with image must be i2v, got %v", i2v["modelVersion"])
+	}
+	// 官网对 Kling 3.0 在 modelSpecificPayload 里带 aspect_ratio 与 resolution。
+	if ms := i2v["modelSpecificPayload"].(map[string]any); ms["aspect_ratio"] != "9:16" || ms["resolution"] != "720p" {
+		t.Fatalf("kling modelSpecificPayload = %v", ms)
+	}
+	if _, ok := videoModelByID("sora2"); ok {
+		t.Fatal("sora2 is no longer offered by Firefly")
 	}
 }
 
@@ -533,5 +540,24 @@ func TestSubmitImageKeepsUncertainAfterServerError(t *testing.T) {
 	_, err := c.submitImage(context.Background(), server.URL, []map[string]any{{"a": 1}, {"b": 2}}, "p")
 	if rejected(err) || provider.ErrorHTTPStatusOrZero(err) != http.StatusInternalServerError {
 		t.Fatalf("500 then 400 => %v (rejected=%v)", err, rejected(err))
+	}
+}
+
+// Gemini 2.5 (Nano Banana) 版本号是 nano-banana、只出 1K、按比例给尺寸、不发 groundSearch。
+func TestNanoBanana25MatchesOfficialSite(t *testing.T) {
+	in, err := NewAdapter(Config{}, nil, nil, nil, nil).buildImageInput("nano-banana", "cat", "", "16:9", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := buildImagePayloads(in)[0]
+	size := p["size"].(map[string]any)
+	if p["modelVersion"] != "nano-banana" || size["width"] != 1344 || size["height"] != 768 {
+		t.Fatalf("nano-banana payload = %v / %v", p["modelVersion"], size)
+	}
+	if _, ok := p["groundSearch"]; ok {
+		t.Fatal("Gemini 2.5 must not send groundSearch")
+	}
+	if _, err := NewAdapter(Config{}, nil, nil, nil, nil).buildImageInput("nano-banana", "cat", "", "", "4K", "", ""); err == nil {
+		t.Fatal("nano-banana must reject 4K")
 	}
 }
