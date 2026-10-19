@@ -13,7 +13,7 @@
 <p align="center">
   <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
   <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
+  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -158,7 +158,7 @@ flowchart LR
 
 ## 快速部署
 
-官方镜像支持 `linux/amd64` 和 `linux/arm64`。
+镜像只发布 `linux/amd64`。
 
 ```bash
 git clone https://github.com/ws4934/grok2api.git
@@ -496,7 +496,7 @@ docker network inspect grok2api_default \
 
 ### 在线更新
 
-发行版由 tag 触发构建。先更新 `VERSION`，再推送对应的 `vX.Y.Z` tag：`.github/workflows/release.yml` 会运行后端测试、构建前端、交叉编译 `linux/amd64` 与 `linux/arm64`，并发布包含 `grok2api_vX.Y.Z_linux_<arch>.tar.gz` 和 `checksums.txt` 的 GitHub Release；`.github/workflows/ghcr-image.yml` 会发布 `ghcr.io/ws4934/grok2api:vX.Y.Z` 与 `:latest`。
+发行版由 tag 触发构建。先更新 `VERSION`，再推送对应的 `vX.Y.Z` tag：`.github/workflows/release.yml` 会运行后端测试、构建前端、构建 `linux/amd64`，并发布包含 `grok2api_vX.Y.Z_linux_amd64.tar.gz` 和 `checksums.txt` 的 GitHub Release；`.github/workflows/ghcr-image.yml` 会发布 `ghcr.io/ws4934/grok2api:vX.Y.Z` 与 `:latest`。
 
 ```bash
 git tag v3.1.7

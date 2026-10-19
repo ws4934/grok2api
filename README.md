@@ -13,7 +13,7 @@
 <p align="center">
   <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
   <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
+  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
 <p align="center">
@@ -170,7 +170,7 @@ Each Provider keeps its own credentials, quota, health, cooldown, concurrency, a
 
 ## Quick start
 
-Official images support `linux/amd64` and `linux/arm64`.
+Images are published for `linux/amd64` only.
 
 ```bash
 git clone https://github.com/ws4934/grok2api.git
@@ -537,7 +537,7 @@ Important optional settings:
 
 ### Online update
 
-Releases are built from tags. Bump `VERSION`, then push the matching `vX.Y.Z` tag: `.github/workflows/release.yml` runs the backend tests, builds the frontend, cross-compiles `linux/amd64` and `linux/arm64`, and publishes a GitHub Release with `grok2api_vX.Y.Z_linux_<arch>.tar.gz` and `checksums.txt`; `.github/workflows/ghcr-image.yml` publishes `ghcr.io/ws4934/grok2api:vX.Y.Z` and `:latest`.
+Releases are built from tags. Bump `VERSION`, then push the matching `vX.Y.Z` tag: `.github/workflows/release.yml` runs the backend tests, builds the frontend, builds `linux/amd64`, and publishes a GitHub Release with `grok2api_vX.Y.Z_linux_amd64.tar.gz` and `checksums.txt`; `.github/workflows/ghcr-image.yml` publishes `ghcr.io/ws4934/grok2api:vX.Y.Z` and `:latest`.
 
 ```bash
 git tag v3.1.7
