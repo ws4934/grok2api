@@ -2631,7 +2631,7 @@ Object.assign(resources["zh-CN"].translation.accounts as unknown as Record<strin
   credentials: "凭据（每行一个）",
   credentialsPlaceholder: "credential_1\ncredential_2",
   syncAllProviderDescription: "将同步所有已启用 {{provider}} 账号的额度状态。",
-  quotaModes: { reason: "推理", image_gen: "生图", file_upload: "文件上传", codex: "Codex", codex_5h: "5 小时", codex_weekly: "每周" },
+  quotaModes: { reason: "推理", image_gen: "生图", file_upload: "文件上传", codex: "Codex", codex_5h: "5 小时", codex_weekly: "每周", credits: "积分" },
   quotaRemainingPercent: "剩余 {{remaining}}%",
   codexQuotaPart: "{{name}}：剩余 {{remaining}}%，{{time}} 重置",
   chatgpt: {
@@ -2642,6 +2642,12 @@ Object.assign(resources["zh-CN"].translation.accounts as unknown as Record<strin
     authHelp: "回调页面可能显示无法访问，直接复制地址栏中的完整地址即可，形如：",
     importSub2api: "导入 sub2api 导出文件",
     importCPA: "导入 CPA 凭据文件",
+  },
+  adobe: {
+    quickImport: "快速导入 Cookie",
+    quickImportDescription: "登录 https://firefly.adobe.com 后，从浏览器复制完整 Cookie（需包含 sherlockToken），每行一个；也可粘贴 JSON / JSONL。access token 会用该 Cookie 自动续期。",
+    tokens: "Firefly Cookie",
+    tokenPlaceholder: "sherlockToken=…; other=…\n{\"cookie\":\"sherlockToken=…\",\"email\":\"a@b.com\"}",
   },
 });
 Object.assign(resources.en.translation.accounts as unknown as Record<string, unknown>, {
@@ -2658,7 +2664,7 @@ Object.assign(resources.en.translation.accounts as unknown as Record<string, unk
   credentials: "Credentials (one per line)",
   credentialsPlaceholder: "credential_1\ncredential_2",
   syncAllProviderDescription: "Sync quota status for every enabled {{provider}} account.",
-  quotaModes: { reason: "Reasoning", image_gen: "Images", file_upload: "File uploads", codex: "Codex", codex_5h: "5-hour", codex_weekly: "Weekly" },
+  quotaModes: { reason: "Reasoning", image_gen: "Images", file_upload: "File uploads", codex: "Codex", codex_5h: "5-hour", codex_weekly: "Weekly", credits: "Credits" },
   quotaRemainingPercent: "{{remaining}}% remaining",
   codexQuotaPart: "{{name}}: {{remaining}}% remaining, resets {{time}}",
   chatgpt: {
@@ -2669,6 +2675,12 @@ Object.assign(resources.en.translation.accounts as unknown as Record<string, unk
     authHelp: "The callback page may fail to load; copy the full address from the address bar. It looks like:",
     importSub2api: "Import sub2api export",
     importCPA: "Import CPA credential files",
+  },
+  adobe: {
+    quickImport: "Quick import cookies",
+    quickImportDescription: "Sign in at https://firefly.adobe.com, then copy the full browser cookie (it must include sherlockToken), one per line; JSON / JSONL also works. The access token is refreshed automatically from the cookie.",
+    tokens: "Firefly cookie",
+    tokenPlaceholder: "sherlockToken=…; other=…\n{\"cookie\":\"sherlockToken=…\",\"email\":\"a@b.com\"}",
   },
 });
 function readStoredLanguage(): string | null {

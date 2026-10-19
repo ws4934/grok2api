@@ -183,3 +183,13 @@ qualityGuard:
     idleAccountCooldown: 15m
     minEncryptedBytes: 256
     encryptedBytesPerReasoningToken: 4
+
+# ================================ Adobe（Firefly）渠道 ================================
+# Adobe 是纯媒体渠道（图像 + 视频）。账号靠导入 firefly.adobe.com 的 Cookie 添加。
+# 使用 Adobe 时需启动 mint sidecar：docker compose --profile adobe up -d --build
+provider:
+  adobe:
+    # mint sidecar 基址；compose 默认即此地址。
+    sherlockMintAPI: "http://mint:8777"
+    # 单次上游调用超时。
+    timeout: 60s

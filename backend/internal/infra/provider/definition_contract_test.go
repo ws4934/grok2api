@@ -8,6 +8,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	adobeprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/adobe"
 	chatgptprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt"
 	cliprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/cli"
 	consoleprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/console"
@@ -28,6 +29,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 		webprovider.NewAdapter(webprovider.Config{}, nil, nil, nil, nil),
 		consoleprovider.NewAdapter(consoleprovider.Config{}, nil, nil, nil),
 		chatgptprovider.NewAdapter(chatgptprovider.Config{}, nil, nil, nil),
+		adobeprovider.NewAdapter(adobeprovider.Config{}, nil, nil, nil),
 	)
 	if err := registry.Validate(); err != nil {
 		t.Fatalf("production registry validation failed: %v", err)
@@ -84,6 +86,14 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, TTS: true, STT: true, SingleImagePerRequest: true},
 			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true},
 		},
+		{
+			provider: account.ProviderAdobe, catalog: provider.ModelCatalogStatic, quota: provider.QuotaRemoteWindow,
+			capabilities: []modeldomain.Capability{modeldomain.CapabilityImage, modeldomain.CapabilityImageEdit, modeldomain.CapabilityVideo},
+			credential:   provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true},
+			conversation: provider.ConversationSurface{},
+			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true},
+			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated},
+		},
 	}
 	for _, test := range tests {
 		t.Run(string(test.provider), func(t *testing.T) {
@@ -98,8 +108,8 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 				t.Fatalf("definition capabilities = %#v", definition)
 			}
 			for _, operation := range []string{"responses", "chat", "messages"} {
-				if !registry.SupportsConversation(test.provider, operation) {
-					t.Fatalf("%s does not expose declared %s compatibility", test.provider, operation)
+				if registry.SupportsConversation(test.provider, operation) != test.conversation.Supports(operation) {
+					t.Fatalf("%s %s conversation support does not match the declared surface", test.provider, operation)
 				}
 			}
 		})

@@ -190,3 +190,36 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
 - 删除旧渠道创建的路由。
 
 ChatGPT 账号需要在账号页重新添加，价格需要在模型页重新设置。原有密钥范围为"全部"的，自动包含 ChatGPT。
+
+## Adobe（Firefly）接入
+
+Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游是 `firefly-3p.ff.adobe.io` 的异步任务（submit → poll → 取结果 URL）。图像走共享的 `AsyncImageAdapter`、视频走 `VideoAdapter`，持久任务、账号池、出口、定价、审计全部复用。
+
+### 账号与凭据
+
+- **导入**（账号页 → Adobe 标签）：登录 `https://firefly.adobe.com`，复制完整浏览器 Cookie（需含 `sherlockToken`），每行一个粘贴；也支持 JSON/JSONL。Cookie 存入 refresh token 字段。
+- **续期**：access token（IMS JWT）约 1 小时过期，网关用 Cookie 调 `adobeid-na1.services.adobe.com/ims/check/v6/token` 自动续期；Cookie 失效（401/403）→ 账号转入需重新导入。没有注册新账号的能力——账号始终靠导入 Cookie。
+
+### 全局 x-arp-session-id（mint sidecar）
+
+- 提交 Adobe 任务需要一个全局共享、与账号无关的 `x-arp-session-id`，由 mint 容器（`docker/mint/`，`GET /mint`）提供。启动：
+
+  ```bash
+  docker compose --profile adobe up -d --build
+  ```
+
+- grok2api 默认指向 compose 的 `mint` 服务（`provider.adobe.sherlockMintAPI=http://mint:8777`），定期自动刷新并缓存；非 compose 部署需自行提供可达的 mint 地址。
+- mint 容器可选出站代理 `MINT_PROXY`：`http(s)://` 或无认证 `socks5://` 直传，带认证 `socks5://user:pass@host` 走容器内置中转。
+- 账号始终靠导入 Cookie，无自动注册。
+
+### 模型
+
+精简基础名 + 请求参数（`size`/`quality`/`aspect_ratio`/`resolution`/`duration`），不展开成几百个维度 ID：
+
+- 图像（各含生成 + 编辑）：`nano-banana-pro`、`nano-banana`、`nano-banana2`、`gpt-image-2`、`gpt-image-2.5`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`。多图 `n` 在一次请求里用 seeds 数组出多张。
+- 视频：`sora2`、`sora2-pro`、`veo31`、`veo31-ref`、`gemini-omni`、`kling-o3`、`kling3`、`seedance20`、`seedance20-fast`。参考图/视频/音频上传到 `/v2/storage/*` 后引用。
+- 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口展示。
+
+### 出口
+
+使用作用域 `adobe` 的出口节点（HTTP/SOCKS/Trojan）。提交、上传下载、IMS 续期都走账号绑定的节点；传输失败时按出口问题反馈健康度。

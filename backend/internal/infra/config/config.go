@@ -148,6 +148,17 @@ type ProviderConfig struct {
 	Web     WebProviderConfig     `yaml:"web"`
 	Console ConsoleProviderConfig `yaml:"console"`
 	ChatGPT ChatGPTProviderConfig `yaml:"chatgpt"`
+	Adobe   AdobeProviderConfig   `yaml:"adobe"`
+}
+
+// AdobeProviderConfig holds the Adobe Firefly provider runtime settings.
+type AdobeProviderConfig struct {
+	// SherlockMintAPI is the base URL of the fingerprint-chromium mint sidecar
+	// (GET /mint → the global x-arp-session-id). The bundled docker-compose runs
+	// it as the "mint" service; empty disables Adobe submits.
+	SherlockMintAPI string `yaml:"sherlockMintAPI"`
+	// Timeout bounds a single upstream call; 0 uses 60s.
+	Timeout Duration `yaml:"timeout"`
 }
 
 // ChatGPTProviderConfig holds the ChatGPT web provider runtime settings.
@@ -942,6 +953,7 @@ func defaultConfig() Config {
 			},
 			Console: ConsoleProviderConfig{BaseURL: "https://console.x.ai", ChatTimeout: Duration(5 * time.Minute), StreamIdleTimeout: Duration(settingsdomain.DefaultConsoleStreamIdleTimeout)},
 			ChatGPT: ChatGPTProviderConfig{OutputTokenLimit: DefaultChatGPTOutputTokenLimit, VisionTokens: DefaultChatGPTVisionTokens},
+			Adobe:   AdobeProviderConfig{SherlockMintAPI: "http://mint:8777", Timeout: Duration(60 * time.Second)},
 		},
 		Batch: BatchConfig{
 			ImportConcurrency: 25, ConversionConcurrency: 25, SyncConcurrency: 25,

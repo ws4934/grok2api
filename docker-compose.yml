@@ -77,6 +77,27 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # ================================ ADOBE FIREFLY MINT ================================
+  # Adobe（Firefly）渠道的 mint sidecar。仅在使用 Adobe 渠道时启用：
+  #   docker compose --profile adobe up -d --build
+  # grok2api 默认指向本服务（provider.adobe.sherlockMintAPI=http://mint:8777）。
+
+  mint:
+    container_name: grok2api-adobe-mint
+    profiles: ["adobe"]
+    build:
+      context: ./docker/mint
+    environment:
+      TZ: "${TZ:-Asia/Shanghai}"
+      # 可选：mint 容器出站代理。留空为直连。
+      # http(s):// 或无认证 socks5:// 直传；带认证 socks5://user:pass@host:port 走内置中转。
+      MINT_PROXY: "${MINT_PROXY:-}"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   grok2api-data:
   quality_guard_state:

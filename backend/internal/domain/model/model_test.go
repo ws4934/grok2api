@@ -70,7 +70,7 @@ func TestExternalPublicIDAndCandidatesSeparateClientAndRouteNames(t *testing.T) 
 	if got := ExternalPublicID(account.ProviderBuild, "Build/grok-4.5"); got != "grok-4.5" {
 		t.Fatalf("external public ID = %q", got)
 	}
-	want := []string{"Build/grok-4.5", "Web/grok-4.5", "Console/grok-4.5", "chatgpt/grok-4.5"}
+	want := []string{"Build/grok-4.5", "Web/grok-4.5", "Console/grok-4.5", "chatgpt/grok-4.5", "adobe/grok-4.5"}
 	got := PublicIDCandidates("grok-4.5")
 	if len(got) != len(want) {
 		t.Fatalf("candidates = %#v", got)

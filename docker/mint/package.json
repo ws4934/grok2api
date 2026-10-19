@@ -1,0 +1,16 @@
+{
+  "name": "adobe2api-mint",
+  "version": "0.1.0",
+  "private": true,
+  "description": "fingerprint-chromium sherlockToken mint sidecar (headful + Xvfb)",
+  "type": "module",
+  "scripts": {
+    "start": "node mint-service.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.8.0"
+  }
+}

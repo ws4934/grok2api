@@ -16,6 +16,7 @@ const (
 	ProviderWeb     Provider = "grok_web"
 	ProviderConsole Provider = "grok_console"
 	ProviderChatGPT Provider = "chatgpt"
+	ProviderAdobe   Provider = "adobe"
 )
 
 // LinkedAccount 表示同一上游用户在另一 Provider 下的弱关联账号。
@@ -28,7 +29,7 @@ type LinkedAccount struct {
 	UserID   string
 }
 
-var providers = [...]Provider{ProviderBuild, ProviderWeb, ProviderConsole, ProviderChatGPT}
+var providers = [...]Provider{ProviderBuild, ProviderWeb, ProviderConsole, ProviderChatGPT, ProviderAdobe}
 
 // Providers 返回按产品展示和后台维护顺序排列的稳定 Provider 集合。
 // The order is also the routing priority when providers share a public model name.

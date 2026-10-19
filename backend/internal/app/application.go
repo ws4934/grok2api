@@ -39,6 +39,7 @@ import (
 	inframedia "github.com/chenyme/grok2api/backend/internal/infra/media"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/adobe"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt"
 	cliprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/cli"
 	consoleprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/console"
@@ -236,7 +237,9 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 	chatgptAdapter := chatgpt.NewAdapter(chatgptProviderConfig(cfg), egressManager, cipher, mediaService)
 	chatgptAdapter.SetLogger(logger)
 	egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(cfg))
-	providers := provider.NewRegistry(cliAdapter, webAdapter, consoleAdapter, chatgptAdapter)
+	adobeAdapter := adobe.NewAdapter(adobeProviderConfig(cfg), egressManager, cipher, mediaService)
+	adobeAdapter.SetLogger(logger)
+	providers := provider.NewRegistry(cliAdapter, webAdapter, consoleAdapter, chatgptAdapter, adobeAdapter)
 	if err := providers.Validate(); err != nil {
 		if runtimeStore != nil {
 			_ = runtimeStore.Close()
@@ -322,6 +325,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 		}
 		database.Close()
 		return nil, fmt.Errorf("初始化 ChatGPT 图片模型: %w", err)
+	}
+	if err := modelRepo.ReplaceProviderRoutes(ctx, account.ProviderAdobe, adobe.Routes()); err != nil {
+		if runtimeStore != nil {
+			_ = runtimeStore.Close()
+		}
+		database.Close()
+		return nil, fmt.Errorf("初始化 Adobe 模型目录: %w", err)
 	}
 	accountSyncService := accountsyncapp.NewService(logger, accountService, accountService, accountService, modelService)
 	accountSyncService.SetBulkPool(importPool)
@@ -527,6 +537,11 @@ func clearanceConfig(cfg config.Config) infraegress.ClearanceConfig {
 func chatgptProviderConfig(cfg config.Config) chatgpt.Config {
 	value := cfg.Provider.ChatGPT
 	return chatgpt.Config{ImageConversationModel: value.ImageConversationModel, OutputTokenLimit: value.OutputTokenLimit, VisionTokens: value.VisionTokens}
+}
+
+func adobeProviderConfig(cfg config.Config) adobe.Config {
+	value := cfg.Provider.Adobe
+	return adobe.Config{RequestTimeout: value.Timeout.Value(), SherlockMintAPI: value.SherlockMintAPI}
 }
 
 // chatgptClearanceTarget is the site FlareSolverr solves for ChatGPT egresses;

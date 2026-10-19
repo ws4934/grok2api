@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { AccountTypeText, QuotaNotSynced, QuotaWindowRow } from "@/features/accounts/account-cells";
 import { orderQuotaWindows, resolveAccountUI, type ProviderAccountUI } from "@/features/accounts/account-ui";
 import type { AccountDTO } from "@/features/accounts/accounts-api";
+import { adobeAccountUI } from "@/features/accounts/providers/adobe";
 import { chatgptAccountUI } from "@/features/accounts/providers/chatgpt";
 import { grokBuildAccountUI } from "@/features/accounts/providers/grok-build";
 import { grokConsoleAccountUI } from "@/features/accounts/providers/grok-console";
@@ -38,6 +39,7 @@ const providerModules: Readonly<Record<string, Partial<ProviderAccountUI>>> = {
   grok_web: grokWebAccountUI,
   grok_console: grokConsoleAccountUI,
   chatgpt: chatgptAccountUI,
+  adobe: adobeAccountUI,
 };
 
 export function accountUI(provider: string): ProviderAccountUI {
