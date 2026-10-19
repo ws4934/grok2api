@@ -1,14 +1,19 @@
 package memory
 
 import (
+	"container/list"
 	"context"
-	"sort"
 	"sync"
 	"time"
 )
 
+// reasoningReplayMaxBytes 是单实例回放缓存的总字节上限，与条目数上限同时生效。
+const reasoningReplayMaxBytes = 128 << 20
+
 type reasoningReplayEntry struct {
+	key       string
 	items     [][]byte
+	size      int
 	expiresAt time.Time
 	storedAt  time.Time
 }
@@ -18,7 +23,10 @@ type ReasoningReplayStore struct {
 	mu         sync.Mutex
 	maxSize    int
 	evictBatch int
-	values     map[string]reasoningReplayEntry
+	maxBytes   int
+	bytes      int
+	values     map[string]*list.Element
+	order      *list.List // 按最近访问排序，front 最旧
 	ttlSlide   bool
 }
 
@@ -34,7 +42,7 @@ func NewReasoningReplayStore(maxSize int) *ReasoningReplayStore {
 	if evictBatch > 128 {
 		evictBatch = 128
 	}
-	return &ReasoningReplayStore{maxSize: maxSize, evictBatch: evictBatch, values: make(map[string]reasoningReplayEntry, maxSize), ttlSlide: true}
+	return &ReasoningReplayStore{maxSize: maxSize, evictBatch: evictBatch, maxBytes: reasoningReplayMaxBytes, values: make(map[string]*list.Element, maxSize), order: list.New(), ttlSlide: true}
 }
 
 func reasoningReplayMapKey(model, sessionKey string) string {
@@ -59,12 +67,13 @@ func (s *ReasoningReplayStore) Get(_ context.Context, model, sessionKey string, 
 	key := reasoningReplayMapKey(model, sessionKey)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entry, ok := s.values[key]
+	elem, ok := s.values[key]
 	if !ok {
 		return nil, false, nil
 	}
+	entry := elem.Value.(*reasoningReplayEntry)
 	if !now.Before(entry.expiresAt) {
-		delete(s.values, key)
+		s.removeLocked(elem)
 		return nil, false, nil
 	}
 	if s.ttlSlide {
@@ -76,7 +85,7 @@ func (s *ReasoningReplayStore) Get(_ context.Context, model, sessionKey string, 
 		}
 		entry.expiresAt = now.Add(ttl)
 		entry.storedAt = now
-		s.values[key] = entry
+		s.order.MoveToBack(elem)
 	}
 	return cloneReplayItems(entry.items), true, nil
 }
@@ -87,12 +96,18 @@ func (s *ReasoningReplayStore) Set(_ context.Context, model, sessionKey string, 
 	}
 	key := reasoningReplayMapKey(model, sessionKey)
 	now := time.Now()
+	entry := &reasoningReplayEntry{key: key, items: cloneReplayItems(items), size: len(key), expiresAt: expiresAt, storedAt: now}
+	for _, item := range entry.items {
+		entry.size += len(item)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.values[key]; !exists {
-		s.evictLocked(now)
+	if elem, exists := s.values[key]; exists {
+		s.removeLocked(elem)
 	}
-	s.values[key] = reasoningReplayEntry{items: cloneReplayItems(items), expiresAt: expiresAt, storedAt: now}
+	s.evictLocked(now, entry.size)
+	s.values[key] = s.order.PushBack(entry)
+	s.bytes += entry.size
 	return nil
 }
 
@@ -102,34 +117,31 @@ func (s *ReasoningReplayStore) Delete(_ context.Context, model, sessionKey strin
 	}
 	key := reasoningReplayMapKey(model, sessionKey)
 	s.mu.Lock()
-	delete(s.values, key)
+	if elem, ok := s.values[key]; ok {
+		s.removeLocked(elem)
+	}
 	s.mu.Unlock()
 	return nil
 }
 
-func (s *ReasoningReplayStore) evictLocked(now time.Time) {
-	for key, entry := range s.values {
-		if !now.Before(entry.expiresAt) {
-			delete(s.values, key)
+// evictLocked 为即将写入的 incoming 字节腾出空间：先清过期项，再按条目数和字节上限淘汰最旧项。
+// ponytail: 只从最旧端清过期项；TTL 调小后较新但先过期的条目要等轮到队首或被上限淘汰（Get 不会返回它们）。
+func (s *ReasoningReplayStore) evictLocked(now time.Time, incoming int) {
+	for elem := s.order.Front(); elem != nil && !now.Before(elem.Value.(*reasoningReplayEntry).expiresAt); elem = s.order.Front() {
+		s.removeLocked(elem)
+	}
+	if len(s.values) >= s.maxSize {
+		for range s.evictBatch {
+			s.removeLocked(s.order.Front())
 		}
 	}
-	if len(s.values) < s.maxSize {
-		return
+	for s.order.Len() > 0 && s.bytes+incoming > s.maxBytes {
+		s.removeLocked(s.order.Front())
 	}
-	type candidate struct {
-		key      string
-		storedAt time.Time
-	}
-	candidates := make([]candidate, 0, len(s.values))
-	for key, entry := range s.values {
-		candidates = append(candidates, candidate{key: key, storedAt: entry.storedAt})
-	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].storedAt.Before(candidates[j].storedAt) })
-	count := s.evictBatch
-	if count > len(candidates) {
-		count = len(candidates)
-	}
-	for index := 0; index < count; index++ {
-		delete(s.values, candidates[index].key)
-	}
+}
+
+func (s *ReasoningReplayStore) removeLocked(elem *list.Element) {
+	entry := s.order.Remove(elem).(*reasoningReplayEntry)
+	delete(s.values, entry.key)
+	s.bytes -= entry.size
 }
