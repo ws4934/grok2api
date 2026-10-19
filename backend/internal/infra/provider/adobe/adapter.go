@@ -2,9 +2,11 @@ package adobe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -76,10 +78,15 @@ func (a *Adapter) requestContextFor(credential account.Credential) (requestConte
 	return rc, nil
 }
 
-// withClient 为该凭据获取出口租约，构建绑定其上的 client，执行 fn，把结果
+// withClient 以账号的浏览器身份获取出口租约，构建绑定其上的 client，执行 fn，把结果
 // 反馈给出口健康度并释放租约。
 func (a *Adapter) withClient(ctx context.Context, credential account.Credential, fn func(context.Context, *client) error) error {
-	lease, err := a.egress.AcquireCredential(ctx, scope, credential)
+	return a.withClientAs(ctx, credential, a.userAgentOf(credential), fn)
+}
+
+// withClientAs 用指定的浏览器身份（导入时账号还没有存下来的身份）执行 fn。
+func (a *Adapter) withClientAs(ctx context.Context, credential account.Credential, userAgent string, fn func(context.Context, *client) error) error {
+	lease, err := a.egress.AcquireCredential(infraegress.WithUserAgent(ctx, userAgent), scope, credential)
 	if err != nil {
 		return err
 	}
@@ -88,10 +95,23 @@ func (a *Adapter) withClient(ctx context.Context, credential account.Credential,
 	if err != nil {
 		return err
 	}
-	rc.userAgent = lease.UserAgent // 出口按这个 UA 选 TLS 指纹，请求头必须一致
+	rc.userAgent = lease.UserAgent // 出口按这个 UA 选了 TLS 指纹，请求头必须一致
 	runErr := fn(ctx, &client{do: lease, rc: rc})
 	a.report(ctx, lease, runErr)
 	return runErr
+}
+
+// userAgentOf 是账号导入时分到的浏览器身份；凭据状态里没有时用池里第一个。
+func (a *Adapter) userAgentOf(credential account.Credential) string {
+	if credential.EncryptedState != "" {
+		if raw, err := a.cipher.Decrypt(credential.EncryptedState); err == nil {
+			var state map[string]string
+			if json.Unmarshal([]byte(raw), &state) == nil && strings.TrimSpace(state[stateUserAgent]) != "" {
+				return strings.TrimSpace(state[stateUserAgent])
+			}
+		}
+	}
+	return browserUserAgents[0]
 }
 
 // report 把一次结果反馈给出口健康度：传输失败归咎于出口节点，上游状态码不算。

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
@@ -201,7 +202,7 @@ func preSubmitFailure(err error) error {
 
 // DownloadVideo 用创建任务的凭据读取完成的视频内容。调用方必须先校验任务归属。
 func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credential, rawURL string) (io.ReadCloser, string, int64, error) {
-	lease, err := a.egress.AcquireCredential(ctx, scope, credential)
+	lease, err := a.egress.AcquireCredential(infraegress.WithUserAgent(ctx, a.userAgentOf(credential)), scope, credential)
 	if err != nil {
 		return nil, "", 0, err
 	}

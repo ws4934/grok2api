@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"strings"
@@ -25,6 +26,7 @@ type importRecord struct {
 	AccessToken string `json:"access_token"`
 	Email       string `json:"email"`
 	Name        string `json:"name"`
+	UserAgent   string `json:"user_agent,omitempty"` // 账号的浏览器身份，导出时带上，导回来不变
 }
 
 // ParseImportedCredentials 接受每行一个 Adobe Cookie，或 JSON/JSONL 记录。
@@ -62,7 +64,7 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 		if !looksLikeCookie(cookie) {
 			continue
 		}
-		seeds = append(seeds, provider.CredentialSeed{
+		seed := provider.CredentialSeed{
 			Provider:     account.ProviderAdobe,
 			AuthType:     account.AuthTypeOAuth,
 			Email:        strings.TrimSpace(record.Email),
@@ -70,7 +72,11 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 			SourceKey:    "adobe:" + security.HashToken(cookie)[:24],
 			RefreshToken: cookie,
 			AccessToken:  strings.TrimSpace(record.AccessToken),
-		})
+		}
+		if userAgent := strings.TrimSpace(record.UserAgent); userAgent != "" {
+			seed.State = map[string]string{stateUserAgent: userAgent}
+		}
+		seeds = append(seeds, seed)
 	}
 	if len(seeds) == 0 {
 		return nil, errors.New("没有找到有效的 Adobe Cookie（形如 name=value; name2=value2）")
@@ -88,7 +94,7 @@ func looksLikeCookie(value string) bool {
 func (a *Adapter) MarshalCredentials(values []provider.CredentialSeed) ([]byte, error) {
 	var builder strings.Builder
 	for _, seed := range values {
-		record := importRecord{Cookie: seed.RefreshToken, Email: seed.Email, Name: seed.Name}
+		record := importRecord{Cookie: seed.RefreshToken, Email: seed.Email, Name: seed.Name, UserAgent: seed.State[stateUserAgent]}
 		encoded, err := json.Marshal(record)
 		if err != nil {
 			return nil, err
@@ -107,10 +113,19 @@ func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.C
 		return seed, &provider.CredentialRefreshError{Status: http.StatusBadRequest, Code: "adobe_cookie_invalid", Message: "缺少有效的 Adobe Cookie"}
 	}
 	pending := a.pendingCredential(ctx, seed.SourceKey)
+	// 浏览器身份：导出文件里带的 > 重新导入时账号原有的 > 新账号随机分一个。
+	userAgent := strings.TrimSpace(seed.State[stateUserAgent])
+	if userAgent == "" && pending.ID != 0 {
+		userAgent = a.userAgentOf(pending)
+	}
+	if userAgent == "" {
+		userAgent = browserUserAgents[rand.IntN(len(browserUserAgents))]
+	}
+	seed.State = map[string]string{stateUserAgent: userAgent}
 	var token string
 	var expiresAt time.Time
 	var email, userID string
-	err := a.withClient(ctx, pending, func(ctx context.Context, c *client) error {
+	err := a.withClientAs(ctx, pending, userAgent, func(ctx context.Context, c *client) error {
 		var refreshErr error
 		token, expiresAt, refreshErr = c.imsRefresh(ctx, cookie)
 		if refreshErr != nil {
@@ -268,7 +283,6 @@ func (c *client) imsRefresh(ctx context.Context, cookie string) (string, time.Ti
 	body := url.Values{"client_id": {c.rc.apiKey}, "guest_allowed": {"true"}, "scope": {refreshScope}}
 	headers := map[string]string{}
 	headers["Accept"] = "*/*"
-	headers["Accept-Language"] = "en-US,en;q=0.9"
 	headers["Content-Type"] = "application/x-www-form-urlencoded;charset=UTF-8"
 	headers["Cookie"] = cookie
 	headers["Origin"] = "https://firefly.adobe.com"

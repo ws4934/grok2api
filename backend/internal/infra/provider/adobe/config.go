@@ -10,6 +10,19 @@ const (
 	refreshScope = "AdobeID,firefly_api,openid,pps.read,pps.write,additional_info.projectedProductContext,additional_info.ownerOrg,uds_read,uds_write,ab.manage,read_organizations,additional_info.roles,account_cluster.read,creative_production,profile"
 )
 
+// browserUserAgents 是账号浏览器身份池：导入时给新账号随机一个并存进凭据状态，之后该账号
+// 的请求都用它，出口按它选 TLS 指纹、客户端提示也由它推出。只放 tls-client 有对应指纹的
+// Chrome 版本。
+var browserUserAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+}
+
+// stateUserAgent 是凭据状态里保存账号浏览器身份的键。
+const stateUserAgent = "user_agent"
+
 // 这两个固定端点以 var 声明，便于测试覆盖。
 var (
 	refreshURL = "https://adobeid-na1.services.adobe.com/ims/check/v6/token?jslVersion=v2-v0.48.0-1-g1e322cb"

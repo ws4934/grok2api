@@ -80,6 +80,7 @@ func browserHeaders(ua string) map[string]string {
 	}
 	return map[string]string{
 		"User-Agent":         ua,
+		"Accept-Language":    "en-US,en;q=0.9",
 		"sec-ch-ua":          fmt.Sprintf(`"Chromium";v="%s", "Google Chrome";v="%s", "Not/A)Brand";v="99"`, version, version),
 		"sec-ch-ua-mobile":   "?0",
 		"sec-ch-ua-platform": platform,
@@ -97,7 +98,6 @@ func (c *client) submitHeaders(noncePrompt string) map[string]string {
 	headers["Accept"] = "*/*"
 	headers["Origin"] = "https://firefly.adobe.com"
 	headers["Referer"] = "https://firefly.adobe.com/"
-	headers["Accept-Language"] = "en-US,en;q=0.9"
 	headers["x-arp-session-id"] = c.rc.sherlock
 	if noncePrompt != "" {
 		if nonce := submitNonce(c.rc.token, noncePrompt); nonce != "" {

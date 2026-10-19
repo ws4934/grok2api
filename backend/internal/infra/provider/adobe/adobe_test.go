@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bogdanfinn/tls-client/profiles"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
@@ -280,6 +282,10 @@ func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"links": map[string]any{"result": "http://" + r.Host + "/status/job1"}})
 		case r.URL.Path == "/status/job1":
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "succeeded", "outputs": []any{map[string]any{"image": map[string]any{"presignedUrl": "http://" + r.Host + "/out.png"}}}})
+		case r.URL.Path == "/ims/token":
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "header.e30.sig", "expires_in": 3600})
+		case r.URL.Path == "/ims/profile":
+			_ = json.NewEncoder(w).Encode(map[string]any{"email": "a@example.com", "userId": "u1"})
 		case r.URL.Path == "/out.png":
 			_, _ = w.Write([]byte("PNGDATA"))
 		case strings.HasPrefix(r.URL.Path, "/storage/"):
@@ -387,17 +393,87 @@ func TestGenerateImageRejectionsBecomeResponses(t *testing.T) {
 	}
 }
 
-// 每个发往 Adobe 的请求都带出口租约的 UA 与对应的客户端提示：出口按同一个 UA 选 TLS 指纹。
-func TestRequestsCarryTheLeaseUserAgent(t *testing.T) {
+// 每个发往 Adobe 的请求都带账号自己的浏览器身份（UA 与对应的客户端提示），出口按同一个
+// UA 选 TLS 指纹；凭据状态里没有身份的账号用池里第一个。
+func TestRequestsCarryTheAccountUserAgent(t *testing.T) {
 	fake, adapter, credential := newFakeAdobe(t)
-	if _, err := adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image/2", Prompt: "cat"}); err != nil {
+	state, err := adapter.cipher.Encrypt(`{"user_agent":"` + browserUserAgents[3] + `"}`)
+	if err != nil {
 		t.Fatal(err)
 	}
+	for _, tc := range []struct{ state, agent, version string }{{"", browserUserAgents[0], "146"}, {state, browserUserAgents[3], "144"}} {
+		credential.EncryptedState = tc.state
+		fake.mu.Lock()
+		fake.agents = nil
+		fake.mu.Unlock()
+		if _, err := adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image/2", Prompt: "cat"}); err != nil {
+			t.Fatal(err)
+		}
+		fake.mu.Lock()
+		want := tc.agent + fmt.Sprintf(` | "Chromium";v="%s", "Google Chrome";v="%s", "Not/A)Brand";v="99"`, tc.version, tc.version)
+		if len(fake.agents) < 3 || slices.ContainsFunc(fake.agents, func(got string) bool { return got != want }) {
+			t.Errorf("request agents = %q, want all %q", fake.agents, want)
+		}
+		fake.mu.Unlock()
+	}
+}
+
+// 身份池里每个 UA 的 Chrome 版本都有对应的 tls-client 指纹，出口不会退回别的版本。
+func TestBrowserUserAgentsHaveTLSProfiles(t *testing.T) {
+	for _, agent := range browserUserAgents {
+		major := regexp.MustCompile(`Chrome/(\d+)`).FindStringSubmatch(agent)
+		if len(major) != 2 {
+			t.Fatalf("not a Chrome user agent: %q", agent)
+		}
+		if _, ok := profiles.MappedTLSClients["chrome_"+major[1]]; !ok {
+			t.Errorf("no tls-client profile for %q", agent)
+		}
+	}
+}
+
+// 导入时给新账号分一个身份并存进凭据状态；导出再导入、重新导入已有账号都保持原身份。
+func TestImportKeepsAccountBrowserIdentity(t *testing.T) {
+	fake, adapter, existing := newFakeAdobe(t)
+	previousRefresh, previousProfiles := refreshURL, profileURLs
+	refreshURL, profileURLs = fake.URL+"/ims/token", []string{fake.URL + "/ims/profile"}
+	t.Cleanup(func() { refreshURL, profileURLs = previousRefresh, previousProfiles })
+	ctx := context.Background()
+	seeds, err := adapter.ParseImportedCredentials([]byte(validCookie()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := adapter.PrepareImportedCredential(ctx, seeds[0])
+	agent := seed.State[stateUserAgent]
+	if err != nil || !slices.Contains(browserUserAgents, agent) {
+		t.Fatalf("new account identity = %q, %v", agent, err)
+	}
 	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	want := infraegress.DefaultUserAgent + ` | "Chromium";v="146", "Google Chrome";v="146", "Not/A)Brand";v="99"`
-	if len(fake.agents) < 3 || slices.ContainsFunc(fake.agents, func(got string) bool { return got != want }) {
-		t.Fatalf("request agents = %q, want all %q", fake.agents, want)
+	for _, got := range fake.agents {
+		if !strings.HasPrefix(got, agent+" | ") {
+			t.Errorf("import request agent = %q, want %q", got, agent)
+		}
+	}
+	fake.mu.Unlock()
+
+	exported, err := adapter.MarshalCredentials([]provider.CredentialSeed{seed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := adapter.ParseImportedCredentials(exported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip, err := adapter.PrepareImportedCredential(ctx, again[0]); err != nil || roundTrip.State[stateUserAgent] != agent {
+		t.Fatalf("export/import identity = %q, %v, want %q", roundTrip.State[stateUserAgent], err, agent)
+	}
+
+	existing.EncryptedState, err = adapter.cipher.Encrypt(`{"user_agent":"` + browserUserAgents[2] + `"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reimported, err := adapter.PrepareImportedCredential(infraegress.WithExistingAccount(ctx, existing), seeds[0])
+	if err != nil || reimported.State[stateUserAgent] != browserUserAgents[2] {
+		t.Fatalf("re-import identity = %q, %v", reimported.State[stateUserAgent], err)
 	}
 }
 
