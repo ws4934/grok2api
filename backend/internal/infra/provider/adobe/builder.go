@@ -543,10 +543,10 @@ func (v *modelVersion) videoPlan(prompt, aspect, resolution string, duration int
 	tiers := v.tiers
 	if match, ok := findFold(tiers, resolution); ok {
 		in.resolution = match
-	} else if want := videoLines(resolution); want > 0 && len(tiers) > 0 {
+	} else if want := tierLinesOf(resolution); want > 0 && len(tiers) > 0 {
 		best := tiers[0]
 		for _, tier := range tiers {
-			if abs(videoLines(tier)-want) < abs(videoLines(best)-want) {
+			if abs(tierLinesOf(tier)-want) < abs(tierLinesOf(best)-want) {
 				best = tier
 			}
 		}

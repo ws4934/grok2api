@@ -609,6 +609,10 @@ func TestVideoInputsFollowSchema(t *testing.T) {
 	if in.resolution != "1080p" {
 		t.Errorf("1080p-only model resolution = %q", in.resolution)
 	}
+	// 2K 取模型的最高档，不是回落到默认的 720p。
+	if in := mustVersion(t, "veo-3.1").videoPlan("x", "16:9", "2K", 8, false, false); in.resolution != "1080p" {
+		t.Errorf("veo-3.1 2K resolution = %q, want 1080p", in.resolution)
+	}
 }
 
 // 官网约束：Veo 参考图规则；gpt-image-2.5 尺寸上限；音频默认值；Seedance 2.5 带首帧时比例为 auto。
