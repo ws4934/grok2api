@@ -3,6 +3,7 @@ package inference
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -116,6 +117,13 @@ func rewriteResponsesDataLine(line []byte, state *responsesCompatState) []byte {
 	}
 	payload := bytes.TrimSpace(bytes.TrimPrefix(trimmed, []byte("data:")))
 	if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+		return line
+	}
+	// Most events already carry every field. Confirm that with a typed decode
+	// and forward the line untouched; only events that need a field rewritten
+	// pay for the map decode and re-marshal below.
+	var fields responsesCompatFields
+	if json.Unmarshal(payload, &fields) == nil && fields.unchanged(state) {
 		return line
 	}
 	var event map[string]any
@@ -236,6 +244,150 @@ func sanitizeResponsesEvent(event map[string]any, state *responsesCompatState) b
 		changed = true
 	}
 	return changed
+}
+
+// responsesCompatFields is what sanitizeResponsesEvent reads from an event,
+// decoded without building a map so large values such as image results are
+// skipped instead of copied. Nested nodes reuse it for the annotations walk.
+// Any field holding another JSON type fails the decode, and the event then
+// takes the map path. It reads an event differently from the map path only
+// for JSON no encoder emits: keys differing just in case, duplicate keys, or
+// numbers beyond float64 range in fields it skips.
+type responsesCompatFields struct {
+	Type        string      `json:"type"`
+	ID          string      `json:"id"`
+	ItemID      string      `json:"item_id"`
+	OutputIndex *float64    `json:"output_index"`
+	CreatedAt   *float64    `json:"created_at"`
+	Model       string      `json:"model"`
+	Object      jsonPresent `json:"object"`
+	Annotations jsonPresent `json:"annotations"`
+	Error       *struct {
+		ID string `json:"id"`
+	} `json:"error"`
+	Item     *responsesCompatFields  `json:"item"`
+	Part     *responsesCompatFields  `json:"part"`
+	Response *responsesCompatFields  `json:"response"`
+	Content  []responsesCompatFields `json:"content"`
+	Output   []responsesCompatFields `json:"output"`
+	Delta    scalarDelta             `json:"delta"`
+}
+
+// unchanged reports whether sanitizeResponsesEvent would leave the event as
+// is and, only then, applies the state updates it would have made.
+func (f *responsesCompatFields) unchanged(state *responsesCompatState) bool {
+	responseID, createdAt, model := state.responseID, state.createdAt, state.model
+	carriesID := responsesEventCarriesResponseID(f.Type)
+	if carriesID && responseID == "" {
+		responseID = strings.TrimSpace(f.ID)
+	}
+	if resp := f.Response; resp != nil {
+		id := strings.TrimSpace(resp.ID)
+		model = strings.TrimSpace(resp.Model)
+		if id == "" || resp.CreatedAt == nil || !resp.Object || resp.Output == nil || model == "" {
+			return false
+		}
+		if resp.Error != nil && strings.TrimSpace(resp.Error.ID) == "" {
+			return false
+		}
+		if responseID == "" {
+			responseID = id
+		} else if id != responseID {
+			return false
+		}
+		if ts := int64(*resp.CreatedAt); ts > 0 {
+			if createdAt == 0 {
+				createdAt = ts
+			} else if ts != createdAt {
+				return false
+			}
+		}
+	}
+	var outputIndex int64
+	if f.OutputIndex != nil {
+		outputIndex = int64(*f.OutputIndex)
+	}
+	itemID := ""
+	if f.Item != nil {
+		itemID = strings.TrimSpace(f.Item.ID)
+		if f.OutputIndex != nil {
+			if remembered := state.itemID(outputIndex); remembered != "" {
+				itemID = remembered
+			}
+		}
+		if itemID == "" || itemID != strings.TrimSpace(f.Item.ID) {
+			return false
+		}
+	}
+	if strings.TrimSpace(f.ItemID) == "" && responsesEventNeedsItemID(f.Type) && f.OutputIndex != nil {
+		return false
+	}
+	if carriesID {
+		id := strings.TrimSpace(f.ID)
+		if id == "" {
+			return false
+		}
+		if responseID == "" {
+			responseID = id
+		} else if id != responseID {
+			return false
+		}
+	}
+	if f.missingAnnotations() {
+		return false
+	}
+	state.responseID, state.createdAt, state.model = responseID, createdAt, model
+	if f.Item != nil {
+		state.rememberItemID(outputIndex, f.OutputIndex != nil, itemID)
+	}
+	return true
+}
+
+// missingAnnotations reports whether ensureOutputTextAnnotations would add
+// annotations anywhere in this node.
+func (f *responsesCompatFields) missingAnnotations() bool {
+	if f == nil {
+		return false
+	}
+	if f.Type == "output_text" && !f.Annotations {
+		return true
+	}
+	if f.Item.missingAnnotations() || f.Part.missingAnnotations() || f.Response.missingAnnotations() {
+		return true
+	}
+	for i := range f.Content {
+		if f.Content[i].missingAnnotations() {
+			return true
+		}
+	}
+	for i := range f.Output {
+		if f.Output[i].missingAnnotations() {
+			return true
+		}
+	}
+	return false
+}
+
+// jsonPresent records whether a field holds a non-null value without
+// keeping the value.
+type jsonPresent bool
+
+func (p *jsonPresent) UnmarshalJSON(data []byte) error {
+	*p = string(data) != "null"
+	return nil
+}
+
+var errNestedDelta = errors.New("nested delta")
+
+// scalarDelta skips the string delta of Responses events without copying it.
+// An object or array delta fails the decode so the map path walks it.
+type scalarDelta struct{}
+
+func (*scalarDelta) UnmarshalJSON(data []byte) error {
+	if data[0] == '{' || data[0] == '[' {
+		return errNestedDelta
+	}
+	return nil
 }
 
 // Grok CLI serde requires output_text.annotations even when there are no
