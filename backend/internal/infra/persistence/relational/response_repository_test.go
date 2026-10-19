@@ -3,6 +3,7 @@ package relational
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -167,5 +168,59 @@ func TestResponseOwnershipIdentityMigrationPreservesExistingRows(t *testing.T) {
 	got, err := repo.Get(ctx, value.ResponseID, value.ClientKeyID, now)
 	if err != nil || got.AccountID != value.AccountID || got.Provider != value.Provider || got.PromptCacheKey != "" || got.ReasoningReplayKey != "" {
 		t.Fatalf("migrated ownership = %#v, err = %v", got, err)
+	}
+}
+
+func TestResponseRepositorySaveUpsertsNewAndExistingRows(t *testing.T) {
+	for _, dialect := range []string{"sqlite", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			ctx := context.Background()
+			database := openTestDatabase
+			if dialect == "postgres" {
+				database = openPostgresTestDatabase
+			}
+			db := database(t)
+			suffix := fmt.Sprintf("%s-%d", dialect, time.Now().UnixNano()%1e9)
+			accountValue, _, err := NewAccountRepository(db).UpsertByIdentity(ctx, account.Credential{Provider: account.ProviderWeb, Name: "upsert-" + suffix, SourceKey: "upsert-" + suffix, EncryptedAccessToken: testEncryptedToken, AuthStatus: account.AuthStatusActive})
+			if err != nil {
+				t.Fatal(err)
+			}
+			keyValue, err := NewClientKeyRepository(db).Create(ctx, clientkeydomain.Key{Name: "upsert-" + suffix, Prefix: "upsert-" + suffix, SecretHash: testSecretHash, EncryptedSecret: testEncryptedToken, Enabled: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo := NewResponseRepository(db)
+			id := "resp-upsert-" + suffix
+			base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+			// The second save overwrites every column, created_at included; updated_at is always stamped at save time.
+			for _, value := range []inferencedomain.ResponseOwnership{
+				{ResponseID: id, AccountID: accountValue.ID, ClientKeyID: keyValue.ID, ModelRouteID: 7, Provider: account.ProviderWeb, PromptCacheKey: "cache-1", ReasoningReplayKey: "replay-1", ExpiresAt: base.Add(time.Hour), CreatedAt: base, UpdatedAt: base},
+				{ResponseID: id, AccountID: accountValue.ID, ClientKeyID: keyValue.ID, Provider: account.ProviderWeb, ReasoningReplayKey: "replay-2", ExpiresAt: base.Add(3 * time.Hour), CreatedAt: base.Add(2 * time.Hour), UpdatedAt: base.Add(2 * time.Hour)},
+			} {
+				started := time.Now().UTC().Truncate(time.Millisecond)
+				if err := repo.Save(ctx, value); err != nil {
+					t.Fatal(err)
+				}
+				got, err := repo.Get(ctx, id, keyValue.ID, base)
+				if err != nil || got.AccountID != value.AccountID || got.ModelRouteID != value.ModelRouteID || got.Provider != value.Provider || got.PromptCacheKey != value.PromptCacheKey || got.ReasoningReplayKey != value.ReasoningReplayKey ||
+					!got.ExpiresAt.Equal(value.ExpiresAt) || !got.CreatedAt.Equal(value.CreatedAt) || got.UpdatedAt.Before(started) {
+					t.Fatalf("ownership after save = %#v, want %#v, err = %v", got, value, err)
+				}
+			}
+			for _, value := range []inferencedomain.WebResponseState{
+				{ResponseID: id, AccountID: accountValue.ID, ConversationID: "conv-1", UpstreamParentResponseID: "parent-1", ResponseJSON: `{"n":1}`, Status: "completed", ExpiresAt: base.Add(time.Hour), CreatedAt: base, UpdatedAt: base},
+				{ResponseID: id, AccountID: accountValue.ID, ConversationID: "conv-2", UpstreamParentResponseID: "parent-2", ResponseJSON: `{"n":2}`, Status: "failed", ExpiresAt: base.Add(3 * time.Hour), CreatedAt: base.Add(2 * time.Hour), UpdatedAt: base.Add(2 * time.Hour)},
+			} {
+				started := time.Now().UTC().Truncate(time.Millisecond)
+				if err := repo.SaveWebState(ctx, value); err != nil {
+					t.Fatal(err)
+				}
+				got, err := repo.GetWebState(ctx, id, base)
+				if err != nil || got.AccountID != value.AccountID || got.ConversationID != value.ConversationID || got.UpstreamParentResponseID != value.UpstreamParentResponseID || got.ResponseJSON != value.ResponseJSON || got.Status != value.Status ||
+					!got.ExpiresAt.Equal(value.ExpiresAt) || !got.CreatedAt.Equal(value.CreatedAt) || got.UpdatedAt.Before(started) {
+					t.Fatalf("web state after save = %#v, want %#v, err = %v", got, value, err)
+				}
+			}
+		})
 	}
 }

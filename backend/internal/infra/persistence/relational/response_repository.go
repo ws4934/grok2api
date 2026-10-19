@@ -8,6 +8,7 @@ import (
 	inferencedomain "github.com/chenyme/grok2api/backend/internal/domain/inference"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type ResponseRepository struct{ db *Database }
@@ -19,9 +20,18 @@ func (r *ResponseRepository) Save(ctx context.Context, value inferencedomain.Res
 		ResponseID: value.ResponseID, AccountID: value.AccountID,
 		ClientKeyID: value.ClientKeyID, ModelRouteID: value.ModelRouteID, Provider: string(value.Provider),
 		PromptCacheKey: value.PromptCacheKey, ReasoningReplayKey: value.ReasoningReplayKey,
-		ExpiresAt: value.ExpiresAt, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
+		ExpiresAt: value.ExpiresAt, CreatedAt: value.CreatedAt,
 	}
-	return r.db.db.WithContext(ctx).Save(&row).Error
+	return r.upsert(ctx, &row)
+}
+
+// upsert writes row in one statement with the same result Save had: every column,
+// created_at included, is overwritten, and the zero updated_at is stamped with
+// NowFunc. A single INSERT needs no wrapping transaction.
+func (r *ResponseRepository) upsert(ctx context.Context, row any) error {
+	return r.db.db.WithContext(ctx).Session(&gorm.Session{SkipDefaultTransaction: true}).
+		Clauses(clause.OnConflict{UpdateAll: true, DoUpdates: clause.AssignmentColumns([]string{"created_at"})}).
+		Create(row).Error
 }
 
 func (r *ResponseRepository) Get(ctx context.Context, responseID string, clientKeyID uint64, now time.Time) (inferencedomain.ResponseOwnership, error) {
@@ -103,9 +113,9 @@ func (r *ResponseRepository) SaveWebState(ctx context.Context, value inferencedo
 	row := webResponseStateModel{
 		ResponseID: value.ResponseID, AccountID: value.AccountID, ConversationID: value.ConversationID,
 		UpstreamParentResponseID: value.UpstreamParentResponseID, ResponseJSON: value.ResponseJSON,
-		Status: value.Status, ExpiresAt: value.ExpiresAt, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
+		Status: value.Status, ExpiresAt: value.ExpiresAt, CreatedAt: value.CreatedAt,
 	}
-	return r.db.db.WithContext(ctx).Save(&row).Error
+	return r.upsert(ctx, &row)
 }
 
 func (r *ResponseRepository) GetWebState(ctx context.Context, responseID string, now time.Time) (inferencedomain.WebResponseState, error) {
