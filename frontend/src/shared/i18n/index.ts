@@ -2631,7 +2631,7 @@ Object.assign(resources["zh-CN"].translation.accounts as unknown as Record<strin
   credentials: "凭据（每行一个）",
   credentialsPlaceholder: "credential_1\ncredential_2",
   syncAllProviderDescription: "将同步所有已启用 {{provider}} 账号的额度状态。",
-  quotaModes: { reason: "推理", image_gen: "生图", file_upload: "文件上传" },
+  quotaModes: { reason: "推理", image_gen: "生图", file_upload: "文件上传", codex_5h: "Codex 5 小时", codex_weekly: "Codex 每周" },
   chatgpt: {
     quickImport: "快速导入 Token",
     quickImportDescription: "每行粘贴一个 Access Token，或粘贴导出的 JSON / JSONL 凭据；重复账号会更新凭据。",
@@ -2656,7 +2656,7 @@ Object.assign(resources.en.translation.accounts as unknown as Record<string, unk
   credentials: "Credentials (one per line)",
   credentialsPlaceholder: "credential_1\ncredential_2",
   syncAllProviderDescription: "Sync quota status for every enabled {{provider}} account.",
-  quotaModes: { reason: "Reasoning", image_gen: "Images", file_upload: "File uploads" },
+  quotaModes: { reason: "Reasoning", image_gen: "Images", file_upload: "File uploads", codex_5h: "Codex 5h", codex_weekly: "Codex weekly" },
   chatgpt: {
     quickImport: "Quick import tokens",
     quickImportDescription: "Paste one access token per line, or exported JSON / JSONL credentials. Duplicate accounts get their credentials updated.",

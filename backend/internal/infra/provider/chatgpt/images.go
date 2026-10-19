@@ -215,6 +215,9 @@ func (a *Adapter) streamImages(ctx context.Context, credential account.Credentia
 // generateImage draws one image. Uploads made before a retried egress failure
 // are reused; the generation request itself is sent at most once.
 func (a *Adapter) generateImage(ctx context.Context, credential account.Credential, c credentials, job imageJob, model string, submitted func()) (imageOutput, bool, error) {
+	if _, ok := codexImageEngine(job.model); ok {
+		return a.generateCodexImage(ctx, credential, c, job, model, submitted)
+	}
 	var inputs []OpenAIImageInput
 	var mask *OpenAIImageInput
 	prepared := false
@@ -255,19 +258,26 @@ func (a *Adapter) generateImage(ctx context.Context, credential account.Credenti
 	if err != nil {
 		return imageOutput{}, sent, err
 	}
+	output, err := a.archiveImage(ctx, job, download)
+	return output, true, err
+}
+
+// archiveImage applies the requested output format and background, then
+// stores the image.
+func (a *Adapter) archiveImage(ctx context.Context, job imageJob, download downloadedImage) (imageOutput, error) {
 	raw, _, err := (ImageOutputOptions{OutputFormat: job.outputFormat, Background: job.background}).applyDecoded(download)
 	if err != nil {
-		return imageOutput{}, true, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, err)
+		return imageOutput{}, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, err)
 	}
 	asset, err := a.assets.SaveImage(context.WithoutCancel(ctx), raw)
 	if err != nil {
-		return imageOutput{}, true, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
+		return imageOutput{}, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
 	}
 	output := imageOutput{data: raw, asset: asset}
 	if config, _, err := image.DecodeConfig(bytes.NewReader(raw)); err == nil {
 		output.width, output.height = config.Width, config.Height
 	}
-	return output, true, nil
+	return output, nil
 }
 
 type preparedImageKey struct{}
@@ -406,6 +416,11 @@ func asyncImageJob(request provider.ImageJobRequest) imageJob {
 // started generating is reported unsubmitted, so another account may retry.
 func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequest, save func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error) {
 	var cp provider.ImageCheckpoint
+	if _, ok := codexImageEngine(request.Model); ok {
+		// The Codex Images API answers with the image itself; there is no
+		// upstream job to resume.
+		return cp, invalidRequest("Codex image models do not support image jobs; use the Images API")
+	}
 	job := asyncImageJob(request)
 	if err := a.ValidateImageRequest(job.options()); err != nil {
 		return cp, err

@@ -115,6 +115,14 @@ ChatGPT 网页端不能执行客户端函数，网关用和 Grok Web 相同的�
   - 遇到第一次失败就停止，返回已生成的图片。
   - 流式只支持 `n=1`。
 
+### Codex 生图
+
+- **模型**：`codex-gpt-image-2`、`codex-gpt-image-2.5`、`codex-gpt-image-2.5-flare`、`codex-gpt-image-2.5-sunburst`，各有生图和编辑两条。请求走 Codex 后端的 Images API（`chatgpt.com/backend-api/codex/images/generations`、`/images/edits`），上游模型名是去掉 `codex-` 前缀后的名字，计费也按它。
+- **账号**：只调度到 Plus、Pro、Team、Business、Enterprise、Edu 套餐的账号，Free 账号会被上游拒绝（403）。凭据类型不限，浏览器 OAuth 登录的 Platform 账号也可以。
+- **额度**：不占网页的"生图"次数，按 Codex 的 5 小时和每周用量计算（百分比）。账号页显示这两个窗口；两者中剩余较少的那个决定账号能否接 Codex 生图请求，用满后等到重置。
+- **参数**：`size`、`quality`、`background`、`output_format` 原样传给上游；编辑的输入图和遮罩以 data URL 发送，遮罩沿用 Images API 的透明区域约定。实测请求 `1024x1024` 返回 `1312x1199`，上游并不保证精确尺寸。
+- **限制**：只支持同步的 Images API，不支持异步生图任务。
+
 ### 异步生图（Responses 官方格式）
 
 ```bash

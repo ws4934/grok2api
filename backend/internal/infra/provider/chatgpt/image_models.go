@@ -83,6 +83,9 @@ func (a *Adapter) imageCapableFromCache(accountID uint64, models []string) map[s
 // this account. An explicit override is used as configured; otherwise the
 // first preferred model whose image tool is enabled wins (gpt-6, then auto).
 func (a *Adapter) resolveImageModel(ctx context.Context, credential account.Credential, upstreamModel string) (string, error) {
+	if engine, ok := codexImageEngine(upstreamModel); ok {
+		return engine, nil
+	}
 	candidates := a.imageCandidates(upstreamModel)
 	if len(candidates) == 0 {
 		return "", &upstreamError{Status: http.StatusNotFound, Message: "Unknown ChatGPT image model " + upstreamModel, Body: "unknown image model"}

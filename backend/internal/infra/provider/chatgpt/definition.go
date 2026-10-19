@@ -30,7 +30,7 @@ func (a *Adapter) Definition() provider.Definition {
 		Profile: provider.ProfileSurface{
 			Name: "ChatGPT", ShortName: "ChatGPT", TierExempt: true,
 			EgressScopes: []egressdomain.Scope{scope}, DefaultMaxConcurrent: 1,
-			QuotaModes: []string{quotaModeReason, quotaModeImage, quotaModeUpload},
+			QuotaModes: []string{quotaModeReason, quotaModeImage, quotaModeUpload, quotaModeCodex5Hour, quotaModeCodexWeekly, quotaModeCodex},
 			// Windows carry their reset time and every request refreshes its
 			// window, so idle accounts need only an occasional sync.
 			QuotaStaleAfter: 6 * time.Hour,
@@ -66,6 +66,10 @@ func Routes() []modeldomain.Route {
 		add(item.id, modeldomain.CapabilityImage)
 		add(item.id, modeldomain.CapabilityImageEdit)
 	}
+	for _, id := range codexImageModels {
+		add(id, modeldomain.CapabilityImage)
+		add(id, modeldomain.CapabilityImageEdit)
+	}
 	add(TTSModel, modeldomain.CapabilityTTS)
 	add(STTModel, modeldomain.CapabilitySTT)
 	return values
@@ -73,9 +77,13 @@ func Routes() []modeldomain.Route {
 
 // QuotaMode follows the Web limits: every chat consumes "reason", every image
 // "image_gen"; dictation and speech, answered by speechModel, use neither.
+// Codex images draw on the Codex usage windows instead.
 func (a *Adapter) QuotaMode(upstreamModel string) string {
 	if upstreamModel == STTModel || upstreamModel == TTSModel {
 		return ""
+	}
+	if _, ok := codexImageEngine(upstreamModel); ok {
+		return quotaModeCodex
 	}
 	if len(a.imageCandidates(upstreamModel)) > 0 {
 		return quotaModeImage
@@ -86,9 +94,10 @@ func (a *Adapter) QuotaMode(upstreamModel string) string {
 func (a *Adapter) TierOrder(string) []account.WebTier { return nil }
 
 // NormalizeAccountModelCapabilities makes the voice routes schedulable on
-// every account and each image route on accounts whose catalog has one of
+// every account, each image route on accounts whose catalog has one of
 // its conversation models with the image tool enabled
-// (image_gen_tool_enabled in /backend-api/models).
+// (image_gen_tool_enabled in /backend-api/models), and the Codex image routes
+// on paid plans.
 func (a *Adapter) NormalizeAccountModelCapabilities(models []string, _ *account.Billing, credential account.Credential) []string {
 	capable := a.imageCapableFromCache(credential.ID, models)
 	result := append(slices.Clip(models), TTSModel, STTModel)
@@ -97,5 +106,16 @@ func (a *Adapter) NormalizeAccountModelCapabilities(models []string, _ *account.
 			result = append(result, item.id)
 		}
 	}
+	if codexPlan(credential.Plan) {
+		result = append(result, codexImageModels...)
+	}
 	return result
+}
+
+// PricingModel prices a Codex image route as its Images API model.
+func (a *Adapter) PricingModel(upstreamModel string) string {
+	if engine, ok := codexImageEngine(upstreamModel); ok {
+		return engine
+	}
+	return upstreamModel
 }

@@ -798,7 +798,7 @@ func TestImageRoutesFollowTheImageToolOfEachAccount(t *testing.T) {
 	if got := a.imageCandidates("gpt-image-2.5"); len(got) != 1 || got[0] != "gpt-5-6" || a.QuotaMode("gpt-image-2.5-flare") != quotaModeImage {
 		t.Fatalf("configured override = %v", got)
 	}
-	if len(Routes()) != 10 {
+	if len(Routes()) != 18 {
 		t.Fatalf("routes = %d", len(Routes()))
 	}
 }

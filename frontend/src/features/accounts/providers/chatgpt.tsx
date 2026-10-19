@@ -21,4 +21,6 @@ export const chatgptAccountUI: Partial<ProviderAccountUI> = {
     formats: ["accounts.chatgpt.importSub2api", "accounts.chatgpt.importCPA"],
   },
   AuthHelp,
+  // "codex" is the tighter of the shown 5-hour and weekly Codex windows.
+  hiddenQuotaModes: ["codex"],
 };

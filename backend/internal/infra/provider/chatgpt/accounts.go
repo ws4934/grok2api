@@ -684,6 +684,15 @@ func (a *Adapter) SyncQuota(ctx context.Context, credential account.Credential) 
 		}
 		snapshot.Windows = append(snapshot.Windows, window)
 	}
+	if codexPlan(credential.Plan) {
+		// A Codex outage must not hide the Web windows; Codex routes keep their
+		// last known window until the next sync.
+		if windows, err := a.codexQuotaWindows(ctx, credential, c, now); err == nil {
+			snapshot.Windows = append(snapshot.Windows, windows...)
+		} else {
+			a.log().Warn("chatgpt_codex_usage_failed", "account_id", credential.ID, "error", err)
+		}
+	}
 	return snapshot, nil
 }
 
