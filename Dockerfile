@@ -52,18 +52,18 @@ ENV TZ=Asia/Shanghai \
 RUN apk add --no-cache ca-certificates su-exec tzdata && \
     addgroup -S -g 10001 grok2api && \
     adduser -S -D -H -u 10001 -G grok2api grok2api && \
-    mkdir -p /app/data /run/grok2api /var/lib/grok2api-quality-guard && \
+    mkdir -p /app/data /app/frontend /run/grok2api /var/lib/grok2api-quality-guard && \
     chown -R grok2api:grok2api \
-      /app/data \
+      /app \
       /run/grok2api \
       /var/lib/grok2api-quality-guard && \
     chmod 0700 /var/lib/grok2api-quality-guard
 
 WORKDIR /app
 
-COPY --from=backend-builder --chmod=0755 /out/grok2api /app/grok2api
-COPY --from=frontend-builder /src/frontend/dist /app/frontend/dist
-COPY VERSION /app/VERSION
+COPY --from=backend-builder --chown=grok2api:grok2api --chmod=0755 /out/grok2api /app/grok2api
+COPY --from=frontend-builder --chown=grok2api:grok2api /src/frontend/dist /app/frontend/dist
+COPY --chown=grok2api:grok2api VERSION /app/VERSION
 COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/grok2api-entrypoint
 
 EXPOSE 8000
