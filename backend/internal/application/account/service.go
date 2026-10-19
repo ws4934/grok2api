@@ -145,6 +145,8 @@ type quotaRefreshResult struct {
 	Credential accountdomain.Credential
 	Windows    []accountdomain.QuotaWindow
 	Modes      []string
+	// Complete marks a snapshot listing every mode the Provider still limits.
+	Complete bool
 }
 
 // quotaModeSnapshotAdapter is a quota adapter whose single-mode sync reads
@@ -3034,6 +3036,9 @@ func (s *Service) resolveRefreshedQuotaWindow(ctx context.Context, id uint64, mo
 	if window, ok := quotaWindowByMode(refreshed.Windows, mode); ok {
 		return window, nil
 	}
+	if refreshed.Complete {
+		return accountdomain.QuotaWindow{}, fmt.Errorf("%w: %s", accountdomain.ErrQuotaNotLimited, mode)
+	}
 	credential := refreshed.Credential
 	paidWebImagine := credential.Provider == accountdomain.ProviderWeb && isWebImagineQuotaMode(mode) &&
 		(credential.WebTier == accountdomain.WebTierSuper || credential.WebTier == accountdomain.WebTierHeavy)
@@ -3138,7 +3143,7 @@ func (s *Service) refreshQuotaMode(ctx context.Context, id uint64, mode string) 
 	} else if err := s.accounts.SaveQuotaWindows(ctx, id, tier, syncedAt, windows); err != nil {
 		return quotaRefreshResult{}, err
 	}
-	result := quotaRefreshResult{Credential: value, Windows: windows}
+	result := quotaRefreshResult{Credential: value, Windows: windows, Complete: snapshotSync}
 	if snapshotSync {
 		// The snapshot covers every declared mode: RefreshQuotaMode reconciles
 		// them all and cancels recovery of a mode that is no longer limited.
@@ -3446,6 +3451,10 @@ func (s *Service) runQuotaRefresh(parent context.Context, request quotaRefreshRe
 					}
 				} else {
 					_, refreshErr = s.RefreshQuotaMode(workCtx, request.accountID, refreshMode)
+					if errors.Is(refreshErr, accountdomain.ErrQuotaNotLimited) {
+						// The stored snapshot no longer limits this mode: nothing to retry.
+						refreshErr = nil
+					}
 				}
 				return refreshErr
 			}); err != nil {

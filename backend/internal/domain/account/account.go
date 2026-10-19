@@ -3,6 +3,7 @@ package account
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"strings"
 	"time"
 )
@@ -359,6 +360,9 @@ func IsWebImagineQuotaMode(mode string) bool {
 		return false
 	}
 }
+
+// ErrQuotaNotLimited 表示 Provider 的完整额度快照已不再限制该模式。
+var ErrQuotaNotLimited = errors.New("Provider 额度快照未限制该模式")
 
 // QuotaWindow 表示 Provider 单个模式的额度窗口。
 type QuotaWindow struct {

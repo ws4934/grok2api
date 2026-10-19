@@ -2,6 +2,7 @@ package quotarecovery
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -94,7 +95,9 @@ func (s *Service) runOne(ctx context.Context, now time.Time, value accountdomain
 	probeCtx, cancel := context.WithTimeout(ctx, recoveryProbeTimeout)
 	window, probeErr := s.syncer.ProbeQuotaMode(probeCtx, value.AccountID, value.Mode)
 	cancel()
-	if probeErr == nil && window.Remaining > 0 {
+	// A complete quota snapshot that omits the mode means the upstream no
+	// longer limits it, so there is nothing left to recover.
+	if (probeErr == nil && window.Remaining > 0) || errors.Is(probeErr, accountdomain.ErrQuotaNotLimited) {
 		if err := s.queue.AckQuotaRecovery(ctx, value); err != nil {
 			s.logger.Warn("quota_recovery_ack_failed", "account_id", value.AccountID, "mode", value.Mode, "error", err)
 		}
