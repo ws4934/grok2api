@@ -67,6 +67,9 @@ type Input struct {
 	auditOperation audit.Operation
 	// skipQualityHold is set only by trusted gateway-side request classifiers.
 	skipQualityHold bool
+	// notCompaction records that CreateResponse already classified Body as no
+	// compaction request, so the quality-hold gate need not parse it again.
+	notCompaction bool
 	// ForcedEgressNodeID is an internal-only administrator probe constraint.
 	// Public inference handlers never populate it.
 	ForcedEgressNodeID uint64

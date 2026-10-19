@@ -173,6 +173,10 @@ func routeTargetScore(seed string, routeID uint64) uint64 {
 }
 
 func routeTargetSeed(input Input) string {
+	return routeTargetSeedWithAnchors(input, &messageAnchors{body: input.Body})
+}
+
+func routeTargetSeedWithAnchors(input Input, anchors *messageAnchors) string {
 	// Match the Build account-affinity precedence so Codex and Claude Code keep
 	// both the route target and account stable across one logical session.
 	anchor := strings.TrimSpace(input.PromptCacheSeed)
@@ -180,7 +184,7 @@ func routeTargetSeed(input Input) string {
 		anchor = strings.TrimSpace(input.PromptCacheKey)
 	}
 	if anchor == "" {
-		system, firstUser, _ := extractMessageAnchors(input.Body)
+		system, firstUser := anchors.get()
 		system = truncateAnchor(system, 100)
 		firstUser = truncateAnchor(firstUser, 200)
 		if firstUser != "" {

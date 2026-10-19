@@ -452,7 +452,7 @@ func shouldHoldQualityStream(input Input, ownership *inferencedomain.ResponseOwn
 	// turn. Holding it can quarantine a healthy account for producing the
 	// expected summary without streamed reasoning. Keep both compaction forms
 	// excluded even if a caller reaches this gate without skipQualityHold.
-	if isResponsesCompactionRequest(input.Body) {
+	if !input.notCompaction && isResponsesCompactionRequest(input.Body) {
 		return false
 	}
 	// TUI commonly declares tools and follow-ups carry previous_response_id.

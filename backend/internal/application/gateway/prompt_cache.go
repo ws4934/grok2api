@@ -34,6 +34,28 @@ type sessionIdentity struct {
 // 2. Fall back to system/instructions and the first user message when no explicit signal exists.
 // 3. Return an empty identity when no signal exists; never generate a random session ID per request.
 func resolveSessionIdentity(clientKeyID uint64, provider accountdomain.Provider, upstreamModel, explicitKey, sessionSeed string, body []byte) sessionIdentity {
+	return resolveSessionIdentityWithAnchors(clientKeyID, provider, upstreamModel, explicitKey, sessionSeed, &messageAnchors{body: body})
+}
+
+// messageAnchors parses a body's system and first-user anchors on first use,
+// so a request parses them once however many routes and identities ask.
+type messageAnchors struct {
+	body              []byte
+	parsed            bool
+	system, firstUser string
+}
+
+func (m *messageAnchors) get() (system, firstUser string) {
+	if !m.parsed {
+		m.system, m.firstUser, _ = extractMessageAnchors(m.body)
+		m.parsed = true
+	}
+	return m.system, m.firstUser
+}
+
+// resolveSessionIdentityWithAnchors is resolveSessionIdentity reading the
+// message anchors through a per-request memo.
+func resolveSessionIdentityWithAnchors(clientKeyID uint64, provider accountdomain.Provider, upstreamModel, explicitKey, sessionSeed string, anchors *messageAnchors) sessionIdentity {
 	// Prefer Claude Code and Codex session signals extracted by the transport layer.
 	// body.prompt_cache_key is only a fallback when no stronger header or session signal exists.
 	seed := strings.TrimSpace(sessionSeed)
@@ -55,7 +77,7 @@ func resolveSessionIdentity(clientKeyID uint64, provider accountdomain.Provider,
 		}
 	}
 	// Fall back to a message-prefix hash to keep account affinity and session IDs stable without client session signals.
-	system, firstUser, _ := extractMessageAnchors(body)
+	system, firstUser := anchors.get()
 	firstUser = truncateAnchor(firstUser, 200)
 	system = truncateAnchor(system, 100)
 	if firstUser == "" {

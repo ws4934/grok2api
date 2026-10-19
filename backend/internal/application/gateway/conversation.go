@@ -20,6 +20,8 @@ func (s *Service) CreateResponse(ctx context.Context, input Input) (*Result, err
 		// only its audit classification and quality-hold policy differ.
 		input.auditOperation = audit.OperationCompaction
 		input.skipQualityHold = true
+	case responsesCompactionNone:
+		input.notCompaction = true
 	}
 	return s.createResponseAt(ctx, input, "/responses")
 }

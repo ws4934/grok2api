@@ -41,6 +41,7 @@ type responseAttempt struct {
 	publicModel    string
 	accountScope   clientkey.AccountScope
 	selection      *selectionSession
+	anchors        *messageAnchors
 
 	timing          *generationTiming
 	timingHandedOff bool
@@ -83,7 +84,7 @@ type responseAttempt struct {
 // use; prepare audits and rejects it once generation timing is running.
 func (s *Service) newResponseAttempt(ctx context.Context, input Input, path string) (*responseAttempt, bool, error) {
 	ctx, egressTrace := infraegress.WithTrace(ctx)
-	a := &responseAttempt{s: s, ctx: ctx, input: input, path: path, egressTrace: egressTrace, startedAt: time.Now()}
+	a := &responseAttempt{s: s, ctx: ctx, input: input, path: path, egressTrace: egressTrace, startedAt: time.Now(), anchors: &messageAnchors{body: input.Body}}
 	if input.Streaming {
 		a.firstToken = newFirstTokenTimer(a.startedAt)
 	}
@@ -111,6 +112,8 @@ func (s *Service) newResponseAttempt(ctx context.Context, input Input, path stri
 		if err != nil {
 			return nil, false, err
 		}
+		// applySessionIdentity reads the rewritten body.
+		a.anchors = &messageAnchors{body: a.input.Body}
 	}
 	if routeErr != nil && !errors.Is(routeErr, clientkeyapp.ErrModelNotAllowed) {
 		return nil, false, routeErr
@@ -155,7 +158,7 @@ func (a *responseAttempt) selectRoute(routes []modeldomain.Route) error {
 	a.route = fallbackRoute
 	orderedRoutes := eligibleRoutes
 	if routeErr == nil {
-		orderedRoutes = orderConversationRouteTargets(eligibleRoutes, routeTargetSeed(input))
+		orderedRoutes = orderConversationRouteTargets(eligibleRoutes, routeTargetSeedWithAnchors(input, a.anchors))
 		a.route = orderedRoutes[0]
 	}
 	a.accountScope = input.ClientKey.AccountScope()
@@ -166,13 +169,13 @@ func (a *responseAttempt) selectRoute(routes []modeldomain.Route) error {
 		for _, candidate := range orderedRoutes {
 			affinityKey := ""
 			if s.providers.Inference(candidate.Provider).SessionIdentity {
-				identity := resolveSessionIdentity(
+				identity := resolveSessionIdentityWithAnchors(
 					input.ClientKey.ID,
 					candidate.Provider,
 					candidate.UpstreamModel,
 					input.PromptCacheKey,
 					input.PromptCacheSeed,
-					input.Body,
+					a.anchors,
 				)
 				identity = ensureComposerSessionIdentity(identity, input.ClientKey.ID, candidate.Provider, candidate.UpstreamModel, requestSessionScope)
 				affinityKey = identity.affinityKey
@@ -207,7 +210,12 @@ func (a *responseAttempt) prepare(modelNotAllowed bool) error {
 	if usageKind, _ := s.providers.UsageKind(route.Provider); usageKind == provider.UsageEstimated {
 		a.usageSource = audit.UsageSourceEstimated
 	}
-	mediaSummary, _ := summarizeResponseMedia(a.input.Body)
+	// Only InputImages matters here (the log is skipped without images), so a
+	// body with no image block skips the full parse.
+	var mediaSummary responseMediaSummary
+	if mayContainInputImages(a.input.Body) {
+		mediaSummary, _ = summarizeResponseMedia(a.input.Body)
+	}
 	logResponseMediaSummary(s.logger, a.input.RequestID, mediaSummary)
 	a.auditBase = audit.Record{
 		EventID: a.eventID, RequestID: a.input.RequestID, ClientKeyID: a.input.ClientKey.ID, ClientKeyName: a.input.ClientKey.Name,
@@ -245,16 +253,20 @@ func (a *responseAttempt) prepare(modelNotAllowed bool) error {
 	// nor new evidence and can multiply a slow/failing probe.
 	a.holdCfg = s.qualityRetryConfig()
 	a.qualityHoldEnabled = s.providers.Inference(route.Provider).QualityHold && shouldHoldQualityStream(a.input, a.ownership, route, a.operation, a.holdCfg)
-	a.qualityCrossAccountReplay = canReplayQualityHoldAcrossAccounts(a.input, a.ownership)
+	// Only the quality hold reads the replay verdict; skip its body parse otherwise.
+	a.qualityCrossAccountReplay = a.qualityHoldEnabled && canReplayQualityHoldAcrossAccounts(a.input, a.ownership)
 	a.attemptPolicy = newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), a.ownership != nil || a.input.ForcedAccountID != 0)
 	a.idempotencyID, _ = security.NewOpaqueToken(18)
 	a.pricingModel = s.providers.PricingModel(route.Provider, route.UpstreamModel)
 	if err := s.checkLedgerReady(); err != nil {
 		return err
 	}
-	if reservation, priced := s.pricing.QuoteTextReservation(route.Provider, a.pricingModel, a.input.Body); priced {
-		if _, err := s.clientKeys.ReserveBilling(ctx, a.input.ClientKey, a.eventID, reservation.CostInUSDTicks, s.textBillingReservationTTL()); err != nil {
-			return err
+	// ReserveBilling ignores keys without a limit; skip the body estimate for them.
+	if a.input.ClientKey.BillingLimitUSDTicks > 0 {
+		if reservation, priced := s.pricing.QuoteTextReservation(route.Provider, a.pricingModel, a.input.Body); priced {
+			if _, err := s.clientKeys.ReserveBilling(ctx, a.input.ClientKey, a.eventID, reservation.CostInUSDTicks, s.textBillingReservationTTL()); err != nil {
+				return err
+			}
 		}
 	}
 	a.excluded = make(map[uint64]bool)
@@ -284,13 +296,13 @@ func (a *responseAttempt) applySessionIdentity() {
 		identity.upstreamID = a.ownership.PromptCacheKey
 		identity.replayKey = a.ownership.ReasoningReplayKey
 	} else {
-		identity = resolveSessionIdentity(
+		identity = resolveSessionIdentityWithAnchors(
 			a.input.ClientKey.ID,
 			route.Provider,
 			route.UpstreamModel,
 			a.input.PromptCacheKey,
 			a.input.PromptCacheSeed,
-			a.input.Body,
+			a.anchors,
 		)
 	}
 	identity = ensureComposerSessionIdentity(identity, a.input.ClientKey.ID, route.Provider, route.UpstreamModel, a.eventID)

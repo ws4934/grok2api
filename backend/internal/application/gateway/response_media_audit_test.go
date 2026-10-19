@@ -125,3 +125,24 @@ func TestDecodedBase64Bytes(t *testing.T) {
 		}
 	}
 }
+
+func TestInputImagePrefilterKeepsEveryImageBody(t *testing.T) {
+	for name, test := range map[string]struct {
+		body   string
+		images int64
+	}{
+		"codex view_image tool and text": {`{"tools":[{"type":"function","name":"view_image"}],"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"render(w, \"image\")"}]}]}`, 0},
+		"responses input_image":          {`{"input":[{"type":"message","role":"user","content":[{"type": "input_image","image_url":"data:image/png;base64,QUJD"}]}]}`, 1},
+		"chat image_url":                 {`{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}`, 1},
+		"anthropic image":                {`{"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"QUJD"}}]}]}`, 1},
+		"escaped type value":             {`{"tools":[{"name":"view_image"}],"input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,QUJD"}]}]}`, 1},
+	} {
+		summary, err := summarizeResponseMedia([]byte(test.body))
+		if err != nil || summary.InputImages != test.images {
+			t.Fatalf("%s: summary = %#v, err = %v", name, summary, err)
+		}
+		if got := mayContainInputImages([]byte(test.body)); got != (test.images > 0) {
+			t.Fatalf("%s: mayContainInputImages = %t", name, got)
+		}
+	}
+}

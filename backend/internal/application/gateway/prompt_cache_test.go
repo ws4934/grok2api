@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 )
 
@@ -136,5 +137,22 @@ func TestResolveBuildSessionIdentityUsesInstructionsAsSystemAnchor(t *testing.T)
 	}
 	if a.upstreamID == c.upstreamID {
 		t.Fatal("different instructions should isolate soft session")
+	}
+}
+
+func TestMessageAnchorsParseOnceAndMatchBody(t *testing.T) {
+	body := []byte(`{"instructions":"stable system","input":[{"role":"user","content":"hello"}]}`)
+	anchors := &messageAnchors{body: body}
+	identity := resolveSessionIdentityWithAnchors(3, accountdomain.ProviderBuild, "grok-4.5", "", "", anchors)
+	if identity != resolveSessionIdentity(3, accountdomain.ProviderBuild, "grok-4.5", "", "", body) || !identity.soft {
+		t.Fatalf("memoized identity = %#v", identity)
+	}
+	input := Input{ClientKey: clientkey.Key{ID: 3}, Body: body}
+	if got, want := routeTargetSeedWithAnchors(input, anchors), routeTargetSeed(input); got != want {
+		t.Fatalf("memoized route seed = %q, want %q", got, want)
+	}
+	anchors.body = []byte(`{"input":"other"}`)
+	if system, firstUser := anchors.get(); system != "stable system" || firstUser != "hello" {
+		t.Fatalf("anchors were parsed again: %q %q", system, firstUser)
 	}
 }

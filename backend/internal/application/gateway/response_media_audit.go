@@ -92,6 +92,38 @@ func mayContainResponseMedia(body []byte) bool {
 	return bytes.Contains(body, []byte("image"))
 }
 
+// mayContainInputImages is a tighter prefilter for callers that only need
+// InputImages. Only blocks typed "input_image", "image_url" or "image" count,
+// so it looks for those quoted values rather than the bare word, which tool
+// names such as Codex's view_image put in every request.
+func mayContainInputImages(body []byte) bool {
+	if !mayContainResponseMedia(body) {
+		return false
+	}
+	for _, marker := range []string{`"input_image"`, `"image_url"`, `"image"`} {
+		if bytes.Contains(body, []byte(marker)) {
+			return true
+		}
+	}
+	return hasEscapedTypeLetter(body)
+}
+
+// hasEscapedTypeLetter reports a \u escape of '_' or a lowercase letter: a
+// type value spelled that way has no quoted marker, so the body keeps the
+// full scan.
+func hasEscapedTypeLetter(body []byte) bool {
+	for {
+		index := bytes.Index(body, []byte(`\u00`))
+		if index < 0 || index+4 >= len(body) {
+			return false
+		}
+		if digit := body[index+4]; digit >= '5' && digit <= '7' {
+			return true
+		}
+		body = body[index+4:]
+	}
+}
+
 func logResponseMediaSummary(logger *slog.Logger, requestID string, summary responseMediaSummary) {
 	if logger == nil || summary.InputImages == 0 {
 		return
