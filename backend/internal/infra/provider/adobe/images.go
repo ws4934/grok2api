@@ -16,41 +16,17 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
-// buildImageInput 把网关的图像请求参数解析成上游 payload 的基础输入。显式给出但
-// 该模型不支持的比例或分辨率直接拒绝，不静默替换。
-func (a *Adapter) buildImageInput(model, prompt, size, aspectRatio, resolution, outputFormat, background string) (imagePayloadInput, error) {
-	m, ok := imageModelByID(strings.TrimSpace(model))
-	if !ok {
-		return imagePayloadInput{}, &requestError{msg: fmt.Sprintf("未知的 Adobe 图像模型：%s", model)}
+// imageModel 查找图像模型并规划请求参数。
+func (a *Adapter) imageModel(model string) (*modelVersion, error) {
+	v, ok := a.catalog.Load().lookup(model)
+	if !ok || v.video {
+		return nil, &requestError{msg: fmt.Sprintf("未知的 Adobe 图像模型：%s", model)}
 	}
-	ratio := strings.ToLower(strings.TrimSpace(aspectRatio))
-	switch {
-	case ratio == "" || ratio == "auto":
-		ratio = ratioFromSize(size, m.nanoRatios)
-	case !supportedImageRatio(ratio, m.nanoRatios):
-		return imagePayloadInput{}, &requestError{msg: fmt.Sprintf("%s 不支持 aspect_ratio %s", m.id, aspectRatio)}
-	}
-	res := strings.ToUpper(strings.TrimSpace(resolution))
-	switch res {
-	case "":
-		res = tierFromSize(size)
-	case "1K", "2K", "4K":
-	default:
-		return imagePayloadInput{}, &requestError{msg: "resolution 只支持 1K、2K 或 4K"}
-	}
-	if m.ratioSizes != nil {
-		if res != "1K" && strings.TrimSpace(resolution) != "" {
-			return imagePayloadInput{}, &requestError{msg: m.id + " 只支持 1K"}
-		}
-		res = "1K"
-	}
-	return imagePayloadInput{
-		model: m, prompt: prompt, aspectRatio: ratio, resolution: res, count: 1,
-		outputFormat: outputFormat, background: background,
-	}, nil
+	return v, nil
 }
 
-// ValidateImageRequest 拒绝 Adobe 不支持的请求参数（与模型相关的比例在 buildImageInput 里校验）。
+// ValidateImageRequest 拒绝所有 Adobe 模型都不支持的参数；与模型相关的比例、档位、
+// 张数在规划请求时按 schema 校验。
 func (a *Adapter) ValidateImageRequest(options provider.ImageRequestOptions) error {
 	switch {
 	case options.Streaming || options.PartialImages != 0:
@@ -58,40 +34,38 @@ func (a *Adapter) ValidateImageRequest(options provider.ImageRequestOptions) err
 	case options.ResponseFormat != "" && options.ResponseFormat != "url" && options.ResponseFormat != "b64_json":
 		return &requestError{msg: "response_format 只支持 url 或 b64_json"}
 	}
-	if ratio := strings.ToLower(strings.TrimSpace(options.AspectRatio)); ratio != "" && ratio != "auto" && !supportedImageRatio(ratio, true) {
-		return &requestError{msg: "Adobe 不支持 aspect_ratio " + options.AspectRatio}
-	}
-	switch strings.ToUpper(strings.TrimSpace(options.Resolution)) {
-	case "", "1K", "2K", "4K":
-		return nil
-	default:
-		return &requestError{msg: "resolution 只支持 1K、2K 或 4K"}
-	}
+	return nil
 }
 
 // --- 同步图像（ImageGenerationAdapter / ImageEditAdapter）---
 
 func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGenerationRequest) (*provider.Response, error) {
-	in, err := a.buildImageInput(request.Model, request.Prompt, request.Size, request.AspectRatio, request.Resolution, request.OutputFormat, request.Background)
+	v, err := a.imageModel(request.Model)
 	if err != nil {
 		return syncFailure(err, false)
 	}
-	in.count, in.quality = max(1, request.Count), request.Quality
-	return a.runSyncImage(ctx, request.Credential, in, nil, "", request.ResponseFormat)
+	in, err := v.imagePlan(request.Prompt, request.Size, request.AspectRatio, request.Resolution, request.Quality, request.Background, request.Count, 0, false)
+	if err != nil {
+		return syncFailure(err, false)
+	}
+	return a.runSyncImage(ctx, request.Credential, v, in, nil, "", request.ResponseFormat)
 }
 
 func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditRequest) (*provider.Response, error) {
-	in, err := a.buildImageInput(request.Model, request.Prompt, request.Size, request.AspectRatio, request.Resolution, request.OutputFormat, request.Background)
+	v, err := a.imageModel(request.Model)
 	if err != nil {
 		return syncFailure(err, false)
 	}
-	in.count, in.quality = max(1, request.Count), request.Quality
-	return a.runSyncImage(ctx, request.Credential, in, request.ImageURLs, request.MaskURL, request.ResponseFormat)
+	in, err := v.imagePlan(request.Prompt, request.Size, request.AspectRatio, request.Resolution, request.Quality, request.Background, request.Count, len(request.ImageURLs), strings.TrimSpace(request.MaskURL) != "")
+	if err != nil {
+		return syncFailure(err, false)
+	}
+	return a.runSyncImage(ctx, request.Credential, v, in, request.ImageURLs, request.MaskURL, request.ResponseFormat)
 }
 
 // runSyncImage 在一次请求内 submit→poll→download。Adobe 接受任务前的明确拒绝转成
 // 响应交给网关处理；接受之后的失败保持为错误，网关不会重新提交。
-func (a *Adapter) runSyncImage(ctx context.Context, credential account.Credential, in imagePayloadInput, imageURLs []string, maskURL, responseFormat string) (*provider.Response, error) {
+func (a *Adapter) runSyncImage(ctx context.Context, credential account.Credential, v *modelVersion, in genInput, imageURLs []string, maskURL, responseFormat string) (*provider.Response, error) {
 	var body map[string]any
 	var delivered int
 	accepted := false
@@ -100,7 +74,7 @@ func (a *Adapter) runSyncImage(ctx context.Context, credential account.Credentia
 			return err
 		}
 		sub, err := a.submit(ctx, c, func() (submission, error) {
-			return c.submitImage(ctx, endpoints.imageSubmit, buildImagePayloads(in), in.prompt)
+			return c.submitJob(ctx, endpoints.imageSubmit, v.buildBody(in), in.prompt)
 		})
 		if err != nil {
 			return err
@@ -135,7 +109,7 @@ func (a *Adapter) runSyncImage(ctx context.Context, credential account.Credentia
 }
 
 // imageResponseBody 渲染 OpenAI Images 风格的响应体（可含多张）。
-func (a *Adapter) imageResponseBody(ctx context.Context, in imagePayloadInput, images [][]byte, responseFormat string) (map[string]any, error) {
+func (a *Adapter) imageResponseBody(ctx context.Context, in genInput, images [][]byte, responseFormat string) (map[string]any, error) {
 	data := make([]any, 0, len(images))
 	for _, raw := range images {
 		item := map[string]any{}
@@ -153,7 +127,7 @@ func (a *Adapter) imageResponseBody(ctx context.Context, in imagePayloadInput, i
 	return map[string]any{
 		"created": time.Now().Unix(),
 		"data":    data,
-		"usage":   a.ImageUsage(in.prompt, len(in.sourceImageID), "", nil),
+		"usage":   a.ImageUsage(in.prompt, len(in.references), "", nil),
 	}, nil
 }
 
@@ -161,11 +135,14 @@ func (a *Adapter) imageResponseBody(ctx context.Context, in imagePayloadInput, i
 
 func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequest, save func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error) {
 	var cp provider.ImageCheckpoint
-	in, err := a.buildImageInput(request.Model, request.Prompt, request.Size, "", "", request.OutputFormat, request.Background)
+	v, err := a.imageModel(request.Model)
 	if err != nil {
 		return cp, err
 	}
-	in.quality = request.Quality
+	in, err := v.imagePlan(request.Prompt, request.Size, "", "", request.Quality, request.Background, 1, len(request.ImageURLs), strings.TrimSpace(request.MaskURL) != "")
+	if err != nil {
+		return cp, err
+	}
 	err = a.withClient(ctx, request.Credential, func(ctx context.Context, c *client) error {
 		if err := a.prepareImage(ctx, c, &in, request.ImageURLs, request.MaskURL); err != nil {
 			return err
@@ -177,7 +154,7 @@ func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequ
 		}
 		cp = next
 		sub, err := a.submit(ctx, c, func() (submission, error) {
-			return c.submitImage(ctx, endpoints.imageSubmit, buildImagePayloads(in), in.prompt)
+			return c.submitJob(ctx, endpoints.imageSubmit, v.buildBody(in), in.prompt)
 		})
 		if err != nil {
 			// 明确的 4xx 拒绝没有生成任务，网关可清掉标记换账号；其余结果未知。
@@ -228,7 +205,7 @@ func (a *Adapter) ImageUsage(prompt string, inputImages int, quality string, out
 
 // prepareImage 完成不可逆提交之前的全部步骤：检查 token、上传输入图与蒙版、
 // 取全局 x-arp-session-id。这里的失败都不会在 Adobe 生成任何东西。
-func (a *Adapter) prepareImage(ctx context.Context, c *client, in *imagePayloadInput, imageURLs []string, maskURL string) error {
+func (a *Adapter) prepareImage(ctx context.Context, c *client, in *genInput, imageURLs []string, maskURL string) error {
 	if c.rc.token == "" {
 		return errNoToken
 	}
@@ -237,14 +214,14 @@ func (a *Adapter) prepareImage(ctx context.Context, c *client, in *imagePayloadI
 		if err != nil {
 			return err
 		}
-		in.sourceImageID = append(in.sourceImageID, id)
+		in.references = append(in.references, id)
 	}
 	if strings.TrimSpace(maskURL) != "" {
 		id, err := a.uploadImage(ctx, c, maskURL)
 		if err != nil {
 			return err
 		}
-		in.maskID = id
+		in.mask = id
 	}
 	return a.useSherlock(ctx, c)
 }

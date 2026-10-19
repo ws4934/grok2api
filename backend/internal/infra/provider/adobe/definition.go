@@ -9,7 +9,8 @@ import (
 
 // Definition 声明 Adobe Firefly：纯媒体 Provider，图像生成/编辑与视频生成都是
 // 异步任务（submit→poll→取结果），凭据用 Cookie 自动续期（IMS OAuth），usage
-// 为本地估算（媒体按模型计价）。
+// 为本地估算（媒体按模型计价）。模型目录由官方 discovery 驱动、所有账号通用，
+// 路由由后台任务刷新（见 RefreshCatalog）。
 func (a *Adapter) Definition() provider.Definition {
 	return provider.Definition{
 		Provider: account.ProviderAdobe,
@@ -36,27 +37,6 @@ func (a *Adapter) Definition() provider.Definition {
 		},
 		Inference: provider.InferencePolicy{Usage: provider.UsageEstimated},
 	}
-}
-
-// Routes 返回静态图像与视频路由：每个基础模型名一条（图像另加编辑路由），
-// 分辨率/比例/时长由请求参数承担。
-func Routes() []modeldomain.Route {
-	values := make([]modeldomain.Route, 0, len(imageModels)*2+len(videoModels))
-	add := func(id string, capability modeldomain.Capability) {
-		publicID, ok := modeldomain.NormalizePublicID(account.ProviderAdobe, id)
-		if !ok {
-			return
-		}
-		values = append(values, modeldomain.Route{PublicID: publicID, Provider: account.ProviderAdobe, UpstreamModel: id, Capability: capability, Origin: modeldomain.OriginCatalog, Enabled: true})
-	}
-	for _, m := range imageModels {
-		add(m.id, modeldomain.CapabilityImage)
-		add(m.id, modeldomain.CapabilityImageEdit)
-	}
-	for _, m := range videoModels {
-		add(m.id, modeldomain.CapabilityVideo)
-	}
-	return values
 }
 
 // QuotaMode：Adobe 的所有图像/视频模型都消费账号积分窗口。

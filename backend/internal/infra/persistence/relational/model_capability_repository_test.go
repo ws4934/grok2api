@@ -989,3 +989,37 @@ func verifyCapabilityModelIndex(t *testing.T, database *Database) {
 		t.Fatal("account_model_capabilities must be indexed by upstream model for routing overlays and availability")
 	}
 }
+
+// Adobe 的目录由全局 discovery 驱动、所有账号通用：账号没有能力快照时，目录路由
+// 也必须能被解析、列出，回退选择器也要把账号当作支持。
+func TestAdobeCatalogRoutesNeedNoAccountSnapshot(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDatabase(t)
+	models := NewModelRepository(db)
+	accounts := NewAccountRepository(db)
+	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
+		Provider: account.ProviderAdobe, AuthType: account.AuthTypeOAuth, Name: "adobe", SourceKey: "adobe",
+		EncryptedAccessToken: testEncryptedToken, AuthStatus: account.AuthStatusActive, Enabled: true, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := model.Route{PublicID: "adobe/veo-3.1", Provider: account.ProviderAdobe, UpstreamModel: "veo-3.1", Capability: model.CapabilityVideo, Origin: model.OriginCatalog, Enabled: true}
+	if err := models.ReplaceProviderRoutes(ctx, account.ProviderAdobe, []model.Route{route}); err != nil {
+		t.Fatal(err)
+	}
+	if routes, err := models.GetByPublicIDCandidates(ctx, "adobe/veo-3.1"); err != nil || len(routes) != 1 {
+		t.Fatalf("GetByPublicIDCandidates = %d routes, %v", len(routes), err)
+	}
+	if enabled, err := models.ListEnabled(ctx); err != nil || len(enabled) != 1 {
+		t.Fatalf("ListEnabled = %d routes, %v", len(enabled), err)
+	}
+	stored, err := models.GetByPublicIDCandidates(ctx, "adobe/veo-3.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := accounts.ListRoutingCandidates(ctx, account.ProviderAdobe, stored[0].ID, "veo-3.1", "credits")
+	if err != nil || len(candidates) != 1 || candidates[0].Credential.ID != credential.ID || !candidates[0].SupportsModel {
+		t.Fatalf("fallback candidates = %+v, %v", candidates, err)
+	}
+}

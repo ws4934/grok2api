@@ -38,21 +38,6 @@ func TestDefinitionValidatesInRegistry(t *testing.T) {
 	}
 }
 
-func TestRoutesCoverEveryModel(t *testing.T) {
-	routes := Routes()
-	if want := len(imageModels)*2 + len(videoModels); len(routes) != want {
-		t.Fatalf("routes = %d, want %d", len(routes), want)
-	}
-	for _, route := range routes {
-		if !strings.HasPrefix(route.PublicID, "adobe/") {
-			t.Fatalf("route %q is not namespaced", route.PublicID)
-		}
-		if route.Capability == modeldomain.CapabilityVideo && route.Provider != account.ProviderAdobe {
-			t.Fatalf("route %q provider = %s", route.PublicID, route.Provider)
-		}
-	}
-}
-
 func TestParseImportedCredentials(t *testing.T) {
 	adapter := NewAdapter(Config{}, nil, nil, nil, nil)
 	cookie := validCookie()
@@ -71,71 +56,6 @@ func TestParseImportedCredentials(t *testing.T) {
 	}
 	if seeds[1].Email != "a@b.com" {
 		t.Fatalf("json record email = %q", seeds[1].Email)
-	}
-}
-
-func TestBuildImagePayloadsNanoBanana(t *testing.T) {
-	in := imagePayloadInput{model: imageModels[0], prompt: "hi", aspectRatio: "16:9", resolution: "2K", count: 1}
-	payloads := buildImagePayloads(in)
-	if len(payloads) != 1 {
-		t.Fatalf("payloads = %d", len(payloads))
-	}
-	p := payloads[0]
-	if p["modelId"] != "gemini-flash" || p["modelVersion"] != "nano-banana-2" {
-		t.Fatalf("upstream = %v/%v", p["modelId"], p["modelVersion"])
-	}
-	if _, ok := p["groundSearch"]; !ok {
-		t.Fatal("nano-banana must send groundSearch")
-	}
-	size := p["size"].(map[string]any)
-	if size["width"] != 2048 || size["height"] != 2048 {
-		t.Fatalf("nano size = %v", size)
-	}
-	ms := p["modelSpecificPayload"].(map[string]any)
-	if ms["aspectRatio"] != "16:9" {
-		t.Fatalf("aspectRatio = %v", ms["aspectRatio"])
-	}
-}
-
-func TestBuildImagePayloadsGPTImageEditFallbacks(t *testing.T) {
-	m, _ := imageModelByID("gpt-image-2")
-	in := imagePayloadInput{model: m, prompt: "edit", aspectRatio: "1:1", resolution: "1K", count: 1, sourceImageID: []string{"src1"}, maskID: "mask1"}
-	payloads := buildImagePayloads(in)
-	if len(payloads) != 3 {
-		t.Fatalf("gpt-image edit payloads = %d, want 3", len(payloads))
-	}
-	for _, p := range payloads {
-		meta := p["generationMetadata"].(map[string]any)
-		if meta["module"] != "image2image" {
-			t.Fatalf("edit module = %v", meta["module"])
-		}
-		if p["modelId"] != "gpt-image" {
-			t.Fatalf("modelId = %v", p["modelId"])
-		}
-	}
-}
-
-func TestBuildVideoPayloadEngines(t *testing.T) {
-	veo, _ := videoModelByID("veo31")
-	p := buildVideoPayload(videoPayloadInput{model: veo, prompt: "a cat", aspectRatio: "16:9", duration: 8, resolution: "1080p"})
-	if p["modelId"] != "veo" || p["modelVersion"] != "3.1-generate" {
-		t.Fatalf("veo upstream = %v/%v", p["modelId"], p["modelVersion"])
-	}
-	if size := p["size"].(map[string]any); size["width"] != 1920 {
-		t.Fatalf("veo 1080p size = %v", size)
-	}
-
-	kling, _ := videoModelByID("kling3")
-	i2v := buildVideoPayload(videoPayloadInput{model: kling, prompt: "move", aspectRatio: "9:16", duration: 5, resolution: "720p", sourceImageID: []string{"img"}})
-	if i2v["modelVersion"] != "kling_v3_standard_i2v" {
-		t.Fatalf("kling with image must be i2v, got %v", i2v["modelVersion"])
-	}
-	// 官网对 Kling 3.0 在 modelSpecificPayload 里带 aspect_ratio 与 resolution。
-	if ms := i2v["modelSpecificPayload"].(map[string]any); ms["aspect_ratio"] != "9:16" || ms["resolution"] != "720p" {
-		t.Fatalf("kling modelSpecificPayload = %v", ms)
-	}
-	if _, ok := videoModelByID("sora2"); ok {
-		t.Fatal("sora2 is no longer offered by Firefly")
 	}
 }
 
@@ -158,7 +78,7 @@ func TestClientSubmitPollDownload(t *testing.T) {
 	}))
 	defer server.Close()
 	c := &client{do: server.Client(), rc: requestContext{token: "t", sherlock: "s", apiKey: "k", userAgent: defaultUserAgent}}
-	sub, err := c.submitImage(context.Background(), server.URL+"/v2/3p-images/generate-async", []map[string]any{{"prompt": "x"}}, "x")
+	sub, err := c.submitJob(context.Background(), server.URL+"/v2/3p-images/generate-async", map[string]any{"prompt": "x"}, "x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,33 +219,6 @@ func TestSherlockNoSourceErrors(t *testing.T) {
 		t.Fatal("no mint API and no manual token must error")
 	}
 }
-
-// gpt-image 编辑的回退候选里 referenceBlobs 必须是数组（不能是 null），且无蒙版时为空数组。
-func TestGPTImageEditReferenceBlobsAreArrays(t *testing.T) {
-	m, _ := imageModelByID("gpt-image-2")
-	in := imagePayloadInput{model: m, prompt: "edit", aspectRatio: "1:1", resolution: "1K", count: 1, sourceImageID: []string{"src1"}}
-	for i, p := range buildImagePayloads(in) {
-		encoded, _ := json.Marshal(p["referenceBlobs"])
-		if string(encoded) == "null" {
-			t.Fatalf("payload %d referenceBlobs serialized to null", i)
-		}
-	}
-}
-
-// kling-o3 带参考图时 module 应为 image2video（与引擎无关，按是否有参考图判定）。
-func TestKlingO3ModuleFollowsReference(t *testing.T) {
-	m, _ := videoModelByID("kling-o3")
-	p := buildVideoPayload(videoPayloadInput{model: m, prompt: "x", aspectRatio: "16:9", duration: 5, resolution: "1080p", sourceImageID: []string{"img"}})
-	meta := p["generationMetadata"].(map[string]any)
-	if meta["module"] != "image2video" {
-		t.Fatalf("kling-o3 with reference image module = %v, want image2video", meta["module"])
-	}
-	if p["modelVersion"] != "kling_o3_pro_reference_to_video" {
-		t.Fatalf("kling-o3 modelVersion = %v", p["modelVersion"])
-	}
-}
-
-// --- 与网关对接的流程测试 ---
 
 type egressRepositoryStub struct{}
 
@@ -479,31 +372,6 @@ func TestPollToleratesTransientErrorsAndReportsFailure(t *testing.T) {
 	}
 }
 
-func TestRatioAndDurationSnapping(t *testing.T) {
-	ratios := map[string]string{"": "1:1", "auto": "1:1", "1024x1024": "1:1", "1536x1024": "3:2", "1024x1536": "2:3", "1792x1024": "16:9", "4096x1024": "21:9"}
-	for size, want := range ratios {
-		if got := ratioFromSize(size, false); got != want {
-			t.Fatalf("ratioFromSize(%q) = %s, want %s", size, got, want)
-		}
-	}
-	if got := ratioFromSize("1024x4096", true); got != "1:4" {
-		t.Fatalf("nano tall ratio = %s", got)
-	}
-	if got := nearestRatio("1:1", []string{"16:9", "9:16"}, "16:9"); got != "16:9" {
-		t.Fatalf("nearestRatio = %s", got)
-	}
-	if got := nearestRatio("2:3", []string{"16:9", "9:16"}, "16:9"); got != "9:16" {
-		t.Fatalf("portrait nearestRatio = %s", got)
-	}
-	if got := nearestDuration(8, []int{5, 10, 15}, 5); got != 10 {
-		t.Fatalf("nearestDuration = %d", got)
-	}
-	// 网关对未填 duration 默认 8 秒：kling 不能因此被拒。
-	if err := NewAdapter(Config{}, nil, nil, nil, nil).ValidateVideoRequest(provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: "kling3", Duration: 8, Resolution: "720p"}); err != nil {
-		t.Fatalf("kling3 default duration rejected: %v", err)
-	}
-}
-
 // 积分接口拿不到数值时不能写出"余额 0"窗口（落库会被当成上游耗尽）。
 func TestSyncQuotaModeNeverInventsEmptyWindow(t *testing.T) {
 	status := http.StatusOK
@@ -525,39 +393,186 @@ func TestSyncQuotaModeNeverInventsEmptyWindow(t *testing.T) {
 	}
 }
 
-// 某个候选 payload 拿到 5xx 后即使后续候选被 4xx 拒绝，结果也必须是"未知"，否则网关会换账号重画。
-func TestSubmitImageKeepsUncertainAfterServerError(t *testing.T) {
-	var hits atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if hits.Add(1) == 1 {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+// --- schema 驱动的目录与请求体 ---
+
+func TestSnapshotCatalogMatchesOfficialModels(t *testing.T) {
+	c := mustSnapshot()
+	for _, slug := range []string{"nano-banana-pro", "nano-banana-2", "nano-banana-2.1", "gpt-image-1", "gpt-image-1.5", "gpt-image-2",
+		"gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "veo-3.1", "veo-3.1-fast", "veo-3.1-lite", "kling-3.0", "kling-3.0-omni",
+		"seedance-2.0", "seedance-2.0-fast", "seedance-2.5", "gemini-omni-flash", "ray3.14", "flux-kontext-pro"} {
+		if _, ok := c.lookup(slug); !ok {
+			t.Errorf("catalog lacks %s", slug)
 		}
-		w.WriteHeader(http.StatusBadRequest)
-	}))
-	defer server.Close()
-	c := &client{do: server.Client(), rc: requestContext{token: "t", sherlock: "s"}}
-	_, err := c.submitImage(context.Background(), server.URL, []map[string]any{{"a": 1}, {"b": 2}}, "p")
-	if rejected(err) || provider.ErrorHTTPStatusOrZero(err) != http.StatusInternalServerError {
-		t.Fatalf("500 then 400 => %v (rejected=%v)", err, rejected(err))
+	}
+	for _, v := range c.versions {
+		// 下架（Sora、Imagen、Veo 2/3）、增强类（Topaz）、Gemini 2.5、Kling 拆分版本与视频编辑版本都不应出现。
+		if v.slug == "nano-banana" || strings.Contains(v.slug, "sora") || strings.Contains(v.slug, "imagen") || strings.Contains(v.slug, "topaz") ||
+			strings.Contains(v.version, "_t2v") || strings.Contains(v.version, "v2v") || strings.Contains(v.version, "editing") || v.version == "3.0-generate" {
+			t.Errorf("unexpected model %s (%s/%s)", v.slug, v.modelID, v.version)
+		}
+	}
+	caps := map[string][]modeldomain.Capability{}
+	for _, route := range c.routes() {
+		caps[route.UpstreamModel] = append(caps[route.UpstreamModel], route.Capability)
+	}
+	if got := caps["flux-1.1-pro-fill"]; len(got) != 1 || got[0] != modeldomain.CapabilityImageEdit {
+		t.Errorf("inpainting-only model capabilities = %v, want image_edit only", got)
+	}
+	if got := caps["humain-image-1"]; len(got) != 1 || got[0] != modeldomain.CapabilityImage {
+		t.Errorf("model without input images capabilities = %v, want image only", got)
 	}
 }
 
-// Gemini 2.5 (Nano Banana) 版本号是 nano-banana、只出 1K、按比例给尺寸、不发 groundSearch。
-func TestNanoBanana25MatchesOfficialSite(t *testing.T) {
-	in, err := NewAdapter(Config{}, nil, nil, nil, nil).buildImageInput("nano-banana", "cat", "", "16:9", "", "", "")
+func mustVersion(t *testing.T, slug string) *modelVersion {
+	t.Helper()
+	v, ok := mustSnapshot().lookup(slug)
+	if !ok {
+		t.Fatalf("catalog lacks %s", slug)
+	}
+	return v
+}
+
+func get(body map[string]any, path ...string) any {
+	var current any = body
+	for _, key := range path {
+		m, _ := current.(map[string]any)
+		current = m[key]
+	}
+	return current
+}
+
+// 复现官网前端对同一组参数拼出的请求体（SPEC-payload 的 worked bodies）。
+func TestBuildBodyMatchesOfficialClient(t *testing.T) {
+	nano := mustVersion(t, "nano-banana-pro")
+	in, err := nano.imagePlan("cat", "", "16:9", "2K", "", "", 1, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := buildImagePayloads(in)[0]
-	size := p["size"].(map[string]any)
-	if p["modelVersion"] != "nano-banana" || size["width"] != 1344 || size["height"] != 768 {
-		t.Fatalf("nano-banana payload = %v / %v", p["modelVersion"], size)
+	in.references = []string{"img1"}
+	body := nano.buildBody(in)
+	if body["modelId"] != "gemini-flash" || body["modelVersion"] != "nano-banana-2" || body["resolution"] != "2K" || body["groundSearch"] != false ||
+		get(body, "size", "width") != 2752 || get(body, "size", "height") != 1536 ||
+		get(body, "generationSettings", "aspectRatio") != "16:9" || get(body, "modelSpecificPayload", "aspectRatio") != "16:9" ||
+		get(body, "generationMetadata", "module") != "text2image" {
+		t.Fatalf("nano-banana-pro body = %v", body)
 	}
-	if _, ok := p["groundSearch"]; ok {
-		t.Fatal("Gemini 2.5 must not send groundSearch")
+	if refs := body["referenceBlobs"].([]any); get(refs[0].(map[string]any), "usage") != "general" {
+		t.Fatalf("nano-banana-pro reference usage = %v", refs)
 	}
-	if _, err := NewAdapter(Config{}, nil, nil, nil, nil).buildImageInput("nano-banana", "cat", "", "", "4K", "", ""); err == nil {
-		t.Fatal("nano-banana must reject 4K")
+
+	gpt := mustVersion(t, "gpt-image-2")
+	in, err = gpt.imagePlan("cat", "", "auto", "", "high", "", 1, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.references = []string{"img1"}
+	body = gpt.buildBody(in)
+	if _, ok := body["size"]; ok || get(body, "generationSettings", "detailLevel") != 5 || get(body, "generationSettings", "aspectRatio") != nil ||
+		get(body["referenceBlobs"].([]any)[0].(map[string]any), "usage") != "subject" {
+		t.Fatalf("gpt-image-2 auto body = %v", body)
+	}
+
+	veo := mustVersion(t, "veo-3.1")
+	in = veo.videoPlan("a cat", "16:9", "1080p", 8, false)
+	in.frames = []string{"frame1"}
+	body = veo.buildBody(in)
+	if body["duration"] != 8 || body["generateAudio"] != true || body["resolution"] != "1080p" || get(body, "size", "width") != 1920 ||
+		get(body, "generationSettings", "aspectRatio") != "16:9" || get(body, "generationMetadata", "module") != "text2video" ||
+		get(body["referenceBlobs"].([]any)[0].(map[string]any), "usage") != "frame" || body["seeds"] == nil {
+		t.Fatalf("veo-3.1 body = %v", body)
+	}
+
+	kling := mustVersion(t, "kling-3.0-omni")
+	in = kling.videoPlan("run", "16:9", "1080p", 10, false)
+	in.frames = []string{"frame1"}
+	body = kling.buildBody(in)
+	if body["modelVersion"] != "kling_v3_omni" || body["duration"] != 10 || body["resolution"] != "1080p" || get(body, "size", "width") != 1920 ||
+		get(body, "generationSettings", "aspectRatio") != "16:9" || get(body, "modelSpecificPayload", "resolution") != "1080p" ||
+		get(body, "modelSpecificPayload", "aspect_ratio") != "16:9" || body["seeds"] == nil {
+		t.Fatalf("kling-3.0-omni body = %v", body)
+	}
+
+	seedance := mustVersion(t, "seedance-2.5")
+	in = seedance.videoPlan("wave", "auto", "720p", 8, false)
+	body = seedance.buildBody(in)
+	if _, ok := body["size"]; ok || body["resolution"] != "720p" || get(body, "generationSettings", "aspectRatio") != "auto" {
+		t.Fatalf("seedance-2.5 body = %v", body)
+	}
+}
+
+// 显式给出但模型不支持的参数直接 400；张数超过 schema 上限也拒绝。
+func TestImagePlanRejectsUnsupportedParameters(t *testing.T) {
+	nano := mustVersion(t, "nano-banana-pro")
+	if _, err := nano.imagePlan("x", "", "8:1", "", "", "", 1, 0, false); err == nil {
+		t.Error("nano-banana-pro accepted 8:1")
+	}
+	if _, err := nano.imagePlan("x", "", "", "512", "", "", 1, 0, false); err == nil {
+		t.Error("nano-banana-pro accepted 512")
+	}
+	if _, err := mustVersion(t, "nano-banana-2").imagePlan("x", "", "8:1", "512", "", "", 1, 0, false); err != nil {
+		t.Errorf("nano-banana-2 rejected 8:1@512: %v", err)
+	}
+	if _, err := mustVersion(t, "gpt-image-2").imagePlan("x", "", "", "", "", "transparent", 1, 0, false); err == nil {
+		t.Error("gpt-image-2 accepted a transparent background")
+	}
+	in, err := mustVersion(t, "gpt-image-2.5-flare").imagePlan("x", "1536x1024", "", "", "", "transparent", 1, 0, false)
+	if err != nil || !in.transparent || in.aspect != "3:2" {
+		t.Errorf("gpt-image-2.5-flare plan = %+v, %v", in, err)
+	}
+	if _, err := mustVersion(t, "humain-image-1").imagePlan("x", "", "", "", "", "", 2, 0, false); err == nil {
+		t.Error("model without n accepted 2 images")
+	}
+}
+
+// 视频的首帧/参考图按 schema 能力校验，时长与分辨率就近对齐（网关默认 8 秒、720p）。
+func TestVideoInputsFollowSchema(t *testing.T) {
+	adapter := NewAdapter(Config{}, nil, nil, nil, nil)
+	check := func(model string, hasImage bool, refs int) error {
+		return adapter.ValidateVideoRequest(provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, UpstreamModel: model, HasImage: hasImage, ReferenceImages: refs, Duration: 8, Resolution: "720p"})
+	}
+	if err := check("kling-3.0", false, 2); err == nil {
+		t.Error("kling-3.0 accepted reference images")
+	}
+	if err := check("kling-3.0-omni", false, 3); err != nil {
+		t.Errorf("kling-3.0-omni rejected 3 references: %v", err)
+	}
+	if err := check("kling-3.0-omni", false, 4); err == nil {
+		t.Error("kling-3.0-omni accepted 4 references")
+	}
+	if err := check("kling-video-2.5-turbo", false, 0); err == nil {
+		t.Error("image-to-video model accepted a request without a first frame")
+	}
+	if err := check("sora2", false, 0); err == nil {
+		t.Error("removed model sora2 accepted")
+	}
+	in := mustVersion(t, "kling-video-2.5-turbo").videoPlan("x", "16:9", "720p", 8, false)
+	if in.resolution != "1080p" {
+		t.Errorf("1080p-only model resolution = %q", in.resolution)
+	}
+	if body := mustVersion(t, "gemini-omni-flash").buildBody(mustVersion(t, "gemini-omni-flash").videoPlan("x", "16:9", "1080p", 15, false)); body["duration"] != 10 || body["resolution"] != "720p" {
+		t.Errorf("omni-flash duration/resolution = %v / %v", body["duration"], body["resolution"])
+	}
+}
+
+func TestRefreshCatalogSwapsAndGuardsShrink(t *testing.T) {
+	payload := discoverySnapshot
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+	previous := discoveryURL
+	discoveryURL = server.URL
+	t.Cleanup(func() { discoveryURL = previous })
+	_, adapter, _ := newFakeAdobe(t)
+	routes, err := adapter.RefreshCatalog(context.Background())
+	if err != nil || len(routes) == 0 || len(routes) != len(adapter.Routes()) {
+		t.Fatalf("refresh = %d routes, %v", len(routes), err)
+	}
+	payload = []byte(`{"models":[],"commonRequestSchema":{}}`)
+	if _, err := adapter.RefreshCatalog(context.Background()); err == nil {
+		t.Fatal("an empty discovery must not replace the catalog")
+	}
+	if len(adapter.Routes()) != len(routes) {
+		t.Fatal("a rejected refresh changed the catalog")
 	}
 }

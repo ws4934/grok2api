@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -88,7 +89,7 @@ func (c *client) browserHeaders() map[string]string {
 	}
 }
 
-func (c *client) submitHeaders(prompt string, video bool) map[string]string {
+func (c *client) submitHeaders(noncePrompt string) map[string]string {
 	headers := c.browserHeaders()
 	headers["Authorization"] = "Bearer " + c.rc.token
 	headers["x-api-key"] = c.rc.apiKey
@@ -98,8 +99,8 @@ func (c *client) submitHeaders(prompt string, video bool) map[string]string {
 	headers["Referer"] = "https://firefly.adobe.com/"
 	headers["Accept-Language"] = "en-US,en;q=0.9"
 	headers["x-arp-session-id"] = c.rc.sherlock
-	if prompt != "" && !video {
-		if nonce := submitNonce(c.rc.token, prompt); nonce != "" {
+	if noncePrompt != "" {
+		if nonce := submitNonce(c.rc.token, noncePrompt); nonce != "" {
 			headers["x-nonce"] = nonce
 		}
 	}
@@ -177,54 +178,22 @@ func (c *client) request(ctx context.Context, method, rawURL string, body io.Rea
 	return resp.StatusCode, data, resp.Header, nil
 }
 
-func (c *client) submitImage(ctx context.Context, submitURL string, payloads []map[string]any, prompt string) (submission, error) {
-	headers := c.submitHeaders(prompt, false)
-	var last, uncertain error
-	for _, payload := range payloads {
-		encoded, _ := json.Marshal(payload)
-		status, data, hdr, reqErr := c.request(ctx, http.MethodPost, submitURL, bytes.NewReader(encoded), headers)
-		if reqErr != nil {
-			last = reqErr
-			break
-		}
-		if status >= 200 && status < 300 {
-			link := resultLink(hdr, data)
-			if link == "" {
-				return submission{}, &upstreamError{stage: "submit", status: 502, body: "no polling URL"}
-			}
-			return submission{pollURL: link}, nil
-		}
-		last = classifyUpstream("submit", status, bodyText(data))
-		if status >= 500 && uncertain == nil {
-			uncertain = last
-		}
-		// 只有普通 4xx 拒绝才停止尝试后续候选 payload。
-		if status < 500 && status != 429 && status != 451 {
-			break
-		}
+// submitJob 提交一个生成任务并返回轮询链接。noncePrompt 非空时带官网的图像 x-nonce。
+func (c *client) submitJob(ctx context.Context, submitURL string, payload map[string]any, noncePrompt string) (submission, error) {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return submission{}, err
 	}
-	// 某个候选拿到过 5xx 就可能已被接受：按结果未知上报，不能被当成明确拒绝去换账号。
-	if uncertain != nil {
-		return submission{}, uncertain
-	}
-	if last == nil {
-		last = &upstreamError{stage: "submit", status: 502, body: "image submission failed"}
-	}
-	return submission{}, last
-}
-
-func (c *client) submitVideo(ctx context.Context, submitURL string, payload map[string]any) (submission, error) {
-	encoded, _ := json.Marshal(payload)
-	status, data, hdr, reqErr := c.request(ctx, http.MethodPost, submitURL, bytes.NewReader(encoded), c.submitHeaders("", true))
+	status, data, hdr, reqErr := c.request(ctx, http.MethodPost, submitURL, bytes.NewReader(encoded), c.submitHeaders(noncePrompt))
 	if reqErr != nil {
 		return submission{}, reqErr
 	}
 	if status < 200 || status >= 300 {
-		return submission{}, classifyUpstream("submit_video", status, bodyText(data))
+		return submission{}, classifyUpstream("submit", status, bodyText(data))
 	}
 	link := resultLink(hdr, data)
 	if link == "" {
-		return submission{}, &upstreamError{stage: "submit_video", status: 502, body: "no polling URL"}
+		return submission{}, &upstreamError{stage: "submit", status: 502, body: "no polling URL"}
 	}
 	return submission{pollURL: link}, nil
 }
@@ -390,7 +359,7 @@ func progressValue(value any) int {
 		}
 		return clampPercent(int(v))
 	case string:
-		n := atoi(strings.TrimSuffix(v, "%"))
+		n, _ := strconv.Atoi(strings.TrimSpace(strings.TrimSuffix(v, "%")))
 		return clampPercent(n)
 	}
 	return 0

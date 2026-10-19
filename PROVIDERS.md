@@ -193,7 +193,7 @@ ChatGPT 账号需要在账号页重新添加，价格需要在模型页重新设
 
 ## Adobe（Firefly）接入
 
-Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游是 `firefly-3p.ff.adobe.io` 的异步任务（submit → poll → 取结果 URL）。图像走共享的 `AsyncImageAdapter`、视频走 `VideoAdapter`，持久任务、账号池、出口、定价、审计全部复用。
+Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游是 `firefly-3p.ff.adobe.io` 的异步任务（submit → poll → 取结果 URL），模型目录与请求体由官方 schema 驱动。图像走共享的 `AsyncImageAdapter`、视频走 `VideoAdapter`，持久任务、账号池、出口、定价、审计全部复用。
 
 ### 账号与凭据
 
@@ -212,17 +212,19 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 - mint 容器可选出站代理 `MINT_PROXY`：`http(s)://`（可带 `user:pass@`，由页面应答代理认证）或 `socks5://`（带认证时走容器内置中转）。
 - 账号始终靠导入 Cookie，无自动注册。
 
-### 模型
+### 模型（由官方 schema 驱动）
 
-精简基础名 + 请求参数（`size`/`quality`/`aspect_ratio`/`resolution`/`duration`），不展开成几百个维度 ID：
+模型目录和请求体都来自 Adobe 官方的模型发现接口 `POST https://firefly-3p.ff.adobe.io/v2/models/discovery`（无需鉴权，与 firefly.adobe.com 前端同源）：
 
-- 图像（各含生成 + 编辑）：`nano-banana-pro`、`nano-banana`、`nano-banana2`、`gpt-image-2`、`gpt-image-2.5`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`。多图 `n` 在一次请求里用 seeds 数组出多张。
-- 视频：`veo31`、`veo31-ref`、`gemini-omni`、`kling-o3`、`kling3`、`seedance20`、`seedance20-fast`（Sora 已从 Firefly 下架，不再提供）。参考图上传到 `/v2/storage/image` 后引用。
-- `nano-banana` 是 Gemini 2.5，只出 1K；`nano-banana-pro` 是 Gemini 3；`nano-banana2` 是 Gemini 3.1。版本号与参数按 firefly.adobe.com 前端核对（2026-10-19）。
-- 视频的 `duration` / `aspect_ratio` 会就近对齐到该模型支持的值（网关对未填的 `duration` 默认 8 秒，例如 `kling3` 取 10 秒）；不支持的 `resolution` 在建任务时拒绝。不支持 `reference_audios`。
-- 图像不支持 `stream` / `partial_images`；显式给出但模型不支持的 `aspect_ratio` / `resolution`（只有 `1K`/`2K`/`4K`）直接 400。未给比例时按 `size` 取最接近的比例。
+- **自动登记**：后台启动时拉取一次，之后每小时一次。新上线的图像/视频模型自动出现，下架（`isDeprecated`）或禁用的模型路由自动删除；结果为空或比当前少一半以上时视为异常，保留上次结果。程序内嵌一份快照（`backend/internal/infra/provider/adobe/discovery.json`），启动即可用，拉取失败时兜底；快照只补齐缺失路由、不删除。
+- **筛选**：只收图像/视频生成模型；跳过放大/降噪类（Topaz）、视频编辑/延长版本、Kling 按模式拆分的版本（统一用合并版 `kling-3.0` / `kling-3.0-omni`）。
+- **命名**：按官方显示名生成，例如 `veo-3.1`、`veo-3.1-fast`、`kling-3.0-omni`、`seedance-2.0`、`gpt-image-2.5-flare`、`ray3.14`、`flux-kontext-pro`；Gemini 系列用 `nano-banana-pro`（Gemini 3）、`nano-banana-2`（Gemini 3.1）、`nano-banana-2.1`。完整清单见管理端模型页或 `/v1/models`。
+- **请求体**：按模型 schema 填字段，再按官网前端的按模型规则放置比例、分辨率与参考图用途（首帧 `frame`、参考图 `subject` / `style` / `asset` / `general`、蒙版 `mask`），最后丢弃 schema 之外的字段。
+- **参数校验**：
+  - 图像：显式给出但模型不支持的 `aspect_ratio` / `resolution`、超过 schema 上限的 `n`、不支持的输入图 / 蒙版 / 透明背景直接 400；未给比例时按 `size` 取最接近的比例。不支持 `stream` / `partial_images`。
+  - 视频：首帧图与参考图按 schema 的能力和数量校验；`duration` / `aspect_ratio` / `resolution` 就近对齐到模型支持的值（网关对未填参数会填默认值，如 8 秒、720p）。不支持 `reference_audios` 与视频编辑。
 - 输入图支持 Base64 data URI 与 `https` URL（经带 SSRF 防护的下载器，不走账号出口），只接受 PNG/JPEG/WebP。
-- 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口，所有 Adobe 路由都消费它。
+- 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"；价格按模型名存储，模型名不变价格就保留。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口，所有 Adobe 路由都消费它。
 
 ### 失败处理
 

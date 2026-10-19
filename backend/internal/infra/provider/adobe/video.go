@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -19,28 +18,46 @@ type videoCheckpoint struct {
 	Submitting bool   `json:"submitting,omitempty"`
 }
 
-// ValidateVideoRequest 校验 Adobe 视频请求的模型与参数。时长和比例不在这里拒绝：
-// 网关对未填的 duration 默认填 8 秒，GenerateVideo 会就近对齐到模型支持的值。
+// ValidateVideoRequest 按模型 schema 校验视频请求：首帧图、参考图的支持与数量。
+// 时长、比例、分辨率不在这里拒绝：网关会给未填的参数填默认值，GenerateVideo 会就近
+// 对齐到模型支持的值。
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
 	if options.Operation != provider.VideoOperationGenerate {
 		return provider.ErrVideoOperationUnsupported
 	}
-	m, ok := videoModelByID(strings.TrimSpace(options.UpstreamModel))
-	if !ok {
+	v, ok := a.catalog.Load().lookup(options.UpstreamModel)
+	if !ok || !v.video {
 		return fmt.Errorf("%w: 未知的 Adobe 视频模型 %s", provider.ErrVideoParameterInvalid, options.UpstreamModel)
 	}
-	if r := strings.ToLower(strings.TrimSpace(options.Resolution)); r != "" && !slices.Contains(m.resolutions, r) {
-		return fmt.Errorf("%w: %s 不支持分辨率 %s", provider.ErrVideoParameterInvalid, m.id, options.Resolution)
+	if err := v.checkVideoInputs(options.HasImage, options.ReferenceImages); err != nil {
+		return fmt.Errorf("%w: %s", provider.ErrVideoParameterInvalid, err.Error())
+	}
+	return nil
+}
+
+// checkVideoInputs 按 schema 的 x-capabilities 检查首帧图与参考图。
+func (v *modelVersion) checkVideoInputs(hasFrame bool, references int) error {
+	frame, frameOK := v.refs["image:frame"]
+	switch {
+	case hasFrame && !frameOK:
+		return &requestError{msg: v.slug + " 不支持首帧图 image"}
+	case !hasFrame && (frame.min > 0 || v.patch.requireFrame):
+		return &requestError{msg: v.slug + " 需要首帧图 image"}
+	}
+	if references > 0 {
+		usage, limit := v.referenceUsage()
+		if usage == "" {
+			return &requestError{msg: v.slug + " 不支持 reference_images"}
+		}
+		if limit > 0 && references > limit {
+			return &requestError{msg: fmt.Sprintf("%s 最多支持 %d 张参考图", v.slug, limit)}
+		}
 	}
 	return nil
 }
 
 // GenerateVideo 创建并等待一个 Adobe 视频任务，返回结果的预签名 URL。
 func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
-	m, ok := videoModelByID(strings.TrimSpace(request.Model))
-	if !ok {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, &requestError{msg: "未知的 Adobe 视频模型：" + request.Model})
-	}
 	if len(request.ReferenceAudios) > 0 {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, &requestError{msg: "Adobe 视频不支持 reference_audios"})
 	}
@@ -49,11 +66,23 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	if cp.PollURL == "" && cp.Submitting {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, fmt.Errorf("Adobe 视频已提交但未取得任务 ID，无法安全重建"))
 	}
+	var v *modelVersion
+	if cp.PollURL == "" {
+		// 续跑已提交的任务不查目录：模型即使刚下架，已在跑的任务也要取回结果。
+		found, ok := a.catalog.Load().lookup(request.Model)
+		if !ok || !found.video {
+			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, &requestError{msg: "未知的 Adobe 视频模型：" + request.Model})
+		}
+		hasFrame := strings.TrimSpace(request.ImageURL) != ""
+		if err := found.checkVideoInputs(hasFrame, len(request.ReferenceURLs)); err != nil {
+			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
+		}
+		v = found
+	}
 	var result provider.VideoResult
 	err := a.withClient(ctx, request.Credential, func(ctx context.Context, c *client) error {
-		// 已有轮询 URL：上次只丢了结果，继续等待即可，不重复创建。
 		if cp.PollURL == "" {
-			pollURL, err := a.createVideo(ctx, c, m, request)
+			pollURL, err := a.createVideo(ctx, c, v, request)
 			if err != nil {
 				return err
 			}
@@ -75,22 +104,19 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 
 // createVideo 准备输入并提交任务，返回轮询 URL。提交前先取 x-arp-session-id，
 // 再落盘 Submitting 标记，保证标记只出现在真的发出了请求之后。
-func (a *Adapter) createVideo(ctx context.Context, c *client, m videoModel, request provider.VideoRequest) (string, error) {
+func (a *Adapter) createVideo(ctx context.Context, c *client, v *modelVersion, request provider.VideoRequest) (string, error) {
 	if c.rc.token == "" {
 		return "", preSubmitFailure(errNoToken)
 	}
-	in := videoPayloadInput{
-		model: m, prompt: request.Prompt,
-		aspectRatio:   nearestRatio(request.AspectRatio, m.ratios, m.defaultRatio),
-		duration:      nearestDuration(request.Duration, m.durations, m.defaultDur),
-		resolution:    strings.ToLower(strings.TrimSpace(request.Resolution)),
-		generateAudio: m.genAudio,
+	in := v.videoPlan(request.Prompt, request.AspectRatio, request.Resolution, request.Duration, len(request.ReferenceURLs) > 0)
+	if ref := strings.TrimSpace(request.ImageURL); ref != "" {
+		id, err := a.uploadImage(ctx, c, ref)
+		if err != nil {
+			return "", preSubmitFailure(err)
+		}
+		in.frames = append(in.frames, id)
 	}
-	if in.resolution == "" {
-		in.resolution = m.defaultRes
-	}
-	// 首帧图与参考图都上传成 Adobe 存储里的图像。
-	for _, ref := range append([]string{request.ImageURL}, request.ReferenceURLs...) {
+	for _, ref := range request.ReferenceURLs {
 		if strings.TrimSpace(ref) == "" {
 			continue
 		}
@@ -98,7 +124,7 @@ func (a *Adapter) createVideo(ctx context.Context, c *client, m videoModel, requ
 		if err != nil {
 			return "", preSubmitFailure(err)
 		}
-		in.sourceImageID = append(in.sourceImageID, id)
+		in.references = append(in.references, id)
 	}
 	if err := a.useSherlock(ctx, c); err != nil {
 		return "", preSubmitFailure(err)
@@ -107,7 +133,7 @@ func (a *Adapter) createVideo(ctx context.Context, c *client, m videoModel, requ
 		return "", provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 	}
 	sub, err := a.submit(ctx, c, func() (submission, error) {
-		return c.submitVideo(ctx, endpoints.videoSubmit, buildVideoPayload(in))
+		return c.submitJob(ctx, endpoints.videoSubmit, v.buildBody(in), "")
 	})
 	if err != nil {
 		return "", provider.VideoCreateFailed(request, err)

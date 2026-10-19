@@ -252,25 +252,12 @@ func (a *Adapter) fetchCreditsWindow(ctx context.Context, credential account.Cre
 	return window, ok, err
 }
 
-// --- 模型目录（ModelCatalogAdapter）：静态目录，每个账号都具备全部媒体模型 ---
+// --- 模型目录（ModelCatalogAdapter）---
 
+// ListModels 不按账号发现模型：目录来自全局 discovery，每个账号都服务全部模型
+// （StaticModel）。返回空可避免账号同步把模型登记成对话路由。
 func (a *Adapter) ListModels(ctx context.Context, credential account.Credential) ([]string, error) {
-	return staticUpstreamModels(), nil
-}
-
-func (a *Adapter) NormalizeAccountModelCapabilities(models []string, _ *account.Billing, _ account.Credential) []string {
-	return staticUpstreamModels()
-}
-
-func staticUpstreamModels() []string {
-	models := make([]string, 0, len(imageModels)+len(videoModels))
-	for _, m := range imageModels {
-		models = append(models, m.id)
-	}
-	for _, m := range videoModels {
-		models = append(models, m.id)
-	}
-	return models
+	return nil, nil
 }
 
 // --- IMS / 积分 上游调用 ---
