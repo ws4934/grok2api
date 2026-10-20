@@ -366,6 +366,12 @@ func (r *ClientKeyRepository) CancelBillingReservation(ctx context.Context, even
 	})
 }
 
+// A media job that has not recorded its usage still owns its reservations:
+// video_usage_<id>, and image_usage_<id>_<n> (_r<generation> on a resume).
+// Both probes read idx_media_jobs_usage_pending.
+const noPendingMediaUsage = "(NOT EXISTS (SELECT 1 FROM media_jobs WHERE billing_reservations.event_id = 'video_usage_' || media_jobs.id AND media_jobs.usage_recorded_at IS NULL)" +
+	" AND NOT EXISTS (SELECT 1 FROM media_jobs WHERE media_jobs.kind = 'image' AND media_jobs.usage_recorded_at IS NULL AND billing_reservations.event_id LIKE 'image_usage_' || media_jobs.id || '_%'))"
+
 // CleanupExpiredBillingReservations 分批释放进程异常遗留的过期预留。
 func (r *ClientKeyRepository) CleanupExpiredBillingReservations(ctx context.Context, now time.Time, limit int, protectedEventIDSets ...[]string) (int, error) {
 	if limit <= 0 || limit > 1000 {
@@ -380,10 +386,6 @@ func (r *ClientKeyRepository) CleanupExpiredBillingReservations(ctx context.Cont
 		}
 	}
 	scanLimit := min(200000, limit+len(protected))
-	// A media job that has not recorded its usage still owns its reservations:
-	// video_usage_<id>, and image_usage_<id>_<n> (_r<generation> on a resume).
-	const noPendingMediaUsage = "(NOT EXISTS (SELECT 1 FROM media_jobs WHERE billing_reservations.event_id = 'video_usage_' || media_jobs.id AND media_jobs.usage_recorded_at IS NULL)" +
-		" AND NOT EXISTS (SELECT 1 FROM media_jobs WHERE media_jobs.kind = 'image' AND media_jobs.usage_recorded_at IS NULL AND billing_reservations.event_id LIKE 'image_usage_' || media_jobs.id || '_%'))"
 	var candidates []billingReservationModel
 	if err := r.db.db.WithContext(ctx).Model(&billingReservationModel{}).
 		Select("event_id", "client_key_id", "amount", "expires_at").

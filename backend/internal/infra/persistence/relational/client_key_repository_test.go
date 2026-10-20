@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -399,4 +400,27 @@ func TestClientKeyStaysRestrictedAfterItsRoutesAreDeleted(t *testing.T) {
 			t.Fatalf("key after its only route was deleted = %+v", stored)
 		}
 	})
+}
+
+// Cleanup probes media_jobs twice per expired reservation inside a write
+// transaction; both probes must read only jobs with pending usage, also
+// without ANALYZE statistics, or one sweep blocks writers for seconds.
+func TestBillingCleanupProbesOnlyPendingMediaJobs(t *testing.T) {
+	database := openTestDatabase(t)
+	var plan []struct{ Detail string }
+	if err := database.db.Raw("EXPLAIN QUERY PLAN SELECT event_id FROM billing_reservations WHERE expires_at <= ? AND "+noPendingMediaUsage, time.Now().UTC()).Scan(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	probes := 0
+	for _, step := range plan {
+		if strings.Contains(step.Detail, "media_jobs") {
+			probes++
+			if !strings.Contains(step.Detail, "idx_media_jobs_usage_pending") {
+				t.Fatalf("media job probe %q does not use idx_media_jobs_usage_pending", step.Detail)
+			}
+		}
+	}
+	if probes != 2 {
+		t.Fatalf("plan = %+v", plan)
+	}
 }

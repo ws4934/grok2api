@@ -104,6 +104,10 @@ var schemaIndexes = []string{
 	"CREATE INDEX IF NOT EXISTS idx_media_jobs_account_status ON media_jobs(account_id, status)",
 	"CREATE INDEX IF NOT EXISTS idx_media_jobs_recovery ON media_jobs(status, lease_until, created_at, id)",
 	"CREATE INDEX IF NOT EXISTS idx_media_jobs_usage_recovery ON media_jobs(status, usage_recorded_at, completed_at, id)",
+	// Billing cleanup checks every expired reservation against the jobs whose
+	// usage is still pending. usage_recorded_at makes the index covering, which
+	// SQLite needs to prefer it over idx_media_jobs_kind_created without ANALYZE.
+	"CREATE INDEX IF NOT EXISTS idx_media_jobs_usage_pending ON media_jobs(kind, id, usage_recorded_at) WHERE usage_recorded_at IS NULL",
 	"CREATE INDEX IF NOT EXISTS idx_media_assets_created ON media_assets(created_at DESC, id)",
 	"CREATE INDEX IF NOT EXISTS idx_media_assets_kind_created ON media_assets(kind, created_at DESC, id)",
 	"CREATE INDEX IF NOT EXISTS idx_media_assets_expires ON media_assets(expires_at, id) WHERE expires_at IS NOT NULL",
