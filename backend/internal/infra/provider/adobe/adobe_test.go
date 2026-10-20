@@ -66,6 +66,16 @@ func TestParseImportedCredentials(t *testing.T) {
 	}
 }
 
+// 格式化成多行的 JSON 对象是一条记录，不能逐行拆成 Cookie。
+func TestParseImportedCredentialsPrettyJSON(t *testing.T) {
+	adapter := NewAdapter(Config{}, nil, nil, nil, nil)
+	cookie := validCookie()
+	seeds, err := adapter.ParseImportedCredentials([]byte("{\n  \"cookie\": \"" + cookie + "\",\n  \"email\": \"a@b.com\"\n}\n"))
+	if err != nil || len(seeds) != 1 || seeds[0].RefreshToken != cookie || seeds[0].Email != "a@b.com" {
+		t.Fatalf("seeds = %+v, err = %v", seeds, err)
+	}
+}
+
 func TestClientSubmitPollDownload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

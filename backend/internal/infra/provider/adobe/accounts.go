@@ -37,9 +37,10 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 		return nil, nil
 	}
 	var records []importRecord
-	if trimmed[0] == '[' {
-		if err := json.Unmarshal([]byte(trimmed), &records); err != nil {
-			return nil, errors.New("invalid JSON array")
+	if trimmed[0] == '{' || trimmed[0] == '[' {
+		var err error
+		if records, err = provider.DecodeCredentialJSONEntries[importRecord]([]byte(trimmed), string(account.ProviderAdobe), 0); err != nil {
+			return nil, fmt.Errorf("解析 Adobe 账号 JSON: %w", err)
 		}
 	} else {
 		// 逐行解析：以 '{' 开头的行按 JSON 记录处理，其余按裸 Cookie 处理。
