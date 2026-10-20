@@ -272,8 +272,8 @@ func parseImportRecord(raw json.RawMessage) (provider.CredentialSeed, error) {
 		v = *v.Credentials
 	}
 	c := credentials{
-		AccessToken: firstNonEmptyString([]string{v.AT, v.AT2, v.Token}, ""), RefreshToken: firstNonEmptyString([]string{v.RT, v.RT2}, ""),
-		IDToken: v.IDToken, ClientProfile: v.Profile, DeviceID: firstNonEmptyString([]string{v.Device, v.Device2}, ""), SessionID: firstNonEmptyString([]string{v.Session, v.Session2}, ""),
+		AccessToken: provider.FirstNonEmptyFailure(v.AT, v.AT2, v.Token), RefreshToken: provider.FirstNonEmptyFailure(v.RT, v.RT2),
+		IDToken: v.IDToken, ClientProfile: v.Profile, DeviceID: provider.FirstNonEmptyFailure(v.Device, v.Device2), SessionID: provider.FirstNonEmptyFailure(v.Session, v.Session2),
 	}
 	if len(v.Browser) > 0 && string(v.Browser) != "null" {
 		if v.Browser[0] == '"' {
@@ -299,7 +299,7 @@ func parseImportRecord(raw json.RawMessage) (provider.CredentialSeed, error) {
 	// The issuing client: the tokens' claim, else the record's client_id, else
 	// the given label; sub2api and CPA log in through the Codex client unless
 	// told otherwise (CPA SIWC files use their own client).
-	if clientID := firstNonEmptyString([]string{tokenClientID(c.AccessToken, c.IDToken), v.ClientID}, ""); clientID != "" {
+	if clientID := provider.FirstNonEmptyFailure(tokenClientID(c.AccessToken, c.IDToken), v.ClientID); clientID != "" {
 		c.ClientProfile = profileOfClient(clientID)
 	} else if c.ClientProfile == "" && (sub2api || (cpa && !v.UseSIWC)) {
 		c.ClientProfile = codexProfile
@@ -320,17 +320,17 @@ func parseImportRecord(raw json.RawMessage) (provider.CredentialSeed, error) {
 // newSeed prefers the upstream identity and falls back to token claims.
 func newSeed(name string, c credentials, identity provider.AccountIdentity) provider.CredentialSeed {
 	claims := claimsIdentity(c.AccessToken, c.IDToken)
-	identity.UserID = firstNonEmptyString([]string{identity.UserID, claims.UserID}, "")
-	identity.TeamID = firstNonEmptyString([]string{identity.TeamID, claims.TeamID}, "")
-	identity.Email = firstNonEmptyString([]string{identity.Email, claims.Email}, "")
-	identity.Plan = firstNonEmptyString([]string{identity.Plan, claims.Plan}, "")
-	key := "chatgpt|" + firstNonEmptyString([]string{c.RefreshToken, c.AccessToken}, "")
+	identity.UserID = provider.FirstNonEmptyFailure(identity.UserID, claims.UserID)
+	identity.TeamID = provider.FirstNonEmptyFailure(identity.TeamID, claims.TeamID)
+	identity.Email = provider.FirstNonEmptyFailure(identity.Email, claims.Email)
+	identity.Plan = provider.FirstNonEmptyFailure(identity.Plan, claims.Plan)
+	key := "chatgpt|" + provider.FirstNonEmptyFailure(c.RefreshToken, c.AccessToken)
 	if identity.UserID != "" {
 		key = "chatgpt|" + identity.UserID + "|" + identity.TeamID
 	}
 	return provider.CredentialSeed{
 		Provider: account.ProviderChatGPT, AuthType: account.AuthTypeOAuth,
-		Name: firstNonEmptyString([]string{name, identity.Email}, defaultAccountName), Email: identity.Email, UserID: identity.UserID, TeamID: identity.TeamID, Plan: identity.Plan,
+		Name: provider.FirstNonEmptyFailure(name, identity.Email, defaultAccountName), Email: identity.Email, UserID: identity.UserID, TeamID: identity.TeamID, Plan: identity.Plan,
 		SourceKey: "import:" + security.HashToken(key), AccessToken: c.AccessToken, RefreshToken: c.RefreshToken, ExpiresAt: c.ExpiresAt, State: c.state(),
 	}
 }
@@ -532,7 +532,7 @@ func oauthError(raw json.RawMessage, description string) (string, string) {
 	}
 	var nested struct{ Code, Message string }
 	if json.Unmarshal(raw, &nested) == nil {
-		return nested.Code, firstNonEmptyString([]string{description, nested.Message}, "")
+		return nested.Code, provider.FirstNonEmptyFailure(description, nested.Message)
 	}
 	return "", description
 }
@@ -565,10 +565,10 @@ func claimsIdentity(tokens ...string) provider.AccountIdentity {
 		claims := tokenClaims(token)
 		auth, _ := claims["https://api.openai.com/auth"].(map[string]any)
 		profile, _ := claims["https://api.openai.com/profile"].(map[string]any)
-		out.UserID = firstNonEmptyString([]string{out.UserID, aiString(auth, "chatgpt_user_id", "user_id")}, "")
-		out.TeamID = firstNonEmptyString([]string{out.TeamID, aiString(auth, "chatgpt_account_id")}, "")
-		out.Plan = firstNonEmptyString([]string{out.Plan, aiString(auth, "chatgpt_plan_type")}, "")
-		out.Email = firstNonEmptyString([]string{out.Email, aiString(profile, "email"), aiString(claims, "email")}, "")
+		out.UserID = provider.FirstNonEmptyFailure(out.UserID, aiString(auth, "chatgpt_user_id", "user_id"))
+		out.TeamID = provider.FirstNonEmptyFailure(out.TeamID, aiString(auth, "chatgpt_account_id"))
+		out.Plan = provider.FirstNonEmptyFailure(out.Plan, aiString(auth, "chatgpt_plan_type"))
+		out.Email = provider.FirstNonEmptyFailure(out.Email, aiString(profile, "email"), aiString(claims, "email"))
 	}
 	return out
 }

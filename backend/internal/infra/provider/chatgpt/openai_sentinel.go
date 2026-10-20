@@ -3,6 +3,7 @@ package chatgpt
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt/browserprofile"
 	"golang.org/x/crypto/sha3"
 )
@@ -179,7 +181,7 @@ func (o *OpenAIImage) requirementHeaders(requirements openAIRequirements) map[st
 func buildLegacyRequirementsToken(profile browserprofile.Profile, scripts []string, build string, zone openAITimezoneSnapshot) string {
 	config := []any{
 		fmt.Sprintf("%dx%d", profile.ScreenWidth, profile.ScreenHeight), zone.date(),
-		profile.JSHeapSizeLimit, 1, profile.UserAgent, firstStringValue(map[string]any{"script": firstNonEmptyString(scripts, "https://chatgpt.com/backend-api/sentinel/sdk.js")}, "script"),
+		profile.JSHeapSizeLimit, 1, profile.UserAgent, cmp.Or(provider.FirstNonEmptyFailure(scripts...), "https://chatgpt.com/backend-api/sentinel/sdk.js"),
 		build, profile.NavigatorLanguage, profile.NavigatorLanguagesValue(), mathrand.Float64(),
 		"webdriver-false", "location", "navigator", mathrand.Float64() * 1000, firstUUID(), "",
 		profile.HardwareConcurrency, zone.at.UnixMilli(), 0, 0, 0, 0, 0, 0, 0, 0,
@@ -195,7 +197,7 @@ func buildProofToken(ctx context.Context, seed, difficulty string, profile brows
 	}
 	config := []any{
 		fmt.Sprintf("%dx%d", profile.ScreenWidth, profile.ScreenHeight), zone.date(), profile.JSHeapSizeLimit, 0, profile.UserAgent,
-		firstStringValue(map[string]any{"script": firstNonEmptyString(scripts, "https://chatgpt.com/backend-api/sentinel/sdk.js")}, "script"),
+		cmp.Or(provider.FirstNonEmptyFailure(scripts...), "https://chatgpt.com/backend-api/sentinel/sdk.js"),
 		build, profile.NavigatorLanguage, profile.NavigatorLanguagesValue(), 0.5, "webdriver-false", "location", "navigator",
 		0, firstUUID(), "", profile.HardwareConcurrency, zone.at.UnixMilli(), 0, 0, 0, 0, 0, 0, 0, 0,
 	}

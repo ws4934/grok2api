@@ -327,12 +327,12 @@ func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
 		}
 		if rawError, ok := object["error"].(map[string]any); ok {
 			status := 502
-			if code := strings.ToLower(firstStringValue(rawError, "code", "type")); strings.Contains(code, "rate") {
+			if code := strings.ToLower(aiString(rawError, "code", "type")); strings.Contains(code, "rate") {
 				status = 429
 			}
 			return OpenAIChatEvent{}, &upstreamError{
 				Status:  status,
-				Message: firstStringValue(rawError, "message", "error"),
+				Message: aiString(rawError, "message", "error"),
 				Body:    stringValue(rawError["message"]),
 			}
 		}

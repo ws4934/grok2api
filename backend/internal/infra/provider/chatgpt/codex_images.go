@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
 // Codex image routes draw through the Codex backend's Images API
@@ -57,7 +58,7 @@ func codexPlan(plan string) bool {
 // planOf prefers the plan the access token carries (Codex tokens do; it is
 // current after each refresh) over the plan stored at import.
 func planOf(credential account.Credential, c credentials) string {
-	return firstNonEmptyString([]string{claimsIdentity(c.AccessToken).Plan, credential.Plan}, "")
+	return provider.FirstNonEmptyFailure(claimsIdentity(c.AccessToken).Plan, credential.Plan)
 }
 
 // AsyncImageModel reports whether a route can draw as a resumable image job.
@@ -70,7 +71,7 @@ func (a *Adapter) AsyncImageModel(upstreamModel string) bool {
 // codexAccountID is the workspace the Codex backend bills: the token's claim,
 // else the account found at import (platform tokens carry no claim).
 func codexAccountID(credential account.Credential, c credentials) string {
-	return firstNonEmptyString([]string{claimsIdentity(c.AccessToken).TeamID, credential.TeamID}, "")
+	return provider.FirstNonEmptyFailure(claimsIdentity(c.AccessToken).TeamID, credential.TeamID)
 }
 
 // codexDo calls the Codex backend on ctx's egress. The image timeout comes

@@ -176,7 +176,7 @@ func (o *OpenAIImage) readImageDownloadResponse(ctx context.Context, account wir
 		if json.Unmarshal(raw, &value) != nil {
 			return downloadedImage{}, fmt.Errorf("decode OpenAI image download metadata")
 		}
-		downloadURL := firstStringValue(value, "download_url", "url")
+		downloadURL := aiString(value, "download_url", "url")
 		if downloadURL == "" {
 			return downloadedImage{}, fmt.Errorf("OpenAI image download returned no URL")
 		}

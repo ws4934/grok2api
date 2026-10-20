@@ -133,7 +133,7 @@ func openAIImageTerminalReason(value any) string {
 		// Read an explicit explanation before generic status markers; map iteration
 		// order must not replace "quota exhausted" with only "failed".
 		if detail, ok := typed["error"].(map[string]any); ok {
-			if reason := firstStringValue(detail, "message", "code", "type"); reason != "" {
+			if reason := aiString(detail, "message", "code", "type"); reason != "" {
 				return reason
 			}
 		} else if reason, ok := typed["error"].(string); ok && strings.TrimSpace(reason) != "" {
@@ -162,7 +162,7 @@ func openAIImageTerminalReason(value any) string {
 				}
 			case "error":
 				if details, ok := item.(map[string]any); ok {
-					if message := firstStringValue(details, "message", "code", "type"); message != "" {
+					if message := aiString(details, "message", "code", "type"); message != "" {
 						return strings.TrimSpace(message)
 					}
 				} else if message, ok := item.(string); ok && strings.TrimSpace(message) != "" {

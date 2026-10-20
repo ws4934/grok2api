@@ -288,24 +288,6 @@ func openAIImageModel(model string) string {
 	return strings.TrimSpace(model)
 }
 
-func firstStringValue(value map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if text := stringValue(value[key]); text != "" {
-			return text
-		}
-	}
-	return ""
-}
-
-func firstNonEmptyString(values []string, fallback string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return fallback
-}
-
 func uniqueStrings(values []string) []string {
 	seen := map[string]bool{}
 	result := []string{}
