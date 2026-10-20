@@ -23,6 +23,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
+	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	pricingdomain "github.com/chenyme/grok2api/backend/internal/domain/pricing"
 	localmedia "github.com/chenyme/grok2api/backend/internal/infra/media"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
@@ -751,5 +752,51 @@ func TestCreateImageJobRefusesSynchronousOnlyModels(t *testing.T) {
 	}
 	if f.service.IsImageJobModel(ctx, "codex-gpt-image-2") || !f.service.IsImageJobModel(ctx, "gpt-image-2") {
 		t.Fatal("IsImageJobModel")
+	}
+}
+
+// Saves extend the heartbeat lease instead of writing back the claim-time one.
+func TestImageJobSavesKeepTheHeartbeatLease(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	var jobID string
+	var lease time.Duration
+	f.adapter.submit = func(_ provider.ImageJobRequest, save func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error) {
+		cp := provider.ImageCheckpoint{Submitted: true, UpstreamID: "conv"}
+		if err := save(cp); err != nil {
+			return cp, err
+		}
+		lease = time.Until(*f.job(t, jobID).LeaseUntil)
+		return cp, nil
+	}
+	job := f.create(t, ImageJobInput{})
+	jobID = job.ID
+	f.service.processMediaJob(context.Background(), job.ID)
+	if lease <= 0 || lease > mediaJobLease {
+		t.Fatalf("lease after a save = %v, want at most %v", lease, mediaJobLease)
+	}
+}
+
+// failingRoutes fails the first route lookup like a locked database.
+type failingRoutes struct {
+	routeResolver
+	failed bool
+}
+
+func (r *failingRoutes) Get(ctx context.Context, id uint64) (modeldomain.Route, error) {
+	if !r.failed {
+		r.failed = true
+		return modeldomain.Route{}, errors.New("database is locked")
+	}
+	return r.routeResolver.Get(ctx, id)
+}
+
+// A failed route lookup leaves the job to recovery instead of ending it.
+func TestMediaJobSurvivesAFailedRouteLookup(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	job := f.create(t, ImageJobInput{})
+	f.service.models = &failingRoutes{routeResolver: f.service.models}
+	f.service.processMediaJob(context.Background(), job.ID)
+	if stored := f.job(t, job.ID); stored.Status.Terminal() {
+		t.Fatalf("a failed route lookup ended the job: %#v", stored)
 	}
 }

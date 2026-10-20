@@ -10,6 +10,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
+	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
 // RecoverMediaJobs records missing usage of finished jobs and requeues jobs
@@ -116,19 +117,32 @@ func (s *Service) processMediaJob(ctx context.Context, id string) {
 		return
 	}
 	route, err := s.models.Get(ctx, job.ModelRouteID)
-	if job.Kind == media.KindImage {
-		if err != nil {
-			s.endImageJob(ctx, &job, media.StatusFailed, "model_not_found", errors.New("模型路由不存在"), 0)
-			return
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		// A failed lookup is no missing route: recovery retries once the lease ends.
+		s.logger.Warn("media_job_route_lookup_failed", "job_id", id, "error", err)
+		return
+	}
+	end := func(status media.Status, code string, cause error) {
+		if job.Kind == media.KindImage {
+			s.endImageJob(ctx, &job, status, code, cause, 0)
+		} else {
+			s.endVideoJob(ctx, job, status, code, cause, 0, nil)
 		}
+	}
+	switch {
+	case err != nil:
+		end(media.StatusFailed, "model_not_found", errors.New("模型路由不存在"))
+	case job.Generation-job.ResumeGeneration > mediaJobMaxClaims:
+		status := media.StatusFailed
+		if job.Submitted {
+			status = media.StatusUncertain
+		}
+		end(status, "recovery_exhausted", errors.New("任务多次恢复仍未完成"))
+	case job.Kind == media.KindImage:
 		s.runImageJob(ctx, job, route)
-		return
+	default:
+		s.runVideoJob(ctx, job, route)
 	}
-	if err != nil {
-		s.failVideoJob(ctx, job, "model_not_found", errors.New("模型路由不存在"), 0, nil)
-		return
-	}
-	s.runVideoJob(ctx, job, route)
 }
 
 // RunMediaRecovery 周期认领新建后未启动或执行实例失联后的媒体任务。
@@ -147,13 +161,13 @@ func (s *Service) RunMediaRecovery(ctx context.Context) {
 	}
 }
 
-// claimMediaJob takes the job with the long video lease; image jobs shorten
-// it to their heartbeat lease as soon as they start.
+// claimMediaJob takes the job with the lease its worker's heartbeat renews,
+// so a dead worker's job is recovered within minutes.
 func (s *Service) claimMediaJob(ctx context.Context, id string) (media.Job, bool, error) {
 	now := time.Now().UTC()
 	claimToken, err := security.NewOpaqueToken(18)
 	if err != nil {
 		return media.Job{}, false, err
 	}
-	return s.mediaJobs.TryClaimMediaJob(ctx, id, now, now.Add(videoJobLease), claimToken)
+	return s.mediaJobs.TryClaimMediaJob(ctx, id, now, now.Add(mediaJobLease), claimToken)
 }

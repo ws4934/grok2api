@@ -18,13 +18,22 @@ import (
 )
 
 func (s *Service) runVideoJob(parent context.Context, job media.Job, route model.Route) {
-	ctx, cancel := context.WithTimeout(parent, videoJobTimeout)
-	defer cancel()
+	ctx, lose := context.WithCancelCause(parent)
+	defer lose(nil)
+	ctx, cancel := context.WithTimeout(ctx, videoJobTimeout)
 	ctx, egressTrace := infraegress.WithTrace(ctx)
+	heartbeat, claim := make(chan struct{}), job
+	go func() {
+		defer close(heartbeat)
+		s.keepMediaJobLease(ctx, lose, claim)
+	}()
+	defer func() {
+		cancel()
+		<-heartbeat
+	}()
 	startedAt := time.Now()
 	job.Progress = max(job.Progress, 1)
-	job.UpdatedAt = time.Now().UTC()
-	if err := s.mediaJobs.UpdateMediaJob(ctx, job); err != nil {
+	if err := s.saveMediaJob(ctx, &job); err != nil {
 		s.logger.Warn("video_job_progress_write_failed", "job_id", job.ID, "error", err)
 	}
 	inputReferences := decodeVideoInput(job.InputJSON)
@@ -144,8 +153,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		lease.Credential = credential
 		if job.AccountID != credential.ID || job.AccountName != credential.Name {
 			job.AccountID, job.AccountName = credential.ID, credential.Name
-			job.UpdatedAt = time.Now().UTC()
-			_ = s.mediaJobs.UpdateMediaJob(ctx, job)
+			_ = s.saveMediaJob(ctx, &job)
 		}
 
 		lastProgress := job.Progress
@@ -158,8 +166,8 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			ReferenceVideoURLs: inputs.referenceVideoURLs, ReferenceAudios: inputs.referenceAudios, VideoURL: inputs.videoURL,
 			Checkpoint: job.Checkpoint,
 			SaveCheckpoint: func(value string) error {
-				job.Checkpoint, job.Submitted, job.UpdatedAt = value, value != "", time.Now().UTC()
-				return s.mediaJobs.UpdateMediaJob(ctx, job)
+				job.Checkpoint, job.Submitted = value, value != ""
+				return s.saveMediaJob(ctx, &job)
 			},
 			Progress: func(value int) {
 				value = min(99, max(1, value))
@@ -167,12 +175,8 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 					return
 				}
 				lastProgress = value
-				job.Progress, job.UpdatedAt = value, time.Now().UTC()
-				leaseUntil := job.UpdatedAt.Add(videoJobLease)
-				job.LeaseUntil = &leaseUntil
-				updateCtx, updateCancel := context.WithTimeout(context.Background(), 3*time.Second)
-				_ = s.mediaJobs.UpdateMediaJob(updateCtx, job)
-				updateCancel()
+				job.Progress = value
+				_ = s.saveMediaJob(ctx, &job)
 			},
 		})
 		if err == nil && result.AssetID == "" && result.URL != "" {
@@ -180,6 +184,10 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		}
 		if err == nil {
 			break
+		}
+		if errors.Is(err, errJobLost) || errors.Is(context.Cause(ctx), errJobLost) {
+			// Canceled, or recovered by another worker: the job is no longer ours.
+			return
 		}
 		lastErr = err
 		captureVideoAttempt(failureAttempts, lease.Credential, attemptStarted, err)

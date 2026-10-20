@@ -373,14 +373,6 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 		s.endImageJob(parent, &job, media.StatusFailed, "provider_unavailable", ErrNoAvailableAccount, 0)
 		return
 	}
-	if job.Generation-job.ResumeGeneration > mediaJobMaxClaims {
-		status := media.StatusFailed
-		if job.Submitted {
-			status = media.StatusUncertain
-		}
-		s.endImageJob(parent, &job, status, "recovery_exhausted", errors.New("任务多次恢复仍未完成"), 0)
-		return
-	}
 	ctx, lose := context.WithCancelCause(parent)
 	defer lose(nil)
 	ctx, cancel := context.WithTimeout(ctx, imageJobTimeout)
@@ -391,11 +383,6 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 		WithImageJobScope(context.Context) context.Context
 	}); ok {
 		ctx = scoped.WithImageJobScope(ctx)
-	}
-	// The claim carries the long video lease; image jobs hold a short one
-	// and renew it, so a dead worker's job is recovered within minutes.
-	if err := s.renewMediaJobLease(ctx, job); errors.Is(err, repository.ErrNotFound) {
-		return
 	}
 	heartbeat, claim := make(chan struct{}), job
 	go func() {
@@ -464,11 +451,13 @@ func (s *Service) keepMediaJobLease(ctx context.Context, lose context.CancelCaus
 	}
 }
 
-// saveMediaJob writes job under its claim fence.
+// saveMediaJob writes job under its claim fence and extends its lease.
 func (s *Service) saveMediaJob(ctx context.Context, job *media.Job) error {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
-	job.UpdatedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	leaseUntil := now.Add(mediaJobLease)
+	job.UpdatedAt, job.LeaseUntil = now, &leaseUntil
 	err := s.mediaJobs.UpdateMediaJob(writeCtx, *job)
 	if errors.Is(err, repository.ErrNotFound) {
 		return errJobLost

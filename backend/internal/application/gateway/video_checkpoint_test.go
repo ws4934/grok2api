@@ -15,6 +15,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
+	"github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
@@ -26,6 +27,8 @@ type checkpointVideoAdapter struct {
 	mu    sync.Mutex
 	calls []string
 	fail  error
+	// submitted, when set, runs after the submission checkpoint is saved.
+	submitted func()
 }
 
 func (a *checkpointVideoAdapter) Provider() account.Provider { return account.ProviderWeb }
@@ -44,6 +47,9 @@ func (a *checkpointVideoAdapter) GenerateVideo(_ context.Context, request provid
 		if err := request.SaveCheckpoint(`{"submitting":true}`); err != nil {
 			return provider.VideoResult{}, err
 		}
+		if a.submitted != nil {
+			a.submitted()
+		}
 		if a.fail != nil {
 			return provider.VideoResult{}, a.fail
 		}
@@ -54,13 +60,25 @@ func (a *checkpointVideoAdapter) GenerateVideo(_ context.Context, request provid
 	return provider.VideoResult{URL: "https://assets.example/video.mp4", ContentType: "video/mp4", AssetID: "video_asset_checkpoint"}, nil
 }
 
-func TestVideoJobResumesCheckpointOnSubmittingAccountAndMarksUnknownSubmissionUncertain(t *testing.T) {
+// videoJobFixture serves grok-imagine-video from two Web accounts through
+// checkpointVideoAdapter; created jobs are pinned to the second account.
+type videoJobFixture struct {
+	service  *Service
+	jobs     *relational.MediaJobRepository
+	adapter  *checkpointVideoAdapter
+	key      clientkey.Key
+	accounts []account.Credential
+	route    model.Route
+}
+
+func newVideoJobFixture(t *testing.T) *videoJobFixture {
+	t.Helper()
 	ctx := context.Background()
-	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "video-checkpoint.db"))
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "video-job.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	t.Cleanup(func() { _ = database.Close() })
 	if err := database.InitializeSchema(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -105,55 +123,95 @@ func TestVideoJobResumesCheckpointOnSubmittingAccountAndMarksUnknownSubmissionUn
 	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
 	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(keyRepo, nil, nil, 60, 4, nil), registry, selector, nil, 3)
 	service.ConfigureMedia(mediaRepo, 1)
+	return &videoJobFixture{service: service, jobs: mediaRepo, adapter: adapter, key: key, accounts: accounts, route: route}
+}
 
-	newJob := func(id string) media.Job {
-		now := time.Now().UTC()
-		job := media.Job{
-			ID: id, Kind: media.KindVideo, RequestID: "request-" + id, ClientKeyID: key.ID, ClientKeyName: key.Name,
-			AccountID: accounts[1].ID, AccountName: accounts[1].Name, Provider: string(account.ProviderWeb),
-			Model: route.PublicID, ModelRouteID: route.ID, UpstreamModel: route.UpstreamModel,
-			Operation: media.VideoOperationGenerate, Prompt: "test", Seconds: 5, Quality: "720p",
-			Status: media.StatusQueued, InputJSON: `{}`, CreatedAt: now, UpdatedAt: now,
-		}
-		if err := mediaRepo.CreateMediaJob(ctx, job); err != nil {
-			t.Fatal(err)
-		}
-		return job
+func (f *videoJobFixture) create(t *testing.T, id string) media.Job {
+	t.Helper()
+	now := time.Now().UTC()
+	job := media.Job{
+		ID: id, Kind: media.KindVideo, RequestID: "request-" + id, ClientKeyID: f.key.ID, ClientKeyName: f.key.Name,
+		AccountID: f.accounts[1].ID, AccountName: f.accounts[1].Name, Provider: string(account.ProviderWeb),
+		Model: f.route.PublicID, ModelRouteID: f.route.ID, UpstreamModel: f.route.UpstreamModel,
+		Operation: media.VideoOperationGenerate, Prompt: "test", Seconds: 5, Quality: "720p",
+		Status: media.StatusQueued, InputJSON: `{}`, CreatedAt: now, UpdatedAt: now,
 	}
+	if err := f.jobs.CreateMediaJob(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	return job
+}
+
+func (f *videoJobFixture) job(t *testing.T, id string) media.Job {
+	t.Helper()
+	stored, err := f.jobs.GetMediaJob(context.Background(), id, f.key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stored
+}
+
+func TestVideoJobResumesCheckpointOnSubmittingAccountAndMarksUnknownSubmissionUncertain(t *testing.T) {
+	ctx := context.Background()
+	f := newVideoJobFixture(t)
 
 	// A worker died after the upstream accepted the job: recovery resumes on
 	// the submitting account from its checkpoint.
-	resumed := newJob("video_checkpoint_resume")
+	resumed := f.create(t, "video_checkpoint_resume")
 	now := time.Now().UTC()
-	claimed, ok, err := mediaRepo.TryClaimMediaJob(ctx, resumed.ID, now, now.Add(-time.Second), "claim_dead_video_worker")
+	claimed, ok, err := f.jobs.TryClaimMediaJob(ctx, resumed.ID, now, now.Add(-time.Second), "claim_dead_video_worker")
 	if err != nil || !ok {
 		t.Fatalf("claim = %v %v", ok, err)
 	}
 	claimed.Checkpoint, claimed.Submitted = `{"request_id":"up-1"}`, true
-	if err := mediaRepo.UpdateMediaJob(ctx, claimed); err != nil {
+	if err := f.jobs.UpdateMediaJob(ctx, claimed); err != nil {
 		t.Fatal(err)
 	}
-	service.processMediaJob(ctx, resumed.ID)
-	stored, err := mediaRepo.GetMediaJob(ctx, resumed.ID, key.ID)
-	if err != nil {
-		t.Fatal(err)
+	f.service.processMediaJob(ctx, resumed.ID)
+	stored := f.job(t, resumed.ID)
+	if want := fmt.Sprintf("%d:{\"request_id\":\"up-1\"}", f.accounts[1].ID); len(f.adapter.calls) != 1 || f.adapter.calls[0] != want {
+		t.Fatalf("resume calls = %v, want %s", f.adapter.calls, want)
 	}
-	if want := fmt.Sprintf("%d:{\"request_id\":\"up-1\"}", accounts[1].ID); len(adapter.calls) != 1 || adapter.calls[0] != want {
-		t.Fatalf("resume calls = %v, want %s", adapter.calls, want)
-	}
-	if stored.Status != media.StatusCompleted || stored.AccountID != accounts[1].ID || stored.Generation != 2 {
+	if stored.Status != media.StatusCompleted || stored.AccountID != f.accounts[1].ID || stored.Generation != 2 {
 		t.Fatalf("resumed job = %#v", stored)
 	}
 
 	// The create may have reached the upstream without returning an ID.
-	adapter.calls, adapter.fail = nil, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, errors.New("create response lost"))
-	unknown := newJob("video_checkpoint_unknown")
-	service.processMediaJob(ctx, unknown.ID)
-	stored, err = mediaRepo.GetMediaJob(ctx, unknown.ID, key.ID)
-	if err != nil {
-		t.Fatal(err)
+	f.adapter.calls, f.adapter.fail = nil, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, errors.New("create response lost"))
+	unknown := f.create(t, "video_checkpoint_unknown")
+	f.service.processMediaJob(ctx, unknown.ID)
+	stored = f.job(t, unknown.ID)
+	if stored.Status != media.StatusUncertain || stored.ErrorCode != "submission_uncertain" || !stored.Submitted || len(f.adapter.calls) != 1 {
+		t.Fatalf("unknown submission job = %#v calls = %v", stored, f.adapter.calls)
 	}
-	if stored.Status != media.StatusUncertain || stored.ErrorCode != "submission_uncertain" || !stored.Submitted || len(adapter.calls) != 1 {
-		t.Fatalf("unknown submission job = %#v calls = %v", stored, adapter.calls)
+}
+
+// A running video job holds the short heartbeat lease, so recovery picks up
+// a dead worker's job within minutes instead of hours.
+func TestVideoJobHoldsTheHeartbeatLease(t *testing.T) {
+	f := newVideoJobFixture(t)
+	job := f.create(t, "video_lease")
+	var lease time.Duration
+	f.adapter.submitted = func() { lease = time.Until(*f.job(t, job.ID).LeaseUntil) }
+	f.service.processMediaJob(context.Background(), job.ID)
+	if lease <= 0 || lease > mediaJobLease {
+		t.Fatalf("lease while running = %v, want at most %v", lease, mediaJobLease)
+	}
+}
+
+// A job whose workers keep dying ends instead of being reclaimed forever.
+func TestVideoJobEndsAfterTooManyClaims(t *testing.T) {
+	ctx := context.Background()
+	f := newVideoJobFixture(t)
+	job := f.create(t, "video_claims")
+	for i := range mediaJobMaxClaims {
+		now := time.Now().UTC()
+		if _, ok, err := f.jobs.TryClaimMediaJob(ctx, job.ID, now, now.Add(-time.Second), fmt.Sprintf("claim_dead_worker_%d", i)); err != nil || !ok {
+			t.Fatalf("claim %d = %v %v", i, ok, err)
+		}
+	}
+	f.service.processMediaJob(ctx, job.ID)
+	if stored := f.job(t, job.ID); stored.Status != media.StatusFailed || stored.ErrorCode != "recovery_exhausted" || len(f.adapter.calls) != 0 {
+		t.Fatalf("job = %#v calls = %v", stored, f.adapter.calls)
 	}
 }

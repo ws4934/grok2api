@@ -22,7 +22,6 @@ import (
 
 const (
 	videoJobTimeout          = 2 * time.Hour
-	videoJobLease            = videoJobTimeout + 5*time.Minute
 	videoJobRecoveryInterval = 30 * time.Second
 	videoOutputAttempts      = 3
 	// Base64 物化会同时持有原图和编码后字符串，单独限流避免高 mediaConcurrency 放大内存峰值。
