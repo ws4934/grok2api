@@ -1,6 +1,7 @@
 package adobe
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -318,5 +319,5 @@ func jsonResponse(status int, body any) *provider.Response {
 	encoded, _ := json.Marshal(body)
 	header := http.Header{}
 	header.Set("Content-Type", "application/json")
-	return &provider.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Header: header, Body: io.NopCloser(strings.NewReader(string(encoded)))}
+	return &provider.Response{StatusCode: status, Status: fmt.Sprintf("%d %s", status, http.StatusText(status)), Header: header, Body: io.NopCloser(bytes.NewReader(encoded))}
 }
