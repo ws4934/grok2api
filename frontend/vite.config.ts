@@ -6,9 +6,6 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  define: {
-    __GROK2API_DEV_API_TARGET__: JSON.stringify(process.env.VITE_DEV_API_TARGET ?? ""),
-  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

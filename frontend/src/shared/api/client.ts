@@ -1,5 +1,4 @@
 import { createObjectDecoder, createValidatedDecoder, hasShape, isString, type ApiDecoder } from "@/shared/api/decoder";
-import { runtimeConfig } from "@/shared/config/runtime-config";
 import { i18n } from "@/shared/i18n";
 
 export class ApiError extends Error {
@@ -48,6 +47,10 @@ function localizedErrorMessage(code: string, fallback: string): string {
   return i18n.exists(key) ? i18n.t(key) : fallback;
 }
 
+function invalidResponse(status: number): ApiError {
+  return new ApiError(status, "invalidResponse", localizedErrorMessage("invalidResponse", "Server returned an invalid response"));
+}
+
 async function parseResponse<T>(response: Response, decode: ApiDecoder<T>): Promise<T> {
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
@@ -56,12 +59,12 @@ async function parseResponse<T>(response: Response, decode: ApiDecoder<T>): Prom
     throw new ApiError(response.status, code, localizedErrorMessage(code, error.message ?? `HTTP ${response.status}`), error.requestId);
   }
   if (!isRecord(payload) || !("data" in payload)) {
-    throw new ApiError(response.status, "invalidResponse", localizedErrorMessage("invalidResponse", "Server returned an invalid response"));
+    throw invalidResponse(response.status);
   }
   try {
     return decode(payload.data);
   } catch {
-    throw new ApiError(response.status, "invalidResponse", localizedErrorMessage("invalidResponse", "Server returned an invalid response"));
+    throw invalidResponse(response.status);
   }
 }
 
@@ -80,7 +83,7 @@ function readErrorEnvelope(payload: unknown): { code?: string; message?: string;
 
 async function requestRefresh(): Promise<RefreshResult> {
   try {
-    const response = await fetch(`${runtimeConfig.apiBaseUrl}/api/admin/v1/auth/refresh`, {
+    const response = await fetch("/api/admin/v1/auth/refresh", {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -141,7 +144,7 @@ async function sendApiRequest(path: string, options: RequestOptions): Promise<Re
     requestHeaders.set("Authorization", `Bearer ${accessToken}`);
   }
 
-  return fetch(`${runtimeConfig.apiBaseUrl}${path}`, {
+  return fetch(path, {
     ...requestInit,
     body: requestBody,
     credentials: "include",
@@ -149,21 +152,21 @@ async function sendApiRequest(path: string, options: RequestOptions): Promise<Re
   });
 }
 
-export async function apiRequest<T>(path: string, options: RequestOptions, decode: ApiDecoder<T>): Promise<T> {
+// sendWithAuthRetry sends the request and, on a 401, refreshes the session and sends it once more.
+async function sendWithAuthRetry(path: string, options: RequestOptions): Promise<Response> {
   const { authenticated = true, retryAuth = true } = options;
   const response = await sendApiRequest(path, options);
-
-  if (response.status === 401 && authenticated && retryAuth) {
-    const refreshResult = await refreshAccessToken();
-    if (refreshResult === "refreshed") {
-      return apiRequest<T>(path, { ...options, retryAuth: false }, decode);
-    }
-    if (refreshResult === "unavailable") {
-      throw new ApiError(503, "sessionRefreshUnavailable", localizedErrorMessage("sessionRefreshUnavailable", "Unable to refresh the session. Please retry."));
-    }
+  if (response.status !== 401 || !authenticated || !retryAuth) return response;
+  const refreshResult = await refreshAccessToken();
+  if (refreshResult === "refreshed") return sendApiRequest(path, options);
+  if (refreshResult === "unavailable") {
+    throw new ApiError(503, "sessionRefreshUnavailable", localizedErrorMessage("sessionRefreshUnavailable", "Unable to refresh the session. Please retry."));
   }
+  return response;
+}
 
-  return parseResponse(response, decode);
+export async function apiRequest<T>(path: string, options: RequestOptions, decode: ApiDecoder<T>): Promise<T> {
+  return parseResponse(await sendWithAuthRetry(path, options), decode);
 }
 
 export type ApiStreamEvent<T> = {
@@ -173,27 +176,17 @@ export type ApiStreamEvent<T> = {
 
 // apiEventStream 使用现有管理员鉴权发起 POST SSE，并正确处理任意分块边界。
 export async function apiEventStream<T>(path: string, options: RequestOptions, decode: ApiDecoder<T>, onEvent: (value: ApiStreamEvent<T>) => void): Promise<void> {
-  const { authenticated = true, retryAuth = true } = options;
-  const response = await sendApiRequest(path, options);
-  if (response.status === 401 && authenticated && retryAuth) {
-    const refreshResult = await refreshAccessToken();
-    if (refreshResult === "refreshed") {
-      return apiEventStream(path, { ...options, retryAuth: false }, decode, onEvent);
-    }
-    if (refreshResult === "unavailable") {
-      throw new ApiError(503, "sessionRefreshUnavailable", localizedErrorMessage("sessionRefreshUnavailable", "Unable to refresh the session. Please retry."));
-    }
-  }
+  const response = await sendWithAuthRetry(path, options);
   if (!response.ok) {
     await parseResponse(response, decodeNever);
   }
   if (!response.body) {
-    throw new ApiError(response.status, "invalidResponse", localizedErrorMessage("invalidResponse", "Server returned an invalid response"));
+    throw invalidResponse(response.status);
   }
   const contentType = response.headers.get("Content-Type")?.toLowerCase() ?? "";
   if (!contentType.startsWith("text/event-stream")) {
     await response.body.cancel().catch(() => undefined);
-    throw new ApiError(response.status, "invalidResponse", localizedErrorMessage("invalidResponse", "Server returned an invalid response"));
+    throw invalidResponse(response.status);
   }
 
   const reader = response.body.getReader();
@@ -212,7 +205,7 @@ export async function apiEventStream<T>(path: string, options: RequestOptions, d
     try {
       payload = decode(JSON.parse(data.join("\n")) as unknown);
     } catch {
-      throw new ApiError(response.status, "invalidResponse", localizedErrorMessage("invalidResponse", "Server returned an invalid response"));
+      throw invalidResponse(response.status);
     }
     onEvent({ event, data: payload });
   };
@@ -225,14 +218,14 @@ export async function apiEventStream<T>(path: string, options: RequestOptions, d
       let boundary = buffer.indexOf("\n\n");
       while (boundary >= 0) {
         if (boundary > maxEventStreamBufferCharacters) {
-          throw new ApiError(response.status, "invalidResponse", localizedErrorMessage("invalidResponse", "Server returned an invalid response"));
+          throw invalidResponse(response.status);
         }
         dispatch(buffer.slice(0, boundary));
         buffer = buffer.slice(boundary + 2);
         boundary = buffer.indexOf("\n\n");
       }
       if (buffer.length > maxEventStreamBufferCharacters) {
-        throw new ApiError(response.status, "invalidResponse", localizedErrorMessage("invalidResponse", "Server returned an invalid response"));
+        throw invalidResponse(response.status);
       }
       if (done) break;
     }
@@ -265,18 +258,9 @@ export type ApiDownloadResult = {
 };
 
 export async function apiDownloadResponse(path: string, options: RequestOptions = {}): Promise<ApiDownloadResult> {
-  const { authenticated = true, retryAuth = true } = options;
-  const response = await sendApiRequest(path, options);
-  if (response.status === 401 && authenticated && retryAuth) {
-    const refreshResult = await refreshAccessToken();
-    if (refreshResult === "refreshed") return apiDownloadResponse(path, { ...options, retryAuth: false });
-    if (refreshResult === "unavailable") {
-      throw new ApiError(503, "sessionRefreshUnavailable", localizedErrorMessage("sessionRefreshUnavailable", "Unable to refresh the session. Please retry."));
-    }
-  }
+  const response = await sendWithAuthRetry(path, options);
   if (!response.ok) {
     await parseResponse(response, decodeNever);
-    throw new ApiError(response.status, "requestFailed", localizedErrorMessage("requestFailed", "The request failed"));
   }
   return { blob: await response.blob(), headers: response.headers };
 }
@@ -305,11 +289,7 @@ const adminValidator = hasShape({ id: isString, username: isString });
 const authTokensValidator = hasShape({ accessToken: isString, accessTokenExpiresAt: isString, refreshTokenExpiresAt: isString });
 
 export const decodeAdminDTO = createValidatedDecoder<AdminDTO>("admin", adminValidator);
-export const decodeAuthTokensDTO = createObjectDecoder<AuthTokensDTO>("auth tokens", {
-  accessToken: isString,
-  accessTokenExpiresAt: isString,
-  refreshTokenExpiresAt: isString,
-});
+export const decodeAuthTokensDTO = createValidatedDecoder<AuthTokensDTO>("auth tokens", authTokensValidator);
 export const decodeLoginResponseDTO = createObjectDecoder<LoginResponseDTO>("login", { admin: adminValidator, tokens: authTokensValidator });
 export const decodeLoggedOut = createObjectDecoder<{ loggedOut: boolean }>("logout", { loggedOut: (value) => typeof value === "boolean" });
 

@@ -9,7 +9,6 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { uniqueModelsByPublicID, useModelRoutes } from "@/entities/model/model-api";
 import type { ModelRouteDTO } from "@/entities/model/types";
 import { getSystemInfo } from "@/entities/system/system-api";
-import { runtimeConfig } from "@/shared/config/runtime-config";
 import { CopyButton } from "@/shared/components/copy-button";
 import { cn } from "@/shared/lib/cn";
 
@@ -357,7 +356,7 @@ export function ApiDocsPage() {
 
   if (!definition) return <Navigate to="/docs/chat/completions" replace />;
 
-  const publicApiBaseUrl = systemQuery.data?.publicApiBaseURL || runtimeConfig.publicApiBaseUrl;
+  const publicApiBaseUrl = systemQuery.data?.publicApiBaseURL || window.location.origin;
   const baseUrl = `${publicApiBaseUrl.replace(/\/$/, "")}/v1`;
   const availableModels = uniqueModelsByPublicID((modelsQuery.data ?? []).filter((model) => model.enabled && model.available && definition.capabilities.includes(model.capability) && (!definition.providers || definition.providers.includes(model.provider))));
   const selectedModelAvailable = availableModels.some((model) => model.publicId === selectedModel);
