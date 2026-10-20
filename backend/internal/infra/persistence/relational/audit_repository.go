@@ -2,6 +2,7 @@ package relational
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
@@ -185,12 +186,21 @@ func applyAuditQuery(query *gorm.DB, search string, start, end time.Time, filter
 		query = query.Where("model_public_id = ? OR model_upstream_model = ?", value, value)
 	}
 	if value := strings.TrimSpace(filter.Key); value != "" {
-		pattern := "%" + strings.ToLower(value) + "%"
-		query = query.Where("LOWER(client_key_name) LIKE ? OR CAST(client_key_id AS TEXT) LIKE ?", pattern, pattern)
+		if id, err := strconv.ParseUint(strings.TrimPrefix(value, "#"), 10, 64); strings.HasPrefix(value, "#") && err == nil && id > 0 {
+			// #ID 是筛选名单选中某个密钥时的精确形式；其它输入仍按名称/ID 模糊匹配。
+			query = query.Where("client_key_id = ?", id)
+		} else {
+			pattern := "%" + strings.ToLower(value) + "%"
+			query = query.Where("LOWER(client_key_name) LIKE ? OR CAST(client_key_id AS TEXT) LIKE ?", pattern, pattern)
+		}
 	}
 	if value := strings.TrimSpace(filter.Account); value != "" {
-		pattern := "%" + strings.ToLower(value) + "%"
-		query = query.Where("LOWER(account_name) LIKE ? OR CAST(account_id AS TEXT) LIKE ?", pattern, pattern)
+		if id, err := strconv.ParseUint(strings.TrimPrefix(value, "#"), 10, 64); strings.HasPrefix(value, "#") && err == nil && id > 0 {
+			query = query.Where("account_id = ?", id)
+		} else {
+			pattern := "%" + strings.ToLower(value) + "%"
+			query = query.Where("LOWER(account_name) LIKE ? OR CAST(account_id AS TEXT) LIKE ?", pattern, pattern)
+		}
 	}
 	if value := strings.TrimSpace(filter.Provider); value != "" {
 		query = query.Where("provider = ?", value)

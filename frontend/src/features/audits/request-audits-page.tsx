@@ -25,6 +25,7 @@ import { PeriodSelector } from "@/shared/components/period-selector";
 import { SortableTableHead } from "@/shared/components/sortable-table-head";
 import { VirtualTableBody } from "@/shared/components/virtual-table-body";
 import { useDebouncedValue } from "@/shared/hooks/use-debounced-value";
+import { useLookupFilter } from "@/shared/hooks/use-lookup-filter";
 import { cn } from "@/shared/lib/cn";
 import { formatCompactDateTime, formatDateTime, formatDuration, formatNumber } from "@/shared/lib/format";
 import { toPeriodValue, type PeriodDays } from "@/shared/lib/period";
@@ -33,10 +34,6 @@ import { formatUSDTicks, usdTicksToValue } from "@/shared/lib/usd";
 
 const AUDIT_PAGE_CACHE_TIME_MS = 60_000;
 const AUDIT_SUMMARY_CACHE_TIME_MS = 120_000;
-// 筛选名单始终限制在服务器搜索后的前 50 条，避免大账号池把大量选项累积到浏览器。
-const AUDIT_FILTER_PAGE_SIZE = 50;
-// 名单高度约 5 行，超出后内部滚动。
-const AUDIT_FILTER_MAX_HEIGHT = "max-h-56 overflow-y-auto py-0.5";
 
 type AuditCursorState = { scope: string; values: string[] };
 
@@ -99,65 +96,10 @@ export function RequestAuditsPage() {
     queryFn: () => listModels({ page: 1, pageSize: 100 }),
     staleTime: 60_000,
   });
-  // 密钥/账号筛选名单只在对应三级菜单展开时懒加载，输入后重新按匹配查询。
-  const [keyFilterOptionsOpen, setKeyFilterOptionsOpen] = useState(false);
-  const [accountFilterOptionsOpen, setAccountFilterOptionsOpen] = useState(false);
-  const [keyFilterOptionsSearch, setKeyFilterOptionsSearch] = useState("");
-  const [accountFilterOptionsSearch, setAccountFilterOptionsSearch] = useState("");
-  const debouncedKeyFilterOptionsSearch = useDebouncedValue(keyFilterOptionsSearch);
-  const debouncedAccountFilterOptionsSearch = useDebouncedValue(accountFilterOptionsSearch);
-  const keyFilterOptionsQuery = useQuery({
-    queryKey: ["client-keys", "audit-filter", debouncedKeyFilterOptionsSearch],
-    queryFn: () => listClientKeys({ page: 1, pageSize: AUDIT_FILTER_PAGE_SIZE, search: auditFilterOptionSearch(debouncedKeyFilterOptionsSearch) }),
-    enabled: keyFilterOptionsOpen,
-    staleTime: 60_000,
-  });
-  const accountFilterOptionsQuery = useQuery({
-    queryKey: ["accounts", "audit-filter", debouncedAccountFilterOptionsSearch],
-    queryFn: () => listAccounts({ page: 1, pageSize: AUDIT_FILTER_PAGE_SIZE, search: auditFilterOptionSearch(debouncedAccountFilterOptionsSearch) }),
-    enabled: accountFilterOptionsOpen,
-    staleTime: 60_000,
-  });
-  const keyFilterOptionsFailed = keyFilterOptionsQuery.isError;
-  const keyFilterOptionsFetching = keyFilterOptionsQuery.isFetching;
-  const accountFilterOptionsFailed = accountFilterOptionsQuery.isError;
-  const accountFilterOptionsFetching = accountFilterOptionsQuery.isFetching;
+  // 选中的密钥/账号以 #ID 精确筛选；名称或数字 ID 的文字仍按模糊匹配。
+  const keyFilterOption = useLookupFilter("client-keys", t("audits.key"), t("audits.keyFilterPlaceholder"), listClientKeys, (key) => ({ value: `#${key.id}`, label: key.name || key.prefix, description: `#${key.id} · ${key.prefix}` }));
   // 账号范围覆盖全部 provider，审计记录可能来自任一 provider 的账号。
-  const keyFilterOptions = keyFilterOptionsQuery.data?.items ?? [];
-  const accountFilterOptions = accountFilterOptionsQuery.data?.items ?? [];
-  const keyFilterGroups = [
-    {
-      id: "keys", label: t("audits.key"),
-      emptyLabel: keyFilterOptionsFailed ? t("audits.filterOptionsLoadFailed") : keyFilterOptionsFetching ? t("common.loading") : t("audits.filterOptionsEmpty"),
-      options: keyFilterOptions.map((key) => ({
-        value: String(key.id),
-        label: key.name || key.prefix,
-        description: `#${key.id} · ${key.prefix}`,
-      })),
-      loading: keyFilterOptionsFetching, hasMore: keyFilterOptionsFailed,
-      actionLabel: t("common.retry"), onAction: () => { void keyFilterOptionsQuery.refetch(); },
-      noteLabel: !keyFilterOptionsFailed && (keyFilterOptionsQuery.data?.total ?? 0) > keyFilterOptions.length ? t("audits.filterOptionsTruncated") : undefined,
-      hideLabel: true,
-      maxHeightClassName: AUDIT_FILTER_MAX_HEIGHT,
-    },
-  ];
-  const accountFilterGroups = [
-    {
-      id: "accounts", label: t("audits.account"),
-      emptyLabel: accountFilterOptionsFailed ? t("audits.filterOptionsLoadFailed") : accountFilterOptionsFetching ? t("common.loading") : t("audits.filterOptionsEmpty"),
-      options: accountFilterOptions.map((account) => ({
-        value: String(account.id),
-        label: account.name || account.email || `#${account.id}`,
-        description: `#${account.id}`,
-        badge: providerShortLabel(account.provider, providers),
-      })),
-      loading: accountFilterOptionsFetching, hasMore: accountFilterOptionsFailed,
-      actionLabel: t("common.retry"), onAction: () => { void accountFilterOptionsQuery.refetch(); },
-      noteLabel: !accountFilterOptionsFailed && (accountFilterOptionsQuery.data?.total ?? 0) > accountFilterOptions.length ? t("audits.filterOptionsTruncated") : undefined,
-      hideLabel: true,
-      maxHeightClassName: AUDIT_FILTER_MAX_HEIGHT,
-    },
-  ];
+  const accountFilterOption = useLookupFilter("accounts", t("audits.account"), t("audits.accountFilterPlaceholder"), listAccounts, (account) => ({ value: `#${account.id}`, label: account.name || account.email || `#${account.id}`, description: `#${account.id}`, badge: providerShortLabel(account.provider, providers) }));
   const result = auditsQuery.data;
   const nextCursor = result?.nextCursor ?? "";
   const summary = summaryQuery.data;
@@ -248,30 +190,8 @@ export function RequestAuditsPage() {
                 ] },
                 { id: "provider", label: t("audits.providerFilter"), value: providerFilter, onChange: setProviderFilter, options: (providers ?? []).map((item) => ({ value: item.id, label: providerLabel(item.id, providers) })) },
                 { id: "operation", label: t("audits.operationFilter"), value: operationFilter, onChange: setOperationFilter, options: auditOperations.map((value) => ({ value, label: t(`audits.operations.${value}`) })) },
-                {
-                  id: "key", label: t("audits.key"), value: keyFilter,
-                  onChange: setKeyFilter, options: [
-                    {
-                      value: "any", label: t("audits.key"), groups: keyFilterGroups,
-                      onGroupsOpenChange: setKeyFilterOptionsOpen,
-                      groupSearch: { value: keyFilterOptionsSearch, placeholder: t("audits.keyFilterPlaceholder"), onChange: (value) => {
-                        setKeyFilterOptionsSearch(value);
-                      } },
-                    },
-                  ],
-                },
-                {
-                  id: "account", label: t("audits.account"), value: accountFilter,
-                  onChange: setAccountFilter, options: [
-                    {
-                      value: "any", label: t("audits.account"), groups: accountFilterGroups,
-                      onGroupsOpenChange: setAccountFilterOptionsOpen,
-                      groupSearch: { value: accountFilterOptionsSearch, placeholder: t("audits.accountFilterPlaceholder"), onChange: (value) => {
-                        setAccountFilterOptionsSearch(value);
-                      } },
-                    },
-                  ],
-                },
+                { id: "key", label: t("audits.key"), value: keyFilter, onChange: (value) => setKeyFilter(value === "any" ? "" : value), options: [keyFilterOption] },
+                { id: "account", label: t("audits.account"), value: accountFilter, onChange: (value) => setAccountFilter(value === "any" ? "" : value), options: [accountFilterOption] },
               ]} />
             </div>
           </>
@@ -748,11 +668,6 @@ function auditProtocolLabel(operation: AuditDTO["operation"]): string {
     case "realtime": return "Realtime";
     case "voice": return "Voice";
   }
-}
-
-function auditFilterOptionSearch(value: string): string {
-  const trimmed = value.trim();
-  return /^\d+$/.test(trimmed) ? `#${trimmed}` : trimmed;
 }
 
 function formatUSDCostCompact(ticks: number): string {

@@ -20,13 +20,13 @@ import { listClientKeys } from "@/features/client-keys/client-keys-api";
 import { deleteMediaAssets, getImageStats, getMediaAsset, listMediaAssets } from "@/features/media/media-api";
 import { assetOperations, mediaAssetPath, mediaProviders, type MediaAssetDTO, type MediaKind } from "@/features/media/media-model";
 import { ProviderTag, VideoPreview } from "@/features/media/media-ui";
-import type { PaginatedDTO } from "@/shared/api/client";
 import { ErrorState, LoadingState } from "@/shared/components/data-state";
-import { DataTableFilters, type DataTableFilterOption, type DataTableFilterOptionGroup } from "@/shared/components/data-table-filters";
+import { DataTableFilters } from "@/shared/components/data-table-filters";
 import { DataTableShell } from "@/shared/components/data-table-shell";
 import { PageHeader } from "@/shared/components/page-header";
 import { Pagination } from "@/shared/components/pagination";
 import { useDebouncedValue } from "@/shared/hooks/use-debounced-value";
+import { useLookupFilter } from "@/shared/hooks/use-lookup-filter";
 import { cn } from "@/shared/lib/cn";
 import { formatDateTime, formatNumber } from "@/shared/lib/format";
 
@@ -34,7 +34,6 @@ const emptyFilters = { provider: "", model: "", operation: "", clientKeyId: "", 
 type GalleryFilters = typeof emptyFilters;
 const mediaCapabilities = new Set(["image", "image_edit", "video"]);
 // Lookup lists stay at the server's first 50 matches, like the audit filters.
-const LOOKUP_PAGE_SIZE = 50;
 
 export function GalleryPage() {
   const { t, i18n } = useTranslation();
@@ -68,8 +67,8 @@ export function GalleryPage() {
     staleTime: 60_000,
   });
   const modelOptions = useMemo(() => [...new Set((modelsQuery.data?.items ?? []).filter((model) => mediaCapabilities.has(model.capability)).map((model) => model.publicId))].map((id) => ({ value: id, label: id })), [modelsQuery.data?.items]);
-  const keyFilter = useLookupFilter("client-keys", t("media.key"), t("audits.keyFilterPlaceholder"), (search) => listClientKeys({ page: 1, pageSize: LOOKUP_PAGE_SIZE, search }), (key) => ({ value: key.id, label: key.name || key.prefix, description: `#${key.id} · ${key.prefix}` }));
-  const accountFilter = useLookupFilter("accounts", t("media.account"), t("audits.accountFilterPlaceholder"), (search) => listAccounts({ page: 1, pageSize: LOOKUP_PAGE_SIZE, search }), (account) => ({ value: account.id, label: account.name || account.email || `#${account.id}`, description: `#${account.id}`, badge: providerShortLabel(account.provider, providers) }));
+  const keyFilter = useLookupFilter("client-keys", t("media.key"), t("audits.keyFilterPlaceholder"), listClientKeys, (key) => ({ value: key.id, label: key.name || key.prefix, description: `#${key.id} · ${key.prefix}` }));
+  const accountFilter = useLookupFilter("accounts", t("media.account"), t("audits.accountFilterPlaceholder"), listAccounts, (account) => ({ value: account.id, label: account.name || account.email || `#${account.id}`, description: `#${account.id}`, badge: providerShortLabel(account.provider, providers) }));
 
   const result = assetsQuery.data;
   const refreshing = assetsQuery.isFetching || statsQuery.isFetching;
@@ -240,33 +239,6 @@ export function GalleryPage() {
       </Dialog>
     </div>
   );
-}
-
-// useLookupFilter loads key/account choices only while their submenu is open, re-querying as the admin types.
-function useLookupFilter<T>(name: string, label: string, placeholder: string, load: (search: string) => Promise<PaginatedDTO<T>>, toOption: (item: T) => DataTableFilterOptionGroup["options"][number]): DataTableFilterOption {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
-  const debouncedSearch = useDebouncedValue(search).trim();
-  const query = useQuery({
-    queryKey: [name, "media-filter", debouncedSearch],
-    // A bare number searches by ID, as in the audit filters.
-    queryFn: () => load(/^\d+$/.test(debouncedSearch) ? `#${debouncedSearch}` : debouncedSearch),
-    enabled: open,
-    staleTime: 60_000,
-  });
-  const items = query.data?.items ?? [];
-  return {
-    value: "any", label, onGroupsOpenChange: setOpen,
-    groupSearch: { value: search, placeholder, onChange: setSearch },
-    groups: [{
-      id: name, label, hideLabel: true, maxHeightClassName: "max-h-56 overflow-y-auto py-0.5",
-      emptyLabel: query.isError ? t("audits.filterOptionsLoadFailed") : query.isFetching ? t("common.loading") : t("audits.filterOptionsEmpty"),
-      options: items.map(toOption),
-      loading: query.isFetching, hasMore: query.isError, actionLabel: t("common.retry"), onAction: () => { void query.refetch(); },
-      noteLabel: !query.isError && (query.data?.total ?? 0) > items.length ? t("audits.filterOptionsTruncated") : undefined,
-    }],
-  };
 }
 
 function AssetCard({ asset, providers, locale, selectionMode, selected, onSelectedChange, onOpen }: { asset: MediaAssetDTO; providers?: ProviderDTO[]; locale: string; selectionMode: boolean; selected: boolean; onSelectedChange: (checked: boolean) => void; onOpen: () => void }) {
