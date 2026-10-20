@@ -12,6 +12,7 @@ func TestIsResponsesCompactionRequest(t *testing.T) {
 	}{
 		{name: "remote v2", body: `{"input":[{"role":"user","content":"continue"},{"type":"compaction_trigger"}]}`, want: responsesCompactionTrigger},
 		{name: "not terminal", body: `{"input":[{"type":"compaction_trigger"},{"role":"user","content":"continue"}]}`, want: responsesCompactionTrigger},
+		{name: "other case", body: `{"input":[{"role":"user","content":"continue"},{"type":"Compaction_Trigger"}]}`, want: responsesCompactionNone},
 		{name: "tui last user string", body: `{"input":[{"role":"user","content":"continue"},{"role":"user","content":"` + tuiCompactionPrompt + `"}]}`, want: responsesCompactionTUI},
 		{name: "tui last user parts", body: `{"input":[{"role":"user","content":[{"type":"input_text","text":"` + tuiCompactionPrompt + `"}]}]}`, want: responsesCompactionTUI},
 		{name: "tui chat messages", body: `{"messages":[{"role":"user","content":"` + tuiCompactionPrompt + `"}]}`, want: responsesCompactionTUI},

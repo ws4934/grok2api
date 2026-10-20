@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -9,6 +10,8 @@ import (
 // Grok TUI compaction request. Codex remote-v2 uses compaction_trigger
 // instead; the TUI appends this prompt as a normal last user item.
 const clientCompactionPromptMarker = "it is a system-generated compaction prompt, not a real user message"
+
+const compactionTriggerType = "compaction_trigger"
 
 type responsesCompactionKind uint8
 
@@ -28,6 +31,11 @@ func isResponsesCompactionRequest(body []byte) bool {
 }
 
 func classifyResponsesCompactionRequest(body []byte) responsesCompactionKind {
+	// Both signals are ASCII literals, so a body without either needs no parse.
+	// A client that escapes their letters gets ordinary handling.
+	if !bytes.Contains(body, []byte(compactionTriggerType)) && !bytes.Contains(body, []byte(clientCompactionPromptMarker)) {
+		return responsesCompactionNone
+	}
 	var payload struct {
 		Input    []json.RawMessage `json:"input"`
 		Messages []json.RawMessage `json:"messages"`
@@ -52,7 +60,8 @@ func hasCompactionTrigger(items []json.RawMessage) bool {
 		if json.Unmarshal(raw, &item) != nil {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(item.Type), "compaction_trigger") {
+		// Matched exactly, like the Provider that executes the trigger.
+		if item.Type == compactionTriggerType {
 			return true
 		}
 	}
