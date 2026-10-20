@@ -264,7 +264,7 @@ func TestCleanupExpiredBillingProtectsActiveRequest(t *testing.T) {
 	if cleaned, cleanupErr := service.CleanupExpiredBilling(ctx, 10); cleanupErr != nil || cleaned != 0 {
 		t.Fatalf("active cleanup: cleaned=%d err=%v", cleaned, cleanupErr)
 	}
-	service.CompleteBilling(eventID)
+	service.ReleaseBillingProtectionBatch([]string{eventID})
 	if cleaned, cleanupErr := service.CleanupExpiredBilling(ctx, 10); cleanupErr != nil || cleaned != 1 {
 		t.Fatalf("completed cleanup: cleaned=%d err=%v", cleaned, cleanupErr)
 	}

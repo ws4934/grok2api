@@ -553,7 +553,7 @@ func (s *Service) CancelBilling(ctx context.Context, eventID string) error {
 	err := repo.CancelBillingReservation(ctx, eventID)
 	// The request is over either way: a reservation whose cancel failed must
 	// stop being protected so the expiry cleanup can reclaim it.
-	s.CompleteBilling(eventID)
+	s.ReleaseBillingProtectionBatch([]string{eventID})
 	if err != nil {
 		perfmetrics.Default.Inc("billing_reservation_total", perfmetrics.Labels{Subsystem: "billing", Operation: "cancel", Outcome: "failed"})
 		return fmt.Errorf("%w: 取消计费预留: %v", ErrRuntimeUnavailable, err)
@@ -562,21 +562,9 @@ func (s *Service) CancelBilling(ctx context.Context, eventID string) error {
 	return nil
 }
 
-// CompleteBilling removes the process-local active marker after the audit and
-// billing transaction commits or the reservation is explicitly cancelled.
-func (s *Service) CompleteBilling(eventID string) {
-	if eventID == "" {
-		return
-	}
-	s.CompleteBillingBatch([]string{eventID})
-}
-
-func (s *Service) CompleteBillingBatch(eventIDs []string) {
-	s.ReleaseBillingProtectionBatch(eventIDs)
-}
-
-// ReleaseBillingProtectionBatch removes process-local activity markers. The
-// durable reservation remains authoritative until commit, cancel, or expiry.
+// ReleaseBillingProtectionBatch removes process-local activity markers once the
+// audit commits or is dropped, or the reservation is cancelled. The durable
+// reservation remains authoritative until commit, cancel, or expiry.
 func (s *Service) ReleaseBillingProtectionBatch(eventIDs []string) {
 	if len(eventIDs) == 0 {
 		return

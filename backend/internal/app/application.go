@@ -327,7 +327,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 	auditService := auditapp.NewService(auditRepo, logger, cfg.Audit.BufferSize, cfg.Audit.BatchSize, cfg.Audit.FlushInterval.Value())
 	auditService.UpdateWriterConfig(cfg.Audit.BatchSize, cfg.Audit.FlushInterval.Value(), cfg.Audit.CommitDelay.Value())
 	auditService.UpdateLedgerConfig(auditLedgerConfig(cfg.Audit))
-	auditService.SetCommitObserver(clientKeyService.CompleteBillingBatch)
+	auditService.SetCommitObserver(clientKeyService.ReleaseBillingProtectionBatch)
 	auditService.SetDropObserver(clientKeyService.ReleaseBillingProtectionBatch)
 	dashboardService := dashboardapp.NewService(dashboardRepo)
 	pricingService, err := pricingapp.NewService(ctx, relational.NewModelPriceRepository(database), func(value account.Provider) bool { _, ok := providers.Definition(value); return ok }, providers.PricingModel)
