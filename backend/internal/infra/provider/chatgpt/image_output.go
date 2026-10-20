@@ -3,7 +3,6 @@ package chatgpt
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"image"
 	"image/draw"
@@ -99,24 +98,16 @@ func (e *imageOutputError) Unwrap() error { return e.err }
 // ImageOutputFailure tells callers outside this package that downloading the
 // same image again cannot satisfy the output options.
 func (e *imageOutputError) ImageOutputFailure() bool { return true }
-func IsImageOutputError(err error) bool {
-	var output *imageOutputError
-	return errors.As(err, &output)
-}
 
 func invalidImageOutput(message string) error {
 	return &imageOutputError{err: &upstreamError{Status: http.StatusBadGateway, Message: message}}
 }
 
-// apply checks actual pixels and encodes the final format before persistence.
-// JPEG with automatic background composites alpha over white to avoid black
-// edges; PNG/WebP preserve alpha. No subject segmentation is performed.
-func (o ImageOutputOptions) apply(raw []byte, mime string) ([]byte, string, error) {
-	return o.applyDecoded(downloadedImage{raw: raw, mime: mime})
-}
-
-// applyDecoded is apply on a download whose pixels decodeImageDownload already
-// decoded (bounded there); without them raw is decoded here.
+// applyDecoded checks actual pixels and encodes the final format before
+// persistence. JPEG with automatic background composites alpha over white to
+// avoid black edges; PNG/WebP preserve alpha. No subject segmentation is
+// performed. It reuses the pixels decodeImageDownload decoded (bounded there);
+// without them raw is decoded here.
 func (o ImageOutputOptions) applyDecoded(download downloadedImage) ([]byte, string, error) {
 	raw, mime, decoded := download.raw, download.mime, download.decoded
 	target := o.EffectiveFormat()

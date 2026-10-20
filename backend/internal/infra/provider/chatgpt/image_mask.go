@@ -3,7 +3,6 @@ package chatgpt
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"image"
 	"image/png"
 )
@@ -17,8 +16,7 @@ const maxImageMaskPixels = 4096 * 4096
 // ImageMask is an immutable, validated Web selection. Each generation uploads
 // it separately; provider/account-specific file IDs must never be shared.
 type ImageMask struct {
-	png        []byte
-	sourceHash [sha256.Size]byte
+	png []byte
 }
 
 // ParseImageMask converts the Images alpha convention to ChatGPT Web's opaque
@@ -69,9 +67,5 @@ func ParseImageMask(raw []byte, inputs []OpenAIImageInput) (*ImageMask, error) {
 	if err := png.Encode(&output, web); err != nil {
 		return invalid("could not encode mask selection")
 	}
-	return &ImageMask{png: output.Bytes(), sourceHash: sha256.Sum256(inputs[0].Data)}, nil
-}
-
-func (m *ImageMask) matches(inputs []OpenAIImageInput) bool {
-	return m != nil && len(m.png) > 0 && len(inputs) == 1 && m.sourceHash == sha256.Sum256(inputs[0].Data)
+	return &ImageMask{png: output.Bytes()}, nil
 }

@@ -59,9 +59,9 @@ func TestImageOutputChecksPixelsAndPreservesPNG(t *testing.T) {
 			if err := png.Encode(&original, canvas); err != nil {
 				t.Fatal(err)
 			}
-			raw, mime, err := (ImageOutputOptions{Background: tc.background, OutputFormat: "png"}).apply(original.Bytes(), "image/png")
+			raw, mime, err := (ImageOutputOptions{Background: tc.background, OutputFormat: "png"}).applyDecoded(downloadedImage{raw: original.Bytes(), mime: "image/png"})
 			if tc.wantError {
-				if !IsImageOutputError(err) || raw != nil {
+				if !errors.As(err, new(*imageOutputError)) || raw != nil {
 					t.Fatalf("incorrect output failure: %v", err)
 				}
 				return
@@ -84,11 +84,11 @@ func TestImageOutputDefaultsToPNG(t *testing.T) {
 	if err := jpeg.Encode(&source, canvas, nil); err != nil {
 		t.Fatal(err)
 	}
-	_, mime, err := (ImageOutputOptions{}).apply(source.Bytes(), "image/jpeg")
+	_, mime, err := (ImageOutputOptions{}).applyDecoded(downloadedImage{raw: source.Bytes(), mime: "image/jpeg"})
 	if err != nil || mime != "image/png" {
 		t.Fatalf("default must encode PNG: %s %v", mime, err)
 	}
-	raw, mime, err := (ImageOutputOptions{OutputFormat: "png"}).apply(source.Bytes(), "image/jpeg")
+	raw, mime, err := (ImageOutputOptions{OutputFormat: "png"}).applyDecoded(downloadedImage{raw: source.Bytes(), mime: "image/jpeg"})
 	if err != nil || mime != "image/png" {
 		t.Fatal(err)
 	}
@@ -127,11 +127,11 @@ func TestImageOutputFormatRoundTrips(t *testing.T) {
 			if err := options.Validate(); err != nil {
 				t.Fatal(err)
 			}
-			raw, mime, err := options.apply(input.Bytes(), "image/png")
+			raw, mime, err := options.applyDecoded(downloadedImage{raw: input.Bytes(), mime: "image/png"})
 			if err != nil || mime != "image/"+format {
 				t.Fatalf("encode: %s %v", mime, err)
 			}
-			verifiedMIME, err := validatedImageMIME(raw)
+			verifiedMIME, _, err := decodeImageDownload(raw)
 			if err != nil || verifiedMIME != mime {
 				t.Fatalf("MIME does not match actual bytes: %v", err)
 			}
@@ -210,8 +210,8 @@ func TestImageOutputWebPEdgeLimit(t *testing.T) {
 	if err := png.Encode(&input, source); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := (ImageOutputOptions{OutputFormat: "webp"}).apply(input.Bytes(), "image/png")
-	if !IsImageOutputError(err) {
+	_, _, err := (ImageOutputOptions{OutputFormat: "webp"}).applyDecoded(downloadedImage{raw: input.Bytes(), mime: "image/png"})
+	if !errors.As(err, new(*imageOutputError)) {
 		t.Fatalf("WebP dimension overflow was not rejected: %v", err)
 	}
 }

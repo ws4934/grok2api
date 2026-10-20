@@ -26,7 +26,7 @@ func maskFixture(t *testing.T, width, height int, alpha uint8) []byte {
 	}
 	return b.Bytes()
 }
-func TestImageMaskConversionAndSourceBinding(t *testing.T) {
+func TestImageMaskConversion(t *testing.T) {
 	source := maskFixture(t, 2, 1, 255)
 	input := []OpenAIImageInput{{Data: source}}
 	im := image.NewNRGBA(image.Rect(0, 0, 2, 1))
@@ -49,9 +49,6 @@ func TestImageMaskConversionAndSourceBinding(t *testing.T) {
 	r, _, _, a = decoded.At(1, 0).RGBA()
 	if r != 65535 || a != 65535 {
 		t.Fatal("protected region must become opaque white")
-	}
-	if !mask.matches(input) || mask.matches([]OpenAIImageInput{{Data: maskFixture(t, 2, 1, 200)}}) || mask.matches(nil) {
-		t.Fatal("mask must bind to the validated source")
 	}
 }
 func TestImageMaskValidation(t *testing.T) {

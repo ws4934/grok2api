@@ -197,12 +197,6 @@ func (o *OpenAIImage) readImageDownloadResponse(ctx context.Context, account wir
 	return downloadedImage{raw: raw, mime: mimeType, decoded: decoded}, nil
 }
 
-// validatedImageMIME is decodeImageDownload without the pixels.
-func validatedImageMIME(raw []byte) (string, error) {
-	mimeType, _, err := decodeImageDownload(raw)
-	return mimeType, err
-}
-
 // Headers and extensions are advisory. A 200 storage error document is not an
 // image; decoding prevents XML/HTML, truncated data and spoofed MIME successes.
 func decodeImageDownload(raw []byte) (string, image.Image, error) {

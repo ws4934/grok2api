@@ -178,7 +178,7 @@ func (o *OpenAIImage) start(ctx context.Context, account wireAccount, requiremen
 			return false
 		}
 		notifyUpstreamModel(ctx, value)
-		if terminalErr = openAIImageTerminalError(value, webSessionSecrets(account.Fields, account.Token)...); terminalErr != nil {
+		if terminalErr = openAIImageTerminalError(value, account.Token); terminalErr != nil {
 			return true
 		}
 		known := conversationID != ""

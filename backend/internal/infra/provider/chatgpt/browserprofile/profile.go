@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
 	"github.com/bogdanfinn/tls-client/profiles"
@@ -141,26 +140,6 @@ func (p Profile) NavigatorLanguagesValue() string {
 	return strings.Join(p.NavigatorLanguages, ",")
 }
 
-func (p Profile) FingerprintMetadata() map[string]any {
-	return map[string]any{
-		"profile":                  p.Name,
-		"user-agent":               p.UserAgent,
-		"impersonate":              p.TLSProfile,
-		"browser-family":           p.BrowserFamily,
-		"browser-os":               p.BrowserOS,
-		"navigator-platform":       p.NavigatorPlatform,
-		"user-agent-data-platform": p.UserAgentDataPlatform,
-		"sec-ch-ua":                p.SecCHUA,
-		"sec-ch-ua-platform":       p.SecCHUAPlatform,
-		"accept-language":          p.AcceptLanguage,
-		"timezone":                 p.TimezoneIANA,
-		"screen":                   fmt.Sprintf("%dx%d", p.ScreenWidth, p.ScreenHeight),
-		"hardware-concurrency":     p.HardwareConcurrency,
-		"device-memory":            p.DeviceMemory,
-		"device-pixel-ratio":       p.DevicePixelRatio,
-	}
-}
-
 func maxInt(a, b int) int {
 	if a > b {
 		return a
@@ -183,45 +162,6 @@ func Parse(value any) (Profile, bool) {
 	return profile, true
 }
 
-// FromFingerprint recovers the exact known template used by
-// older accounts after their registration journal was cleared. Do not infer a
-// different environment from an unknown name or a conflicting saved summary.
-func FromFingerprint(value any) (Profile, bool) {
-	fp, ok := value.(map[string]any)
-	if !ok {
-		return Profile{}, false
-	}
-	for _, candidate := range browserProfilePool {
-		if stringValue(fp["profile"]) != candidate.Name {
-			continue
-		}
-		// Timezone follows egress and is no longer part of the fixed template.
-		// Validate it separately; all stable browser fields must still match.
-		if value, exists := fp["timezone"]; exists {
-			zone := stringValue(value)
-			if zone == "" || zone == "Local" || len(zone) > 100 || strings.Contains(zone, "..") {
-				return Profile{}, false
-			}
-			loc, err := time.LoadLocation(zone)
-			if err != nil {
-				return Profile{}, false
-			}
-			candidate.SetTimezone(loc, time.Now())
-		}
-		matches := true
-		for key, want := range candidate.FingerprintMetadata() {
-			if got, exists := fp[key]; exists && stringValue(got) != stringValue(want) {
-				matches = false
-				break
-			}
-		}
-		if matches {
-			return Parse(candidate)
-		}
-	}
-	return Profile{}, false
-}
-
 // Default is a deterministic environment for imports without a known profile.
 func Default() Profile { return Base(1680, 1050, 8, 4294967296) }
 func Candidates() []Profile {
@@ -231,21 +171,6 @@ func Candidates() []Profile {
 		out[i] = p
 	}
 	return out
-}
-func stringValue(v any) string {
-	if v == nil {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprint(v))
-}
-func (p *Profile) SetTimezone(loc *time.Location, at time.Time) {
-	name, seconds := at.In(loc).Zone()
-	p.TimezoneIANA = loc.String()
-	p.TimezoneName = name
-	if p.TimezoneIANA == "UTC" {
-		p.TimezoneName = "Coordinated Universal Time"
-	}
-	p.TimezoneOffsetMinutes = -seconds / 60
 }
 
 // Headers is the shared registration and authenticated Web browser identity.

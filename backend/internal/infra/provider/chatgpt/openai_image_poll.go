@@ -38,7 +38,7 @@ func (o *OpenAIImage) pollConversation(ctx context.Context, account wireAccount,
 			if len(ids) > 0 {
 				return uniqueStrings(ids), nil
 			}
-			if terminal := openAIImageTerminalError(value, webSessionSecrets(account.Fields, account.Token)...); terminal != nil {
+			if terminal := openAIImageTerminalError(value, account.Token); terminal != nil {
 				return nil, terminal
 			}
 			if terminal := openAIImageTextOnlyError(value, account.Token); terminal != nil {

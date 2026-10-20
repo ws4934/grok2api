@@ -557,8 +557,7 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 }
 
 // isImageOutputFailure reports a fetched image that fails the requested output
-// (chatgpt.IsImageOutputError, e.g. not transparent): fetching it again
-// returns the same image.
+// (e.g. not transparent): fetching it again returns the same image.
 func isImageOutputFailure(err error) bool {
 	var output interface{ ImageOutputFailure() bool }
 	return errors.As(err, &output) && output.ImageOutputFailure()

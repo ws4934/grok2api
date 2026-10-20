@@ -112,7 +112,7 @@ func wire(ctx context.Context, c credentials) (wireAccount, error) {
 			}
 		}
 	}
-	fields := map[string]any{"access_token": c.AccessToken, "browser_profile": p, "oai_device_id": c.DeviceID, "oai_session_id": c.SessionID}
+	fields := map[string]any{"browser_profile": p, "oai_device_id": c.DeviceID, "oai_session_id": c.SessionID}
 	if env := environmentFrom(ctx); env.CFCookies != "" {
 		if solver, ok := browserprofile.ForUserAgent(p, env.UserAgent); ok {
 			fields["clearance_profile"], fields["clearance_cookies"] = solver, env.CFCookies

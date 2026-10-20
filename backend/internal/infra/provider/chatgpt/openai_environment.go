@@ -23,12 +23,6 @@ func accountBrowserProfile(account map[string]any) (browserprofile.Profile, erro
 		}
 		return browserprofile.Profile{}, fmt.Errorf("saved browser profile is unsupported")
 	}
-	if p, ok := browserprofile.FromFingerprint(account["fp"]); ok {
-		return p, nil
-	}
-	if fp, ok := account["fp"].(map[string]any); ok && aiString(fp, "profile") != "" {
-		return browserprofile.Profile{}, fmt.Errorf("saved browser fingerprint is unsupported")
-	}
 	// Imports without a registered profile use one coherent, deterministic
 	// fallback; do not combine arbitrary legacy UA strings with a different TLS.
 	return browserprofile.Default(), nil
@@ -46,26 +40,14 @@ type openAIFingerprint struct {
 	DeviceID, SessionID string
 }
 
-func buildOpenAIFingerprint(account map[string]any, tokens ...string) openAIFingerprint {
+func buildOpenAIFingerprint(account map[string]any, token string) openAIFingerprint {
 	p, _ := accountBrowserProfile(account)
-	token := aiString(account, "access_token", "accessToken", "token")
-	if len(tokens) > 0 {
-		token = tokens[0]
-	}
 	fp := openAIFingerprint{Profile: p, DeviceID: stableBrowserID("device", token), SessionID: stableBrowserID("session", token)}
-	if v := aiString(account, "oai-device-id", "oai_device_id"); v != "" {
+	if v := aiString(account, "oai_device_id"); v != "" {
 		fp.DeviceID = v
 	}
-	if v := aiString(account, "oai-session-id", "oai_session_id"); v != "" {
+	if v := aiString(account, "oai_session_id"); v != "" {
 		fp.SessionID = v
-	}
-	if values, ok := account["fp"].(map[string]any); ok {
-		if v := aiString(values, "oai-device-id", "oai_device_id"); v != "" {
-			fp.DeviceID = v
-		}
-		if v := aiString(values, "oai-session-id", "oai_session_id"); v != "" {
-			fp.SessionID = v
-		}
 	}
 	return fp
 }
@@ -94,7 +76,7 @@ func accountBrowser(cache map[string]*browserHTTP, origin, proxy, token string, 
 		b.lastUsed = time.Now()
 		return b, nil
 	}
-	b, err := newBrowserHTTP(origin, proxy, timeout, p, append(savedWebCookies(fields, token), clearanceCookies(fields)...))
+	b, err := newBrowserHTTP(origin, proxy, timeout, p, clearanceCookies(fields))
 	if err != nil {
 		return nil, err
 	}
@@ -121,21 +103,9 @@ func browserLanguage(p browserprofile.Profile) string {
 }
 
 func accountBrowserKey(origin, proxy, token string, p browserprofile.Profile, fields map[string]any) string {
-	state, _ := json.Marshal([]any{origin, proxy, token, p, savedWebCookies(fields, token), aiString(fields, "cookie_header"), aiString(fields, "clearance_cookies"), aiString(fields, "cookie"), aiString(fields, "cookies"), aiString(fields, "user_id", "account_id", "email")})
+	state, _ := json.Marshal([]any{origin, proxy, token, p, aiString(fields, "clearance_cookies")})
 	sum := sha256.Sum256(state)
 	return fmt.Sprintf("%x", sum)
-}
-func webSessionSecrets(fields map[string]any, token string) []string {
-	out := []string{token}
-	out = append(out, browserprofile.CookieSecrets(fields["web_cookies"])...)
-	return out
-}
-
-func savedWebCookies(fields map[string]any, token string) []browserprofile.Cookie {
-	if token == "" || aiString(fields, "web_cookies_token_hash") != browserprofile.TokenBinding(token) {
-		return nil
-	}
-	return browserprofile.ParseCookies(fields["web_cookies"])
 }
 
 // clearanceCookies turns the egress clearance ("name=value; ...") into jar

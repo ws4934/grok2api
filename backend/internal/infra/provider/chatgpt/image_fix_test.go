@@ -91,9 +91,9 @@ func TestImageOutputErrorTellsCallersNotToFetchAgain(t *testing.T) {
 	if err := png.Encode(&opaque, image.NewGray(image.Rect(0, 0, 1, 1))); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := (ImageOutputOptions{Background: "transparent"}).apply(opaque.Bytes(), "image/png")
+	_, _, err := (ImageOutputOptions{Background: "transparent"}).applyDecoded(downloadedImage{raw: opaque.Bytes(), mime: "image/png"})
 	var marked interface{ ImageOutputFailure() bool }
-	if !IsImageOutputError(err) || !errors.As(err, &marked) || !marked.ImageOutputFailure() {
+	if !errors.As(err, &marked) || !marked.ImageOutputFailure() {
 		t.Fatalf("err = %v", err)
 	}
 }
