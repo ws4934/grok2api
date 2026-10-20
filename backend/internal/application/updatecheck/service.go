@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/pkg/flight"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -122,14 +123,17 @@ func (s *Service) Snapshot() Snapshot {
 }
 
 func (s *Service) Check(ctx context.Context) Snapshot {
-	result, err, _ := s.checks.Do("latest", func() (any, error) {
-		return s.fetchLatest(ctx)
-	})
+	// The fetch is shared and detached, so a caller that leaves does not fail
+	// the others; its own cancellation says nothing about the release.
+	result, err := flight.Do(ctx, &s.checks, "latest", time.Minute, s.fetchLatest)
+	if err != nil && ctx.Err() != nil {
+		return s.Snapshot()
+	}
 	s.record(result, err)
 	return s.Snapshot()
 }
 
-func (s *Service) record(result any, err error) {
+func (s *Service) record(release latestRelease, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
@@ -137,7 +141,6 @@ func (s *Service) record(result any, err error) {
 		s.snapshot.Error = err.Error()
 		return
 	}
-	release := result.(latestRelease)
 	checkedAt := s.now().UTC()
 	current, currentOK := parseSemanticVersion(s.current)
 	latest, latestOK := parseSemanticVersion(release.Tag)

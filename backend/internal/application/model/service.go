@@ -17,12 +17,16 @@ import (
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
+	"github.com/chenyme/grok2api/backend/internal/pkg/flight"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"golang.org/x/sync/singleflight"
 )
 
 const defaultModelSyncWorkers = 25
 const syncFailurePersistTimeout = 5 * time.Second
+
+// modelSyncTimeout bounds a full sync once no caller holds it open.
+const modelSyncTimeout = time.Hour
 
 // Resolved routes are dropped by local and bus-delivered invalidation events;
 // the TTL only bounds staleness when a remote event is missed. The entry cap
@@ -476,19 +480,12 @@ func (s *Service) Sync(ctx context.Context) (int, error) {
 }
 
 // SyncObserved 执行全量模型同步，并按已完成账号数报告进度。
+// The sync is shared and detached: an administrator who leaves does not abort
+// it for another caller. Progress goes to the caller that started it.
 func (s *Service) SyncObserved(ctx context.Context, observer SyncProgressObserver) (int, error) {
-	result := s.syncAll.DoChan("all", func() (any, error) {
+	return flight.Do(ctx, &s.syncAll, "all", modelSyncTimeout, func(ctx context.Context) (int, error) {
 		return s.syncAllAccounts(ctx, observer)
 	})
-	select {
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	case value := <-result:
-		if value.Err != nil {
-			return 0, value.Err
-		}
-		return value.Val.(int), nil
-	}
 }
 
 func (s *Service) syncAllAccounts(ctx context.Context, observer SyncProgressObserver) (int, error) {
