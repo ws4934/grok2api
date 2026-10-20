@@ -478,11 +478,6 @@ func (s *Service) Close(ctx context.Context) error {
 	}
 }
 
-func (s *Service) List(ctx context.Context, page, pageSize int) ([]auditdomain.Record, int64, error) {
-	page, pageSize = repository.NormalizePage(page, pageSize, repository.DefaultPageSize)
-	return s.audits.List(ctx, (page-1)*pageSize, pageSize)
-}
-
 func (s *Service) Get(ctx context.Context, id uint64) (auditdomain.Record, error) {
 	return s.audits.Get(ctx, id)
 }

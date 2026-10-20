@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
@@ -40,7 +39,6 @@ type createRequest struct {
 	AllowedModelIDs      []string  `json:"allowedModelIds"`
 	ProviderScope        *[]string `json:"providerScope"`
 	TierScope            *[]string `json:"tierScope"`
-	AccountPool          *string   `json:"accountPool"`
 }
 
 type updateRequest struct {
@@ -54,7 +52,6 @@ type updateRequest struct {
 	AllowedModelIDs      *[]string `json:"allowedModelIds"`
 	ProviderScope        *[]string `json:"providerScope"`
 	TierScope            *[]string `json:"tierScope"`
-	AccountPool          *string   `json:"accountPool"`
 }
 
 type batchUpdateRequest struct {
@@ -160,7 +157,7 @@ func (h *Handler) create(c *gin.Context) {
 	if request.Enabled != nil {
 		enabled = *request.Enabled
 	}
-	providerScope, tierScope, err := parseRequestedScopes(request.ProviderScope, request.TierScope, request.AccountPool)
+	providerScope, tierScope, err := parseRequestedScopes(request.ProviderScope, request.TierScope)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidAccountScope", err.Error())
 		return
@@ -201,7 +198,7 @@ func (h *Handler) update(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	providerScope, tierScope, err := parseRequestedScopes(request.ProviderScope, request.TierScope, request.AccountPool)
+	providerScope, tierScope, err := parseRequestedScopes(request.ProviderScope, request.TierScope)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidAccountScope", err.Error())
 		return
@@ -298,25 +295,7 @@ func newKeyResponse(value clientkeydomain.Key) keyResponse {
 	}
 }
 
-func parseRequestedScopes(providerValues, tierValues *[]string, legacyPool *string) (*clientkeydomain.ProviderScope, *clientkeydomain.TierScope, error) {
-	if legacyPool != nil && (providerValues != nil || tierValues != nil) {
-		return nil, nil, errors.New("accountPool 不能与 providerScope 或 tierScope 同时设置")
-	}
-	if legacyPool != nil {
-		providers := clientkeydomain.AllProviders()
-		var tiers clientkeydomain.TierScope
-		switch strings.TrimSpace(*legacyPool) {
-		case "all":
-			tiers = clientkeydomain.TierScopeAll
-		case "free":
-			tiers = clientkeydomain.TierScopeFree
-		case "super":
-			tiers = clientkeydomain.TierScopeSuper
-		default:
-			return nil, nil, errors.New("accountPool 必须是 all、free 或 super")
-		}
-		return &providers, &tiers, nil
-	}
+func parseRequestedScopes(providerValues, tierValues *[]string) (*clientkeydomain.ProviderScope, *clientkeydomain.TierScope, error) {
 	var providers *clientkeydomain.ProviderScope
 	if providerValues != nil {
 		value, valid := clientkeydomain.ParseProviderScopeValues(*providerValues)

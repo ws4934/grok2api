@@ -218,27 +218,6 @@ type auditDetailResponse struct {
 }
 
 func (h *Handler) list(c *gin.Context) {
-	if c.Query("pagination") == "cursor" {
-		h.listCursor(c)
-		return
-	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
-	page, pageSize = repository.NormalizePage(page, pageSize, repository.DefaultPageSize)
-	values, total, err := h.service.List(c.Request.Context(), page, pageSize)
-	if err != nil {
-		response.Error(c, http.StatusInternalServerError, "auditListFailed", "读取审计记录失败")
-		return
-	}
-	prices := h.lookupPrices(c.Request.Context(), values)
-	items := make([]auditResponse, 0, len(values))
-	for _, value := range values {
-		items = append(items, newAuditResponse(value, prices))
-	}
-	response.Success(c, http.StatusOK, gin.H{"items": items, "page": page, "pageSize": pageSize, "total": total})
-}
-
-func (h *Handler) listCursor(c *gin.Context) {
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "50"))
 	_, pageSize = repository.NormalizePage(1, pageSize, repository.DefaultCursorPageSize)
 	result, err := h.service.ListCursor(c.Request.Context(), c.Query("cursor"), pageSize, c.Query("search"), c.Query("period"), newListFilter(c))
