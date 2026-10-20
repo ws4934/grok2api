@@ -855,9 +855,7 @@ type durableVideoAuditRecorder struct {
 	last     audit.Record
 }
 
-func (r *durableVideoAuditRecorder) Create(context.Context, audit.Record) error { return nil }
-
-func (r *durableVideoAuditRecorder) CreateDurable(_ context.Context, value audit.Record) error {
+func (r *durableVideoAuditRecorder) Create(_ context.Context, value audit.Record) error {
 	r.calls++
 	r.last = value
 	if r.calls <= r.failures {

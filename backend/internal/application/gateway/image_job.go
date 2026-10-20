@@ -813,11 +813,6 @@ func (s *Service) recordImageItemAudit(ctx context.Context, job media.Job, index
 			share.Apply(&record)
 		}
 	}
-	if durable, ok := s.audits.(interface {
-		CreateDurable(context.Context, audit.Record) error
-	}); ok {
-		return durable.CreateDurable(ctx, record)
-	}
 	return s.audits.Create(ctx, record)
 }
 

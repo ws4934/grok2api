@@ -263,11 +263,6 @@ func (s *Service) Create(ctx context.Context, value auditdomain.Record) error {
 	return s.createAcknowledged(ctx, value)
 }
 
-// CreateDurable returns success only after the audit and billing transaction commits.
-func (s *Service) CreateDurable(ctx context.Context, value auditdomain.Record) error {
-	return s.createAcknowledged(ctx, value)
-}
-
 func (s *Service) createAcknowledged(ctx context.Context, value auditdomain.Record) error {
 	startedAt := time.Now()
 	if err := ctx.Err(); err != nil {

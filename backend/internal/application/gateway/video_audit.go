@@ -70,13 +70,7 @@ func (s *Service) recordVideoAudit(ctx context.Context, job media.Job, durationM
 	if job.Status == media.StatusCompleted && operation == provider.VideoOperationGenerate && job.Price != nil && job.Price.Model != "" {
 		job.Price.Apply(&record)
 	}
-	if durable, ok := s.audits.(interface {
-		CreateDurable(context.Context, audit.Record) error
-	}); ok {
-		if err := durable.CreateDurable(ctx, record); err != nil {
-			return err
-		}
-	} else if err := s.audits.Create(ctx, record); err != nil {
+	if err := s.audits.Create(ctx, record); err != nil {
 		return err
 	}
 	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)

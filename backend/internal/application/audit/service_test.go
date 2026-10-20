@@ -192,7 +192,7 @@ func TestSummaryFreshBypassesAggregateCache(t *testing.T) {
 	}
 }
 
-func TestCreateDurableHonorsCallerDeadline(t *testing.T) {
+func TestCreateHonorsCallerDeadline(t *testing.T) {
 	release := make(chan struct{})
 	repo := &blockingAuditRepository{release: release}
 	service := NewService(repo, slog.Default(), 8, 4, time.Second)
@@ -201,7 +201,7 @@ func TestCreateDurableHonorsCallerDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	err := service.CreateDurable(ctx, auditdomain.Record{EventID: "deadline"})
+	err := service.Create(ctx, auditdomain.Record{EventID: "deadline"})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v", err)
 	}
@@ -455,7 +455,7 @@ func TestLedgerReadinessObserveAndEnforceModes(t *testing.T) {
 	service.UpdateLedgerConfig(LedgerConfig{Mode: LedgerModeObserve, FailureThreshold: 1, UnhealthyGrace: time.Second, QueueHighWatermarkPercent: 90})
 	writeCtx, writeCancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer writeCancel()
-	if err := service.CreateDurable(writeCtx, auditdomain.Record{EventID: "observe"}); !errors.Is(err, context.DeadlineExceeded) {
+	if err := service.Create(writeCtx, auditdomain.Record{EventID: "observe"}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("write error = %v", err)
 	}
 	nowNanos.Add(int64(2 * time.Second))
@@ -473,7 +473,7 @@ func TestLedgerReadinessObserveAndEnforceModes(t *testing.T) {
 	repo.setError(nil)
 	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer recoveryCancel()
-	if err := service.CreateDurable(recoveryCtx, auditdomain.Record{EventID: "recovered"}); err != nil {
+	if err := service.Create(recoveryCtx, auditdomain.Record{EventID: "recovered"}); err != nil {
 		t.Fatal(err)
 	}
 	if snapshot := service.LedgerSnapshot(); !snapshot.Ready || snapshot.ConsecutiveFailures != 0 {
@@ -514,7 +514,7 @@ func TestCommitObserverRunsOnlyAfterDurableCommit(t *testing.T) {
 		committed = append(committed, values...)
 		mu.Unlock()
 	})
-	if err := service.CreateDurable(context.Background(), auditdomain.Record{EventID: "sync"}); err != nil {
+	if err := service.Create(context.Background(), auditdomain.Record{EventID: "sync"}); err != nil {
 		t.Fatal(err)
 	}
 	if !service.Record(auditdomain.Record{EventID: "batch"}) {
