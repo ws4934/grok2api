@@ -3,6 +3,7 @@ package relational
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/model"
@@ -190,7 +191,10 @@ func (r *ModelRepository) UpdateManyEnabled(ctx context.Context, ids []uint64, e
 	return updated, err
 }
 
+// truncate also drops NUL bytes and replaces invalid UTF-8, which PostgreSQL
+// text columns reject; upstream error text may carry either.
 func truncate(value string, limit int) string {
+	value = strings.ToValidUTF8(strings.ReplaceAll(value, "\x00", ""), "\uFFFD")
 	runes := []rune(value)
 	if len(runes) <= limit {
 		return value

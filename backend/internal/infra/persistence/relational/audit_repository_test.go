@@ -13,6 +13,7 @@ import (
 
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	repositorypkg "github.com/chenyme/grok2api/backend/internal/repository"
+	"github.com/google/uuid"
 )
 
 func TestAuditRepositorySumTokensByAccountsSince(t *testing.T) {
@@ -437,6 +438,35 @@ func TestAuditRepositoryRoundTripsFailureAttempts(t *testing.T) {
 	if _, err := repository.Get(ctx, 999); !errors.Is(err, repositorypkg.ErrNotFound) {
 		t.Fatalf("missing audit error = %v", err)
 	}
+}
+
+// PostgreSQL rejects NUL bytes and invalid UTF-8 in text columns, which made
+// the audit writer retry a batch carrying such upstream text forever.
+func TestAuditRepositoryCleansUpstreamTextBeforeInsert(t *testing.T) {
+	dialectDatabases(t, func(t *testing.T, database *Database) {
+		ctx := context.Background()
+		repo := NewAuditRepository(database)
+		now := time.Now().UTC()
+		eventID := "evt_invalid_text_" + uuid.NewString()[:8]
+		record := audit.Record{
+			EventID: eventID, RequestID: "invalid-text", ClientKeyID: 1, ModelRouteID: 1, StatusCode: http.StatusBadGateway, CreatedAt: now,
+			Attempts: []audit.Attempt{{Number: 1, Source: audit.AttemptSourceTransport, Stage: "upstream", StartedAt: now, TransportError: "reset \x00by \xffpeer", UpstreamStatus: "502 \xfe"}},
+		}
+		if err := repo.CreateBatch(ctx, []audit.Record{record}); err != nil {
+			t.Fatal(err)
+		}
+		var id uint64
+		if err := database.db.WithContext(ctx).Model(&requestAuditModel{}).Select("id").Where("event_id = ?", eventID).Scan(&id).Error; err != nil {
+			t.Fatal(err)
+		}
+		stored, err := repo.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := stored.Attempts[0]; got.TransportError != "reset by \uFFFDpeer" || got.UpstreamStatus != "502 \uFFFD" {
+			t.Fatalf("stored attempt text = %q, %q", got.TransportError, got.UpstreamStatus)
+		}
+	})
 }
 
 func TestAuditRepositoryNormalizesUntrustedUsage(t *testing.T) {
