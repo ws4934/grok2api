@@ -17,7 +17,7 @@
  * - 铸造页 loads 走直连即可（好 token 不挑铸造 IP），提交链路代理 IP 由应用侧另管。
  */
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import http from "node:http";
@@ -232,9 +232,16 @@ async function launchChromium(res) {
   res.child = child;
   // 二进制缺失或无权限时 spawn 只发 error 事件；不监听会让整个服务崩溃。
   child.on("error", (error) => { res.spawnError = error; });
+  let stderrTail = "";
   child.stderr.on("data", (chunk) => {
     const text = String(chunk);
+    stderrTail = (stderrTail + text).slice(-300);
     if (/crash|FATAL/i.test(text)) console.error("[fpchrome]", text.trim().slice(0, 300));
+  });
+  // 调试端口就绪前浏览器就退出了（如缺 X server）：立即失败并带上它自己的报错，
+  // 不再空等 CDP；超时后被杀也让残留的轮询立刻结束。
+  child.on("exit", (code, signal) => {
+    res.spawnError ??= new Error(`chromium 已退出（${signal ?? code}）：${stderrTail.trim()}`);
   });
   const version = await waitForCdp(cdpPort, res);
   if (!version.webSocketDebuggerUrl) throw new Error("chromium CDP 未返回 webSocketDebuggerUrl");
@@ -359,7 +366,6 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify(body));
   };
   if (req.method === "GET" && req.url === "/health") {
-    const { stat } = await import("node:fs/promises");
     let chromeOk = true;
     try { await stat(CHROME_BIN); } catch { chromeOk = false; }
     // 两次尝试都有硬超时，忙得比这更久说明服务卡死了：报不健康。
