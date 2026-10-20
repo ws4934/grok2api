@@ -231,7 +231,8 @@ func (c *client) poll(ctx context.Context, pollURL, kind string) (pollResult, er
 			}
 		}
 	}
-	if len(urls) > 0 {
+	// 官网只在 x-task-status 为 COMPLETED 时收尾：进行中的响应可能已带回部分输出。
+	if len(urls) > 0 && !strings.EqualFold(hdr.Get("x-task-status"), "IN_PROGRESS") {
 		return pollResult{status: "SUCCEEDED", progress: 100, outputURLs: urls}, nil
 	}
 	switch taskStatus {

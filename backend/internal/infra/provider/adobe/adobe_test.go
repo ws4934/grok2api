@@ -497,6 +497,29 @@ func TestPollToleratesTransientErrorsAndReportsFailure(t *testing.T) {
 	}
 }
 
+// 多张图的任务在 x-task-status 仍为 IN_PROGRESS 时就会带回先画好的几张，要等到 COMPLETED。
+func TestPollWaitsForCompletedWhileOutputsArrive(t *testing.T) {
+	previous := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = previous })
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		status, outputs := "IN_PROGRESS", []any{map[string]any{"image": map[string]any{"presignedUrl": "https://x/1.png"}}}
+		if hits.Add(1) > 1 {
+			status = "COMPLETED"
+			outputs = append(outputs, map[string]any{"image": map[string]any{"presignedUrl": "https://x/2.png"}})
+		}
+		w.Header().Set("x-task-status", status)
+		_ = json.NewEncoder(w).Encode(map[string]any{"outputs": outputs})
+	}))
+	defer server.Close()
+	c := &client{do: server.Client(), rc: requestContext{token: "t"}}
+	urls, err := pollUntilDone(context.Background(), c, server.URL, "image", nil)
+	if err != nil || len(urls) != 2 || hits.Load() != 2 {
+		t.Fatalf("poll = %v, %v after %d hits", urls, err, hits.Load())
+	}
+}
+
 // 积分接口拿不到数值时不能写出"余额 0"窗口（落库会被当成上游耗尽）。
 func TestSyncQuotaModeNeverInventsEmptyWindow(t *testing.T) {
 	status := http.StatusOK
