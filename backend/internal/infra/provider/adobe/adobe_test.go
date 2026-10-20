@@ -365,6 +365,24 @@ func TestSubmitImageCheckpointSemantics(t *testing.T) {
 	}
 }
 
+// Adobe 以 408 拒绝唯一一次视频提交、重铸又失败时上游没有任务：按提交前失败结束并清掉
+// 提交标记，而不是记成可能已提交（结果未知、无法续跑）。
+func TestVideoRemintFailureCreatesNothing(t *testing.T) {
+	fake, adapter, credential := newFakeAdobe(t)
+	fake.mintDown, fake.submitStatus = true, http.StatusRequestTimeout
+	endpoints.videoSubmit = fake.URL + "/generate-async"
+	adapter.sherlock.token, adapter.sherlock.mintedAt = validSherlockToken(), time.Now() // 首次提交用缓存
+	var saved []string
+	_, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Model: "veo/3.1-generate", Prompt: "cat",
+		SaveCheckpoint: func(value string) error { saved = append(saved, value); return nil },
+	})
+	stage, _ := provider.VideoErrorStage(err)
+	if stage != provider.VideoStagePrepare || !errors.Is(err, errMintUnavailable) || fake.submits.Load() != 1 || len(saved) == 0 || saved[len(saved)-1] != "" {
+		t.Fatalf("stage=%s submits=%d checkpoints=%q err=%v", stage, fake.submits.Load(), saved, err)
+	}
+}
+
 // 同步路径：Adobe 接受任务前的拒绝必须是响应（网关据此刷新凭据/换账号），
 // mint 不可用时请求根本不发出。
 func TestGenerateImageRejectionsBecomeResponses(t *testing.T) {

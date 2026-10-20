@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -213,6 +214,13 @@ func (a *Adapter) createVideo(ctx context.Context, c *client, v *modelVersion, r
 	sub, err := a.submit(ctx, c, func() (submission, error) {
 		return c.submitJob(ctx, endpoints.videoSubmit, v.buildBody(in), in.prompt)
 	})
+	if errors.Is(err, errMintUnavailable) {
+		// Adobe 以 408 拒绝了提交、重铸又失败：上游没有任务，清掉提交标记。
+		if request.SaveCheckpoint != nil {
+			_ = request.SaveCheckpoint("")
+		}
+		return "", preSubmitFailure(err)
+	}
 	if err != nil {
 		return "", provider.VideoCreateFailed(request, err)
 	}
