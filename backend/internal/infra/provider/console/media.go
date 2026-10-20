@@ -235,13 +235,7 @@ func (a *Adapter) forwardConsoleMedia(ctx context.Context, credential account.Cr
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		data, truncated, readErr := provider.ReadDiagnosticBody(response.Body)
 		_ = response.Body.Close()
-		dpopRequired := response.StatusCode == http.StatusForbidden && provider.IsDPoPProofRequiredBody(data)
-		if response.StatusCode == http.StatusForbidden && shouldInvalidateConsoleClearance(data) {
-			lease.InvalidateClearance()
-		}
-		if !dpopRequired {
-			a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, response.StatusCode, nil)
-		}
+		a.reportConsoleResponse(ctx, lease, response.StatusCode, data)
 		lease.Release()
 		cancel()
 		if readErr != nil {
@@ -703,13 +697,7 @@ func (a *Adapter) doConsoleVideoJSON(ctx context.Context, credential account.Cre
 		return nil, provider.ErrUnauthorized
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		dpopRequired := response.StatusCode == http.StatusForbidden && provider.IsDPoPProofRequiredBody(data)
-		if response.StatusCode == http.StatusForbidden && shouldInvalidateConsoleClearance(data) {
-			lease.InvalidateClearance()
-		}
-		if !dpopRequired {
-			a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, response.StatusCode, nil)
-		}
+		a.reportConsoleResponse(ctx, lease, response.StatusCode, data)
 		return nil, newConsoleMediaUpstreamError(response.StatusCode, data, parseConsoleRetryAfterHeader(response.Header.Get("Retry-After"), time.Now().UTC()))
 	}
 	a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, response.StatusCode, nil)

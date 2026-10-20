@@ -61,6 +61,10 @@ func (a *Adapter) DialVoiceWebSocket(ctx context.Context, request provider.Voice
 	for attempt := 0; attempt < 2; attempt++ {
 		session, cacheKey, sessionErr := a.dpop.get(requestCtx, a, request.Credential, token, lease)
 		if sessionErr != nil {
+			var endpointErr *dpopTokenEndpointError
+			if errors.As(sessionErr, &endpointErr) {
+				a.reportConsoleResponse(ctx, lease, endpointErr.status, endpointErr.body)
+			}
 			cleanup()
 			return nil, nil, sessionErr
 		}
@@ -93,7 +97,7 @@ func (a *Adapter) DialVoiceWebSocket(ctx context.Context, request provider.Voice
 			}
 		}
 
-		connection, response, dialErr := lease.DialWebSocket(requestCtx, endpoint, headers, 30*time.Second)
+		connection, response, dialErr := lease.DialWebSocketDeferredForbidden(requestCtx, endpoint, headers, 30*time.Second)
 		if dialErr == nil {
 			if response != nil && response.Body != nil {
 				_ = response.Body.Close()
@@ -122,13 +126,7 @@ func (a *Adapter) DialVoiceWebSocket(ctx context.Context, request provider.Voice
 				continue
 			}
 		}
-		dpopRequired := status == http.StatusForbidden && provider.IsDPoPProofRequiredBody(body)
-		if status == http.StatusForbidden && shouldInvalidateConsoleClearance(body) {
-			lease.InvalidateClearance()
-		}
-		if !dpopRequired {
-			a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, status, nil)
-		}
+		a.reportConsoleResponse(ctx, lease, status, body)
 		cleanup()
 		retryAfter := parseConsoleRetryAfterHeader(response.Header.Get("Retry-After"), time.Now().UTC())
 		return nil, nil, newConsoleMediaUpstreamError(status, body, retryAfter)

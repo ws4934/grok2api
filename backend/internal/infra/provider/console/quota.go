@@ -70,13 +70,7 @@ func (a *Adapter) syncConsoleQuotas(ctx context.Context, credential account.Cred
 			(response.StatusCode == http.StatusForbidden && provider.IsDefinitiveAccountBlockBody(data)) {
 			return nil, time.Time{}, fmt.Errorf("%w: Console usage rejected", provider.ErrUnauthorized)
 		}
-		dpopRequired := response.StatusCode == http.StatusForbidden && provider.IsDPoPProofRequiredBody(data)
-		if response.StatusCode == http.StatusForbidden && shouldInvalidateConsoleClearance(data) {
-			lease.InvalidateClearance()
-		}
-		if !dpopRequired {
-			a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, response.StatusCode, nil)
-		}
+		a.reportConsoleResponse(ctx, lease, response.StatusCode, data)
 		suffix := ""
 		if truncated {
 			suffix = " (响应已截断)"

@@ -1134,6 +1134,83 @@ func TestShouldInvalidateConsoleClearance(t *testing.T) {
 	}
 }
 
+// An account ban or a DPoP proof rejection says nothing about the egress, so
+// no Console path may drop its clearance; a Cloudflare 403 drops it on all.
+func TestConsoleForbiddenKeepsClearanceUnlessEgressRejected(t *testing.T) {
+	bodies := []struct {
+		name       string
+		body       string
+		wantSolves int32
+	}{
+		{name: "account ban", body: `{"code":"unauthorized:blocked-user","error":"User is blocked"}`, wantSolves: 1},
+		{name: "dpop proof", body: `{"code":"unauthorized:dpop-required","error":"DPoP proof required"}`, wantSolves: 1},
+		{name: "cloudflare", body: `<!doctype html><title>Just a moment...</title>`, wantSolves: 2},
+	}
+	calls := []struct {
+		name string
+		call func(*Adapter, account.Credential)
+	}{
+		{"responses", func(a *Adapter, c account.Credential) {
+			if r, err := a.ForwardResponse(context.Background(), provider.ResponseResourceRequest{
+				Credential: c, Method: http.MethodPost, Path: "/responses", Model: "grok-4.3",
+				Operation: conversation.OperationResponses, NormalizeBody: true, Body: []byte(`{"model":"grok-4.3","input":"hello"}`),
+			}); err == nil {
+				_ = r.Body.Close()
+			}
+		}},
+		{"image", func(a *Adapter, c account.Credential) {
+			if r, err := a.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: c, Model: "grok-imagine-image", Prompt: "x"}); err == nil {
+				_ = r.Body.Close()
+			}
+		}},
+		{"video", func(a *Adapter, c account.Credential) {
+			_, _ = a.GenerateVideo(context.Background(), provider.VideoRequest{Credential: c, Prompt: "x", Duration: 6, Resolution: "720p"})
+		}},
+		{"tts", func(a *Adapter, c account.Credential) {
+			_, _ = a.SynthesizeSpeech(context.Background(), provider.TTSRequest{Credential: c, Text: "hi", Language: "en"})
+		}},
+		{"quota", func(a *Adapter, c account.Credential) { _, _ = a.SyncQuota(context.Background(), c) }},
+		{"voice websocket", func(a *Adapter, c account.Credential) {
+			if connection, cleanup, err := a.DialVoiceWebSocket(context.Background(), provider.VoiceWebSocketRequest{Credential: c, Path: "/realtime"}); err == nil {
+				_ = connection.Close()
+				cleanup()
+			}
+		}},
+	}
+	for _, body := range bodies {
+		for _, call := range calls {
+			for _, stage := range []string{"request", "dpop token"} {
+				t.Run(body.name+"/"+call.name+"/"+stage, func(t *testing.T) {
+					var solves atomic.Int32
+					server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+						if request.URL.Path == "/v1" {
+							solves.Add(1)
+							writer.Header().Set("Content-Type", "application/json")
+							_, _ = io.WriteString(writer, `{"status":"ok","solution":{"userAgent":"Mozilla/5.0 Chrome/146.0.0.0 Safari/537.36","cookies":[{"name":"cf_clearance","value":"solved"}]}}`)
+							return
+						}
+						if stage == "request" && serveTestDPoPToken(t, writer, request) {
+							return
+						}
+						writer.WriteHeader(http.StatusForbidden)
+						_, _ = io.WriteString(writer, body.body)
+					}))
+					defer server.Close()
+					adapter, credential := newConsoleTestAdapter(t, server.URL)
+					adapter.egress.UpdateClearanceConfig(infraegress.ClearanceConfig{
+						Mode: "flaresolverr", FlareSolverrURL: server.URL, TargetURL: server.URL, Timeout: time.Second, RefreshInterval: time.Hour,
+					})
+					call.call(adapter, credential)
+					call.call(adapter, credential)
+					if got := solves.Load(); got != body.wantSolves {
+						t.Fatalf("clearance solves = %d, want %d", got, body.wantSolves)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestAdapterForwardsConsoleHeadersAndNormalizedBody(t *testing.T) {
 	var received map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

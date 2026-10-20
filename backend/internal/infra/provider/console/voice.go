@@ -300,6 +300,18 @@ func (a *Adapter) forwardConsoleVoiceBytes(ctx context.Context, credential accou
 		cancel()
 		return nil, err
 	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		data, _, readErr := provider.ReadDiagnosticBody(response.Body)
+		_ = response.Body.Close()
+		a.reportConsoleResponse(ctx, lease, response.StatusCode, data)
+		lease.Release()
+		cancel()
+		if readErr != nil {
+			return nil, readErr
+		}
+		response.Body = io.NopCloser(bytes.NewReader(data))
+		return response, nil
+	}
 	response.Body = &releaseBody{ReadCloser: response.Body, release: func() {
 		a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, response.StatusCode, nil)
 		lease.Release()

@@ -181,10 +181,7 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 			cancel()
 			return nil, readErr
 		}
-		if shouldInvalidateConsoleClearance(data) {
-			lease.InvalidateClearance()
-			a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, response.StatusCode, nil)
-		}
+		a.reportConsoleResponse(ctx, lease, response.StatusCode, data)
 		lease.Release()
 		cancel()
 		responseReleased = true
@@ -262,6 +259,20 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 // rejections from being misclassified as a broken browser/egress binding.
 func shouldInvalidateConsoleClearance(body []byte) bool {
 	return !provider.IsDefinitiveAccountBlockBody(body) && !provider.IsDPoPProofRequiredBody(body)
+}
+
+// reportConsoleResponse feeds an upstream status back to the egress manager.
+// An account-ban or DPoP-proof 403 is not the egress's fault, so it neither
+// drops the clearance nor counts against the node; any other 403 drops the
+// clearance first. Reporting 403 alone would also drop it.
+func (a *Adapter) reportConsoleResponse(ctx context.Context, lease *infraegress.Lease, status int, body []byte) {
+	if status == http.StatusForbidden {
+		if !shouldInvalidateConsoleClearance(body) {
+			return
+		}
+		lease.InvalidateClearance()
+	}
+	a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, status, nil)
 }
 
 func normalizeConversationError(data []byte, operation string, status int) []byte {

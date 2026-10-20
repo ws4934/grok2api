@@ -230,11 +230,7 @@ func (a *Adapter) fetchDPoPSession(ctx context.Context, ssoToken string, lease *
 	// yields 0 (no correction) — still a defined, usable value for every proof.
 	clockSkew := dpopClockSkewFromDateHeader(response.Header.Get("Date"), localBefore, localAfter)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		if response.StatusCode == http.StatusForbidden {
-			if shouldInvalidateConsoleClearance(data) {
-				lease.InvalidateClearance()
-			}
-		}
+		// Callers report the rejection, clearance included, with reportConsoleResponse.
 		return dpopSession{}, &dpopTokenEndpointError{
 			status: response.StatusCode, statusText: response.Status, header: response.Header.Clone(),
 			body: data, bodyTruncated: truncated, request: response.Request,
