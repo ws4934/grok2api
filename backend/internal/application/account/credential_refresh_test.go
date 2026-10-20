@@ -175,6 +175,35 @@ func (l peerHeldLock) Acquire(ctx context.Context, _ string, _ time.Duration) (f
 	return func() {}, true, nil
 }
 
+// A token inside its renewal window whose renewal failed keeps serving until
+// the backoff ends instead of spending an OAuth call per request; an expired
+// one fails with the deferral.
+func TestEnsureCredentialWaitsOutFailedRenewalBackoff(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+	service, credential, adapter := newCredentialRefreshTestService(t, now)
+	if _, err := service.accounts.UpdateTokens(ctx, credential.ID, "access-0", "refresh-0", "", now.Add(time.Minute), 0); err != nil {
+		t.Fatal(err)
+	}
+	adapter.refreshErr = &provider.CredentialRefreshError{Status: 503, Code: "oauth_unavailable", Message: "Please retry later"}
+	var latest, got accountdomain.Credential
+	var err error
+	for range 20 {
+		if latest, err = service.accounts.Get(ctx, credential.ID); err != nil {
+			t.Fatal(err)
+		}
+		got, err = service.EnsureCredential(ctx, latest, false)
+	}
+	if calls := adapter.refreshCount.Load(); calls != 1 || err != nil || got.EncryptedAccessToken != "access-0" {
+		t.Fatalf("20 checks: OAuth calls=%d last access=%q err=%v, want 1 call and the still-valid token", calls, got.EncryptedAccessToken, err)
+	}
+	latest.ExpiresAt = now.Add(-time.Minute)
+	var deferred *CredentialRefreshDeferredError
+	if _, err := service.EnsureCredential(ctx, latest, false); !errors.As(err, &deferred) || adapter.refreshCount.Load() != 1 {
+		t.Fatalf("expired token in backoff: err=%v OAuth calls=%d", err, adapter.refreshCount.Load())
+	}
+}
+
 // A panicking adapter fails the renewal instead of crashing the process.
 func TestPanickingRenewalFailsInsteadOfCrashing(t *testing.T) {
 	service, credential, adapter := newCredentialRefreshTestService(t, time.Now().UTC())

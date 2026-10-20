@@ -96,6 +96,16 @@ func (r *credentialRenewer) ensure(ctx context.Context, value accountdomain.Cred
 	if !options.force && value.EncryptedAccessToken != "" && !value.ExpiresAt.IsZero() && now.Add(credentialRefreshAdvance).Before(value.ExpiresAt) {
 		return value, nil
 	}
+	// After a failed renewal a request waits out the backoff instead of
+	// spending another OAuth call; a token still valid keeps serving.
+	if !options.force {
+		if err := refreshDeferred(value, now); err != nil {
+			if value.EncryptedAccessToken != "" && value.ExpiresAt.After(now) {
+				return value, nil
+			}
+			return accountdomain.Credential{}, err
+		}
+	}
 	refreshKey := strconv.FormatUint(value.ID, 10)
 	if options.respectSchedule {
 		refreshKey += ":scheduled"
@@ -249,8 +259,8 @@ func (r *credentialRenewer) refreshedRecently(accountID uint64, now time.Time) b
 	return !last.IsZero() && now.Sub(last) < forcedRefreshMinInterval
 }
 
-// ErrCredentialRefreshDeferred: a renewal after an upstream 401 waits out the
-// backoff of a failed one; each 401 would otherwise spend another OAuth call.
+// ErrCredentialRefreshDeferred: a request-path renewal waits out the backoff
+// of a failed one; each request would otherwise spend another OAuth call.
 var ErrCredentialRefreshDeferred = errors.New("凭据续期失败，等待下次重试")
 
 // CredentialRefreshDeferredError carries when the next renewal attempt is due.
