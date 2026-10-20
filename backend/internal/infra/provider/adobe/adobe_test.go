@@ -2,7 +2,9 @@ package adobe
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -250,10 +252,11 @@ type fakeAdobe struct {
 	submits      atomic.Int32
 	mintDown     bool
 
-	mu        sync.Mutex
-	uploads   []string       // 上传路径与 Content-Type
-	videoBody map[string]any // 最近一次视频提交的请求体
-	agents    []string       // 发往 Adobe（mint 除外）的每个请求的 User-Agent 与 sec-ch-ua
+	mu         sync.Mutex
+	uploads    []string       // 上传路径与 Content-Type
+	videoBody  map[string]any // 最近一次视频提交的请求体
+	videoNonce string         // 最近一次视频提交的 x-nonce
+	agents     []string       // 发往 Adobe（mint 除外）的每个请求的 User-Agent 与 sec-ch-ua
 }
 
 func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
@@ -298,7 +301,7 @@ func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			fake.mu.Lock()
-			fake.videoBody = body
+			fake.videoBody, fake.videoNonce = body, r.Header.Get("x-nonce")
 			fake.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"links": map[string]any{"result": "http://" + r.Host + "/status/video1"}})
 		case r.URL.Path == "/status/video1":
@@ -965,6 +968,31 @@ func TestGenerateVideoEditSubmitsSourceVideo(t *testing.T) {
 			t.Errorf("%s: duration = %v, want %d", test.version, body["duration"], test.duration)
 		}
 		fake.mu.Unlock()
+	}
+}
+
+// 视频提交同样带官网的 x-nonce：sha256(`${userId}-${prompt.slice(0, 256)}`)，按 UTF-16 码元截取。
+func TestVideoSubmitSendsTheWebNonce(t *testing.T) {
+	previous := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = previous })
+	fake, adapter, credential := newFakeAdobe(t)
+	claims, _ := json.Marshal(map[string]any{"user_id": "u1@AdobeID"})
+	token, err := adapter.cipher.Encrypt("h." + base64.RawURLEncoding.EncodeToString(claims) + ".s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential.EncryptedAccessToken = token
+	// 第 256 个码元是 😀 的高位代理：官网把它切开，TextEncoder 编成 U+FFFD。
+	prompt := strings.Repeat("猫", 255) + "😀尾"
+	if _, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{Credential: credential, Model: "veo/3.1-generate", Prompt: prompt}); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("u1@AdobeID-" + strings.Repeat("猫", 255) + "�"))
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.videoNonce != hex.EncodeToString(sum[:]) {
+		t.Fatalf("x-nonce = %q", fake.videoNonce)
 	}
 }
 

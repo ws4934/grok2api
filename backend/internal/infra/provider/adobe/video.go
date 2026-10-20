@@ -211,7 +211,7 @@ func (a *Adapter) createVideo(ctx context.Context, c *client, v *modelVersion, r
 		return "", provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 	}
 	sub, err := a.submit(ctx, c, func() (submission, error) {
-		return c.submitJob(ctx, endpoints.videoSubmit, v.buildBody(in), "")
+		return c.submitJob(ctx, endpoints.videoSubmit, v.buildBody(in), in.prompt)
 	})
 	if err != nil {
 		return "", provider.VideoCreateFailed(request, err)

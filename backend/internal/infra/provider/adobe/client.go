@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // doer 通过绑定的出口发起一次 HTTP 请求；egress 的 Lease 即实现了它。
@@ -181,7 +182,7 @@ func (c *client) request(ctx context.Context, method, rawURL string, body io.Rea
 	return resp.StatusCode, data, resp.Header, nil
 }
 
-// submitJob 提交一个生成任务并返回轮询链接。noncePrompt 非空时带官网的图像 x-nonce。
+// submitJob 提交一个生成任务并返回轮询链接。noncePrompt 非空时带官网的 x-nonce。
 func (c *client) submitJob(ctx context.Context, submitURL string, payload map[string]any, noncePrompt string) (submission, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -397,15 +398,16 @@ func bodyText(data map[string]any) string {
 	return string(encoded)
 }
 
-// submitNonce 复刻官网的 sha256(userId-prompt[:256]) 图像 nonce。
+// submitNonce 复刻官网的 sha256(`${userId}-${prompt.slice(0, 256)}`) nonce。slice 按
+// UTF-16 码元截取，切开的代理对经 TextEncoder 编成 U+FFFD，utf16.Decode 也是如此。
 func submitNonce(token, prompt string) string {
 	claims := decodeJWTClaims(token)
 	userID := firstString(claims, "user_id", "aa_id", "sub")
 	if userID == "" || prompt == "" {
 		return ""
 	}
-	if len(prompt) > 256 {
-		prompt = prompt[:256]
+	if units := utf16.Encode([]rune(prompt)); len(units) > 256 {
+		prompt = string(utf16.Decode(units[:256]))
 	}
 	sum := sha256.Sum256([]byte(userID + "-" + prompt))
 	return hex.EncodeToString(sum[:])
