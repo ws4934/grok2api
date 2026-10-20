@@ -91,10 +91,13 @@ func TestApplySkipsPreviousResponseID(t *testing.T) {
 	replay := New(store, Config{Enabled: true, TTL: time.Hour}, slog.Default())
 	enc := validEncrypted(2)
 	replay.StoreFromCompleted(context.Background(), "grok-4.5", "session-b", []byte(`{"output":[{"type":"reasoning","encrypted_content":"`+enc+`"}]}`))
-	body := []byte(`{"previous_response_id":"resp_old","input":[{"type":"message","role":"user","content":"x"}]}`)
-	updated := replay.Apply(context.Background(), "grok-4.5", "session-b", body)
-	if strings.Contains(string(updated), enc) {
-		t.Fatalf("should skip when previous_response_id present: %s", updated)
+	// JSON keys may be spelled with \u escapes; the fast path must not miss them.
+	for _, key := range []string{"previous_response_id", `previous\u005fresponse_id`} {
+		body := []byte(`{"` + key + `":"resp_old","input":[{"type":"message","role":"user","content":"x"}]}`)
+		updated := replay.Apply(context.Background(), "grok-4.5", "session-b", body)
+		if strings.Contains(string(updated), enc) {
+			t.Fatalf("should skip when %s present: %s", key, updated)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package reasoningreplay
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"math"
@@ -8,6 +9,12 @@ import (
 )
 
 func previousResponseIDPresent(body []byte) bool {
+	// Skip the full parse when the key cannot be there. A key spelled with
+	// escapes needs a \u00XX escape, which encoders emit only for control,
+	// HTML-sensitive and Latin-1 characters, so such bodies still get parsed.
+	if !bytes.Contains(body, []byte(`"previous_response_id"`)) && !bytes.Contains(body, []byte(`\u00`)) {
+		return false
+	}
 	var payload struct {
 		PreviousResponseID string `json:"previous_response_id"`
 	}
