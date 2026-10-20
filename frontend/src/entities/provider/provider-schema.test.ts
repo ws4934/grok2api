@@ -6,7 +6,7 @@ import { providerListSchema } from "./provider-schema.ts";
 const entry = {
   id: "chatgpt", name: "ChatGPT", shortName: "ChatGPT", order: 3, capabilities: ["responses", "chat", "image"],
   conversation: { responses: true, chatCompletions: true, messages: true },
-  media: { imageGeneration: true, imageEdit: true, videoGeneration: false, tts: false, stt: false, realtime: false },
+  media: { imageGeneration: true, imageEdit: true, videoGeneration: false, tts: false, stt: false, realtime: false, asyncImages: true },
   quota: "remote_window", usage: "estimated", tierScoped: false, egressScopes: ["chatgpt"],
   credential: { authType: "oauth", import: true, refresh: true, deviceOAuth: false, redirectOAuth: true },
   quotaModes: ["reason", "image_gen", "file_upload"], defaultMaxConcurrent: 1,
@@ -20,14 +20,11 @@ describe("provider catalog schema", () => {
     assert.equal(provider.defaultMaxConcurrent, 1);
   });
 
-  it("defaults fields an older backend omits and accepts any auth type", () => {
-    const older: Record<string, unknown> = { ...entry, credential: { authType: "session", import: true, refresh: false, deviceOAuth: false } };
-    delete older.quotaModes;
-    delete older.defaultMaxConcurrent;
-    const [provider] = providerListSchema.parse([older]);
-    assert.equal(provider.credential.redirectOAuth, false);
+  it("accepts any auth type and rejects an entry missing a field", () => {
+    const [provider] = providerListSchema.parse([{ ...entry, credential: { ...entry.credential, authType: "session" } }]);
     assert.equal(provider.credential.authType, "session");
-    assert.deepEqual(provider.quotaModes, []);
-    assert.equal(provider.defaultMaxConcurrent, 8);
+    const missing: Record<string, unknown> = { ...entry };
+    delete missing.quotaModes;
+    assert.equal(providerListSchema.safeParse([missing]).success, false);
   });
 });

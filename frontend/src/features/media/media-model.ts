@@ -7,66 +7,65 @@ export type MediaJobStatus = (typeof mediaJobStatuses)[number];
 export type MediaKind = "image" | "video";
 export const assetOperations = ["image", "image_edit", "video"] as const;
 
-// Fields other than identity and status default so an older or partial payload still decodes.
 export const mediaJobSchema = z.object({
   id: z.string(),
   kind: z.enum(["image", "video"]),
-  provider: z.string().default(""),
-  model: z.string().default(""),
-  operation: z.string().default(""),
-  prompt: z.string().default(""),
+  provider: z.string(),
+  model: z.string(),
+  operation: z.string(),
+  prompt: z.string(),
   status: z.enum(mediaJobStatuses),
-  progress: z.number().default(0),
-  seconds: z.number().default(0),
-  size: z.string().default(""),
-  quality: z.string().default(""),
-  itemCount: z.number().default(0),
-  assetIds: z.array(z.string()).default([]),
-  accountName: z.string().default(""),
-  clientKeyName: z.string().default(""),
+  progress: z.number(),
+  seconds: z.number(),
+  size: z.string(),
+  quality: z.string(),
+  itemCount: z.number(),
+  assetIds: z.array(z.string()),
+  accountName: z.string(),
+  clientKeyName: z.string(),
   createdAt: z.string(),
-  completedAt: z.string().nullable().default(null),
-  errorCode: z.string().default(""),
-  errorMessage: z.string().default(""),
-  cancellable: z.boolean().default(false),
-  retryable: z.boolean().default(false),
+  completedAt: z.string().nullable(),
+  errorCode: z.string(),
+  errorMessage: z.string(),
+  cancellable: z.boolean(),
+  retryable: z.boolean(),
 });
 export type MediaJobDTO = z.infer<typeof mediaJobSchema>;
 
 // resumed: the same job fetches its result again; otherwise the retry is a new job.
-export const retriedMediaJobSchema = mediaJobSchema.extend({ resumed: z.boolean().default(false) });
+export const retriedMediaJobSchema = mediaJobSchema.extend({ resumed: z.boolean() });
 export type RetriedMediaJobDTO = z.infer<typeof retriedMediaJobSchema>;
 
 export const mediaJobStatsSchema = z.object({
-  totalJobs: z.number().default(0),
-  queued: z.number().default(0),
-  inProgress: z.number().default(0),
-  completed: z.number().default(0),
-  failed: z.number().default(0),
-  canceled: z.number().default(0),
-  uncertain: z.number().default(0),
+  totalJobs: z.number(),
+  queued: z.number(),
+  inProgress: z.number(),
+  completed: z.number(),
+  failed: z.number(),
+  canceled: z.number(),
+  uncertain: z.number(),
 });
 export type MediaJobStatsDTO = z.infer<typeof mediaJobStatsSchema>;
 
-// Origin fields are empty for uploads and assets saved before provenance existed.
+// Origin fields are empty for uploads.
 export const mediaAssetSchema = z.object({
   id: z.string(),
   kind: z.string(),
   mimeType: z.string(),
   sizeBytes: z.number(),
-  sha256: z.string().default(""),
+  sha256: z.string(),
   createdAt: z.string(),
-  provider: z.string().default(""),
-  model: z.string().default(""),
-  upstreamModel: z.string().default(""),
-  clientKeyId: z.number().default(0),
-  clientKeyName: z.string().default(""),
-  accountId: z.number().default(0),
-  accountName: z.string().default(""),
-  operation: z.string().default(""),
-  jobId: z.string().default(""),
-  requestId: z.string().default(""),
-  prompt: z.string().default(""),
+  provider: z.string(),
+  model: z.string(),
+  upstreamModel: z.string(),
+  clientKeyId: z.number(),
+  clientKeyName: z.string(),
+  accountId: z.number(),
+  accountName: z.string(),
+  operation: z.string(),
+  jobId: z.string(),
+  requestId: z.string(),
+  prompt: z.string(),
 });
 export type MediaAssetDTO = z.infer<typeof mediaAssetSchema>;
 

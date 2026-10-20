@@ -121,174 +121,79 @@ const settingsConfigValidator = hasShape({
   server: hasShape({ maxConcurrentRequests: isNumber }),
   providerBuild: hasShape({ baseURL: isString, fallbackBaseURL: isString, clientVersion: isString, clientIdentifier: isString, tokenAuth: isString, tokenAuthConfigured: isBoolean, userAgent: isString, responseHeaderTimeout: isString, streamIdleTimeout: isString }),
   providerWeb: hasShape({
-    baseURL: isString, quotaTimeout: isString, chatTimeout: isString, streamIdleTimeout: isOptional(isString), imageTimeout: isString, videoTimeout: isString,
+    baseURL: isString, quotaTimeout: isString, chatTimeout: isString, streamIdleTimeout: isString, imageTimeout: isString, videoTimeout: isString,
     statsigMode: isOneOf("manual", "url"), statsigManualValue: isOptional(isString), statsigManualConfigured: isBoolean,
     statsigSignerURL: isString, clearanceMode: isOneOf("manual", "flaresolverr", "on_demand"), flareSolverrURL: isString,
     clearanceTimeout: isString, clearanceRefresh: isString, mediaConcurrency: isNumber, allowNSFW: isBoolean, freeVideoDurationCap: isOptional(isNumber), recoveryBackoffBase: isString, recoveryBackoffMax: isString,
   }),
-  providerConsole: hasShape({ baseURL: isString, chatTimeout: isString, streamIdleTimeout: isOptional(isString) }),
-  // Older backends omit the ChatGPT section; withSettingsDefaults fills it in.
-  providerChatGPT: isOptional(hasShape({ imageConversationModel: isString, outputTokenLimit: isNumber, visionTokens: isNumber, defaultImageModel: isString, cloudflareClearance: isBoolean })),
+  providerConsole: hasShape({ baseURL: isString, chatTimeout: isString, streamIdleTimeout: isString }),
+  providerChatGPT: hasShape({ imageConversationModel: isString, outputTokenLimit: isNumber, visionTokens: isNumber, defaultImageModel: isString, cloudflareClearance: isBoolean }),
   batch: hasShape({ importConcurrency: isNumber, conversionConcurrency: isNumber, syncConcurrency: isNumber, refreshConcurrency: isNumber, randomDelay: isString }),
   media: hasShape({ maxImageBytes: isNumber, maxTotalBytes: isNumber, cleanupThresholdPercent: isNumber, cleanupInterval: isString }),
   frontend: hasShape({ publicApiBaseURL: isString }),
   routing: hasShape({
     stickyTTL: isString, cooldownBase: isString, cooldownMax: isString, capacityWait: isString, maxAttempts: isNumber, videoMaxAttempts: isNumber, preferFreeBuild: isBoolean, markBuildChatDeniedAsReauth: isBoolean,
-    accountIsolatedConnections: isOptional(isBoolean),
-    segmentedSelector: isOptional(hasShape({ enabled: isBoolean, minCandidates: isNumber, windowSize: isNumber })),
+    accountIsolatedConnections: isBoolean,
+    segmentedSelector: hasShape({ enabled: isBoolean, minCandidates: isNumber, windowSize: isNumber }),
   }),
   audit: hasShape({
-    bufferSize: isNumber, batchSize: isNumber, flushInterval: isString, commitDelayMS: isOptional(isNumber),
-    retentionDays: isOptional(isNumber),
+    bufferSize: isNumber, batchSize: isNumber, flushInterval: isString, commitDelayMS: isNumber,
+    retentionDays: isNumber,
   }),
   clientKeyDefaults: hasShape({ rpmLimit: isNumber, maxConcurrent: isNumber }),
-  // Older backends may omit accounts; withSettingsDefaults supplies a safe local default.
-  accounts: isOptional(hasShape({
-    autoDisableDegradedAccounts: isOptional(isBoolean),
-    markBuildForbiddenReauth: isOptional(isBoolean),
-    buildForbiddenReauthCodes: isOptional(isArrayOf(isString)),
-    excludeBuildBotFlaggedFromScheduling: isOptional(isBoolean),
+  accounts: hasShape({
+    autoDisableDegradedAccounts: isBoolean,
+    markBuildForbiddenReauth: isBoolean,
+    buildForbiddenReauthCodes: isArrayOf(isString),
+    excludeBuildBotFlaggedFromScheduling: isBoolean,
     autoCleanReauthEnabled: isBoolean,
     autoCleanReauthInterval: isString,
     autoCleanReauthMinAge: isString,
     autoCleanIncludeDisabled: isBoolean,
-  })),
+  }),
 });
-const defaultAccountsConfig = (): SettingsConfigDTO["accounts"] => ({
-  autoDisableDegradedAccounts: false,
-  markBuildForbiddenReauth: false,
-  buildForbiddenReauthCodes: ["permission-denied"],
-  excludeBuildBotFlaggedFromScheduling: false,
-  autoCleanReauthEnabled: false,
-  autoCleanReauthInterval: "10m",
-  autoCleanReauthMinAge: "1h",
-  autoCleanIncludeDisabled: false,
-});
-function withSettingsDefaults(snapshot: SettingsSnapshotDTO): SettingsSnapshotDTO {
-  const accounts = snapshot.config.accounts ?? defaultAccountsConfig();
-  const segmentedSelector = snapshot.config.routing.segmentedSelector ?? { enabled: true, minCandidates: 3000, windowSize: 64 };
-  return {
-    ...snapshot,
-    config: {
-      ...snapshot.config,
-      providerWeb: {
-        ...snapshot.config.providerWeb,
-        streamIdleTimeout: snapshot.config.providerWeb.streamIdleTimeout || "1m30s",
-      },
-      providerConsole: {
-        ...snapshot.config.providerConsole,
-        streamIdleTimeout: snapshot.config.providerConsole.streamIdleTimeout || "2m",
-      },
-      providerChatGPT: snapshot.config.providerChatGPT ?? { imageConversationModel: "", outputTokenLimit: 16384, visionTokens: 256, defaultImageModel: "", cloudflareClearance: false },
-      audit: {
-        ...snapshot.config.audit,
-        commitDelayMS: snapshot.config.audit.commitDelayMS ?? 5,
-        retentionDays: snapshot.config.audit.retentionDays ?? 7,
-      },
-      routing: {
-        ...snapshot.config.routing,
-        markBuildChatDeniedAsReauth: snapshot.config.routing.markBuildChatDeniedAsReauth ?? false,
-        accountIsolatedConnections: snapshot.config.routing.accountIsolatedConnections ?? false,
-        segmentedSelector: {
-          enabled: segmentedSelector.enabled ?? true,
-          minCandidates: segmentedSelector.minCandidates || 3000,
-          windowSize: segmentedSelector.windowSize || 64,
-        },
-      },
-      accounts: {
-        autoDisableDegradedAccounts: accounts.autoDisableDegradedAccounts ?? false,
-        markBuildForbiddenReauth: accounts.markBuildForbiddenReauth ?? false,
-        buildForbiddenReauthCodes: accounts.buildForbiddenReauthCodes ?? ["permission-denied"],
-        excludeBuildBotFlaggedFromScheduling: accounts.excludeBuildBotFlaggedFromScheduling ?? false,
-        autoCleanReauthEnabled: accounts.autoCleanReauthEnabled ?? false,
-        autoCleanReauthInterval: accounts.autoCleanReauthInterval || "10m",
-        autoCleanReauthMinAge: accounts.autoCleanReauthMinAge || "1h",
-        autoCleanIncludeDisabled: accounts.autoCleanIncludeDisabled ?? false,
-      },
-    },
-  };
-}
-const decodeSettingsSnapshotRaw = createObjectDecoder<SettingsSnapshotDTO>("settings", {
+const decodeSettingsSnapshot = createObjectDecoder<SettingsSnapshotDTO>("settings", {
   config: settingsConfigValidator,
   recommendedProviderBuild: hasShape({ clientVersion: isString, userAgent: isString }),
   updatedAt: isString,
   revision: isString,
   restartRequired: isArrayOf(isString),
 });
-const decodeSettingsSnapshot = (value: unknown) => withSettingsDefaults(decodeSettingsSnapshotRaw(value));
 const egressIPProbeValidator = hasShape({
   status: isOneOf("unknown", "healthy", "unhealthy"), testedAt: isOptional(isString), latencyMs: isNumber, exitIp: isOptional(isString), error: isOptional(isString),
-});
-type EgressNodeWireDTO = Omit<EgressNodeDTO, "ipv4Probe" | "ipv6Probe"> & { ipv4Probe?: EgressIPProbeDTO; ipv6Probe?: EgressIPProbeDTO };
-type EgressSourceWireDTO = Omit<EgressSourceDTO, "proxyConfigured"> & { proxyConfigured?: boolean };
-type EgressOperationsConfigWireDTO = Omit<EgressOperationsConfigDTO, "probeProvider"> & {
-  probeProvider?: "ipinfo" | "cloudflare";
-};
-type EgressProbeResultWireDTO = Omit<EgressProbeResultDTO, "ipv4" | "ipv6"> & { ipv4?: EgressIPProbeDTO; ipv6?: EgressIPProbeDTO };
-const unknownEgressIPProbe = (): EgressIPProbeDTO => ({ status: "unknown", latencyMs: 0 });
-const withEgressNodeProbeDefaults = (value: EgressNodeWireDTO): EgressNodeDTO => ({
-  ...value,
-  ipv4Probe: value.ipv4Probe ?? unknownEgressIPProbe(),
-  ipv6Probe: value.ipv6Probe ?? unknownEgressIPProbe(),
-});
-const withEgressSourceDefaults = (value: EgressSourceWireDTO): EgressSourceDTO => ({
-  ...value,
-  proxyConfigured: value.proxyConfigured ?? false,
 });
 const egressNodeValidator = hasShape({
   id: isString, name: isString, scope: isString, enabled: isBoolean,
   proxyConfigured: isBoolean, proxyDisplay: isOptional(isString), proxyFingerprint: isOptional(isString), userAgent: isString, cookieConfigured: isBoolean, accountBoundProxy: isBoolean, proxyPool: isBoolean, health: isNumber, failureCount: isNumber,
   sourceId: isOptional(isString), proxyProfileId: isOptional(isString), proxyProfileName: isOptional(isString), accountCapacity: isNumber, assignedAccountCount: isNumber,
   probeStatus: isOneOf("unknown", "healthy", "unhealthy"), lastProbedAt: isOptional(isString), probeLatencyMs: isNumber, exitIp: isOptional(isString), probeError: isOptional(isString), probeProvider: isOptional(isOneOf("ipinfo", "cloudflare")),
-  ipv4Probe: isOptional(egressIPProbeValidator), ipv6Probe: isOptional(egressIPProbeValidator),
+  ipv4Probe: egressIPProbeValidator, ipv6Probe: egressIPProbeValidator,
   cooldownUntil: isOptional(isString), lastError: isOptional(isString),
 });
-const decodeEgressNodeRaw = createValidatedDecoder<EgressNodeWireDTO>("egress node", egressNodeValidator);
-const decodeEgressNode = (value: unknown) => withEgressNodeProbeDefaults(decodeEgressNodeRaw(value));
+const decodeEgressNode = createValidatedDecoder<EgressNodeDTO>("egress node", egressNodeValidator);
 const egressProxyProfileValidator = hasShape({
   id: isString, name: isString, proxyDisplay: isOptional(isString), proxyFingerprint: isOptional(isString),
   boundNodeCount: isNumber, createdAt: isString, updatedAt: isString,
 });
 const decodeEgressProxyProfile = createValidatedDecoder<EgressProxyProfileDTO>("egress proxy profile", egressProxyProfileValidator);
 const decodeEgressProxyProfiles = createObjectDecoder<EgressProxyProfileListDTO>("egress proxy profiles", { items: isArrayOf(egressProxyProfileValidator), page: isNumber, pageSize: isNumber, total: isNumber });
-type EgressNodeListWireDTO = {
-  items: EgressNodeWireDTO[];
-  page?: number;
-  pageSize?: number;
-  total?: number;
-  defaultUserAgents: Omit<Record<EgressScope, string>, "grok_console_asset"> & { grok_console_asset?: string };
-};
-const decodeEgressNodeListRaw = createObjectDecoder<EgressNodeListWireDTO>("egress node list", {
+const decodeEgressNodeList = createObjectDecoder<EgressNodeListDTO>("egress node list", {
   items: isArrayOf(egressNodeValidator),
-  page: isOptional(isNumber),
-  pageSize: isOptional(isNumber),
-  total: isOptional(isNumber),
-  defaultUserAgents: hasShape({ grok_build: isString, grok_web: isString, grok_console: isString, grok_web_asset: isString, grok_console_asset: isOptional(isString) }),
+  page: isNumber,
+  pageSize: isNumber,
+  total: isNumber,
+  defaultUserAgents: hasShape({ grok_build: isString, grok_web: isString, grok_console: isString, grok_web_asset: isString, grok_console_asset: isString }),
 });
-const decodeEgressNodeList = (value: unknown): EgressNodeListDTO => {
-  const decoded = decodeEgressNodeListRaw(value);
-  return {
-    ...decoded,
-    items: decoded.items.map(withEgressNodeProbeDefaults),
-    page: decoded.page ?? 1,
-    pageSize: decoded.pageSize ?? Math.max(20, decoded.items.length),
-    total: decoded.total ?? decoded.items.length,
-    defaultUserAgents: {
-      ...decoded.defaultUserAgents,
-      grok_console_asset: decoded.defaultUserAgents.grok_console_asset ?? decoded.defaultUserAgents.grok_console,
-    },
-  };
-};
 const egressSourceValidator = hasShape({
   id: isString, name: isString, scope: isString, enabled: isBoolean, urlConfigured: isBoolean,
-  proxyConfigured: isOptional(isBoolean),
+  proxyConfigured: isBoolean,
   refreshIntervalSeconds: isNumber, defaultAccountCapacity: isNumber, lastSyncedAt: isOptional(isString), nextSyncAt: isOptional(isString),
   lastSyncImported: isNumber, lastSyncError: isOptional(isString),
 });
-const decodeEgressSourceRaw = createValidatedDecoder<EgressSourceWireDTO>("egress source", egressSourceValidator);
-const decodeEgressSource = (value: unknown) => withEgressSourceDefaults(decodeEgressSourceRaw(value));
+const decodeEgressSource = createValidatedDecoder<EgressSourceDTO>("egress source", egressSourceValidator);
+// The unpaginated list (no page/pageSize/search/scope) returns only items.
 type EgressSourceListWireDTO = {
-  items: EgressSourceWireDTO[];
+  items: EgressSourceDTO[];
   page?: number;
   pageSize?: number;
   total?: number;
@@ -300,7 +205,6 @@ const decodeEgressSourceList = (value: unknown): EgressSourceListDTO => {
   const decoded = decodeEgressSourceListRaw(value);
   return {
     ...decoded,
-    items: decoded.items.map(withEgressSourceDefaults),
     page: decoded.page ?? 1,
     pageSize: decoded.pageSize ?? Math.max(20, decoded.items.length),
     total: decoded.total ?? decoded.items.length,
@@ -310,22 +214,14 @@ const decodeEgressImportResult = createObjectDecoder<EgressImportResultDTO>("egr
 const decodeEgressProbeBatchResult = createObjectDecoder<EgressProbeBatchResultDTO>("egress probe result", { requested: isNumber, healthy: isNumber, unhealthy: isNumber });
 const decodeEgressRebalanceResult = createObjectDecoder<EgressRebalanceResultDTO>("egress rebalance result", { assigned: isNumber, rebalanced: isNumber, unplaced: isNumber });
 const egressFallbackConfigValidator = hasShape({ mode: isOneOf("none", "direct", "fixed"), nodeId: isOptional(isString) });
-const decodeEgressOperationsConfigRaw = createObjectDecoder<EgressOperationsConfigWireDTO>("egress operations config", {
-  probeProvider: isOptional(isOneOf("ipinfo", "cloudflare")), probeIntervalSeconds: isNumber, autoAssignEnabled: isBoolean, autoBalanceEnabled: isBoolean, assignmentIntervalSeconds: isNumber,
+const decodeEgressOperationsConfig = createObjectDecoder<EgressOperationsConfigDTO>("egress operations config", {
+  probeProvider: isOneOf("ipinfo", "cloudflare"), probeIntervalSeconds: isNumber, autoAssignEnabled: isBoolean, autoBalanceEnabled: isBoolean, assignmentIntervalSeconds: isNumber,
   fallbacks: isRecordOf(egressFallbackConfigValidator), updatedAt: isString,
 });
-const decodeEgressOperationsConfig = (value: unknown): EgressOperationsConfigDTO => {
-  const decoded = decodeEgressOperationsConfigRaw(value);
-  return { ...decoded, probeProvider: decoded.probeProvider ?? "cloudflare" };
-};
-const decodeEgressProbeResultRaw = createObjectDecoder<EgressProbeResultWireDTO>("egress probe", {
+const decodeEgressProbeResult = createObjectDecoder<EgressProbeResultDTO>("egress probe", {
   status: isOneOf("unknown", "healthy", "unhealthy"), testedAt: isString, latencyMs: isNumber, exitIp: isOptional(isString), error: isOptional(isString), probeProvider: isOptional(isOneOf("ipinfo", "cloudflare")),
-  ipv4: isOptional(egressIPProbeValidator), ipv6: isOptional(egressIPProbeValidator),
+  ipv4: egressIPProbeValidator, ipv6: egressIPProbeValidator,
 });
-const decodeEgressProbeResult = (value: unknown): EgressProbeResultDTO => {
-  const decoded = decodeEgressProbeResultRaw(value);
-  return { ...decoded, ipv4: decoded.ipv4 ?? unknownEgressIPProbe(), ipv6: decoded.ipv6 ?? unknownEgressIPProbe() };
-};
 
 export function getSettings(): Promise<SettingsSnapshotDTO> {
   return apiRequest("/api/admin/v1/settings", {}, decodeSettingsSnapshot);

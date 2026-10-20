@@ -134,8 +134,8 @@ export type AuditSummaryDTO = {
     unpricedRequests: number;
     pricedTokens: number;
     unpricedTokens: number;
-    // Priced requests billed by an administrator custom price; older servers omit it.
-    customPricedRequests?: number;
+    // Priced requests billed by an administrator custom price.
+    customPricedRequests: number;
   };
 };
 
@@ -183,7 +183,7 @@ const decodeAuditSummary = createObjectDecoder<AuditSummaryDTO>("audit summary",
     averageDurationMs: isNumber, successRate: isNumber, estimatedCostInUsdTicks: isNumber,
   }),
   pricing: hasShape({
-    source: isString, asOf: isString, pricedRequests: isNumber, unpricedRequests: isNumber, pricedTokens: isNumber, unpricedTokens: isNumber, customPricedRequests: isOptional(isNumber),
+    source: isString, asOf: isString, pricedRequests: isNumber, unpricedRequests: isNumber, pricedTokens: isNumber, unpricedTokens: isNumber, customPricedRequests: isNumber,
   }),
 });
 const decodeAuditDetail = createObjectDecoder<AuditDetailDTO>("audit detail", {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { galleryQuery, localDayStart, mediaAssetPath, mediaAssetSchema, mediaJobActions, mediaJobSchema, mediaJobsQuery, mediaJobsRefetchInterval, mediaJobStatsSchema, pageSchema, retriedMediaJobSchema, type MediaJobStatus } from "./media-model.ts";
+import { galleryQuery, localDayStart, mediaAssetPath, mediaAssetSchema, mediaJobActions, mediaJobSchema, mediaJobsQuery, mediaJobsRefetchInterval, pageSchema, retriedMediaJobSchema, type MediaJobStatus } from "./media-model.ts";
 
 describe("media jobs query", () => {
   it("sends only set filters and pairs sort fields", () => {
@@ -73,40 +73,41 @@ describe("media jobs polling", () => {
   });
 });
 
+// The job payload the server sends: every field present, empty values where unset.
+const jobPayload = {
+  id: "img_1", kind: "image", provider: "", model: "", operation: "", prompt: "", status: "queued", progress: 0, seconds: 0,
+  size: "", quality: "", itemCount: 1, assetIds: [], accountName: "", clientKeyName: "", createdAt: "2026-10-18T00:00:00Z",
+  completedAt: null, errorCode: "", errorMessage: "", cancellable: true, retryable: false,
+};
+
 describe("media job retry result", () => {
   it("tells a resumed job from a new one", () => {
-    const base = { id: "resp_img_1", kind: "image", status: "in_progress", createdAt: "2026-10-18T00:00:00Z" };
-    assert.equal(retriedMediaJobSchema.parse({ ...base, resumed: true }).resumed, true);
-    assert.equal(retriedMediaJobSchema.parse(base).resumed, false);
+    assert.equal(retriedMediaJobSchema.parse({ ...jobPayload, resumed: true }).resumed, true);
+    assert.equal(retriedMediaJobSchema.parse({ ...jobPayload, resumed: false }).resumed, false);
   });
 });
 
 describe("media decoders", () => {
-  it("defaults optional job fields", () => {
-    const decoded = mediaJobSchema.parse({ id: "img_1", kind: "image", status: "queued", createdAt: "2026-10-18T00:00:00Z" });
-    assert.deepEqual(decoded.assetIds, []);
-    assert.equal(decoded.completedAt, null);
-    assert.equal(decoded.cancellable, false);
-    assert.equal(decoded.errorCode, "");
-    assert.equal(decoded.itemCount, 0);
+  it("decodes a job and rejects one missing a field", () => {
+    assert.equal(mediaJobSchema.parse(jobPayload).completedAt, null);
+    const missing: Record<string, unknown> = { ...jobPayload };
+    delete missing.errorCode;
+    assert.throws(() => mediaJobSchema.parse(missing));
   });
 
   it("rejects unknown statuses and kinds", () => {
-    assert.throws(() => mediaJobSchema.parse({ id: "x", kind: "image", status: "paused", createdAt: "" }));
-    assert.throws(() => mediaJobSchema.parse({ id: "x", kind: "audio", status: "queued", createdAt: "" }));
+    assert.throws(() => mediaJobSchema.parse({ ...jobPayload, status: "paused" }));
+    assert.throws(() => mediaJobSchema.parse({ ...jobPayload, kind: "audio" }));
   });
 
-  it("decodes stats without the new counters", () => {
-    assert.deepEqual(mediaJobStatsSchema.parse({ totalJobs: 3, queued: 1, inProgress: 1, completed: 1, failed: 0 }), { totalJobs: 3, queued: 1, inProgress: 1, completed: 1, failed: 0, canceled: 0, uncertain: 0 });
-  });
-
-  it("decodes assets saved before provenance", () => {
+  it("decodes an uploaded asset with empty provenance", () => {
     const page = pageSchema(mediaAssetSchema).parse({
-      items: [{ id: "a", kind: "image", mimeType: "image/png", sizeBytes: 10, sha256: "h", createdAt: "2026-10-18T00:00:00Z", url: "http://x/v1/media/images/a" }],
+      items: [{
+        id: "a", kind: "image", mimeType: "image/png", sizeBytes: 10, sha256: "h", createdAt: "2026-10-18T00:00:00Z", url: "http://x/v1/media/images/a",
+        provider: "", model: "", upstreamModel: "", clientKeyId: 0, clientKeyName: "", accountId: 0, accountName: "", operation: "", jobId: "", requestId: "", prompt: "",
+      }],
       page: 1, pageSize: 20, total: 1,
     });
-    assert.equal(page.items[0].provider, "");
-    assert.equal(page.items[0].clientKeyId, 0);
     assert.equal(page.items[0].jobId, "");
   });
 });
