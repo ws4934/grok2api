@@ -109,7 +109,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			}
 			lease = &accountLease{Credential: credential, QuotaMode: quotaMode}
 		} else if pinnedAccountID > 0 && !excluded[pinnedAccountID] {
-			lease, err = s.selector.AcquirePinned(ctx, route.Provider, pinnedAccountID, route.ID, route.UpstreamModel, quotaMode, true)
+			lease, err = s.selector.AcquirePinnedForKey(ctx, route.Provider, pinnedAccountID, route.ID, route.UpstreamModel, quotaMode, true, accountScope)
 			if err != nil {
 				excluded[pinnedAccountID] = true
 				lease = nil

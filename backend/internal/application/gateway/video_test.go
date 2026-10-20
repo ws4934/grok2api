@@ -1276,6 +1276,20 @@ func TestVideoRetryDoesNotEscapeClientKeyAccountScope(t *testing.T) {
 			t.Fatalf("worker shutdown must not invoke the upstream, got attempts %#v", attempts)
 		}
 	})
+	t.Run("a job pinned outside the scope does not run there", func(t *testing.T) {
+		outsideJob := job
+		outsideJob.ID, outsideJob.RequestID = "video_scope_pinned_outside", "request-video-scope-pinned-outside"
+		outsideJob.AccountID, outsideJob.AccountName = outOfScope.ID, outOfScope.Name
+		if err := mediaRepo.CreateMediaJob(ctx, outsideJob); err != nil {
+			t.Fatal(err)
+		}
+		service.runVideoJob(ctx, outsideJob, route)
+		for _, attempted := range adapter.Attempts() {
+			if attempted == outOfScope.ID {
+				t.Fatalf("job pinned to out-of-scope account %d ran there", outOfScope.ID)
+			}
+		}
+	})
 
 	if err := mediaRepo.CreateMediaJob(ctx, job); err != nil {
 		t.Fatal(err)
