@@ -139,7 +139,7 @@ func normalizePhysicalPlane(value string) string {
 
 func normalizePhysicalStage(value string) string {
 	switch strings.TrimSpace(value) {
-	case "primary", "plane_fallback", "reasoning_replay", "reasoning_session_reset", "compaction", "compaction_retry", "anti_bot_retry", "statsig_meta":
+	case "primary", "plane_fallback", "reasoning_replay", "reasoning_session_reset", "compaction", "compaction_retry", "statsig_meta":
 		return strings.TrimSpace(value)
 	default:
 		return "other"
