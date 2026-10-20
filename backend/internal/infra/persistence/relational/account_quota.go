@@ -31,8 +31,9 @@ func (r *AccountRepository) UpsertModelQuotaBlock(ctx context.Context, value acc
 	err := r.db.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "account_id"}, {Name: "upstream_model"}},
 		DoUpdates: clause.Assignments(map[string]any{
-			"reason":         gorm.Expr("CASE WHEN cooldown_until > ? THEN reason ELSE ? END", row.CooldownUntil, row.Reason),
-			"cooldown_until": gorm.Expr("CASE WHEN cooldown_until > ? THEN cooldown_until ELSE ? END", row.CooldownUntil, row.CooldownUntil), "updated_at": now,
+			// PostgreSQL rejects bare column names here: they could mean the row or EXCLUDED.
+			"reason":         gorm.Expr("CASE WHEN account_model_quota_blocks.cooldown_until > ? THEN account_model_quota_blocks.reason ELSE ? END", row.CooldownUntil, row.Reason),
+			"cooldown_until": gorm.Expr("CASE WHEN account_model_quota_blocks.cooldown_until > ? THEN account_model_quota_blocks.cooldown_until ELSE ? END", row.CooldownUntil, row.CooldownUntil), "updated_at": now,
 		}),
 	}).Create(&row).Error
 	if err == nil {

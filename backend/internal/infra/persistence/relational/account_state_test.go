@@ -139,3 +139,34 @@ func containsAccountID(values []uint64, id uint64) bool {
 	}
 	return false
 }
+
+func TestUpsertModelQuotaBlockKeepsTheLaterCooldown(t *testing.T) {
+	accountStateDatabases(t, func(t *testing.T, database *Database) {
+		ctx := context.Background()
+		repo := NewAccountRepository(database)
+		created, _, err := repo.UpsertByIdentity(ctx, account.Credential{
+			Provider: account.ProviderBuild, Name: "blocked", SourceKey: "blocked-" + uuid.NewString(),
+			EncryptedAccessToken: "access", ExpiresAt: time.Now().UTC().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC().Truncate(time.Second)
+		check := func(reason string, until time.Time, wantReason string, wantUntil time.Time) {
+			t.Helper()
+			if err := repo.UpsertModelQuotaBlock(ctx, account.ModelQuotaBlock{AccountID: created.ID, UpstreamModel: "grok-x", Reason: reason, CooldownUntil: until}); err != nil {
+				t.Fatal(err)
+			}
+			var row accountModelQuotaBlockModel
+			if err := database.db.WithContext(ctx).Where("account_id = ? AND upstream_model = ?", created.ID, "grok-x").First(&row).Error; err != nil {
+				t.Fatal(err)
+			}
+			if row.Reason != wantReason || !row.CooldownUntil.Equal(wantUntil) {
+				t.Fatalf("block = %q until %v, want %q until %v", row.Reason, row.CooldownUntil, wantReason, wantUntil)
+			}
+		}
+		check("first", now.Add(time.Hour), "first", now.Add(time.Hour))
+		check("shorter", now.Add(time.Minute), "first", now.Add(time.Hour))
+		check("longer", now.Add(2*time.Hour), "longer", now.Add(2*time.Hour))
+	})
+}
