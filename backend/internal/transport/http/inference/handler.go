@@ -246,14 +246,10 @@ func (h *Handler) createChatCompletion(c *gin.Context) {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "Chat Completions 请求缺少有效 model")
 		return
 	}
-	clientValue, exists := c.Get(middleware.ClientKey)
-	clientKey, ok := clientValue.(clientkeydomain.Key)
-	if !exists || !ok {
-		writeOpenAIError(c, http.StatusUnauthorized, "invalid_api_key", "客户端 API Key 无效")
+	clientKey, requestIDValue, ok := requestIdentity(c)
+	if !ok {
 		return
 	}
-	requestID, _ := c.Get(middleware.RequestIDKey)
-	requestIDValue, _ := requestID.(string)
 	result, err := h.gateway.CreateChatCompletion(c.Request.Context(), gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
 		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
@@ -352,14 +348,10 @@ func (h *Handler) handleCreate(c *gin.Context, compact bool) {
 		}
 		request.Stream = false
 	}
-	clientValue, exists := c.Get(middleware.ClientKey)
-	clientKey, ok := clientValue.(clientkeydomain.Key)
-	if !exists || !ok {
-		writeOpenAIError(c, http.StatusUnauthorized, "invalid_api_key", "客户端 API Key 无效")
+	clientKey, requestIDValue, ok := requestIdentity(c)
+	if !ok {
 		return
 	}
-	requestID, _ := c.Get(middleware.RequestIDKey)
-	requestIDValue, _ := requestID.(string)
 	if !compact && h.handleImageResponse(c, body, clientKey, requestIDValue) {
 		return
 	}
@@ -422,10 +414,8 @@ func (h *Handler) deleteResponse(c *gin.Context) {
 }
 
 func (h *Handler) handleOwnedResource(c *gin.Context, deleteResource bool) {
-	clientValue, exists := c.Get(middleware.ClientKey)
-	clientKey, ok := clientValue.(clientkeydomain.Key)
-	if !exists || !ok {
-		writeOpenAIError(c, http.StatusUnauthorized, "invalid_api_key", "客户端 API Key 无效")
+	clientKey, _, ok := requestIdentity(c)
+	if !ok {
 		return
 	}
 	input := gateway.ResourceInput{ClientKey: clientKey, ResponseID: strings.TrimSpace(c.Param("responseId")), RawQuery: c.Request.URL.RawQuery}
