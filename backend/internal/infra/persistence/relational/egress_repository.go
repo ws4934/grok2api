@@ -446,6 +446,11 @@ func (r *EgressRepository) UpdateEgressSourceSync(ctx context.Context, id uint64
 	return nil
 }
 
+// subscriptionEntryRemoved marks the probe errors of a node that its
+// subscription dropped. A sync re-enables only nodes still carrying it, so an
+// administrator's disable survives.
+const subscriptionEntryRemoved = "subscription entry removed"
+
 // UpsertEgressNodesFromSource replaces the active representation of a source
 // atomically. Stale nodes are disabled instead of deleted so auto-assigned
 // accounts can be moved by the next balancing cycle without touching manual
@@ -473,7 +478,7 @@ func (r *EgressRepository) UpsertEgressNodesFromSource(ctx context.Context, sour
 			if err := tx.Clauses(clause.OnConflict{
 				Columns: []clause.Column{{Name: "source_id"}, {Name: "source_key"}},
 				DoUpdates: clause.Assignments(map[string]any{
-					"name": row.Name, "scope": row.Scope, "enabled": row.Enabled, "proxy_pool": row.ProxyPool,
+					"name": row.Name, "scope": row.Scope, "proxy_pool": row.ProxyPool,
 					"account_capacity": row.AccountCapacity, "encrypted_proxy_url": row.EncryptedProxyURL,
 					"updated_at": time.Now().UTC(),
 				}),
@@ -486,14 +491,22 @@ func (r *EgressRepository) UpsertEgressNodesFromSource(ctx context.Context, sour
 				existing[value.SourceKey] = struct{}{}
 			}
 		}
-		stale := tx.Model(&egressNodeModel{}).Where("source_id = ?", sourceID)
+		// Entries that came back end their stale disable.
+		if len(keys) > 0 {
+			if err := tx.Model(&egressNodeModel{}).Where("source_id = ? AND source_key IN ? AND probe_error = ?", sourceID, keys, subscriptionEntryRemoved).Updates(map[string]any{
+				"enabled": true, "probe_error": "", "ipv4_probe_error": "", "ipv6_probe_error": "", "updated_at": time.Now().UTC(),
+			}).Error; err != nil {
+				return mapError(err)
+			}
+		}
+		stale := tx.Model(&egressNodeModel{}).Where("source_id = ? AND enabled = ?", sourceID, true)
 		if len(keys) > 0 {
 			stale = stale.Where("source_key NOT IN ?", keys)
 		}
 		if err := stale.Updates(map[string]any{
-			"enabled": false, "probe_status": string(egress.ProbeStatusUnknown), "probe_error": "subscription entry removed", "probe_provider": "",
-			"ipv4_probe_status": string(egress.ProbeStatusUnknown), "ipv4_last_probed_at": nil, "ipv4_probe_latency_ms": 0, "ipv4_exit_ip": "", "ipv4_probe_error": "subscription entry removed",
-			"ipv6_probe_status": string(egress.ProbeStatusUnknown), "ipv6_last_probed_at": nil, "ipv6_probe_latency_ms": 0, "ipv6_exit_ip": "", "ipv6_probe_error": "subscription entry removed",
+			"enabled": false, "probe_status": string(egress.ProbeStatusUnknown), "probe_error": subscriptionEntryRemoved, "probe_provider": "",
+			"ipv4_probe_status": string(egress.ProbeStatusUnknown), "ipv4_last_probed_at": nil, "ipv4_probe_latency_ms": 0, "ipv4_exit_ip": "", "ipv4_probe_error": subscriptionEntryRemoved,
+			"ipv6_probe_status": string(egress.ProbeStatusUnknown), "ipv6_last_probed_at": nil, "ipv6_probe_latency_ms": 0, "ipv6_exit_ip": "", "ipv6_probe_error": subscriptionEntryRemoved,
 			"updated_at": time.Now().UTC(),
 		}).Error; err != nil {
 			return mapError(err)
