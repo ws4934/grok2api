@@ -68,7 +68,6 @@ const (
 )
 
 const (
-	auditEnqueueWait         = 25 * time.Millisecond
 	auditWriteTimeout        = 2 * time.Second
 	auditWriteAttempts       = 3
 	auditWriteRetryBase      = 250 * time.Millisecond
@@ -253,11 +252,6 @@ func (s *Service) Start() {
 	})
 }
 
-// Record 将审计写入有界队列；突发满载时短暂等待，持续拥塞才降级丢弃审计。
-func (s *Service) Record(value auditdomain.Record) bool {
-	return s.enqueueBestEffort(context.Background(), auditWriteRequest{record: sanitizeRequestMetadata(value)}) == nil
-}
-
 // Create returns success only after the audit and billing transaction commits.
 func (s *Service) Create(ctx context.Context, value auditdomain.Record) error {
 	return s.createAcknowledged(ctx, value)
@@ -378,34 +372,6 @@ func (s *Service) tryEnqueue(request auditWriteRequest) error {
 		return nil
 	default:
 		return ErrQueueFull
-	}
-}
-
-func (s *Service) enqueueBestEffort(ctx context.Context, request auditWriteRequest) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := s.tryEnqueue(request); !errors.Is(err, ErrQueueFull) {
-		return err
-	}
-	s.queueWaiters.Add(1)
-	defer s.queueWaiters.Add(-1)
-	timer := time.NewTimer(auditEnqueueWait)
-	defer timer.Stop()
-	for {
-		if err := s.tryEnqueue(request); !errors.Is(err, ErrQueueFull) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-s.stop:
-			return ErrWriterUnavailable
-		case <-timer.C:
-			s.recordEnqueueDrop(request, "queue_full")
-			return ErrQueueFull
-		case <-s.queueSpace:
-		}
 	}
 }
 

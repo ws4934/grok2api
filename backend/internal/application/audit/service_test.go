@@ -109,11 +109,11 @@ func TestAuditBatchRetriesTransientDatabaseFailure(t *testing.T) {
 	repo := &flakyAuditRepository{failures: 5}
 	service := NewService(repo, slog.Default(), 8, 4, time.Hour)
 	service.Start()
-	if !service.Record(auditdomain.Record{RequestID: "retry", StatusCode: 200}) {
-		t.Fatal("record was not queued")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if err := service.Create(ctx, auditdomain.Record{RequestID: "retry", StatusCode: 200}); err != nil {
+		t.Fatal(err)
+	}
 	if err := service.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -126,11 +126,11 @@ func TestAuditBatchRecoversRepositoryPanicAndRetries(t *testing.T) {
 	repo := &panicAuditRepository{}
 	service := NewService(repo, slog.Default(), 8, 1, time.Hour)
 	service.Start()
-	if !service.Record(auditdomain.Record{RequestID: "panic-retry", StatusCode: 200}) {
-		t.Fatal("record was not queued")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if err := service.Create(ctx, auditdomain.Record{RequestID: "panic-retry", StatusCode: 200}); err != nil {
+		t.Fatal(err)
+	}
 	if err := service.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -219,22 +219,9 @@ func TestCreateRequiresStartedWriter(t *testing.T) {
 	}
 }
 
-func TestCloseStartsWriterAndFlushesPrestartRecords(t *testing.T) {
-	repo := newGatedAuditRepository()
-	close(repo.release)
-	service := NewService(repo, slog.Default(), 8, 8, time.Hour)
-	if !service.Record(auditdomain.Record{EventID: "prestart-record"}) {
-		t.Fatal("record was not queued")
-	}
+func TestCloseWithoutStartReturns(t *testing.T) {
+	service := NewService(&toggleAuditRepository{}, slog.Default(), 8, 8, time.Hour)
 	closeAuditService(t, service)
-	if calls := repo.calls.Load(); calls != 1 {
-		t.Fatalf("CreateBatch calls = %d", calls)
-	}
-	select {
-	case <-repo.committed:
-	default:
-		t.Fatal("prestart record was not committed")
-	}
 }
 
 func TestAcknowledgedWritesWaitForCommitAndCoalesce(t *testing.T) {
@@ -297,8 +284,9 @@ func TestAcknowledgedWriteUsesCallerBudgetWhenQueueIsFull(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("first batch did not start")
 	}
-	if !service.Record(auditdomain.Record{EventID: "evt_queue_budget_buffered_02", RequestID: "buffered", ClientKeyID: 1, ModelRouteID: 1, StatusCode: 200, CreatedAt: time.Now().UTC()}) {
-		t.Fatal("failed to fill the audit queue")
+	buffered := auditWriteRequest{record: auditdomain.Record{EventID: "evt_queue_budget_buffered_02", RequestID: "buffered", ClientKeyID: 1, ModelRouteID: 1, StatusCode: 200, CreatedAt: time.Now().UTC()}, ack: make(chan error, 1)}
+	if err := service.tryEnqueue(buffered); err != nil {
+		t.Fatalf("failed to fill the audit queue: %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -310,7 +298,7 @@ func TestAcknowledgedWriteUsesCallerBudgetWhenQueueIsFull(t *testing.T) {
 	select {
 	case err := <-ackResult:
 		t.Fatalf("acknowledged write returned before queue capacity recovered: %v", err)
-	case <-time.After(2 * auditEnqueueWait):
+	case <-time.After(50 * time.Millisecond):
 	}
 
 	close(repo.release)
@@ -486,8 +474,8 @@ func TestLedgerReadinessDetectsSustainedQueuePressure(t *testing.T) {
 	service := NewService(&toggleAuditRepository{}, slog.Default(), 2, 2, time.Hour)
 	service.now = func() time.Time { return now }
 	service.UpdateLedgerConfig(LedgerConfig{Mode: LedgerModeEnforce, FailureThreshold: 3, UnhealthyGrace: time.Second, QueueHighWatermarkPercent: 50})
-	if !service.Record(auditdomain.Record{EventID: "queued"}) {
-		t.Fatal("record was not queued")
+	if err := service.tryEnqueue(auditWriteRequest{record: auditdomain.Record{EventID: "queued"}}); err != nil {
+		t.Fatalf("record was not queued: %v", err)
 	}
 	if snapshot := service.LedgerSnapshot(); !snapshot.Ready {
 		t.Fatalf("queue pressure should honor grace: %#v", snapshot)
@@ -517,8 +505,8 @@ func TestCommitObserverRunsOnlyAfterDurableCommit(t *testing.T) {
 	if err := service.Create(context.Background(), auditdomain.Record{EventID: "sync"}); err != nil {
 		t.Fatal(err)
 	}
-	if !service.Record(auditdomain.Record{EventID: "batch"}) {
-		t.Fatal("record was not queued")
+	if err := service.Create(context.Background(), auditdomain.Record{EventID: "batch"}); err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
