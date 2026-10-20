@@ -23,17 +23,14 @@ type modelVersion struct {
 	// --- 取值（schema）---
 	fields          []string // 请求体顶层字段里模型接受的那些，其余不发
 	aspects         []string // 可选比例（含 auto）；顺序即就近对齐的平局优先级
-	aspectDefault   string   // generationSettings.aspectRatio 的默认值
 	settingsAspect  bool     // 有 generationSettings.aspectRatio
 	tiers           []string // 可选分辨率档位
-	tierDefault     string   // resolution 的默认值
 	sizes           []pixels // 可选的具体尺寸
 	durations       []int    // 可选时长；为空时取 minDuration–maxDuration
 	minDuration     int
 	maxDuration     int
 	defaultDuration int                   // 没传时长时用它
 	audioOff        bool                  // generateAudio 默认关闭（Kling 3.0）
-	maxCount        int                   // 每次最多几张；0 表示不限
 	detailRange     [2]int                // generationSettings.detailLevel 的范围；零值表示没有
 	transparent     bool                  // 支持透明背景
 	refs            map[string]usageLimit // 输入素材按 "媒体:用途" 的数量限制，例如 "image:frame"
@@ -42,16 +39,11 @@ type modelVersion struct {
 
 	// --- 填法（官网前端）---
 	seeds bool // 官网对 schema 里没有 seeds 的版本也注入随机 seed
-	// keyframeGeneral：schema 的 general 用途在该模型上表示关键帧，不能当参考图。
-	keyframeGeneral bool
-	// styleUsage：参考图的用途（"style" / "asset"），优先于 schema 的 general。
-	styleUsage string
 
 	resolutionInPayload bool // 分辨率写进 modelSpecificPayload.resolution
 	aspectInPayload     bool // 比例写进 modelSpecificPayload.aspect_ratio
 	computedAspect      bool // generationSettings.aspectRatio 用由尺寸算出的比例
 	aspectInSpecific    bool // 比例写进 modelSpecificPayload.aspectRatio
-	omitAuto            bool // auto 比例时不发尺寸与比例
 	explicitAuto        bool // auto 比例时发 generationSettings.aspectRatio="auto"
 	excludeSize         bool // 不发 size
 	autoWithFrame       bool // 带首帧时比例强制 auto（Seedance 2.5）
@@ -129,35 +121,35 @@ var (
 	videoFields = []string{"n", "seeds", "duration", "generateAudio", "resolution", "size", "modelSpecificPayload", "generationSettings", "referenceBlobs"}
 
 	veo31 = modelVersion{modelID: "veo", video: true, fields: videoFields,
-		aspects: []string{"16:9", "9:16"}, settingsAspect: true, aspectDefault: "16:9",
-		tiers: []string{"720p", "1080p"}, tierDefault: "720p",
+		aspects: []string{"16:9", "9:16"}, settingsAspect: true,
+		tiers:     []string{"720p", "1080p"},
 		sizes:     px(1280, 720, 720, 1280, 1920, 1080, 1080, 1920),
-		durations: []int{4, 6, 8}, defaultDuration: 8, maxCount: 1,
+		durations: []int{4, 6, 8}, defaultDuration: 8,
 		refs:      map[string]usageLimit{"image:frame": {0, 2}, "image:subject": {0, 3}},
 		fileBytes: map[string]int64{"image": 100 * mib}, maxBlobs: 3,
-		seeds: true, keyframeGeneral: true, styleUsage: "asset", framesExclusive: true,
+		seeds: true, framesExclusive: true,
 	}
 
 	seedance480  = px(1120, 480, 854, 480, 640, 480, 480, 480, 480, 640, 480, 854)
 	seedance720  = px(1680, 720, 1280, 720, 960, 720, 720, 720, 720, 960, 720, 1280)
 	seedance1080 = px(2520, 1080, 1920, 1080, 1440, 1080, 1080, 1080, 1080, 1440, 1080, 1920)
 	seedance20   = modelVersion{modelID: "seedance", video: true, fields: videoFields,
-		aspects: []string{"auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}, settingsAspect: true, aspectDefault: "auto",
-		minDuration: 4, maxDuration: 15, maxCount: 1,
+		aspects: []string{"auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"}, settingsAspect: true,
+		minDuration: 4, maxDuration: 15,
 		refs:      map[string]usageLimit{"image:frame": {0, 2}, "image:style": {0, 9}, "video:source": {0, 3}},
 		fileBytes: map[string]int64{"image": 30 * mib, "video": 50 * mib}, maxBlobs: 12,
-		seeds: true, styleUsage: "style", computedAspect: true, referenceVideos: true, framesExclusive: true,
+		seeds: true, computedAspect: true, referenceVideos: true, framesExclusive: true,
 	}
 
 	klingSizes = px(1280, 720, 720, 1280, 720, 720, 1920, 1080, 1080, 1920, 1080, 1080)
 	kling30    = modelVersion{modelID: "kling", version: "kling_v3", video: true,
 		fields:  []string{"duration", "generateAudio", "resolution", "size", "modelSpecificPayload", "generationSettings", "referenceBlobs"},
-		aspects: []string{"16:9", "9:16", "1:1"}, settingsAspect: true, aspectDefault: "16:9",
-		tiers: []string{"720p", "1080p"}, tierDefault: "720p", sizes: klingSizes,
+		aspects: []string{"16:9", "9:16", "1:1"}, settingsAspect: true,
+		tiers: []string{"720p", "1080p"}, sizes: klingSizes,
 		minDuration: 3, maxDuration: 15, defaultDuration: 5, audioOff: true,
 		refs:      map[string]usageLimit{"image:frame": {0, 2}},
 		fileBytes: map[string]int64{"image": 10 * mib}, maxBlobs: 5,
-		seeds: true, keyframeGeneral: true, aspectInPayload: true, resolutionInPayload: true,
+		seeds: true, aspectInPayload: true, resolutionInPayload: true,
 	}
 
 	// Nano Banana 的 1K/2K/4K 尺寸（schema 枚举）。
@@ -167,11 +159,11 @@ var (
 	nanoBananaAspects = []string{"1:1", "3:2", "2:3", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"}
 	nanoBanana        = modelVersion{modelID: "gemini-flash",
 		fields:  []string{"n", "seeds", "groundSearch", "resolution", "size", "modelSpecificPayload", "generationSettings", "referenceBlobs"},
-		aspects: nanoBananaAspects, settingsAspect: true, aspectDefault: "1:1",
-		tiers: []string{"1K", "2K", "4K"}, tierDefault: "1K", sizes: nanoBananaSizes,
+		aspects: nanoBananaAspects, settingsAspect: true,
+		tiers: []string{"1K", "2K", "4K"}, sizes: nanoBananaSizes,
 		refs:      map[string]usageLimit{"image:general": {0, 14}},
 		fileBytes: map[string]int64{"image": 20 * mib}, maxBlobs: 14,
-		seeds: true, omitAuto: true,
+		seeds: true,
 	}
 
 	gptImage = modelVersion{modelID: "gpt-image",
@@ -182,7 +174,6 @@ var (
 		// 官网只开放 1K/2K；schema 允许到 3840，所以加上 4K 档（上限内最大尺寸）。
 		sizeRange: []tierSide{{"1K", 1024}, {"2K", 2048}, {"4K", 0}},
 		fileBytes: map[string]int64{"image": 100 * mib}, maxBlobs: 17,
-		omitAuto: true,
 	}
 )
 
@@ -198,7 +189,7 @@ var models = []*modelVersion{
 	}),
 	with(veo31, func(m *modelVersion) {
 		m.slug, m.version = "veo-3.1-lite", "3.1-lite-generate"
-		m.refs, m.maxBlobs, m.styleUsage = map[string]usageLimit{"image:frame": {0, 2}}, 0, ""
+		m.refs, m.maxBlobs = map[string]usageLimit{"image:frame": {0, 2}}, 0
 	}),
 
 	with(seedance20, func(m *modelVersion) {
@@ -215,7 +206,7 @@ var models = []*modelVersion{
 	with(seedance20, func(m *modelVersion) {
 		m.slug, m.version = "seedance-2.5", "seedance_2.5"
 		m.fields = slices.DeleteFunc(slices.Clone(videoFields), func(f string) bool { return f == "size" })
-		m.tiers, m.tierDefault, m.sizes = []string{"480p", "720p"}, "720p", nil
+		m.tiers, m.sizes = []string{"480p", "720p"}, nil
 		m.maxDuration = 30
 		m.fileBytes = map[string]int64{"image": 30 * mib, "video": 200 * mib}
 		m.computedAspect, m.explicitAuto, m.resolutionInPayload, m.autoWithFrame = false, true, true, true
@@ -231,7 +222,7 @@ var models = []*modelVersion{
 	with(kling30, func(m *modelVersion) {
 		m.slug, m.version = "kling-3.0-omni", "kling_v3_omni"
 		m.refs = map[string]usageLimit{"image:frame": {0, 2}, "image:style": {0, 3}}
-		m.maxBlobs, m.styleUsage, m.computedAspect = 0, "style", true
+		m.maxBlobs, m.computedAspect = 0, true
 		// 官网给 Omni 加编辑视频（不带参考图）时换成 v2v_edit：schema 不收时长与
 		// generateAudio，多一个 keepAudio。
 		m.edit = editVersion(*m, "kling_v3_omni_v2v_edit")
@@ -245,7 +236,7 @@ var models = []*modelVersion{
 		durations: []int{5, 10}, defaultDuration: 5,
 		refs:      map[string]usageLimit{"image:frame": {0, 2}},
 		fileBytes: map[string]int64{"image": 10 * mib},
-		seeds:     true, keyframeGeneral: true, aspectInPayload: true, requireFrame: true,
+		seeds:     true, aspectInPayload: true, requireFrame: true,
 		module: "image2video", negativePrompt: "blur, distort, and low quality",
 	},
 

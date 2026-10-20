@@ -34,9 +34,6 @@ func isAuto(aspect string) bool { return strings.EqualFold(strings.TrimSpace(asp
 // --- 默认值 ---
 
 func (v *modelVersion) defaultResolution(options []string) string {
-	if v.tierDefault != "" && slices.Contains(options, v.tierDefault) {
-		return v.tierDefault
-	}
 	preferred := []string{"1K", "720p"}
 	if v.video {
 		preferred = []string{"720p"} // 官网视频取第一档；Runway 的 1K 只有非 16:9 尺寸
@@ -57,9 +54,6 @@ func (v *modelVersion) defaultAspect(options []string) string {
 	if v.video && slices.Contains(options, "16:9") {
 		return "16:9"
 	}
-	if def := v.aspectDefault; def != "" && !isAuto(def) && slices.Contains(options, def) {
-		return def
-	}
 	if !v.video && slices.Contains(options, "1:1") {
 		return "1:1"
 	}
@@ -73,21 +67,10 @@ func (v *modelVersion) defaultAspect(options []string) string {
 
 // --- 参考图用途 ---
 
-// referenceUsage 是参考图/编辑输入图的用途：subject 优先（官网同样如此），否则用表里的
-// styleUsage，再否则用 general / style / asset / source。
+// referenceUsage 是参考图/编辑输入图的用途：按 subject / general / style / asset / source
+// 取表里第一个有的（官网同样 subject 优先）。
 func (v *modelVersion) referenceUsage() (string, int) {
-	if limit, ok := v.refs["image:subject"]; ok {
-		return "subject", limit.max
-	}
-	if usage := v.styleUsage; usage != "" {
-		if limit, ok := v.refs["image:"+usage]; ok {
-			return usage, limit.max
-		}
-	}
-	for _, usage := range []string{"general", "style", "asset", "source"} {
-		if usage == "general" && v.keyframeGeneral {
-			continue
-		}
+	for _, usage := range []string{"subject", "general", "style", "asset", "source"} {
 		if limit, ok := v.refs["image:"+usage]; ok {
 			return usage, limit.max
 		}
@@ -343,7 +326,6 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 
 	auto := isAuto(in.aspect)
 	explicitAuto := v.explicitAuto && auto
-	omitAuto := v.omitAuto && auto && !explicitAuto
 	size, hasSize := v.pickSize(in.aspect, in.resolution)
 	if !hasSize && len(v.aspects) == 0 && in.sizeHint.width > 0 {
 		size, hasSize = in.sizeHint, true
@@ -359,7 +341,7 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 	case in.aspect != "" && !auto && !v.computedAspect && v.settingsAspect:
 		settings["aspectRatio"] = in.aspect
 	}
-	if hasSize && !omitAuto {
+	if hasSize {
 		if v.resolutionInPayload {
 			res := in.resolution
 			if res == "" {
@@ -378,10 +360,10 @@ func (v *modelVersion) buildBody(in genInput) map[string]any {
 			settings["aspectRatio"] = code
 		}
 	}
-	if v.aspectInSpecific && in.aspect != "" && !omitAuto {
+	if v.aspectInSpecific && in.aspect != "" {
 		specific["aspectRatio"] = in.aspect
 	}
-	if omitAuto || v.excludeSize {
+	if v.excludeSize {
 		delete(body, "size")
 	}
 	if v.negativePrompt != "" {
@@ -455,11 +437,7 @@ func randomSeed() int64 {
 // imagePlan 校验图像请求并选定比例与档位。显式给出但模型不支持的值直接拒绝。
 func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, background string, count, inputs int, mask bool) (genInput, error) {
 	in := genInput{prompt: prompt, count: max(1, count), quality: quality}
-	if v.has("n") {
-		if v.maxCount > 0 && in.count > v.maxCount {
-			return in, &requestError{msg: fmt.Sprintf("%s 每次最多生成 %d 张", v.slug, v.maxCount)}
-		}
-	} else if in.count > 1 {
+	if !v.has("n") && in.count > 1 {
 		return in, &requestError{msg: v.slug + " 每次只能生成 1 张"}
 	}
 	if inputs == 0 && v.requiresImageInput() {
