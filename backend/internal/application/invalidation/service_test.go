@@ -114,3 +114,15 @@ func TestEventKeyKeepsAccountHealthInvalidationsDistinct(t *testing.T) {
 		t.Fatalf("account health invalidations were coalesced: first=%#v second=%#v", first, second)
 	}
 }
+
+func TestEventKeyKeepsAccountsAndKindsDistinct(t *testing.T) {
+	for _, pair := range [][2]repository.InvalidationEvent{
+		{{Kind: repository.InvalidationAccountQuotaChanged, AccountID: 5}, {Kind: repository.InvalidationAccountQuotaChanged, AccountID: 9}},
+		{{Kind: repository.InvalidationAccountStateChanged, Provider: account.ProviderWeb, AccountID: 5}, {Kind: repository.InvalidationAccountStateChanged, Provider: account.ProviderWeb, AccountID: 9}},
+		{{Kind: repository.InvalidationAccountStateChanged, Provider: account.ProviderWeb}, {Kind: repository.InvalidationAccountQuotaChanged, Provider: account.ProviderWeb}},
+	} {
+		if eventKey(pair[0]) == eventKey(pair[1]) {
+			t.Errorf("coalesced %+v with %+v", pair[0], pair[1])
+		}
+	}
+}

@@ -99,22 +99,19 @@ func (s *Service) RunPublisher(ctx context.Context) error {
 }
 
 type invalidationKey struct {
-	layer       repository.InvalidationLayer
+	kind        repository.InvalidationKind
 	provider    string
 	accountID   uint64
 	clientKeyID uint64
 }
 
+// eventKey coalesces only events that receivers handle alike. They act on the
+// kind (the model route cache skips some), resolve a provider-less account's
+// provider, and drop one account's health override, so the kind and every
+// target stay in the key; a later health event of one account replaces the
+// earlier one.
 func eventKey(event repository.InvalidationEvent) invalidationKey {
-	key := invalidationKey{layer: event.Layer(), provider: string(event.Provider)}
-	if key.layer == repository.InvalidationLayerClientKey {
-		key.clientKeyID = event.ClientKeyID
-	} else if event.Kind == repository.InvalidationAccountHealthChanged {
-		// Health events are intentionally account-scoped. Coalescing different
-		// accounts would silently drop cooldown updates on multi-replica setups.
-		key.accountID = event.AccountID
-	}
-	return key
+	return invalidationKey{kind: event.Kind, provider: string(event.Provider), accountID: event.AccountID, clientKeyID: event.ClientKeyID}
 }
 
 // RunSubscriber consumes remote events. Pub/Sub delivery is best effort; the
