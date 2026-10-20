@@ -383,6 +383,15 @@ func TestVideoRemintFailureCreatesNothing(t *testing.T) {
 	}
 }
 
+// 下载失败的错误文本会成为任务的错误信息：不能带出预签名链接里的签名。
+func TestDownloadVideoErrorOmitsSignedURL(t *testing.T) {
+	_, adapter, credential := newFakeAdobe(t)
+	_, _, _, err := adapter.DownloadVideo(context.Background(), credential, "http://127.0.0.1:1/out.mp4?X-Amz-Signature=SECRETSIG")
+	if err == nil || strings.Contains(err.Error(), "SECRETSIG") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 // 同步路径：Adobe 接受任务前的拒绝必须是响应（网关据此刷新凭据/换账号），
 // mint 不可用时请求根本不发出。
 func TestGenerateImageRejectionsBecomeResponses(t *testing.T) {

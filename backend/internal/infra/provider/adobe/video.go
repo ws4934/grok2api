@@ -257,7 +257,7 @@ func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credenti
 	req.Header.Set("Accept", "*/*")
 	resp, err := lease.Do(req)
 	if err != nil {
-		err = &transportError{err: err}
+		err = &transportError{err: withoutURL(err)}
 		a.report(ctx, lease, err)
 		lease.Release()
 		return nil, "", 0, err
