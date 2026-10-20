@@ -26,15 +26,7 @@ type preparedAudit struct {
 }
 
 func (r *AuditRepository) Create(ctx context.Context, value audit.Record) error {
-	prepared, err := prepareAudits([]audit.Record{value})
-	if err != nil {
-		return err
-	}
-	row := prepared[0].row
-	attempts := prepared[0].attempts
-	return r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		return createAuditAndBill(tx, &row, attempts)
-	})
+	return r.CreateBatch(ctx, []audit.Record{value})
 }
 
 func (r *AuditRepository) CreateBatch(ctx context.Context, values []audit.Record) error {

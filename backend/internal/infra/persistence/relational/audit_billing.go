@@ -69,46 +69,6 @@ func settleInsertedAudits(tx *gorm.DB, inserted []preparedAudit) error {
 	return deleteBillingReservations(tx, settledEventIDs)
 }
 
-func createAuditAndBill(tx *gorm.DB, row *requestAuditModel, attempts []requestAuditAttemptModel) error {
-	inserted, err := insertAudit(tx, row)
-	if err != nil || !inserted {
-		return err
-	}
-	if err := insertAuditAttempts(tx, row.ID, attempts); err != nil {
-		return err
-	}
-	var reservation billingReservationModel
-	reservationErr := tx.Where("event_id = ?", row.EventID).First(&reservation).Error
-	if reservationErr != nil && !errors.Is(reservationErr, gorm.ErrRecordNotFound) {
-		return reservationErr
-	}
-	if reservationErr == nil || auditBillingAmount(*row) > 0 {
-		if err := lockClientKey(tx, row.ClientKeyID); err != nil {
-			if reservationErr == nil || !errors.Is(err, repository.ErrNotFound) {
-				return err
-			}
-			return billInsertedAudit(tx, *row, billingReservationModel{}, false)
-		}
-		reservation = billingReservationModel{}
-		reservationErr = tx.Where("event_id = ?", row.EventID).First(&reservation).Error
-		if reservationErr != nil && !errors.Is(reservationErr, gorm.ErrRecordNotFound) {
-			return reservationErr
-		}
-	}
-	return billInsertedAudit(tx, *row, reservation, reservationErr == nil)
-}
-
-func billInsertedAudit(tx *gorm.DB, row requestAuditModel, reservation billingReservationModel, hasReservation bool) error {
-	settled, err := applyInsertedAuditBilling(tx, row, reservation, hasReservation)
-	if err != nil {
-		return err
-	}
-	if !settled {
-		return nil
-	}
-	return deleteBillingReservations(tx, []string{row.EventID})
-}
-
 func applyInsertedAuditBilling(tx *gorm.DB, row requestAuditModel, reservation billingReservationModel, hasReservation bool) (bool, error) {
 	amount := auditBillingAmount(row)
 	if hasReservation {
