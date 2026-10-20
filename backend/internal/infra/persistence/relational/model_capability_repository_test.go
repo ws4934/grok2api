@@ -10,6 +10,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/repository"
+	"github.com/google/uuid"
 )
 
 func TestModelCapabilitiesAggregateAndGateEnabledRoutes(t *testing.T) {
@@ -1021,4 +1022,37 @@ func TestAdobeCatalogRoutesNeedNoAccountSnapshot(t *testing.T) {
 	if err != nil || len(candidates) != 1 || candidates[0].Credential.ID != credential.ID || !candidates[0].SupportsModel {
 		t.Fatalf("fallback candidates = %+v, %v", candidates, err)
 	}
+}
+
+// The capability catch-up lists never-synced accounts first on every dialect;
+// PostgreSQL sorts NULL last unless told otherwise.
+func TestStaleModelSyncListsNeverSyncedAccountsFirst(t *testing.T) {
+	dialectDatabases(t, func(t *testing.T, database *Database) {
+		ctx := context.Background()
+		accounts := NewAccountRepository(database)
+		models := NewModelRepository(database)
+		suffix := uuid.NewString()
+		for _, name := range []string{"synced-long-ago", "never-synced"} {
+			value, _, err := accounts.UpsertByIdentity(ctx, account.Credential{Provider: account.ProviderBuild, Name: name, SourceKey: name + "-" + suffix, EncryptedAccessToken: testEncryptedToken, AuthStatus: account.AuthStatusActive})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "synced-long-ago" {
+				if err := models.ReplaceAccountCapabilities(ctx, value.ID, []string{"grok-x"}, time.Now().UTC().Add(-48*time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		ids, err := models.ListStaleAccountSyncIDs(ctx, time.Now().UTC().Add(-time.Hour), 1)
+		if err != nil || len(ids) != 1 {
+			t.Fatalf("stale ids = %v, err = %v", ids, err)
+		}
+		var synced int64
+		if err := database.db.WithContext(ctx).Model(&accountModelSyncStateModel{}).Where("account_id = ? AND last_success_at IS NOT NULL", ids[0]).Count(&synced).Error; err != nil {
+			t.Fatal(err)
+		}
+		if synced != 0 {
+			t.Fatalf("first stale account %d has synced before a never-synced one", ids[0])
+		}
+	})
 }

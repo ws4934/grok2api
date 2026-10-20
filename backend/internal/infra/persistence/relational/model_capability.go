@@ -296,7 +296,7 @@ func (r *ModelRepository) ListStaleAccountSyncIDs(ctx context.Context, before ti
 		Joins("LEFT JOIN account_model_sync_states AS sync ON sync.account_id = account.id").
 		Where("account.enabled = ? AND account.auth_status = ?", true, account.AuthStatusActive).
 		Where("sync.last_success_at IS NULL OR sync.last_success_at < ?", before.UTC()).
-		Order("sync.last_success_at ASC, account.id ASC").
+		Order("CASE WHEN sync.last_success_at IS NULL THEN 0 ELSE 1 END, sync.last_success_at ASC, account.id ASC").
 		Limit(limit).
 		Scan(&ids).Error
 	return ids, err
