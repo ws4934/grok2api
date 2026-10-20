@@ -1,5 +1,5 @@
 import { apiRequest, type PaginatedDTO } from "@/shared/api/client";
-import { createObjectDecoder, createPaginatedDecoder, decodeBooleanResult, decodeCountResult, hasShape, isArrayOf, isBoolean, isNumber, isOneOf, isOptional, isString } from "@/shared/api/decoder";
+import { createObjectDecoder, createPaginatedDecoder, createValidatedDecoder, decodeBooleanResult, decodeCountResult, hasShape, isArrayOf, isBoolean, isNumber, isOneOf, isOptional, isString } from "@/shared/api/decoder";
 import type { SortOrder } from "@/shared/lib/table-sort";
 
 export type ClientKeyDTO = {
@@ -43,11 +43,7 @@ const clientKeyValidator = hasShape({
   rpmLimit: isNumber, maxConcurrent: isNumber, billingLimitUsdTicks: isNumber, billedUsageUsdTicks: isNumber,
   allowModelAliases: isBoolean, allowedModelIds: isArrayOf(isString), providerScope: isOptional(isArrayOf(isString)), tierScope: isOptional(isArrayOf(isOneOf("all", "free", "super"))), lastUsedAt: isOptional(isString),
 });
-const decodeClientKey = createObjectDecoder<ClientKeyDTO>("client key", {
-  id: isString, name: isString, prefix: isString, enabled: isBoolean, expiresAt: isOptional(isString),
-  rpmLimit: isNumber, maxConcurrent: isNumber, billingLimitUsdTicks: isNumber, billedUsageUsdTicks: isNumber,
-  allowModelAliases: isBoolean, allowedModelIds: isArrayOf(isString), providerScope: isOptional(isArrayOf(isString)), tierScope: isOptional(isArrayOf(isOneOf("all", "free", "super"))), lastUsedAt: isOptional(isString),
-});
+const decodeClientKey = createValidatedDecoder<ClientKeyDTO>("client key", clientKeyValidator);
 const decodeClientKeyPage = createPaginatedDecoder<ClientKeyDTO>(clientKeyValidator);
 const decodeCreatedClientKey = createObjectDecoder<CreateKeyResponseDTO>("created client key", { key: clientKeyValidator, secret: isString });
 const decodeSecret = createObjectDecoder<{ secret: string }>("client key secret", { secret: isString });

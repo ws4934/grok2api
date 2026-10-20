@@ -1,5 +1,5 @@
 import { apiRequest } from "@/shared/api/client";
-import { createObjectDecoder, hasShape, isArrayOf, isBoolean, isNumber, isObject, isOneOf, isOptional, isRecordOf, isString } from "@/shared/api/decoder";
+import { createObjectDecoder, createValidatedDecoder, hasShape, isArrayOf, isBoolean, isNumber, isObject, isOneOf, isOptional, isRecordOf, isString } from "@/shared/api/decoder";
 import { qualityGuardStatusPath } from "./quality-guard-query";
 
 export type QualityGuardPolicy = {
@@ -200,20 +200,17 @@ export function runQualityTest(nodeId: string, status: QualityGuardStatus, profi
   }, decodeQualityTest);
 }
 
-const decodeProfile = createObjectDecoder<ProbeProfile>("probe profile", {
+const profileValidator = hasShape({
   id: isString, name: isString, built_in: isBoolean, prompt: isString,
   expected_text: isOptional(isString), match_mode: isString, require_thinking: isBoolean,
   max_output_tokens: isOptional(isNumber),
 });
+const decodeProfile = createValidatedDecoder<ProbeProfile>("probe profile", profileValidator);
 
 export function listProbeProfiles(): Promise<{ activeProfileId: string; items: ProbeProfile[] }> {
   return apiRequest("/api/admin/v1/egress-quality-guard/profiles", {}, createObjectDecoder("probe profiles", {
     activeProfileId: isString,
-    items: isArrayOf(hasShape({
-      id: isString, name: isString, built_in: isBoolean, prompt: isString,
-      expected_text: isOptional(isString), match_mode: isString, require_thinking: isBoolean,
-      max_output_tokens: isOptional(isNumber),
-    })),
+    items: isArrayOf(profileValidator),
   }));
 }
 

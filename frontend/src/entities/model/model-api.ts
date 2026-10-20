@@ -39,12 +39,7 @@ const modelRouteValidator = hasShape({
   available: isBoolean,
   lastSyncedAt: isOptional(isString),
 });
-const decodeModelRoute = createObjectDecoder<ModelRouteDTO>("model route", {
-  id: isString, publicId: isString, provider: isString, upstreamModel: isString,
-  capability: isOneOf("responses", "chat", "image", "image_edit", "video", "tts", "stt", "realtime"), origin: isOneOf("catalog", "discovered", "manual"),
-  enabled: isBoolean, accountIds: isArrayOf(isString), bindingMode: isBoolean, supportedAccounts: isNumber,
-  syncedAccounts: isNumber, totalAccounts: isNumber, capabilityKnown: isBoolean, available: isBoolean, lastSyncedAt: isOptional(isString),
-});
+const decodeModelRoute = createValidatedDecoder<ModelRouteDTO>("model route", modelRouteValidator);
 const decodeModelRoutePage = createPaginatedDecoder<ModelRouteDTO>(modelRouteValidator);
 const decodeModelPage: ApiDecoder<PaginatedDTO<ModelRouteDTO>> = (value) => {
   const page = decodeModelRoutePage(value);

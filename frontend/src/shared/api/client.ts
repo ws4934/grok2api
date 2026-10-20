@@ -1,4 +1,4 @@
-import { createObjectDecoder, hasShape, isString, type ApiDecoder } from "@/shared/api/decoder";
+import { createObjectDecoder, createValidatedDecoder, hasShape, isString, type ApiDecoder } from "@/shared/api/decoder";
 import { runtimeConfig } from "@/shared/config/runtime-config";
 import { i18n } from "@/shared/i18n";
 
@@ -304,7 +304,7 @@ export type LoginResponseDTO = {
 const adminValidator = hasShape({ id: isString, username: isString });
 const authTokensValidator = hasShape({ accessToken: isString, accessTokenExpiresAt: isString, refreshTokenExpiresAt: isString });
 
-export const decodeAdminDTO = createObjectDecoder<AdminDTO>("admin", { id: isString, username: isString });
+export const decodeAdminDTO = createValidatedDecoder<AdminDTO>("admin", adminValidator);
 export const decodeAuthTokensDTO = createObjectDecoder<AuthTokensDTO>("auth tokens", {
   accessToken: isString,
   accessTokenExpiresAt: isString,

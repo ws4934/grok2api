@@ -286,17 +286,20 @@ export type AccountDeleteResultDTO = {
   deletedByProvider?: Partial<Record<AccountProvider, number>>;
 };
 
+const decodeAccountDeleteResult = createObjectDecoder<AccountDeleteResultDTO>("account delete", {
+  deleted: isNumber,
+  rootsDeleted: isOptional(isNumber),
+  linkedDeleted: isOptional(isNumber),
+  skipped: isOptional(isNumber),
+  deletedByProvider: isOptional(isRecordOf(isNumber)),
+});
+
 export function deleteAccount(id: string, input?: { provider?: AccountProvider; linkedDeleteTargets?: LinkedDeleteTarget[] }): Promise<AccountDeleteResultDTO | { deleted: boolean }> {
   if (input?.linkedDeleteTargets?.length) {
     return apiRequest(
       `/api/admin/v1/accounts/${id}`,
       { method: "DELETE", body: { provider: input.provider, linkedDeleteTargets: input.linkedDeleteTargets } },
-      createObjectDecoder("account delete", {
-        deleted: isNumber,
-        rootsDeleted: isOptional(isNumber),
-        linkedDeleted: isOptional(isNumber),
-        deletedByProvider: isOptional(isRecordOf(isNumber)),
-      }),
+      decodeAccountDeleteResult,
     );
   }
   return apiRequest(`/api/admin/v1/accounts/${id}`, { method: "DELETE" }, decodeBooleanResult<{ deleted: boolean }>("deleted"));
@@ -650,13 +653,7 @@ export function deleteAccounts(ids: string[], provider: AccountProvider, linkedD
         ...(linkedDeleteTargets.length ? { linkedDeleteTargets } : {}),
       },
     },
-    createObjectDecoder("account batch delete", {
-      deleted: isNumber,
-      rootsDeleted: isOptional(isNumber),
-      linkedDeleted: isOptional(isNumber),
-      skipped: isOptional(isNumber),
-      deletedByProvider: isOptional(isRecordOf(isNumber)),
-    }),
+    decodeAccountDeleteResult,
   );
 }
 

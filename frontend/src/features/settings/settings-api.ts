@@ -1,5 +1,5 @@
 import { apiRequest } from "@/shared/api/client";
-import { createObjectDecoder, decodeBooleanResult, hasShape, isArrayOf, isBoolean, isNumber, isOneOf, isOptional, isRecordOf, isString } from "@/shared/api/decoder";
+import { createObjectDecoder, createValidatedDecoder, decodeBooleanResult, hasShape, isArrayOf, isBoolean, isNumber, isOneOf, isOptional, isRecordOf, isString } from "@/shared/api/decoder";
 import type { SortOrder } from "@/shared/lib/table-sort";
 
 export type SettingsConfigDTO = {
@@ -243,23 +243,14 @@ const egressNodeValidator = hasShape({
   ipv4Probe: isOptional(egressIPProbeValidator), ipv6Probe: isOptional(egressIPProbeValidator),
   cooldownUntil: isOptional(isString), lastError: isOptional(isString),
 });
-const decodeEgressNodeRaw = createObjectDecoder<EgressNodeWireDTO>("egress node", {
-  id: isString, name: isString, scope: isString, enabled: isBoolean,
-  proxyConfigured: isBoolean, proxyDisplay: isOptional(isString), proxyFingerprint: isOptional(isString), userAgent: isString, cookieConfigured: isBoolean, accountBoundProxy: isBoolean, proxyPool: isBoolean, health: isNumber, failureCount: isNumber,
-  sourceId: isOptional(isString), proxyProfileId: isOptional(isString), proxyProfileName: isOptional(isString), accountCapacity: isNumber, assignedAccountCount: isNumber,
-  probeStatus: isOneOf("unknown", "healthy", "unhealthy"), lastProbedAt: isOptional(isString), probeLatencyMs: isNumber, exitIp: isOptional(isString), probeError: isOptional(isString), probeProvider: isOptional(isOneOf("ipinfo", "cloudflare")),
-  ipv4Probe: isOptional(egressIPProbeValidator), ipv6Probe: isOptional(egressIPProbeValidator),
-  cooldownUntil: isOptional(isString), lastError: isOptional(isString),
-});
+const decodeEgressNodeRaw = createValidatedDecoder<EgressNodeWireDTO>("egress node", egressNodeValidator);
 const decodeEgressNode = (value: unknown) => withEgressNodeProbeDefaults(decodeEgressNodeRaw(value));
-const decodeEgressProxyProfile = createObjectDecoder<EgressProxyProfileDTO>("egress proxy profile", {
+const egressProxyProfileValidator = hasShape({
   id: isString, name: isString, proxyDisplay: isOptional(isString), proxyFingerprint: isOptional(isString),
   boundNodeCount: isNumber, createdAt: isString, updatedAt: isString,
 });
-const decodeEgressProxyProfiles = createObjectDecoder<EgressProxyProfileListDTO>("egress proxy profiles", { items: isArrayOf(hasShape({
-  id: isString, name: isString, proxyDisplay: isOptional(isString), proxyFingerprint: isOptional(isString),
-  boundNodeCount: isNumber, createdAt: isString, updatedAt: isString,
-})), page: isNumber, pageSize: isNumber, total: isNumber });
+const decodeEgressProxyProfile = createValidatedDecoder<EgressProxyProfileDTO>("egress proxy profile", egressProxyProfileValidator);
+const decodeEgressProxyProfiles = createObjectDecoder<EgressProxyProfileListDTO>("egress proxy profiles", { items: isArrayOf(egressProxyProfileValidator), page: isNumber, pageSize: isNumber, total: isNumber });
 type EgressNodeListWireDTO = {
   items: EgressNodeWireDTO[];
   page?: number;
@@ -294,12 +285,7 @@ const egressSourceValidator = hasShape({
   refreshIntervalSeconds: isNumber, defaultAccountCapacity: isNumber, lastSyncedAt: isOptional(isString), nextSyncAt: isOptional(isString),
   lastSyncImported: isNumber, lastSyncError: isOptional(isString),
 });
-const decodeEgressSourceRaw = createObjectDecoder<EgressSourceWireDTO>("egress source", {
-  id: isString, name: isString, scope: isString, enabled: isBoolean, urlConfigured: isBoolean,
-  proxyConfigured: isOptional(isBoolean),
-  refreshIntervalSeconds: isNumber, defaultAccountCapacity: isNumber, lastSyncedAt: isOptional(isString), nextSyncAt: isOptional(isString),
-  lastSyncImported: isNumber, lastSyncError: isOptional(isString),
-});
+const decodeEgressSourceRaw = createValidatedDecoder<EgressSourceWireDTO>("egress source", egressSourceValidator);
 const decodeEgressSource = (value: unknown) => withEgressSourceDefaults(decodeEgressSourceRaw(value));
 type EgressSourceListWireDTO = {
   items: EgressSourceWireDTO[];
