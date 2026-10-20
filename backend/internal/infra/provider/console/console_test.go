@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
@@ -985,18 +986,19 @@ func TestConsoleImportBareArrayErrors(t *testing.T) {
 }
 
 func TestConsoleRetryAfterParsesCompoundDuration(t *testing.T) {
-	if value := consoleRetryAfter([]byte(`Rate limit reached. Resets in: 1h 2m 3s`)); value != time.Hour+2*time.Minute+3*time.Second {
+	if value := provider.RateLimitResetAfter(`Rate limit reached. Resets in: 1h 2m 3s`); value != time.Hour+2*time.Minute+3*time.Second {
 		t.Fatalf("retry after = %s", value)
 	}
-	if value := consoleRetryAfter([]byte(`ordinary error`)); value != 0 {
+	if value := provider.RateLimitResetAfter(`ordinary error`); value != 0 {
 		t.Fatalf("ordinary retry after = %s", value)
 	}
 }
 
 func TestNormalizeRateLimitResponsePrefersRetryAfterHeader(t *testing.T) {
 	response := &http.Response{
-		Header: http.Header{"Retry-After": {"17"}},
-		Body:   io.NopCloser(strings.NewReader("Too many requests for team 00000000-0000-0000-0000-000000000013 and model grok-4.20-multi-agent-0309. Requests per Second (actual/limit): 2/2")),
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Retry-After": {"17"}},
+		Body:       io.NopCloser(strings.NewReader("Too many requests for team 00000000-0000-0000-0000-000000000013 and model grok-4.20-multi-agent-0309. Requests per Second (actual/limit): 2/2")),
 	}
 	_, metadata, err := normalizeRateLimitResponse(response)
 	if err != nil {
@@ -1007,8 +1009,37 @@ func TestNormalizeRateLimitResponsePrefersRetryAfterHeader(t *testing.T) {
 	}
 }
 
+type closeRecorder struct {
+	io.Reader
+	closed bool
+}
+
+func (r *closeRecorder) Close() error {
+	r.closed = true
+	return nil
+}
+
+func TestNormalizeRateLimitResponseClosesUnreadableBody(t *testing.T) {
+	body := &closeRecorder{Reader: iotest.ErrReader(errors.New("connection reset"))}
+	_, _, err := normalizeRateLimitResponse(&http.Response{StatusCode: http.StatusTooManyRequests, Header: http.Header{}, Body: body})
+	if err == nil || !body.closed {
+		t.Fatalf("err = %v, closed = %t", err, body.closed)
+	}
+}
+
+func TestNormalizeRateLimitResponseFallsBackToResetWindow(t *testing.T) {
+	response := &http.Response{
+		StatusCode: http.StatusTooManyRequests, Header: http.Header{},
+		Body: io.NopCloser(strings.NewReader("Rate limit reached. Resets in: 1m 5s")),
+	}
+	_, metadata, err := normalizeRateLimitResponse(response)
+	if err != nil || metadata != nil || response.Header.Get("Retry-After") != "65" {
+		t.Fatalf("metadata = %#v, Retry-After = %q, err = %v", metadata, response.Header.Get("Retry-After"), err)
+	}
+}
+
 func TestParseConsoleRateLimitMetadataRPS(t *testing.T) {
-	metadata := parseConsoleRateLimitMetadata([]byte(`{"code":"resource-exhausted","error":"Too many requests for team 00000000-0000-0000-0000-000000000013 and model grok-4.3. Your team's rate limit is — Requests per Second (actual/limit): 2/2."}`))
+	metadata := provider.ParseRateLimitMetadata([]byte(`{"code":"resource-exhausted","error":"Too many requests for team 00000000-0000-0000-0000-000000000013 and model grok-4.3. Your team's rate limit is — Requests per Second (actual/limit): 2/2."}`))
 	if metadata == nil {
 		t.Fatal("metadata is nil")
 	}
@@ -1022,7 +1053,7 @@ func TestParseConsoleRateLimitMetadataRPS(t *testing.T) {
 
 func TestParseConsoleRateLimitMetadataRPM(t *testing.T) {
 	body := []byte(`{"error":{"message":"Too many requests for team 00000000-0000-0000-0000-000000000013 and model grok-4.20-multi-agent-0309. Requests per Minute (actual/limit): 101/60. Resets in: 3m 4s"}}`)
-	metadata := parseConsoleRateLimitMetadata(body)
+	metadata := provider.ParseRateLimitMetadata(body)
 	if metadata == nil {
 		t.Fatal("metadata is nil")
 	}
@@ -1032,13 +1063,13 @@ func TestParseConsoleRateLimitMetadataRPM(t *testing.T) {
 }
 
 func TestParseConsoleRateLimitMetadataOrdinary429(t *testing.T) {
-	if metadata := parseConsoleRateLimitMetadata([]byte(`Rate limit reached. Resets in: 1h`)); metadata != nil {
+	if metadata := provider.ParseRateLimitMetadata([]byte(`Rate limit reached. Resets in: 1h`)); metadata != nil {
 		t.Fatalf("metadata = %#v", metadata)
 	}
 }
 
 func TestParseConsoleRateLimitMetadataExtractsTeamAndModel(t *testing.T) {
-	metadata := parseConsoleRateLimitMetadata([]byte(`{"message":"Too many requests for team 00000000-0000-0000-0000-000000000013 and model grok-4.20-multi-agent-0309. Requests per Second (actual/limit): 3/2. Resets in: 1s"}`))
+	metadata := provider.ParseRateLimitMetadata([]byte(`{"message":"Too many requests for team 00000000-0000-0000-0000-000000000013 and model grok-4.20-multi-agent-0309. Requests per Second (actual/limit): 3/2. Resets in: 1s"}`))
 	if metadata == nil {
 		t.Fatal("metadata is nil")
 	}

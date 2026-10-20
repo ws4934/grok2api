@@ -132,7 +132,7 @@ func (c *oauthClient) exchange(ctx context.Context, form url.Values, fallbackRef
 		return tokenPayload{}, &provider.CredentialRefreshError{
 			Status: resp.StatusCode, Code: oauthError.Code, Message: oauthError.Message, Response: oauthError.Response,
 			Permanent:  provider.IsPermanentCredentialRefreshErrorCode(oauthError.Code),
-			RetryAfter: parseOAuthRetryAfter(resp.Header.Get("Retry-After")),
+			RetryAfter: provider.ParseRetryAfterHeader(resp.Header.Get("Retry-After"), time.Now()),
 		}
 	}
 	var value struct {
@@ -290,17 +290,6 @@ func truncateOAuthDiagnostic(value string, limit int) string {
 		return string(runes[:limit-1]) + "…"
 	}
 	return value
-}
-
-func parseOAuthRetryAfter(value string) time.Duration {
-	value = strings.TrimSpace(value)
-	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
-		return time.Duration(seconds) * time.Second
-	}
-	if parsed, err := http.ParseTime(value); err == nil && parsed.After(time.Now()) {
-		return time.Until(parsed)
-	}
-	return 0
 }
 
 func (c *oauthClient) postForm(ctx context.Context, endpoint string, form url.Values, output any, deviceFlow bool) error {

@@ -166,7 +166,6 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	if response.StatusCode == http.StatusTooManyRequests {
 		responseBodyTruncated, rateLimit, err = normalizeRateLimitResponse(response)
 		if err != nil {
-			_ = response.Body.Close()
 			lease.Release()
 			cancel()
 			return nil, err
@@ -333,26 +332,16 @@ func consoleEndpoint(baseURL string) string {
 
 func normalizeRateLimitResponse(response *http.Response) (bool, *provider.RateLimitMetadata, error) {
 	data, truncated, err := provider.ReadDiagnosticBody(response.Body)
+	_ = response.Body.Close()
 	if err != nil {
 		return truncated, nil, err
 	}
-	_ = response.Body.Close()
 	response.Body = io.NopCloser(bytes.NewReader(data))
 	response.ContentLength = int64(len(data))
 	response.Header.Set("Content-Length", strconv.Itoa(len(data)))
-	metadata := parseConsoleRateLimitMetadata(data)
-	if headerValue := response.Header.Get("Retry-After"); headerValue != "" {
-		if metadata != nil {
-			if retryAfter := parseConsoleRetryAfterHeader(headerValue, time.Now().UTC()); retryAfter > 0 {
-				metadata.RetryAfter = retryAfter
-			}
-		}
-	} else {
-		retryAfter := consoleRetryAfter(data)
-		if metadata != nil {
-			retryAfter = metadata.RetryAfter
-		}
-		if retryAfter > 0 {
+	metadata := provider.RateLimitFromResponse(response.StatusCode, response.Header, data)
+	if metadata == nil && response.Header.Get("Retry-After") == "" {
+		if retryAfter := provider.RateLimitResetAfter(string(data)); retryAfter > 0 {
 			response.Header.Set("Retry-After", strconv.FormatInt(int64(retryAfter/time.Second), 10))
 		}
 	}

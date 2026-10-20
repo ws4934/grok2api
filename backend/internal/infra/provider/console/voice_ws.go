@@ -128,7 +128,7 @@ func (a *Adapter) DialVoiceWebSocket(ctx context.Context, request provider.Voice
 		}
 		a.reportConsoleResponse(ctx, lease, status, body)
 		cleanup()
-		retryAfter := parseConsoleRetryAfterHeader(response.Header.Get("Retry-After"), time.Now().UTC())
+		retryAfter := provider.ParseRetryAfterHeader(response.Header.Get("Retry-After"), time.Now().UTC())
 		return nil, nil, newConsoleMediaUpstreamError(status, body, retryAfter)
 	}
 	cleanup()

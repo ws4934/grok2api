@@ -3,19 +3,12 @@ package console
 import (
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	auditdomain "github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/cli"
-)
-
-var (
-	resetDurationPattern = regexp.MustCompile(`(?i)(\d+)\s*([dhms])`)
 )
 
 func normalizeRequest(body []byte, spec ModelSpec) ([]byte, error) {
@@ -436,43 +429,4 @@ func toolIdentity(value any) string {
 	}
 	name, _ := tool["name"].(string)
 	return typeName + ":" + name
-}
-
-func consoleRetryAfter(body []byte) time.Duration {
-	text := string(body)
-	index := strings.Index(strings.ToLower(text), "resets in:")
-	if index < 0 {
-		return 0
-	}
-	text = text[index+len("resets in:"):]
-	var total time.Duration
-	for _, match := range resetDurationPattern.FindAllStringSubmatch(text, -1) {
-		value, _ := strconv.Atoi(match[1])
-		switch strings.ToLower(match[2]) {
-		case "d":
-			total += time.Duration(value) * 24 * time.Hour
-		case "h":
-			total += time.Duration(value) * time.Hour
-		case "m":
-			total += time.Duration(value) * time.Minute
-		case "s":
-			total += time.Duration(value) * time.Second
-		}
-	}
-	return total
-}
-
-func parseConsoleRetryAfterHeader(value string, now time.Time) time.Duration {
-	value = strings.TrimSpace(value)
-	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds > 0 {
-		return time.Duration(seconds) * time.Second
-	}
-	if at, err := http.ParseTime(value); err == nil && at.After(now) {
-		return at.Sub(now)
-	}
-	return 0
-}
-
-func parseConsoleRateLimitMetadata(body []byte) *provider.RateLimitMetadata {
-	return provider.ParseRateLimitMetadata(body)
 }

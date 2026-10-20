@@ -382,7 +382,7 @@ func consoleVoiceResponseError(response *http.Response) error {
 	if err != nil {
 		return err
 	}
-	retryAfter := parseConsoleRetryAfterHeader(response.Header.Get("Retry-After"), time.Now().UTC())
+	retryAfter := provider.ParseRetryAfterHeader(response.Header.Get("Retry-After"), time.Now().UTC())
 	return newConsoleMediaUpstreamError(response.StatusCode, data, retryAfter)
 }
 

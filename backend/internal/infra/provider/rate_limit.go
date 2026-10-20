@@ -40,7 +40,7 @@ func RateLimitFromResponse(status int, header http.Header, body []byte) *RateLim
 	}
 	if header != nil {
 		if headerValue := header.Get("Retry-After"); headerValue != "" {
-			if retryAfter := parseRetryAfterHeader(headerValue, time.Now().UTC()); retryAfter > 0 {
+			if retryAfter := ParseRetryAfterHeader(headerValue, time.Now().UTC()); retryAfter > 0 {
 				metadata.RetryAfter = retryAfter
 			}
 		} else if metadata.RetryAfter > 0 {
@@ -104,7 +104,7 @@ func parseRateLimitText(text string) *RateLimitMetadata {
 		scope = RateLimitScopeRPS
 		retryAfter = 2 * time.Second
 	}
-	if parsed := rateLimitResetAfter(text); parsed > 0 {
+	if parsed := RateLimitResetAfter(text); parsed > 0 {
 		retryAfter = parsed
 		if scope == RateLimitScopeRPS && retryAfter < 2*time.Second {
 			retryAfter = 2 * time.Second
@@ -136,7 +136,8 @@ func rateLimitModel(text string) string {
 	return strings.TrimRight(match[1], rateLimitModelTrimChars)
 }
 
-func rateLimitResetAfter(body string) time.Duration {
+// RateLimitResetAfter sums a "resets in: 1h 2m 3s" window in an upstream 429 body.
+func RateLimitResetAfter(body string) time.Duration {
 	index := strings.Index(strings.ToLower(body), "resets in:")
 	if index < 0 {
 		return 0
@@ -159,7 +160,8 @@ func rateLimitResetAfter(body string) time.Duration {
 	return total
 }
 
-func parseRetryAfterHeader(value string, now time.Time) time.Duration {
+// ParseRetryAfterHeader reads a Retry-After header in seconds or as an HTTP date.
+func ParseRetryAfterHeader(value string, now time.Time) time.Duration {
 	value = strings.TrimSpace(value)
 	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds > 0 {
 		return time.Duration(seconds) * time.Second

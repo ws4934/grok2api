@@ -698,7 +698,7 @@ func (a *Adapter) doConsoleVideoJSON(ctx context.Context, credential account.Cre
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		a.reportConsoleResponse(ctx, lease, response.StatusCode, data)
-		return nil, newConsoleMediaUpstreamError(response.StatusCode, data, parseConsoleRetryAfterHeader(response.Header.Get("Retry-After"), time.Now().UTC()))
+		return nil, newConsoleMediaUpstreamError(response.StatusCode, data, provider.ParseRetryAfterHeader(response.Header.Get("Retry-After"), time.Now().UTC()))
 	}
 	a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, response.StatusCode, nil)
 	return data, nil
@@ -897,7 +897,7 @@ func newConsoleMediaUpstreamError(status int, body []byte, retryAfter time.Durat
 		summary += ": " + message
 	}
 	if retryAfter <= 0 {
-		retryAfter = consoleRetryAfter(body)
+		retryAfter = provider.RateLimitResetAfter(string(body))
 	}
 	return &consoleMediaUpstreamError{
 		status: status, summary: summary, retryAfter: retryAfter,
