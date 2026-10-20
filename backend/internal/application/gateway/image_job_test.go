@@ -659,7 +659,7 @@ func TestResumedImageJobStaysResumableAndCountsClaimsFromTheResume(t *testing.T)
 		t.Fatal(err)
 	}
 	// Workers keep dying on the resumed job until its claims run out.
-	for index := range imageJobMaxClaims {
+	for index := range mediaJobMaxClaims {
 		now := time.Now().UTC()
 		if _, ok, err := f.jobs.TryClaimMediaJob(ctx, job.ID, now, now.Add(-time.Second), fmt.Sprintf("claim_dead_worker_%02d", index)); err != nil || !ok {
 			t.Fatalf("claim %d = %v %v", index, ok, err)
@@ -681,7 +681,7 @@ func TestResumedImageJobStaysResumableAndCountsClaimsFromTheResume(t *testing.T)
 		t.Fatal(err)
 	}
 	f.service.processMediaJob(ctx, job.ID)
-	if stored := f.job(t, job.ID); stored.Status != media.StatusCompleted || stored.Generation <= imageJobMaxClaims {
+	if stored := f.job(t, job.ID); stored.Status != media.StatusCompleted || stored.Generation <= mediaJobMaxClaims {
 		t.Fatalf("second resume = %#v", stored)
 	}
 	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {

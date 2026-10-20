@@ -36,11 +36,11 @@ import (
 const (
 	// ImageJobIDPrefix marks image jobs among Responses IDs.
 	ImageJobIDPrefix = "resp_img_"
-	imageJobLease    = 2 * time.Minute
-	imageJobRenewal  = 30 * time.Second
+	mediaJobLease    = 2 * time.Minute
+	mediaJobRenewal  = 30 * time.Second
 	imageJobTimeout  = time.Hour
-	// imageJobMaxClaims stops a job whose workers keep dying mid-run.
-	imageJobMaxClaims    = 5
+	// mediaJobMaxClaims stops a job whose workers keep dying mid-run.
+	mediaJobMaxClaims    = 5
 	imageJobPollInterval = time.Second
 	imageResultMaxBytes  = 64 << 20
 )
@@ -373,7 +373,7 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 		s.endImageJob(parent, &job, media.StatusFailed, "provider_unavailable", ErrNoAvailableAccount, 0)
 		return
 	}
-	if job.Generation-job.ResumeGeneration > imageJobMaxClaims {
+	if job.Generation-job.ResumeGeneration > mediaJobMaxClaims {
 		status := media.StatusFailed
 		if job.Submitted {
 			status = media.StatusUncertain
@@ -394,13 +394,13 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 	}
 	// The claim carries the long video lease; image jobs hold a short one
 	// and renew it, so a dead worker's job is recovered within minutes.
-	if err := s.renewImageJobLease(ctx, job); errors.Is(err, repository.ErrNotFound) {
+	if err := s.renewMediaJobLease(ctx, job); errors.Is(err, repository.ErrNotFound) {
 		return
 	}
 	heartbeat, claim := make(chan struct{}), job
 	go func() {
 		defer close(heartbeat)
-		s.keepImageJobLease(ctx, lose, claim)
+		s.keepMediaJobLease(ctx, lose, claim)
 	}()
 	defer func() {
 		cancel()
@@ -440,23 +440,23 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 	s.endImageJob(parent, &job, media.StatusCompleted, "", nil, 0)
 }
 
-func (s *Service) renewImageJobLease(ctx context.Context, job media.Job) error {
+func (s *Service) renewMediaJobLease(ctx context.Context, job media.Job) error {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
-	return s.mediaJobs.RenewMediaJobLease(writeCtx, job, time.Now().UTC().Add(imageJobLease))
+	return s.mediaJobs.RenewMediaJobLease(writeCtx, job, time.Now().UTC().Add(mediaJobLease))
 }
 
-// keepImageJobLease renews the claim until ctx ends; a lost claim stops the
+// keepMediaJobLease renews the claim until ctx ends; a lost claim stops the
 // worker through lose.
-func (s *Service) keepImageJobLease(ctx context.Context, lose context.CancelCauseFunc, job media.Job) {
-	ticker := time.NewTicker(imageJobRenewal)
+func (s *Service) keepMediaJobLease(ctx context.Context, lose context.CancelCauseFunc, job media.Job) {
+	ticker := time.NewTicker(mediaJobRenewal)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.renewImageJobLease(ctx, job); errors.Is(err, repository.ErrNotFound) {
+			if err := s.renewMediaJobLease(ctx, job); errors.Is(err, repository.ErrNotFound) {
 				lose(errJobLost)
 				return
 			}
@@ -464,8 +464,8 @@ func (s *Service) keepImageJobLease(ctx context.Context, lose context.CancelCaus
 	}
 }
 
-// saveImageJob writes job under its claim fence.
-func (s *Service) saveImageJob(ctx context.Context, job *media.Job) error {
+// saveMediaJob writes job under its claim fence.
+func (s *Service) saveMediaJob(ctx context.Context, job *media.Job) error {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
 	job.UpdatedAt = time.Now().UTC()
@@ -489,7 +489,7 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 			return err
 		}
 		job.Checkpoint, job.Submitted = string(data), next.Submitted
-		return s.saveImageJob(ctx, job)
+		return s.saveMediaJob(ctx, job)
 	}
 	quotaMode := s.providers.QuotaMode(route.Provider, route.UpstreamModel)
 	var lease *accountLease
@@ -554,7 +554,7 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 	job.ResultAssetIDs = append(job.ResultAssetIDs, asset.ID)
 	job.Checkpoint, job.Submitted = "", false
 	job.Progress = min(99, len(job.ResultAssetIDs)*100/job.ItemCount)
-	if err := s.saveImageJob(ctx, job); err != nil {
+	if err := s.saveMediaJob(ctx, job); err != nil {
 		return imageItemOutcome{err: err}
 	}
 	succeeded = true
