@@ -16,7 +16,7 @@ const byteSizeSchema = z.object({ value: z.number().positive(), unit: z.enum(["M
 const routingTTLDuration = durationSchema.refine((value) => durationSeconds(value) <= 30 * 86_400);
 const routingCooldownDuration = durationSchema.refine((value) => durationSeconds(value) <= 86_400);
 const routingCapacityWaitDuration = durationSchema.refine((value) => durationSeconds(value) <= 30);
-const consoleChatDuration = durationSchema.refine((value) => {
+const upstreamTimeoutDuration = durationSchema.refine((value) => {
   const seconds = durationSeconds(value);
   return seconds >= 5 && seconds <= 30 * 60;
 });
@@ -111,7 +111,7 @@ export const settingsSchema = z.object({
   }),
   providerConsole: z.object({
     baseURL: z.url().refine((value) => value.startsWith("https://")),
-    chatTimeout: consoleChatDuration,
+    chatTimeout: upstreamTimeoutDuration,
     streamIdleTimeout: providerStreamIdleDuration,
   }).refine((value) => durationSeconds(value.streamIdleTimeout) <= durationSeconds(value.chatTimeout), {
     path: ["streamIdleTimeout"], message: "invalid",
@@ -122,6 +122,10 @@ export const settingsSchema = z.object({
     visionTokens: z.number().int().min(0).max(100_000),
     defaultImageModel: z.string().trim(),
     cloudflareClearance: z.boolean(),
+  }),
+  providerAdobe: z.object({
+    sherlockMintAPI: z.string().trim().max(2048).refine((value) => value === "" || validHTTPURL(value)),
+    timeout: upstreamTimeoutDuration,
   }),
   batch: z.object({
     importConcurrency: positiveInteger.max(50),
@@ -204,6 +208,7 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
     },
     providerConsole: { ...config.providerConsole, chatTimeout: parseDuration(config.providerConsole.chatTimeout), streamIdleTimeout: parseDuration(config.providerConsole.streamIdleTimeout) },
     providerChatGPT: config.providerChatGPT,
+    providerAdobe: { ...config.providerAdobe, timeout: parseDuration(config.providerAdobe.timeout) },
     batch: { ...config.batch, randomDelay: parseDurationMilliseconds(config.batch.randomDelay) },
     media: {
       maxImageSize: parseByteSize(config.media.maxImageBytes), maxTotalSize: parseByteSize(config.media.maxTotalBytes),
@@ -254,6 +259,7 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
     },
     providerConsole: { ...config.providerConsole, chatTimeout: formatDuration(config.providerConsole.chatTimeout), streamIdleTimeout: formatDuration(config.providerConsole.streamIdleTimeout) },
     providerChatGPT: config.providerChatGPT,
+    providerAdobe: { ...config.providerAdobe, timeout: formatDuration(config.providerAdobe.timeout) },
     batch: { ...config.batch, randomDelay: `${config.batch.randomDelay}ms` },
     media: {
       maxImageBytes: byteSizeBytes(config.media.maxImageSize), maxTotalBytes: byteSizeBytes(config.media.maxTotalSize),

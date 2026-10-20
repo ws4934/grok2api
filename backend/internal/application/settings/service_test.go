@@ -659,6 +659,58 @@ func TestUpdateRejectsProviderChatGPTOutOfRange(t *testing.T) {
 	}
 }
 
+func TestProviderAdobeSettingsRoundTrip(t *testing.T) {
+	cfg := testConfig(t)
+	repository := &runtimeSettingsRepositoryStub{}
+	var applied config.Config
+	service := NewService(cfg, time.Time{}, 0, repository, nil, func(next config.Config) { applied = next })
+	input := service.Get().Config
+	if input.ProviderAdobe != (ProviderAdobeConfig{SherlockMintAPI: "http://mint:8777", Timeout: "1m"}) {
+		t.Fatalf("default providerAdobe = %#v", input.ProviderAdobe)
+	}
+	input.ProviderAdobe = ProviderAdobeConfig{SherlockMintAPI: " http://127.0.0.1:9000 ", Timeout: "2m"}
+	want := config.AdobeProviderConfig{SherlockMintAPI: "http://127.0.0.1:9000", Timeout: config.Duration(2 * time.Minute)}
+	snapshot, err := service.Update(context.Background(), 0, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.Provider.Adobe != want || snapshot.Config.ProviderAdobe != (ProviderAdobeConfig{SherlockMintAPI: "http://127.0.0.1:9000", Timeout: "2m"}) {
+		t.Fatalf("applied = %#v, snapshot = %#v", applied.Provider.Adobe, snapshot.Config.ProviderAdobe)
+	}
+	reloaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
+	if err != nil || reloaded.Provider.Adobe != want {
+		t.Fatalf("reloaded = %#v, err = %v", reloaded.Provider.Adobe, err)
+	}
+	// An empty mint address disables Adobe submits and a zero timeout means 60s;
+	// both must load instead of failing startup.
+	repository.value.ProviderAdobe = settingsdomain.ProviderAdobeConfig{}
+	if reloaded, _, _, err = LoadPersisted(context.Background(), cfg, repository); err != nil || reloaded.Provider.Adobe != (config.AdobeProviderConfig{}) {
+		t.Fatalf("zero section: reloaded = %#v, err = %v", reloaded.Provider.Adobe, err)
+	}
+}
+
+func TestUpdateRejectsInvalidProviderAdobe(t *testing.T) {
+	for _, value := range []ProviderAdobeConfig{
+		{SherlockMintAPI: "http://mint.example.com:8777", Timeout: "1m"},
+		{SherlockMintAPI: "http://mint:8777/?token=x", Timeout: "1m"},
+		{SherlockMintAPI: "http://mint:8777", Timeout: "4s"},
+		{SherlockMintAPI: "http://mint:8777", Timeout: "31m"},
+		{SherlockMintAPI: "http://mint:8777", Timeout: "-1m"},
+		{SherlockMintAPI: "http://mint:8777", Timeout: ""},
+	} {
+		repository := &runtimeSettingsRepositoryStub{}
+		service := NewService(testConfig(t), time.Time{}, 0, repository, nil, nil)
+		input := service.Get().Config
+		input.ProviderAdobe = value
+		if _, err := service.Update(context.Background(), 0, input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("%#v: error = %v, want ErrInvalidInput", value, err)
+		}
+		if repository.found {
+			t.Fatalf("%#v was persisted", value)
+		}
+	}
+}
+
 // Fields only the YAML file sets must survive applying persisted settings.
 func TestApplyingSettingsKeepsFileOnlyFields(t *testing.T) {
 	base := testConfig(t)

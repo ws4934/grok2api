@@ -26,6 +26,7 @@ type settingsConfigDTO struct {
 	ProviderWeb       providerWebConfigDTO       `json:"providerWeb"`
 	ProviderConsole   providerConsoleConfigDTO   `json:"providerConsole"`
 	ProviderChatGPT   providerChatGPTConfigDTO   `json:"providerChatGPT"`
+	ProviderAdobe     providerAdobeConfigDTO     `json:"providerAdobe"`
 	Batch             batchConfigDTO             `json:"batch"`
 	Media             mediaConfigDTO             `json:"media"`
 	Frontend          frontendConfigDTO          `json:"frontend"`
@@ -51,6 +52,11 @@ type providerChatGPTConfigDTO struct {
 	VisionTokens           int    `json:"visionTokens"`
 	DefaultImageModel      string `json:"defaultImageModel"`
 	CloudflareClearance    bool   `json:"cloudflareClearance"`
+}
+
+type providerAdobeConfigDTO struct {
+	SherlockMintAPI string `json:"sherlockMintAPI"`
+	Timeout         string `json:"timeout"`
 }
 
 type mediaConfigDTO struct {
@@ -220,6 +226,7 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 			StreamIdleTimeout: value.ProviderConsole.StreamIdleTimeout,
 		},
 		ProviderChatGPT: settingsapp.ProviderChatGPTConfig(value.ProviderChatGPT),
+		ProviderAdobe:   settingsapp.ProviderAdobeConfig(value.ProviderAdobe),
 		Batch: settingsapp.BatchConfig{
 			ImportConcurrency: value.Batch.ImportConcurrency, ConversionConcurrency: value.Batch.ConversionConcurrency,
 			SyncConcurrency: value.Batch.SyncConcurrency, RefreshConcurrency: value.Batch.RefreshConcurrency,
@@ -298,6 +305,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				VisionTokens: config.ProviderChatGPT.VisionTokens, DefaultImageModel: config.ProviderChatGPT.DefaultImageModel,
 				CloudflareClearance: config.ProviderChatGPT.CloudflareClearance,
 			},
+			ProviderAdobe: providerAdobeConfigDTO(config.ProviderAdobe),
 			Batch: batchConfigDTO{
 				ImportConcurrency: config.Batch.ImportConcurrency, ConversionConcurrency: config.Batch.ConversionConcurrency,
 				SyncConcurrency: config.Batch.SyncConcurrency, RefreshConcurrency: config.Batch.RefreshConcurrency,

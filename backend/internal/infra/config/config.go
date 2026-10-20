@@ -649,7 +649,7 @@ func (c Config) Validate() error {
 	switch c.Provider.Web.ClearanceMode {
 	case ClearanceModeManual:
 	case ClearanceModeFlareSolverr, ClearanceModeOnDemand:
-		if err := validateFlareSolverrURL(c.Provider.Web.FlareSolverrURL); err != nil {
+		if err := validateServiceURL(c.Provider.Web.FlareSolverrURL); err != nil {
 			return fmt.Errorf("provider.web FlareSolverr URL 无效: %w", err)
 		}
 	default:
@@ -682,6 +682,15 @@ func (c Config) Validate() error {
 	}
 	if c.Provider.ChatGPT.OutputTokenLimit < 1 || c.Provider.ChatGPT.OutputTokenLimit > 131072 || c.Provider.ChatGPT.VisionTokens < 0 || c.Provider.ChatGPT.VisionTokens > 100000 {
 		return errors.New("provider.chatgpt.outputTokenLimit 必须在 1 到 131072 之间，visionTokens 必须在 0 到 100000 之间")
+	}
+	if strings.TrimSpace(c.Provider.Adobe.SherlockMintAPI) != "" {
+		if err := validateServiceURL(c.Provider.Adobe.SherlockMintAPI); err != nil {
+			return fmt.Errorf("provider.adobe mint 服务地址无效: %w", err)
+		}
+	}
+	// 0 表示默认 60 秒。
+	if timeout := c.Provider.Adobe.Timeout.Value(); timeout != 0 && (timeout < 5*time.Second || timeout > 30*time.Minute) {
+		return errors.New("provider.adobe.timeout 必须为 0（默认 60 秒）或在 5 秒到 30 分钟之间")
 	}
 	if c.Provider.Console.ChatTimeout.Value() < 5*time.Second || c.Provider.Console.ChatTimeout.Value() > 30*time.Minute {
 		return errors.New("provider.console.chatTimeout 必须在 5 秒到 30 分钟之间")
@@ -1006,7 +1015,8 @@ func defaultConfig() Config {
 	}
 }
 
-func validateFlareSolverrURL(value string) error {
+// validateServiceURL 校验 FlareSolverr、mint 等辅助服务地址：公网须 HTTPS:443，内网可用 HTTP。
+func validateServiceURL(value string) error {
 	if err := signerurl.Validate(value); err != nil {
 		return errors.New(strings.ReplaceAll(err.Error(), "签名 URL", "URL"))
 	}

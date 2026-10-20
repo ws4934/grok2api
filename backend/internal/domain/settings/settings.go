@@ -35,6 +35,7 @@ type Config struct {
 	ProviderWeb       ProviderWebConfig
 	ProviderConsole   ProviderConsoleConfig
 	ProviderChatGPT   ProviderChatGPTConfig
+	ProviderAdobe     ProviderAdobeConfig
 	Batch             BatchConfig
 	Media             MediaConfig
 	Frontend          FrontendConfig
@@ -58,6 +59,12 @@ type ProviderConsoleConfig struct {
 	BaseURL           string
 	ChatTimeout       time.Duration
 	StreamIdleTimeout time.Duration
+}
+
+// ProviderAdobeConfig 定义 Adobe Provider 的运行参数，字段与 config.AdobeProviderConfig 一一对应。
+type ProviderAdobeConfig struct {
+	SherlockMintAPI string
+	Timeout         time.Duration
 }
 
 // ProviderChatGPTConfig 定义 ChatGPT Provider 的运行参数，字段与 config.ChatGPTProviderConfig 一一对应。

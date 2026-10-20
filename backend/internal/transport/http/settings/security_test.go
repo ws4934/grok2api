@@ -97,6 +97,25 @@ func TestSettingsResponseIncludesSegmentedSelector(t *testing.T) {
 	}
 }
 
+func TestProviderAdobeSettingsWireShape(t *testing.T) {
+	var dto settingsConfigDTO
+	body := `{"providerAdobe":{"sherlockMintAPI":"http://mint:8777","timeout":"1m"}}`
+	if err := json.Unmarshal([]byte(body), &dto); err != nil {
+		t.Fatal(err)
+	}
+	want := settingsapp.ProviderAdobeConfig{SherlockMintAPI: "http://mint:8777", Timeout: "1m"}
+	if input := dto.toApplication(); input.ProviderAdobe != want {
+		t.Fatalf("providerAdobe input = %#v", input.ProviderAdobe)
+	}
+	data, err := json.Marshal(newSettingsResponse(settingsapp.Snapshot{Config: settingsapp.EditableConfig{ProviderAdobe: want}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), body[1:len(body)-1]) {
+		t.Fatalf("settings response providerAdobe = %s", data)
+	}
+}
+
 func TestProviderChatGPTSettingsWireShape(t *testing.T) {
 	var dto settingsConfigDTO
 	body := `{"providerChatGPT":{"imageConversationModel":"gpt-5","outputTokenLimit":4096,"visionTokens":0,"defaultImageModel":"gpt-image-2","cloudflareClearance":true}}`

@@ -88,6 +88,7 @@ export function SettingsPage() {
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="web">{t("settings.web.title")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="console">{t("console.name")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="chatgpt">{t("settingsChatGPT.title")}</TabsTrigger>
+            <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="adobe">{t("settingsAdobe.title")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="delivery">{t("settings.groups.delivery")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="policies">{t("settings.groups.policies")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="audit">{t("settings.audit.tabTitle")}</TabsTrigger>
@@ -178,6 +179,15 @@ export function SettingsPage() {
               <SettingsField controlId="chatgpt-output-token-limit" label={t("settingsChatGPT.outputTokenLimit")} description={t("settingsChatGPT.outputTokenLimitHelp")} error={form.formState.errors.providerChatGPT?.outputTokenLimit?.message}><Input id="chatgpt-output-token-limit" type="number" min={1} max={131_072} {...form.register("providerChatGPT.outputTokenLimit", { valueAsNumber: true })} /></SettingsField>
               <SettingsField controlId="chatgpt-vision-tokens" label={t("settingsChatGPT.visionTokens")} description={t("settingsChatGPT.visionTokensHelp")} error={form.formState.errors.providerChatGPT?.visionTokens?.message}><Input id="chatgpt-vision-tokens" type="number" min={0} max={100_000} {...form.register("providerChatGPT.visionTokens", { valueAsNumber: true })} /></SettingsField>
               <SettingsField controlId="chatgpt-cloudflare-clearance" label={t("settingsChatGPT.cloudflareClearance")} description={t("settingsChatGPT.cloudflareClearanceHelp")}><Controller control={form.control} name="providerChatGPT.cloudflareClearance" render={({ field }) => <div className="flex h-8 items-center"><Switch id="chatgpt-cloudflare-clearance" checked={field.value} onCheckedChange={field.onChange} /></div>} /></SettingsField>
+            </div>
+          </SettingsSection>
+          </SettingsPane>
+
+          <SettingsPane value="adobe">
+          <SettingsSection title={t("settingsAdobe.title")}>
+            <div className="space-y-0">
+              <SettingsField controlId="adobe-sherlock-mint-api" label={t("settingsAdobe.sherlockMintAPI")} description={t("settingsAdobe.sherlockMintAPIHelp")} error={form.formState.errors.providerAdobe?.sherlockMintAPI?.message}><Input id="adobe-sherlock-mint-api" type="url" placeholder="http://mint:8777" {...form.register("providerAdobe.sherlockMintAPI")} /></SettingsField>
+              <SettingsField controlId="adobe-timeout" label={t("settingsAdobe.timeout")} description={t("settingsAdobe.timeoutHelp")} error={form.formState.errors.providerAdobe?.timeout?.message}><Controller control={form.control} name="providerAdobe.timeout" render={({ field }) => <DurationInput id="adobe-timeout" value={field.value} onChange={field.onChange} />} /></SettingsField>
             </div>
           </SettingsSection>
           </SettingsPane>

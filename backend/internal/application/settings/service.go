@@ -64,6 +64,12 @@ type ProviderConsoleConfig struct {
 	StreamIdleTimeout string
 }
 
+// ProviderAdobeConfig 是管理接口使用的 Adobe Provider 可编辑输入。
+type ProviderAdobeConfig struct {
+	SherlockMintAPI string
+	Timeout         string
+}
+
 // ProviderChatGPTConfig 是管理接口使用的 ChatGPT Provider 可编辑输入。
 type ProviderChatGPTConfig struct {
 	ImageConversationModel string
@@ -153,6 +159,7 @@ type EditableConfig struct {
 	ProviderWeb       ProviderWebConfig
 	ProviderConsole   ProviderConsoleConfig
 	ProviderChatGPT   ProviderChatGPTConfig
+	ProviderAdobe     ProviderAdobeConfig
 	Batch             BatchConfig
 	Media             MediaConfig
 	Frontend          FrontendConfig
@@ -321,6 +328,7 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 		StreamIdleTimeout: config.Duration(value.ProviderConsole.StreamIdleTimeout),
 	}
 	base.Provider.ChatGPT = config.ChatGPTProviderConfig(value.ProviderChatGPT)
+	base.Provider.Adobe = config.AdobeProviderConfig{SherlockMintAPI: value.ProviderAdobe.SherlockMintAPI, Timeout: config.Duration(value.ProviderAdobe.Timeout)}
 	randomDelay := time.Duration(-1)
 	if value.Batch.RandomDelay != nil {
 		randomDelay = *value.Batch.RandomDelay
@@ -394,6 +402,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			StreamIdleTimeout: value.Provider.Console.StreamIdleTimeout.Value(),
 		},
 		ProviderChatGPT: settingsdomain.ProviderChatGPTConfig(value.Provider.ChatGPT),
+		ProviderAdobe:   settingsdomain.ProviderAdobeConfig{SherlockMintAPI: value.Provider.Adobe.SherlockMintAPI, Timeout: value.Provider.Adobe.Timeout.Value()},
 		Batch: settingsdomain.BatchConfig{
 			ImportConcurrency: value.Batch.ImportConcurrency, ConversionConcurrency: value.Batch.ConversionConcurrency,
 			SyncConcurrency: value.Batch.SyncConcurrency, RefreshConcurrency: value.Batch.RefreshConcurrency,
@@ -489,6 +498,7 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	chatGPT.ImageConversationModel = strings.TrimSpace(chatGPT.ImageConversationModel)
 	chatGPT.DefaultImageModel = strings.TrimSpace(chatGPT.DefaultImageModel)
 	next.Provider.ChatGPT = config.ChatGPTProviderConfig(chatGPT)
+	next.Provider.Adobe.SherlockMintAPI = strings.TrimSpace(input.ProviderAdobe.SherlockMintAPI)
 	next.Batch = config.BatchConfig{
 		ImportConcurrency: input.Batch.ImportConcurrency, ConversionConcurrency: input.Batch.ConversionConcurrency,
 		SyncConcurrency: input.Batch.SyncConcurrency, RefreshConcurrency: input.Batch.RefreshConcurrency,
@@ -535,6 +545,7 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		{"providerWeb.recoveryBackoffBase", input.ProviderWeb.RecoveryBackoffBase, func(value config.Duration) { next.Provider.Web.RecoveryBackoffBase = value }},
 		{"providerWeb.recoveryBackoffMax", input.ProviderWeb.RecoveryBackoffMax, func(value config.Duration) { next.Provider.Web.RecoveryBackoffMax = value }},
 		{"providerConsole.chatTimeout", input.ProviderConsole.ChatTimeout, func(value config.Duration) { next.Provider.Console.ChatTimeout = value }},
+		{"providerAdobe.timeout", input.ProviderAdobe.Timeout, func(value config.Duration) { next.Provider.Adobe.Timeout = value }},
 		{"media.cleanupInterval", input.Media.CleanupInterval, func(value config.Duration) { next.Media.CleanupInterval = value }},
 		{"batch.randomDelay", input.Batch.RandomDelay, func(value config.Duration) { next.Batch.RandomDelay = value }},
 		{"providerBuild.responseHeaderTimeout", input.ProviderBuild.ResponseHeaderTimeout, func(value config.Duration) { next.Provider.Build.ResponseHeaderTimeout = value }},
@@ -596,6 +607,7 @@ func toEditable(cfg config.Config) EditableConfig {
 			StreamIdleTimeout: cfg.Provider.Console.StreamIdleTimeout.String(),
 		},
 		ProviderChatGPT: ProviderChatGPTConfig(cfg.Provider.ChatGPT),
+		ProviderAdobe:   ProviderAdobeConfig{SherlockMintAPI: cfg.Provider.Adobe.SherlockMintAPI, Timeout: cfg.Provider.Adobe.Timeout.String()},
 		Batch: BatchConfig{
 			ImportConcurrency: cfg.Batch.ImportConcurrency, ConversionConcurrency: cfg.Batch.ConversionConcurrency,
 			SyncConcurrency: cfg.Batch.SyncConcurrency, RefreshConcurrency: cfg.Batch.RefreshConcurrency,
