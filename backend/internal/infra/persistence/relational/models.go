@@ -204,7 +204,7 @@ func (modelRouteModel) TableName() string { return "model_routes" }
 // modelRouteAliasModel 保留升级或人工重命名前的公开模型 ID，使外部客户端可以平滑迁移。
 type modelRouteAliasModel struct {
 	Alias        string           `gorm:"size:255;primaryKey;check:chk_model_route_aliases_alias,length(trim(alias)) BETWEEN 1 AND 255"`
-	ModelRouteID uint64           `gorm:"not null;index"`
+	ModelRouteID uint64           `gorm:"not null"`
 	CreatedAt    time.Time        `gorm:"not null"`
 	ModelRoute   *modelRouteModel `gorm:"foreignKey:ModelRouteID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 }
@@ -577,7 +577,7 @@ type egressNodeModel struct {
 	Scope                       string  `gorm:"size:32;not null"`
 	Enabled                     bool    `gorm:"not null;default:true"`
 	ProxyPool                   bool    `gorm:"not null;default:false"`
-	SourceID                    *uint64 `gorm:"uniqueIndex:uidx_egress_nodes_source_key,priority:1;index:idx_egress_nodes_source;constraint:OnUpdate:CASCADE,OnDelete:SET NULL"`
+	SourceID                    *uint64 `gorm:"uniqueIndex:uidx_egress_nodes_source_key,priority:1;constraint:OnUpdate:CASCADE,OnDelete:SET NULL"`
 	SourceKey                   string  `gorm:"size:64;not null;default:'';uniqueIndex:uidx_egress_nodes_source_key,priority:2;check:chk_egress_nodes_source_key,length(source_key) <= 64"`
 	AccountCapacity             int     `gorm:"not null;default:0;check:chk_egress_nodes_capacity,account_capacity BETWEEN 0 AND 100000"`
 	ProxyProfileID              *uint64 `gorm:"index:idx_egress_nodes_proxy_profile;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT"`
