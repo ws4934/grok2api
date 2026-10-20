@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenyme/grok2api/backend/internal/pkg/socksproxy"
 	"github.com/chenyme/grok2api/backend/internal/pkg/tunnelproxy"
 )
 
@@ -68,29 +67,8 @@ func newPinnedHTTPSClient(proxyURL, serverName string, tlsConfig *tls.Config) (*
 		ResponseHeaderTimeout: 30 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
-	if strings.TrimSpace(proxyURL) != "" {
-		parsed, err := url.Parse(proxyURL)
-		if err != nil {
-			return nil, fmt.Errorf("解析固定地址出口代理: %w", err)
-		}
-		switch strings.ToLower(parsed.Scheme) {
-		case "http", "https":
-			transport.Proxy = http.ProxyURL(parsed)
-		case "socks4", "socks4a", "socks5", "socks5h":
-			dial, err := socksproxy.NewDialContext(parsed, direct, direct.Timeout)
-			if err != nil {
-				return nil, fmt.Errorf("创建固定地址 SOCKS 代理: %w", err)
-			}
-			transport.DialContext = dial
-		case "trojan", "vless", "ss", "vmess":
-			dialer, err := tunnelproxy.NewDialer(proxyURL)
-			if err != nil {
-				return nil, fmt.Errorf("创建固定地址隧道代理: %w", err)
-			}
-			transport.DialContext = dialer.DialContext
-		default:
-			return nil, fmt.Errorf("固定地址请求不支持代理协议 %q", parsed.Scheme)
-		}
+	if err := tunnelproxy.RouteTransport(transport, proxyURL, direct); err != nil {
+		return nil, fmt.Errorf("固定地址出口代理: %w", err)
 	}
 	return &http.Client{
 		Transport: transport,

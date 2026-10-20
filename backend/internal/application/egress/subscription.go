@@ -16,7 +16,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/chenyme/grok2api/backend/internal/pkg/socksproxy"
 	"github.com/chenyme/grok2api/backend/internal/pkg/tunnelproxy"
 )
 
@@ -25,7 +24,6 @@ const (
 	maxSubscriptionEntries   = 10000
 	maxSubscriptionHops      = 3
 	subscriptionFetchTimeout = 20 * time.Second
-	proxyHandshakeTimeout    = 10 * time.Second
 )
 
 var blockedSubscriptionPrefixes = []netip.Prefix{
@@ -140,33 +138,9 @@ func subscriptionTransport(viaProxy string) (*http.Transport, error) {
 		ResponseHeaderTimeout: 10 * time.Second,
 		ExpectContinueTimeout: time.Second,
 	}
-	viaProxy = strings.TrimSpace(viaProxy)
-	if viaProxy == "" {
-		return transport, nil
-	}
-	parsed, err := url.Parse(viaProxy)
-	if err != nil || parsed.Host == "" {
-		return nil, errors.New("订阅拉取代理地址无效")
-	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "http", "https":
-		transport.Proxy = http.ProxyURL(parsed)
-		// Dial the proxy endpoint itself; private admin proxies are allowed.
-		transport.DialContext = direct.DialContext
-	case "socks4", "socks4a", "socks5", "socks5h":
-		dial, err := socksproxy.NewDialContext(parsed, direct, proxyHandshakeTimeout)
-		if err != nil {
-			return nil, fmt.Errorf("创建订阅拉取 SOCKS 代理: %w", err)
-		}
-		transport.DialContext = dial
-	case "trojan", "vless", "ss", "vmess":
-		dialer, err := tunnelproxy.NewDialer(viaProxy)
-		if err != nil {
-			return nil, fmt.Errorf("创建订阅拉取隧道代理: %w", err)
-		}
-		transport.DialContext = dialer.DialContext
-	default:
-		return nil, errors.New("订阅拉取代理协议不受支持")
+	// The proxy endpoint itself is dialed directly; private admin proxies are allowed.
+	if err := tunnelproxy.RouteTransport(transport, viaProxy, direct); err != nil {
+		return nil, fmt.Errorf("订阅拉取代理: %w", err)
 	}
 	return transport, nil
 }

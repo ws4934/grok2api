@@ -2,7 +2,6 @@ package chatgpt
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chenyme/grok2api/backend/internal/pkg/socksproxy"
 	"github.com/chenyme/grok2api/backend/internal/pkg/tunnelproxy"
 )
 
@@ -24,31 +22,11 @@ type egressProxy struct {
 
 func parseEgressProxy(raw string) (egressProxy, error) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return egressProxy{}, nil
+	connect, dial, err := tunnelproxy.Route(raw, &net.Dialer{Timeout: 20 * time.Second})
+	if err != nil {
+		return egressProxy{}, fmt.Errorf("invalid egress proxy: %w", err)
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return egressProxy{}, errors.New("invalid egress proxy")
-	}
-	switch scheme := strings.ToLower(u.Scheme); {
-	case scheme == "http" || scheme == "https":
-		return egressProxy{raw: raw, url: u}, nil
-	case scheme == "socks4" || scheme == "socks4a" || scheme == "socks5" || scheme == "socks5h":
-		dial, err := socksproxy.NewDialContext(u, &net.Dialer{Timeout: 20 * time.Second}, 20*time.Second)
-		if err != nil {
-			return egressProxy{}, errors.New("invalid SOCKS egress proxy")
-		}
-		return egressProxy{raw: raw, dial: dial}, nil
-	case tunnelproxy.IsSupportedScheme(scheme):
-		dialer, err := tunnelproxy.NewDialer(raw)
-		if err != nil {
-			return egressProxy{}, errors.New("invalid tunnel egress proxy")
-		}
-		return egressProxy{raw: raw, dial: dialer.DialContext}, nil
-	default:
-		return egressProxy{}, fmt.Errorf("unsupported egress proxy scheme %q", u.Scheme)
-	}
+	return egressProxy{raw: raw, url: connect, dial: dial}, nil
 }
 
 // apply routes an http.Transport through the proxy. Without a proxy the

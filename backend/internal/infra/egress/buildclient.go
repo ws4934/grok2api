@@ -4,12 +4,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
-	"strings"
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/infra/buildtransport"
-	"github.com/chenyme/grok2api/backend/internal/pkg/socksproxy"
 	"github.com/chenyme/grok2api/backend/internal/pkg/tunnelproxy"
 )
 
@@ -44,29 +41,8 @@ func newBuildClientWithOptions(proxyURL string, responseHeaderTimeout time.Durat
 	if environmentProxy {
 		transport.Proxy = http.ProxyFromEnvironment
 	}
-	if strings.TrimSpace(proxyURL) != "" {
-		parsed, err := url.Parse(proxyURL)
-		if err != nil {
-			return nil, fmt.Errorf("解析 Grok Build 出口代理: %w", err)
-		}
-		switch strings.ToLower(parsed.Scheme) {
-		case "http", "https":
-			transport.Proxy = http.ProxyURL(parsed)
-		case "socks4", "socks4a", "socks5", "socks5h":
-			dial, err := socksproxy.NewDialContext(parsed, direct, direct.Timeout)
-			if err != nil {
-				return nil, fmt.Errorf("创建 Grok Build SOCKS 代理: %w", err)
-			}
-			transport.DialContext = dial
-		case "trojan", "vless", "ss", "vmess":
-			dialer, err := tunnelproxy.NewDialer(proxyURL)
-			if err != nil {
-				return nil, fmt.Errorf("创建 Grok Build 隧道代理: %w", err)
-			}
-			transport.DialContext = dialer.DialContext
-		default:
-			return nil, fmt.Errorf("Grok Build 不支持代理协议 %q", parsed.Scheme)
-		}
+	if err := tunnelproxy.RouteTransport(transport, proxyURL, direct); err != nil {
+		return nil, fmt.Errorf("Grok Build 出口代理: %w", err)
 	}
 	if _, err := buildtransport.ConfigureHTTP2Health(transport); err != nil {
 		return nil, fmt.Errorf("配置 Grok Build HTTP/2 健康探测: %w", err)
