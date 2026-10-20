@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -93,6 +94,9 @@ func (c *gatewayCompactionCodec) decode(session, blob string) (summary string, o
 // prefixed blob is rejected as a local 400. If Build rejects an original blob,
 // that upstream error is returned to the client.
 func expandGatewayCompactionHistory(body []byte, codec *gatewayCompactionCodec, session string) ([]byte, int, error) {
+	if !bytes.Contains(body, []byte(gatewayCompactionPrefix)) {
+		return body, 0, nil
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body, 0, nil // normalizeResponsesRequest owns the public JSON error.

@@ -264,6 +264,14 @@ func sanitizeReasoningInput(item map[string]any) map[string]any {
 	// bare type=reasoning item that Grok Build may reject.
 	converted := copyNonNullHistoryFields(item, "id", "summary", "content", "encrypted_content")
 	converted["type"] = "reasoning"
+	// Like the official CLI, give every content part type=reasoning_text: the
+	// upstream requires it although some clients send only text.
+	content, _ := converted["content"].([]any)
+	for _, part := range content {
+		if value, ok := part.(map[string]any); ok && value["type"] == nil {
+			value["type"] = "reasoning_text"
+		}
+	}
 	if encrypted, ok := converted["encrypted_content"].(string); ok && strings.TrimSpace(encrypted) != "" {
 		if _, exists := converted["summary"]; !exists {
 			converted["summary"] = []any{}

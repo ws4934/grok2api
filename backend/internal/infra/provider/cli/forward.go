@@ -48,6 +48,10 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 			if err == nil && conversationOptions.ReasoningEffortSet && request.NormalizedMetadata != nil {
 				request.NormalizedMetadata.ReasoningEffort = conversationOptions.ReasoningEffort
 			}
+			if err == nil {
+				// The Responses branch applies this inside normalizeResponsesRequestWithMetadata.
+				body, err = normalizeBuildRequestWithMetadata(body, request.Model, request.Operation, request.NormalizedMetadata)
+			}
 		} else {
 			var driftedCompactions int
 			body, driftedCompactions, err = expandGatewayCompactionHistory(body, a.compaction, request.PromptCacheKey)
@@ -62,13 +66,6 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 				}
 			}
 		}
-		if err != nil {
-			if request.Operation == conversation.OperationChat || request.Operation == conversation.OperationMessages {
-				return invalidConversationResponse(request.Operation, err), nil
-			}
-			return invalidResponsesResponse(err), nil
-		}
-		body, err = normalizeBuildRequestWithMetadata(body, request.Model, request.Operation, request.NormalizedMetadata)
 		if err != nil {
 			if request.Operation == conversation.OperationChat || request.Operation == conversation.OperationMessages {
 				return invalidConversationResponse(request.Operation, err), nil

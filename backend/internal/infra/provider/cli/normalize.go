@@ -50,7 +50,6 @@ func normalizeResponsesRequestWithMetadata(body []byte, model string, metadata *
 		payload["text"] = encoded
 		delete(payload, "response_format")
 	}
-	patchReasoningTextTypes(payload)
 	compatibility, err := normalizeResponsesTools(payload)
 	if err != nil {
 		return nil, nil, err
@@ -262,43 +261,6 @@ func foldBuildReasoningEffort(model string, candidates ...string) string {
 		}
 	}
 	return candidates[len(candidates)-1]
-}
-
-// patchReasoningTextTypes 对齐官方 CLI 的序列化后修补：Responses 上游要求
-// reasoning.content[*] 必须携带 type=reasoning_text，即使部分客户端只发送 text。
-func patchReasoningTextTypes(payload map[string]json.RawMessage) {
-	raw := payload["input"]
-	if isEmptyJSON(raw) {
-		return
-	}
-	var items []any
-	if json.Unmarshal(raw, &items) != nil {
-		return // 字符串输入或其他合法简写不需要处理。
-	}
-	changed := false
-	for _, rawItem := range items {
-		item, ok := rawItem.(map[string]any)
-		if !ok || item["type"] != "reasoning" {
-			continue
-		}
-		content, ok := item["content"].([]any)
-		if !ok {
-			continue
-		}
-		for _, rawContent := range content {
-			value, ok := rawContent.(map[string]any)
-			if !ok {
-				continue
-			}
-			if _, exists := value["type"]; !exists {
-				value["type"] = "reasoning_text"
-				changed = true
-			}
-		}
-	}
-	if changed {
-		payload["input"] = mustJSON(items)
-	}
 }
 
 func normalizeResponseFormat(raw json.RawMessage) (json.RawMessage, error) {
