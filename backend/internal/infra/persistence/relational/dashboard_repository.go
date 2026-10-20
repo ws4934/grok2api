@@ -63,7 +63,7 @@ func (r *DashboardRepository) Snapshot(ctx context.Context, window repository.Da
 			Active int64
 		}
 		if err := tx.Model(&accountModel{}).
-			Select("COUNT(*) AS total, COALESCE(SUM(CASE WHEN enabled = ? AND auth_status = ? AND (cooldown_until IS NULL OR cooldown_until <= ?) AND NOT EXISTS (SELECT 1 FROM account_quota_recovery WHERE account_quota_recovery.account_id = provider_accounts.id AND account_quota_recovery.status IN ?) THEN 1 ELSE 0 END), 0) AS active", true, "active", snapshotAt, []string{"exhausted", "probing"}).
+			Select("COUNT(*) AS total, COALESCE(SUM(CASE WHEN enabled = ? AND auth_status = ? AND (cooldown_until IS NULL OR cooldown_until <= ?) AND NOT "+accountRecoveryPredicate+" AND NOT "+providerQuotaExhaustedPredicate+" THEN 1 ELSE 0 END), 0) AS active", true, "active", snapshotAt).
 			Scan(&accounts).Error; err != nil {
 			return err
 		}

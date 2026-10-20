@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/google/uuid"
 )
 
@@ -168,5 +169,44 @@ func TestUpsertModelQuotaBlockKeepsTheLaterCooldown(t *testing.T) {
 		check("first", now.Add(time.Hour), "first", now.Add(time.Hour))
 		check("shorter", now.Add(time.Minute), "first", now.Add(time.Hour))
 		check("longer", now.Add(2*time.Hour), "longer", now.Add(2*time.Hour))
+	})
+}
+
+// A quota-exhausted account waits for its reset, as Summarize counts it: it is
+// neither active on the dashboard nor in the cooldown filter and cleanup.
+func TestQuotaExhaustedAccountIsNeitherActiveNorCoolingDown(t *testing.T) {
+	accountStateDatabases(t, func(t *testing.T, database *Database) {
+		ctx := context.Background()
+		now := time.Now().UTC()
+		repo := NewAccountRepository(database)
+		dashboard := NewDashboardRepository(database)
+		window := repository.DashboardSnapshotWindow{BucketBoundaries: []time.Time{now.Add(-time.Hour), now}, ActivityBoundaries: []time.Time{now.Add(-time.Hour), now}}
+		before, err := dashboard.Snapshot(ctx, window, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := "exhausted-" + uuid.NewString()[:8]
+		value, _, err := repo.UpsertByIdentity(ctx, account.Credential{Provider: account.ProviderWeb, Name: name, SourceKey: name, EncryptedAccessToken: testEncryptedToken, AuthStatus: account.AuthStatusActive})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.SaveQuotaWindows(ctx, value.ID, account.WebTierSuper, now, []account.QuotaWindow{{AccountID: value.ID, Mode: "weekly", Remaining: 0, Total: 30, UpdatedAt: now}}); err != nil {
+			t.Fatal(err)
+		}
+		after, err := dashboard.Snapshot(ctx, window, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cooldownUntil := now.Add(time.Hour)
+		if err := repo.UpdateHealth(ctx, value.ID, value.Provider, 1, &cooldownUntil, "rate limited", false); err != nil {
+			t.Fatal(err)
+		}
+		_, cooling, err := repo.List(ctx, repository.AccountListQuery{Page: repository.PageQuery{Limit: 10, Search: name}, Filter: repository.AccountListFilter{Provider: string(account.ProviderWeb), Status: "cooldown", Now: now}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if active := after.Resources.ActiveAccounts - before.Resources.ActiveAccounts; active != 0 || cooling != 0 {
+			t.Fatalf("exhausted account counted active = %d, cooling down = %d", active, cooling)
+		}
 	})
 }

@@ -406,7 +406,7 @@ func applyAccountStatusFilter(query *gorm.DB, status string, now time.Time) *gor
 	case "reauthRequired":
 		return query.Where("enabled = ? AND auth_status = ?", true, account.AuthStatusReauthRequired)
 	case "cooldown":
-		return query.Where("enabled = ? AND auth_status = ? AND NOT "+accountRecoveryPredicate+" AND cooldown_until > ?", true, account.AuthStatusActive, now)
+		return query.Where("enabled = ? AND auth_status = ? AND NOT "+accountRecoveryPredicate+" AND NOT "+providerQuotaExhaustedPredicate+" AND cooldown_until > ?", true, account.AuthStatusActive, now)
 	case "waitingReset":
 		return query.Where("enabled = ? AND auth_status = ? AND (EXISTS (SELECT 1 FROM account_quota_recovery recovery WHERE recovery.account_id = provider_accounts.id AND recovery.status = 'exhausted') OR "+providerQuotaExhaustedPredicate+")", true, account.AuthStatusActive)
 	case "probing":
