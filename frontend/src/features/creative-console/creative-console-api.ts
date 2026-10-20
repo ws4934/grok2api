@@ -219,6 +219,8 @@ export async function editVideo(input: {
   prompt: string;
   videoURL?: string;
   videoFileID?: string;
+  aspectRatio?: string;
+  resolution?: string;
   signal?: AbortSignal;
 }): Promise<string> {
   const payload = await publicApiRequest(
@@ -230,6 +232,8 @@ export async function editVideo(input: {
         model: input.model,
         prompt: input.prompt,
         video: input.videoFileID ? { file_id: input.videoFileID } : { url: input.videoURL },
+        ...(input.aspectRatio ? { aspect_ratio: input.aspectRatio } : {}),
+        ...(input.resolution ? { resolution: input.resolution } : {}),
       },
       signal: input.signal,
     },
@@ -248,6 +252,7 @@ export async function extendVideo(input: {
   videoURL?: string;
   videoFileID?: string;
   duration?: number;
+  resolution?: string;
   signal?: AbortSignal;
 }): Promise<string> {
   const body: Record<string, unknown> = {
@@ -256,6 +261,7 @@ export async function extendVideo(input: {
     video: input.videoFileID ? { file_id: input.videoFileID } : { url: input.videoURL },
   };
   if (typeof input.duration === "number") body.duration = input.duration;
+  if (input.resolution) body.resolution = input.resolution;
   const payload = await publicApiRequest(
     input.apiKey,
     "/videos/extensions",

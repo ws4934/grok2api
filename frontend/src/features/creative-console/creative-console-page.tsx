@@ -123,8 +123,9 @@ const basicImageQualities = ["auto", "low", "medium", "high"] as const;
 const videoResolutions = ["480p", "720p", "1080p"] as const;
 const videoDurations = ["6", "10", "15"] as const;
 const videoExtendDurations = ["2", "4", "6", "8", "10"] as const;
-// Adobe Seedance 2.5 extends by 4–30 s.
+// Adobe Seedance 2.5 extends by 4–30 s; Kling 3.0 Omni edits take these aspect ratios.
 const adobeVideoExtendDurations = ["4", "6", "8", "10", "15", "20", "30"] as const;
+const klingEditAspectRatios: readonly string[] = ["16:9", "9:16", "1:1"];
 // Routes that serve /videos/edits and /videos/extensions, written as the admin model
 // list shows them ("<namespace>/<upstream>"); mirrors each provider's ValidateVideoRequest.
 const videoEditUpstreams = ["Console/grok-imagine-video", "adobe/seedance/seedance_2.5", "adobe/kling/kling_v3_omni"];
@@ -1166,11 +1167,19 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const activeModel = activeModels.some((item) => item.publicId === model)
     ? model
     : activeModels[0]?.publicId ?? "";
-  // Grok extends by 2–10 s; a public model without a Grok target is served by Adobe.
-  const extendDurations: readonly string[] = modelOptions.some((item) => item.publicId === activeModel && item.upstreamModel === "Console/grok-imagine-video")
-    ? videoExtendDurations
-    : adobeVideoExtendDurations;
+  // Grok edits and extends without aspect ratio or resolution, by 2–10 s. A public model
+  // without a Grok target is served by Adobe: a resolution for edits and extensions,
+  // an aspect ratio for Kling edits, and 4–30 s extensions.
+  const activeTargets = modelOptions.filter((item) => item.publicId === activeModel).map((item) => item.upstreamModel);
+  const grokTarget = activeTargets.includes("Console/grok-imagine-video");
+  const extendDurations: readonly string[] = grokTarget ? videoExtendDurations : adobeVideoExtendDurations;
   const selectedExtendDuration = extendDurations.includes(extendDuration) ? extendDuration : "6";
+  const adobeOperation = action !== "generate" && activeModel !== "" && !grokTarget;
+  const klingEdit = action === "edit" && activeTargets.includes("adobe/kling/kling_v3_omni");
+  const operationResolutions: readonly string[] = klingEdit ? ["720p", "1080p"] : ["480p", "720p"];
+  const operationResolution = operationResolutions.includes(resolution) ? resolution : "720p";
+  const operationAspectRatio = klingEditAspectRatios.includes(aspectRatio) ? aspectRatio : "16:9";
+  const operationParams = adobeOperation ? { resolution: operationResolution, ...(klingEdit ? { aspectRatio: operationAspectRatio } : {}) } : {};
 
   useEffect(() => {
     if (activeModel && activeModel !== model) onModelChange(activeModel);
@@ -1238,7 +1247,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       const videoFileID = sourceVideoFileID || undefined;
       if (!videoURL && !videoFileID) throw new Error(t("creativeConsole.errors.noSourceVideo"));
       if (action === "edit") {
-        return editVideo({ apiKey, model: activeModel, prompt: prompt.trim(), videoURL, videoFileID });
+        return editVideo({ apiKey, model: activeModel, prompt: prompt.trim(), videoURL, videoFileID, ...operationParams });
       }
       return extendVideo({
         apiKey,
@@ -1247,6 +1256,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
         videoURL,
         videoFileID,
         duration: Number(selectedExtendDuration),
+        ...operationParams,
       });
     },
     onSuccess: (requestId, recordId) => patchRecord(recordId, { status: "generating", requestId }),
@@ -1276,11 +1286,9 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
     const { params } = record;
     setAction(record.action);
     setPrompt(record.prompt);
-    if (record.action === "generate") {
-      if (params.duration) setDuration(String(params.duration));
-      if (params.aspectRatio) setAspectRatio(params.aspectRatio);
-      if (params.resolution) setResolution(params.resolution);
-    }
+    if (record.action === "generate" && params.duration) setDuration(String(params.duration));
+    if (params.aspectRatio) setAspectRatio(params.aspectRatio);
+    if (params.resolution) setResolution(params.resolution);
     if (record.action === "extend" && params.duration) setExtendDuration(String(params.duration));
     if (modelOptions.some((option) => option.publicId === record.model)) onModelChange(record.model);
   }
@@ -1342,7 +1350,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       model: activeModel,
       params: action === "generate"
         ? { duration: Number(duration), aspectRatio, resolution: selectedVideoResolution }
-        : action === "extend" ? { duration: Number(selectedExtendDuration) } : {},
+        : { ...(action === "extend" ? { duration: Number(selectedExtendDuration) } : {}), ...operationParams },
       status: "submitting",
     };
     updateRecords((current) => [record, ...current]);
@@ -1566,6 +1574,12 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
               ) : null}
               {action === "extend" ? (
                 <CompactSelect value={selectedExtendDuration} options={extendDurations} onChange={setExtendDuration} ariaLabel={t("creativeConsole.extendDuration")} suffix="s" icon={<Clock3 />} />
+              ) : null}
+              {klingEdit ? (
+                <CompactSelect value={operationAspectRatio} options={klingEditAspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
+              ) : null}
+              {adobeOperation ? (
+                <CompactSelect value={operationResolution} options={operationResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} />
               ) : null}
             </div>
             <Button type="submit" size="icon" aria-label={submitLabel} disabled={!canSubmit}>
