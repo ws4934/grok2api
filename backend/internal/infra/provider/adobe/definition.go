@@ -19,6 +19,8 @@ func (a *Adapter) Definition() provider.Definition {
 			EgressScopes:         []egressdomain.Scope{scope},
 			DefaultMaxConcurrent: 1,
 			QuotaModes:           []string{quotaModeCredits},
+			// Images and videos spend the same credits.
+			MediaQuota: []provider.MediaQuotaGroup{{Kind: provider.MediaQuotaCredits, Modes: []string{quotaModeCredits}}},
 		},
 		ModelNamespace: account.ProviderAdobe.ModelNamespace(),
 		ModelCatalog:   provider.ModelCatalogStatic,

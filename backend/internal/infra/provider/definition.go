@@ -141,6 +141,20 @@ type FailurePolicy struct {
 	SoftRateLimit bool
 }
 
+// MediaQuotaGroup is one dashboard media quota of a provider and the quota
+// window modes that make it up.
+type MediaQuotaGroup struct {
+	Kind  string
+	Modes []string
+}
+
+// Media quota kinds; credits pay for images and videos alike.
+const (
+	MediaQuotaImage   = "image"
+	MediaQuotaVideo   = "video"
+	MediaQuotaCredits = "credits"
+)
+
 // ProfileSurface presents the provider and declares traits the shared
 // gateway, egress and admin surfaces must honour.
 type ProfileSurface struct {
@@ -159,6 +173,9 @@ type ProfileSurface struct {
 	// DisplayQuotaModes are shown modes that no route consumes (ChatGPT's Codex
 	// 5-hour and weekly windows); they get no recovery probes of their own.
 	DisplayQuotaModes []string
+	// MediaQuota groups the quota windows that count image or video
+	// generations; the dashboard sums each group over usable accounts.
+	MediaQuota []MediaQuotaGroup
 	// OfficialPricing bills the provider with the official xAI price list
 	// (domain/audit/pricing.go) when no custom price exists.
 	OfficialPricing bool

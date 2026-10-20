@@ -11,6 +11,8 @@ import (
 type DashboardSnapshotWindow struct {
 	BucketBoundaries   []time.Time
 	ActivityBoundaries []time.Time
+	// MediaQuota names the quota windows to sum per provider and kind.
+	MediaQuota []dashboard.MediaQuotaSource
 }
 
 // DashboardRepository 定义管理台概览所需的只读聚合查询。

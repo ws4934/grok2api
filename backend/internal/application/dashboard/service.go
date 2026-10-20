@@ -69,17 +69,20 @@ type Result struct {
 	Activity    []ActivityPoint
 	TopModels   []ModelUsage
 	Providers   []dashboarddomain.ProviderUsage
+	MediaQuota  []dashboarddomain.MediaQuota
 }
 
 // Service 负责 Dashboard 时间范围校验和固定时间桶编排。
 type Service struct {
 	dashboard repository.DashboardRepository
-	now       func() time.Time
-	cache     *resultcache.Cache[string, Result]
+	// mediaQuota names the provider quota windows summed as media quota.
+	mediaQuota []dashboarddomain.MediaQuotaSource
+	now        func() time.Time
+	cache      *resultcache.Cache[string, Result]
 }
 
-func NewService(dashboard repository.DashboardRepository) *Service {
-	return &Service{dashboard: dashboard, now: time.Now, cache: resultcache.New[string, Result](32, dashboardCacheTTL)}
+func NewService(dashboard repository.DashboardRepository, mediaQuota []dashboarddomain.MediaQuotaSource) *Service {
+	return &Service{dashboard: dashboard, mediaQuota: mediaQuota, now: time.Now, cache: resultcache.New[string, Result](32, dashboardCacheTTL)}
 }
 
 // Get 返回指定时间范围的 Dashboard 聚合快照。
@@ -129,6 +132,7 @@ func (s *Service) load(ctx context.Context, period Period, bucketCount, bucketDa
 	aggregate, err := s.dashboard.Snapshot(ctx, repository.DashboardSnapshotWindow{
 		BucketBoundaries:   boundaries,
 		ActivityBoundaries: activityBoundaries,
+		MediaQuota:         s.mediaQuota,
 	}, generatedAt)
 	if err != nil {
 		return Result{}, err
@@ -165,6 +169,7 @@ func (s *Service) load(ctx context.Context, period Period, bucketCount, bucketDa
 		Activity:    activity,
 		TopModels:   topModels,
 		Providers:   aggregate.Providers,
+		MediaQuota:  aggregate.MediaQuota,
 	}, nil
 }
 

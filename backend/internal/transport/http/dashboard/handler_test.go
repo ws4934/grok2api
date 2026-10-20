@@ -22,7 +22,8 @@ func TestHandlerReturnsDashboardContract(t *testing.T) {
 		Buckets:         []dashboarddomain.Bucket{{Index: 0, Requests: 10, Tokens: 1200}},
 		ActivityBuckets: []dashboarddomain.ActivityBucket{{Index: 179, Requests: 10}},
 		Providers:       []dashboarddomain.ProviderUsage{{Provider: "grok_build", Requests: 10, SuccessfulRequests: 9, Tokens: 1200}},
-	}})
+		MediaQuota:      []dashboarddomain.MediaQuota{{Provider: "adobe", Kind: "credits", Remaining: 120, Total: 200, Accounts: 2}},
+	}}, nil)
 	router := gin.New()
 	NewHandler(service).Register(router.Group("/api/admin/v1"))
 
@@ -41,15 +42,17 @@ func TestHandlerReturnsDashboardContract(t *testing.T) {
 				AverageFirstTokenMS   float64 `json:"averageFirstTokenMs"`
 				OutputTokensPerSecond float64 `json:"outputTokensPerSecond"`
 			} `json:"usage"`
-			Series    []seriesDTO        `json:"series"`
-			Activity  []activityDTO      `json:"activity"`
-			Providers []providerUsageDTO `json:"providers"`
+			Series     []seriesDTO        `json:"series"`
+			Activity   []activityDTO      `json:"activity"`
+			Providers  []providerUsageDTO `json:"providers"`
+			MediaQuota []mediaQuotaDTO    `json:"mediaQuota"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if envelope.Data.Period != "7d" || envelope.Data.Usage.Requests != 10 || envelope.Data.Usage.SuccessRate != 90 || envelope.Data.Usage.AverageFirstTokenMS != 250 || envelope.Data.Usage.OutputTokensPerSecond != 50 || len(envelope.Data.Series) != 7 || len(envelope.Data.Activity) != 180 || len(envelope.Data.Providers) != 1 {
+	if envelope.Data.Period != "7d" || envelope.Data.Usage.Requests != 10 || envelope.Data.Usage.SuccessRate != 90 || envelope.Data.Usage.AverageFirstTokenMS != 250 || envelope.Data.Usage.OutputTokensPerSecond != 50 || len(envelope.Data.Series) != 7 || len(envelope.Data.Activity) != 180 || len(envelope.Data.Providers) != 1 ||
+		len(envelope.Data.MediaQuota) != 1 || envelope.Data.MediaQuota[0] != (mediaQuotaDTO{Provider: "adobe", Kind: "credits", Remaining: 120, Total: 200, Accounts: 2}) {
 		t.Fatalf("response = %#v", envelope.Data)
 	}
 }
@@ -57,7 +60,7 @@ func TestHandlerReturnsDashboardContract(t *testing.T) {
 func TestHandlerRejectsInvalidPeriod(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	NewHandler(dashboardapp.NewService(&dashboardRepositoryStub{})).Register(router.Group("/api/admin/v1"))
+	NewHandler(dashboardapp.NewService(&dashboardRepositoryStub{}, nil)).Register(router.Group("/api/admin/v1"))
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/admin/v1/dashboard?period=365d", nil))
 	if recorder.Code != http.StatusBadRequest {
@@ -68,7 +71,7 @@ func TestHandlerRejectsInvalidPeriod(t *testing.T) {
 func TestHandlerRejectsInvalidTimezone(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	NewHandler(dashboardapp.NewService(&dashboardRepositoryStub{})).Register(router.Group("/api/admin/v1"))
+	NewHandler(dashboardapp.NewService(&dashboardRepositoryStub{}, nil)).Register(router.Group("/api/admin/v1"))
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/admin/v1/dashboard?period=24h&timezone=invalid", nil))
 	if recorder.Code != http.StatusBadRequest {

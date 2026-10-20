@@ -14,8 +14,13 @@ import (
 // Definition 集中声明 Grok Web 的稳定能力边界；Web 私有协议由本包内部维护。
 func (a *Adapter) Definition() provider.Definition {
 	return provider.Definition{
-		Provider:       account.ProviderWeb,
-		Profile:        provider.ProfileSurface{Name: "Grok Web", OfficialPricing: true, ShortName: "Web", EgressScopes: []egressdomain.Scope{egressdomain.ScopeWeb, egressdomain.ScopeWebAsset}},
+		Provider: account.ProviderWeb,
+		Profile: provider.ProfileSurface{Name: "Grok Web", OfficialPricing: true, ShortName: "Web", EgressScopes: []egressdomain.Scope{egressdomain.ScopeWeb, egressdomain.ScopeWebAsset},
+			// 480p and 720p videos spend separate Imagine products; together they are the video quota.
+			MediaQuota: []provider.MediaQuotaGroup{
+				{Kind: provider.MediaQuotaImage, Modes: []string{account.QuotaModeWebImagePro}},
+				{Kind: provider.MediaQuotaVideo, Modes: []string{account.QuotaModeWebVideo, account.QuotaModeWebVideo720p}},
+			}},
 		ModelNamespace: account.ProviderWeb.ModelNamespace(),
 		ModelCatalog:   provider.ModelCatalogStatic,
 		ModelCapabilities: []modeldomain.Capability{

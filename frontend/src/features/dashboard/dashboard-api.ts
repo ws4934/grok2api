@@ -39,6 +39,8 @@ export type DashboardDTO = {
   activity: Array<{ start: string; requests: number }>;
   topModels: Array<{ model: string; requests: number; inputTokens: number; cachedInputTokens: number; outputTokens: number; reasoningTokens: number; tokens: number; billedCostUsdTicks: number }>;
   providers: Array<{ provider: string; requests: number; successfulRequests: number; tokens: number }>;
+  // Remaining/total media quota over usable accounts; Adobe reports "credits" shared by images and video.
+  mediaQuota: Array<{ provider: string; kind: string; remaining: number; total: number; accounts: number }>;
 };
 
 const dashboardSeriesItem = hasShape({
@@ -68,6 +70,7 @@ const decodeDashboard = createObjectDecoder<DashboardDTO>("dashboard", {
   activity: isArrayOf(hasShape({ start: isString, requests: isNumber })),
   topModels: isArrayOf(dashboardModelItem),
   providers: isArrayOf(hasShape({ provider: isString, requests: isNumber, successfulRequests: isNumber, tokens: isNumber })),
+  mediaQuota: isArrayOf(hasShape({ provider: isString, kind: isString, remaining: isNumber, total: isNumber, accounts: isNumber })),
 });
 
 export function getDashboard(period: DashboardPeriod, timezone: string, refresh = false): Promise<DashboardDTO> {

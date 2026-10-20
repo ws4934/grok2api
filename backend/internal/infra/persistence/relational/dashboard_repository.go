@@ -178,6 +178,30 @@ func (r *DashboardRepository) Snapshot(ctx context.Context, window repository.Da
 			result.Providers = append(result.Providers, dashboarddomain.ProviderUsage{Provider: item.Provider, Requests: item.Requests, SuccessfulRequests: item.SuccessfulRequests, Tokens: item.Tokens})
 		}
 
+		// One small query per provider media quota kind; there are only a few.
+		// A window past its reset counts as full, unless the upstream reports no
+		// total (ChatGPT), where the stored remaining is all we know.
+		for _, source := range window.MediaQuota {
+			var quota struct {
+				Remaining int64
+				Total     int64
+				Accounts  int64
+			}
+			if err := tx.Table("account_quota_windows AS w").
+				Joins("JOIN provider_accounts AS a ON a.id = w.account_id").
+				Select("COALESCE(SUM(CASE WHEN w.reset_at IS NOT NULL AND w.reset_at <= ? AND w.total > 0 THEN w.total ELSE w.remaining END), 0) AS remaining, "+
+					"COALESCE(SUM(w.total), 0) AS total, COUNT(DISTINCT w.account_id) AS accounts", snapshotAt).
+				Where("a.provider = ? AND a.enabled = ? AND a.auth_status = ? AND w.mode IN ?", source.Provider, true, "active", source.Modes).
+				Scan(&quota).Error; err != nil {
+				return err
+			}
+			if quota.Accounts > 0 {
+				result.MediaQuota = append(result.MediaQuota, dashboarddomain.MediaQuota{
+					Provider: source.Provider, Kind: source.Kind, Remaining: quota.Remaining, Total: quota.Total, Accounts: quota.Accounts,
+				})
+			}
+		}
+
 		modelExpression := "CASE WHEN TRIM(model_public_id) <> '' THEN model_public_id WHEN TRIM(model_upstream_model) <> '' THEN model_upstream_model ELSE 'unknown' END"
 		var topModels []struct {
 			Model              string

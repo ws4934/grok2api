@@ -67,6 +67,25 @@ type ProviderUsage struct {
 	Tokens             int64
 }
 
+// MediaQuotaSource names the quota windows of one provider that make up one
+// media quota kind (image, video or credits).
+type MediaQuotaSource struct {
+	Provider string
+	Kind     string
+	Modes    []string
+}
+
+// MediaQuota sums one provider's media quota kind over the enabled, logged-in
+// accounts that have it. A window past its reset time counts as full;
+// Total is 0 when the upstream reports only what is left (ChatGPT).
+type MediaQuota struct {
+	Provider  string
+	Kind      string
+	Remaining int64
+	Total     int64
+	Accounts  int64
+}
+
 // Aggregate 表示持久化层返回的 Dashboard 聚合快照。
 type Aggregate struct {
 	Resources       Resources
@@ -75,4 +94,5 @@ type Aggregate struct {
 	ActivityBuckets []ActivityBucket
 	TopModels       []ModelUsage
 	Providers       []ProviderUsage
+	MediaQuota      []MediaQuota
 }

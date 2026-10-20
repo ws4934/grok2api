@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	dashboarddomain "github.com/chenyme/grok2api/backend/internal/domain/dashboard"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"gorm.io/gorm"
 )
@@ -485,5 +486,60 @@ func TestReportsDoNotBlockSQLiteWriters(t *testing.T) {
 		if writeErr != nil {
 			t.Errorf("audit write while the %s report was open: %v", report.name, writeErr)
 		}
+	}
+}
+
+// Media quota sums usable accounts only and counts windows past their reset as full.
+func TestDashboardRepositorySumsMediaQuota(t *testing.T) {
+	ctx := context.Background()
+	database := openTestDatabase(t)
+	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	future, past := now.Add(time.Hour), now.Add(-time.Hour)
+	accounts := []*accountModel{
+		{IdentityKey: testIdentityKey("web-1"), Provider: "grok_web", Name: "web-1", SourceKey: "web-1", Enabled: true, AuthStatus: "active", MaxConcurrent: 1},
+		{IdentityKey: testIdentityKey("web-2"), Provider: "grok_web", Name: "web-2", SourceKey: "web-2", Enabled: true, AuthStatus: "active", MaxConcurrent: 1},
+		{IdentityKey: testIdentityKey("web-off"), Provider: "grok_web", Name: "web-off", SourceKey: "web-off", Enabled: false, AuthStatus: "active", MaxConcurrent: 1},
+		{IdentityKey: testIdentityKey("web-expired"), Provider: "grok_web", Name: "web-expired", SourceKey: "web-expired", Enabled: true, AuthStatus: "reauthRequired", MaxConcurrent: 1},
+		{IdentityKey: testIdentityKey("chatgpt"), Provider: "chatgpt", Name: "chatgpt", SourceKey: "chatgpt", Enabled: true, AuthStatus: "active", MaxConcurrent: 1},
+	}
+	for _, row := range accounts {
+		if err := database.db.WithContext(ctx).Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	window := func(account *accountModel, mode string, remaining, total int, resetAt time.Time) *quotaWindowModel {
+		return &quotaWindowModel{AccountID: account.ID, Mode: mode, Remaining: remaining, Total: total, ResetAt: &resetAt, Source: "upstream", UpdatedAt: now}
+	}
+	for _, row := range []*quotaWindowModel{
+		window(accounts[0], "image_pro", 3, 10, future),
+		window(accounts[0], "video", 2, 5, future),
+		window(accounts[0], "video_720p", 1, 5, past), // reset already passed: full again
+		window(accounts[1], "video", 4, 5, future),
+		window(accounts[2], "video", 5, 5, future),
+		window(accounts[3], "video", 5, 5, future),
+		window(accounts[4], "image_gen", 2, 0, past), // no upstream total: remaining stays
+	} {
+		if err := database.db.WithContext(ctx).Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshotWindow := testDashboardWindow(testDashboardBoundaries(now.Add(-24*time.Hour), 2*time.Hour, 12))
+	snapshotWindow.MediaQuota = []dashboarddomain.MediaQuotaSource{
+		{Provider: "grok_web", Kind: "image", Modes: []string{"image_pro"}},
+		{Provider: "grok_web", Kind: "video", Modes: []string{"video", "video_720p"}},
+		{Provider: "chatgpt", Kind: "image", Modes: []string{"image_gen"}},
+		{Provider: "adobe", Kind: "credits", Modes: []string{"credits"}},
+	}
+	snapshot, err := NewDashboardRepository(database).Snapshot(ctx, snapshotWindow, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []dashboarddomain.MediaQuota{
+		{Provider: "grok_web", Kind: "image", Remaining: 3, Total: 10, Accounts: 1},
+		{Provider: "grok_web", Kind: "video", Remaining: 11, Total: 15, Accounts: 2},
+		{Provider: "chatgpt", Kind: "image", Remaining: 2, Total: 0, Accounts: 1},
+	}
+	if !reflect.DeepEqual(snapshot.MediaQuota, want) {
+		t.Fatalf("media quota = %#v", snapshot.MediaQuota)
 	}
 }

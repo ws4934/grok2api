@@ -27,6 +27,7 @@ type responseDTO struct {
 	Activity    []activityDTO      `json:"activity"`
 	TopModels   []modelUsageDTO    `json:"topModels"`
 	Providers   []providerUsageDTO `json:"providers"`
+	MediaQuota  []mediaQuotaDTO    `json:"mediaQuota"`
 }
 
 type rangeDTO struct {
@@ -85,6 +86,16 @@ type providerUsageDTO struct {
 	Tokens             int64  `json:"tokens"`
 }
 
+// mediaQuotaDTO is one provider's image, video or credits quota summed over
+// its usable accounts.
+type mediaQuotaDTO struct {
+	Provider  string `json:"provider"`
+	Kind      string `json:"kind"`
+	Remaining int64  `json:"remaining"`
+	Total     int64  `json:"total"`
+	Accounts  int64  `json:"accounts"`
+}
+
 type modelUsageDTO struct {
 	Model              string `json:"model"`
 	Requests           int64  `json:"requests"`
@@ -130,6 +141,10 @@ func (h *Handler) get(c *gin.Context) {
 	for _, item := range result.Providers {
 		providers = append(providers, providerUsageDTO{Provider: item.Provider, Requests: item.Requests, SuccessfulRequests: item.SuccessfulRequests, Tokens: item.Tokens})
 	}
+	mediaQuota := make([]mediaQuotaDTO, 0, len(result.MediaQuota))
+	for _, item := range result.MediaQuota {
+		mediaQuota = append(mediaQuota, mediaQuotaDTO{Provider: item.Provider, Kind: item.Kind, Remaining: item.Remaining, Total: item.Total, Accounts: item.Accounts})
+	}
 	response.Success(c, http.StatusOK, responseDTO{
 		Period:      string(result.Period),
 		GeneratedAt: result.GeneratedAt,
@@ -143,11 +158,12 @@ func (h *Handler) get(c *gin.Context) {
 			ActiveClientKeys:   result.Resources.ActiveClientKeys,
 			TotalClientKeys:    result.Resources.TotalClientKeys,
 		},
-		Usage:     toUsageDTO(result.Usage),
-		Series:    series,
-		Activity:  activity,
-		TopModels: topModels,
-		Providers: providers,
+		Usage:      toUsageDTO(result.Usage),
+		Series:     series,
+		Activity:   activity,
+		TopModels:  topModels,
+		Providers:  providers,
+		MediaQuota: mediaQuota,
 	})
 }
 

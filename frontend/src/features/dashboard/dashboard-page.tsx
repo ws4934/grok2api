@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { DashboardActivity } from "@/features/dashboard/dashboard-activity";
 import { getDashboard, type DashboardPeriod } from "@/features/dashboard/dashboard-api";
+import { DashboardMediaQuota } from "@/features/dashboard/dashboard-media-quota";
 import { DashboardOverview, DashboardResources } from "@/features/dashboard/dashboard-overview";
 import { DashboardProviderDistribution } from "@/features/dashboard/dashboard-provider-distribution";
 import { DashboardTopModels } from "@/features/dashboard/dashboard-top-models";
@@ -88,6 +89,8 @@ export function DashboardPage() {
       </div>
 
       <DashboardOverview dashboard={dashboard} locale={i18n.language} loading={loading} />
+
+      <DashboardMediaQuota dashboard={dashboard} locale={i18n.language} loading={loading} />
 
       <div className="grid items-stretch gap-2 xl:grid-cols-[minmax(0,3fr)_minmax(360px,2fr)]">
         <DashboardTrend

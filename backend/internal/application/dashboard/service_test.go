@@ -18,7 +18,7 @@ func TestGetBuildsStableBucketsAndEnrichedData(t *testing.T) {
 		TopModels:       []dashboarddomain.ModelUsage{{Model: "grok-test", Requests: 4, Tokens: 120}},
 		Providers:       []dashboarddomain.ProviderUsage{{Provider: "grok_build", Requests: 4, SuccessfulRequests: 3, Tokens: 120}},
 	}}
-	service := NewService(repository)
+	service := NewService(repository, nil)
 	service.now = func() time.Time { return now }
 
 	result, err := service.Get(context.Background(), "24h", "UTC")
@@ -48,7 +48,7 @@ func TestGetBuildsStableBucketsAndEnrichedData(t *testing.T) {
 func TestGetUsesPeriodSpecificBucketCounts(t *testing.T) {
 	for period, expected := range map[string]int{"24h": 24, "7d": 7, "30d": 30, "90d": 13} {
 		repository := &dashboardRepositoryStub{}
-		service := NewService(repository)
+		service := NewService(repository, nil)
 		if _, err := service.Get(context.Background(), period, "UTC"); err != nil {
 			t.Fatalf("period %s: %v", period, err)
 		}
@@ -60,7 +60,7 @@ func TestGetUsesPeriodSpecificBucketCounts(t *testing.T) {
 
 func TestGetCachesRepeatedAggregate(t *testing.T) {
 	repository := &dashboardRepositoryStub{}
-	service := NewService(repository)
+	service := NewService(repository, nil)
 	service.now = func() time.Time { return time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC) }
 
 	if _, err := service.Get(context.Background(), "24h", "UTC"); err != nil {
@@ -76,7 +76,7 @@ func TestGetCachesRepeatedAggregate(t *testing.T) {
 
 func TestRefreshBypassesAggregateCache(t *testing.T) {
 	repository := &dashboardRepositoryStub{}
-	service := NewService(repository)
+	service := NewService(repository, nil)
 	service.now = func() time.Time { return time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC) }
 
 	if _, err := service.Get(context.Background(), "24h", "UTC"); err != nil {
@@ -94,7 +94,7 @@ func TestGetAlignsDailyBucketsToCalendarDays(t *testing.T) {
 	location := time.FixedZone("Asia/Shanghai", 8*60*60)
 	now := time.Date(2026, 7, 11, 12, 34, 56, 0, location)
 	repository := &dashboardRepositoryStub{}
-	service := NewService(repository)
+	service := NewService(repository, nil)
 	service.now = func() time.Time { return now }
 
 	result, err := service.Get(context.Background(), "7d", "Asia/Shanghai")
@@ -116,7 +116,7 @@ func TestGetAlignsDailyBucketsToCalendarDays(t *testing.T) {
 
 func TestGetUsesWeeklyBucketsFor90Days(t *testing.T) {
 	now := time.Date(2026, 7, 11, 12, 34, 56, 0, time.UTC)
-	service := NewService(&dashboardRepositoryStub{})
+	service := NewService(&dashboardRepositoryStub{}, nil)
 	service.now = func() time.Time { return now }
 
 	result, err := service.Get(context.Background(), "90d", "UTC")
@@ -135,7 +135,7 @@ func TestGetUsesWeeklyBucketsFor90Days(t *testing.T) {
 }
 
 func TestGetRejectsUnknownPeriod(t *testing.T) {
-	service := NewService(&dashboardRepositoryStub{})
+	service := NewService(&dashboardRepositoryStub{}, nil)
 	if _, err := service.Get(context.Background(), "365d", "UTC"); err != ErrInvalidPeriod {
 		t.Fatalf("err = %v", err)
 	}
@@ -144,7 +144,7 @@ func TestGetRejectsUnknownPeriod(t *testing.T) {
 func TestGetUsesCalendarBoundariesAcrossDST(t *testing.T) {
 	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
 	repository := &dashboardRepositoryStub{}
-	service := NewService(repository)
+	service := NewService(repository, nil)
 	service.now = func() time.Time { return now }
 
 	result, err := service.Get(context.Background(), "7d", "America/New_York")
@@ -173,7 +173,7 @@ func TestGetUsesCalendarBoundariesAcrossDST(t *testing.T) {
 }
 
 func TestGetRejectsInvalidTimezone(t *testing.T) {
-	service := NewService(&dashboardRepositoryStub{})
+	service := NewService(&dashboardRepositoryStub{}, nil)
 	if _, err := service.Get(context.Background(), "24h", "Mars/Olympus"); err != ErrInvalidTimezone {
 		t.Fatalf("err = %v", err)
 	}

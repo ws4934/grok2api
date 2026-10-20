@@ -33,6 +33,7 @@ import (
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
 	"github.com/chenyme/grok2api/backend/internal/buildinfo"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	dashboarddomain "github.com/chenyme/grok2api/backend/internal/domain/dashboard"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
@@ -329,7 +330,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 	auditService.UpdateLedgerConfig(auditLedgerConfig(cfg.Audit))
 	auditService.SetCommitObserver(clientKeyService.ReleaseBillingProtectionBatch)
 	auditService.SetDropObserver(clientKeyService.ReleaseBillingProtectionBatch)
-	dashboardService := dashboardapp.NewService(dashboardRepo)
+	dashboardService := dashboardapp.NewService(dashboardRepo, mediaQuotaSources(providers))
 	pricingService, err := pricingapp.NewService(ctx, relational.NewModelPriceRepository(database), func(value account.Provider) bool { _, ok := providers.Definition(value); return ok }, providers.PricingModel)
 	if err != nil {
 		return nil, err
@@ -499,6 +500,19 @@ func clearanceConfig(cfg config.Config) infraegress.ClearanceConfig {
 func chatgptProviderConfig(cfg config.Config) chatgpt.Config {
 	value := cfg.Provider.ChatGPT
 	return chatgpt.Config{ImageConversationModel: value.ImageConversationModel, OutputTokenLimit: value.OutputTokenLimit, VisionTokens: value.VisionTokens}
+}
+
+// mediaQuotaSources lists the quota windows each provider sums into its
+// dashboard media quota.
+func mediaQuotaSources(providers *provider.Registry) []dashboarddomain.MediaQuotaSource {
+	var sources []dashboarddomain.MediaQuotaSource
+	for _, value := range providers.Providers() {
+		definition, _ := providers.Definition(value)
+		for _, group := range definition.Profile.MediaQuota {
+			sources = append(sources, dashboarddomain.MediaQuotaSource{Provider: string(value), Kind: group.Kind, Modes: group.Modes})
+		}
+	}
+	return sources
 }
 
 func adobeProviderConfig(cfg config.Config) adobe.Config {
