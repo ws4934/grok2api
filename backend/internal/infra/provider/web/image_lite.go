@@ -62,7 +62,7 @@ func (e *liteUpstreamError) Response() *provider.Response {
 
 func (a *Adapter) generateLiteImageURL(ctx context.Context, credential account.Credential, spec ModelSpec, prompt string) (string, error) {
 	for attempt := 0; attempt < 2; attempt++ {
-		upstream, lease, _, statsigTarget, err := a.openChat(ctx, credential, "", spec, normalizedChatInput{Prompt: "Drawing: " + prompt}, gatewayOpenOptions{deferForbidden: true})
+		upstream, lease, _, err := a.openGatewayChat(ctx, credential, "", spec, normalizedChatInput{Prompt: "Drawing: " + prompt}, gatewayOpenOptions{deferForbidden: true})
 		if err != nil {
 			return "", err
 		}
@@ -78,10 +78,8 @@ func (a *Adapter) generateLiteImageURL(ctx context.Context, credential account.C
 				a.logWebMediaUpstreamRejection("image_lite_handshake", upstream, upstreamErr)
 				if isClearanceRefreshableMediaError(upstreamErr) {
 					// The failed WebSocket handshake invalidates the current browser
-					// session. Statsig is independent and must not gate reacquiring
-					// a fresh lease for the retry.
+					// session; retry once on a fresh lease.
 					lease.InvalidateClearance()
-					_ = a.invalidateSignedStatsig(http.MethodPost, statsigTarget)
 					if attempt == 0 {
 						lease.Release()
 						continue
@@ -123,7 +121,6 @@ func (a *Adapter) generateLiteImageURL(ctx context.Context, credential account.C
 				// so the handshake path cannot invalidate it for us.
 				lease.InvalidateClearance()
 				if attempt == 0 {
-					_ = a.invalidateSignedStatsig(http.MethodPost, statsigTarget)
 					lease.Release()
 					continue
 				}

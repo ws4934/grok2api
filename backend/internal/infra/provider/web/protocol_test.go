@@ -600,7 +600,7 @@ func TestOpenChatScopesStreamIdleTimeoutToTextStreams(t *testing.T) {
 	}
 
 	for _, enforceStreamIdle := range []bool{false, true} {
-		upstream, lease, _, _, openErr := adapter.openChat(context.Background(), credential, "", spec, normalizedChatInput{Prompt: "hello"}, gatewayOpenOptions{enforceStreamIdle: enforceStreamIdle})
+		upstream, lease, _, openErr := adapter.openGatewayChat(context.Background(), credential, "", spec, normalizedChatInput{Prompt: "hello"}, gatewayOpenOptions{enforceStreamIdle: enforceStreamIdle})
 		if openErr != nil {
 			t.Fatal(openErr)
 		}

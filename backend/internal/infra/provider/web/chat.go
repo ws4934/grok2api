@@ -17,7 +17,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	inferencedomain "github.com/chenyme/grok2api/backend/internal/domain/inference"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
@@ -244,107 +243,84 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	normalized.Prompt = injectToolPrompt(normalized.Prompt, tools)
 	responseID := newWebID("resp")
 	streaming := input.Stream || request.Streaming
-	var parsed parsedChat
-	var previous *inferencedomain.WebResponseState
-	for attempt := 0; attempt < 2; attempt++ {
-		attemptCtx := ctx
-		if attempt > 0 {
-			attemptCtx = infraegress.WithPhysicalCallStage(ctx, "anti_bot_retry")
-		}
-		upstream, lease, currentPrevious, statsigTarget, openErr := a.openChat(attemptCtx, request.Credential, input.PreviousResponseID, spec, normalized, gatewayOpenOptions{enforceStreamIdle: true})
-		if openErr != nil {
-			if errors.Is(openErr, errInvalidChatAttachment) || errors.Is(openErr, errInvalidChatImage) || errors.Is(openErr, errInvalidChatFile) {
-				code := "invalid_attachment_input"
-				if errors.Is(openErr, errInvalidChatImage) {
-					code = "invalid_image_input"
-				}
-				return jsonProviderResponse(http.StatusBadRequest, map[string]any{"error": map[string]any{
-					"message": openErr.Error(), "type": "invalid_request_error", "code": code,
-				}}), nil
+	upstream, lease, previous, openErr := a.openGatewayChat(ctx, request.Credential, input.PreviousResponseID, spec, normalized, gatewayOpenOptions{enforceStreamIdle: true})
+	if openErr != nil {
+		if errors.Is(openErr, errInvalidChatAttachment) || errors.Is(openErr, errInvalidChatImage) || errors.Is(openErr, errInvalidChatFile) {
+			code := "invalid_attachment_input"
+			if errors.Is(openErr, errInvalidChatImage) {
+				code = "invalid_image_input"
 			}
-			return nil, openErr
+			return jsonProviderResponse(http.StatusBadRequest, map[string]any{"error": map[string]any{
+				"message": openErr.Error(), "type": "invalid_request_error", "code": code,
+			}}), nil
 		}
-		previous = currentPrevious
-		if upstream.StatusCode < 200 || upstream.StatusCode >= 300 {
-			if upstream.StatusCode == http.StatusForbidden {
-				// Preserve definitive account-block signals before a Statsig retry can discard the first response.
-				body, readErr := io.ReadAll(io.LimitReader(upstream.Body, 4<<20))
-				_ = upstream.Body.Close()
-				if readErr != nil {
-					lease.Release()
-					return nil, readErr
-				}
-				if provider.IsDefinitiveAccountBlockBody(body) {
-					return &provider.Response{
-						StatusCode: upstream.StatusCode, Status: upstream.Status, Header: http.Header(upstream.Header),
-						UpstreamURL: responseUpstreamURL(upstream),
-						Body: &releaseBody{ReadCloser: io.NopCloser(bytes.NewReader(body)), release: func() {
-							lease.Release()
-						}},
-					}, nil
-				}
-				lease.InvalidateClearance()
-				if statsigTarget != "" && attempt == 0 && a.invalidateSignedStatsig(http.MethodPost, statsigTarget) {
-					lease.Release()
-					continue
-				}
+		return nil, openErr
+	}
+	if upstream.StatusCode < 200 || upstream.StatusCode >= 300 {
+		if upstream.StatusCode == http.StatusForbidden {
+			// A definitive account block must not penalize the egress node or its clearance.
+			body, readErr := io.ReadAll(io.LimitReader(upstream.Body, 4<<20))
+			_ = upstream.Body.Close()
+			if readErr != nil {
+				lease.Release()
+				return nil, readErr
+			}
+			if provider.IsDefinitiveAccountBlockBody(body) {
 				return &provider.Response{
 					StatusCode: upstream.StatusCode, Status: upstream.Status, Header: http.Header(upstream.Header),
 					UpstreamURL: responseUpstreamURL(upstream),
 					Body: &releaseBody{ReadCloser: io.NopCloser(bytes.NewReader(body)), release: func() {
-						a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, upstream.StatusCode, nil)
 						lease.Release()
 					}},
 				}, nil
 			}
+			lease.InvalidateClearance()
 			return &provider.Response{
 				StatusCode: upstream.StatusCode, Status: upstream.Status, Header: http.Header(upstream.Header),
 				UpstreamURL: responseUpstreamURL(upstream),
-				Body: &releaseBody{ReadCloser: upstream.Body, release: func() {
+				Body: &releaseBody{ReadCloser: io.NopCloser(bytes.NewReader(body)), release: func() {
 					a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, upstream.StatusCode, nil)
 					lease.Release()
 				}},
 			}, nil
 		}
-
-		if streaming {
-			prepared, preflightErr := preflightUpstream(upstream.Body)
-			if preflightErr == nil {
-				body := a.streamOpenAIResponse(ctx, prepared, lease, request.Credential, responseID, input.Model, request.Operation, normalized.Prompt, previous, tools, parallelTools, conversationOptions)
-				return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: streamHeaders(), Body: body}, nil
-			}
-			if statsigTarget != "" && errors.Is(preflightErr, errWebAntiBot) && attempt == 0 && a.invalidateSignedStatsig(http.MethodPost, statsigTarget) {
-				a.releaseStatsigRetry(upstream, lease)
-				continue
-			}
-			_ = upstream.Body.Close()
-			lease.Release()
-			if errors.Is(preflightErr, errWebAntiBot) {
-				a.feedbackAntiBot(ctx, lease, statsigTarget)
-				return antiBotProviderResponse(), nil
-			}
-			return nil, preflightErr
-		}
-
-		currentParsed, consumeErr := consumeUpstreamWithCitations(upstream.Body, nil, conversationOptions.InlineCitationsEnabled())
-		_ = upstream.Body.Close()
-		if statsigTarget != "" && errors.Is(consumeErr, errWebAntiBot) && attempt == 0 && a.invalidateSignedStatsig(http.MethodPost, statsigTarget) {
-			lease.Release()
-			continue
-		}
-		lease.Release()
-		if consumeErr != nil {
-			if errors.Is(consumeErr, errWebAntiBot) {
-				a.feedbackAntiBot(ctx, lease, statsigTarget)
-				return antiBotProviderResponse(), nil
-			}
-			a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, consumeErr)
-			return nil, consumeErr
-		}
-		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusOK, nil)
-		parsed = currentParsed
-		break
+		return &provider.Response{
+			StatusCode: upstream.StatusCode, Status: upstream.Status, Header: http.Header(upstream.Header),
+			UpstreamURL: responseUpstreamURL(upstream),
+			Body: &releaseBody{ReadCloser: upstream.Body, release: func() {
+				a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, upstream.StatusCode, nil)
+				lease.Release()
+			}},
+		}, nil
 	}
+
+	if streaming {
+		prepared, preflightErr := preflightUpstream(upstream.Body)
+		if preflightErr == nil {
+			body := a.streamOpenAIResponse(ctx, prepared, lease, request.Credential, responseID, input.Model, request.Operation, normalized.Prompt, previous, tools, parallelTools, conversationOptions)
+			return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: streamHeaders(), Body: body}, nil
+		}
+		_ = upstream.Body.Close()
+		lease.Release()
+		if errors.Is(preflightErr, errWebAntiBot) {
+			a.feedbackAntiBot(ctx, lease)
+			return antiBotProviderResponse(), nil
+		}
+		return nil, preflightErr
+	}
+
+	parsed, consumeErr := consumeUpstreamWithCitations(upstream.Body, nil, conversationOptions.InlineCitationsEnabled())
+	_ = upstream.Body.Close()
+	lease.Release()
+	if consumeErr != nil {
+		if errors.Is(consumeErr, errWebAntiBot) {
+			a.feedbackAntiBot(ctx, lease)
+			return antiBotProviderResponse(), nil
+		}
+		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, consumeErr)
+		return nil, consumeErr
+	}
+	a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusOK, nil)
 	parsed.InputTokens = estimateTokens(normalized.Prompt)
 	parsed.Tools = tools.ResponseTools
 	parsed.ToolChoice = tools.ResponseChoice
@@ -364,15 +340,7 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: jsonHeaders(), Body: io.NopCloser(bytes.NewReader(data))}, nil
 }
 
-func (a *Adapter) releaseStatsigRetry(upstream *http.Response, lease *infraegress.Lease) {
-	_ = upstream.Body.Close()
-	lease.Release()
-}
-
-func (a *Adapter) feedbackAntiBot(ctx context.Context, lease *infraegress.Lease, statsigTarget string) {
-	if statsigTarget != "" {
-		a.invalidateSignedStatsig(http.MethodPost, statsigTarget)
-	}
+func (a *Adapter) feedbackAntiBot(ctx context.Context, lease *infraegress.Lease) {
 	a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusForbidden, nil)
 }
 
@@ -413,10 +381,6 @@ func preflightUpstream(source io.ReadCloser) (io.ReadCloser, error) {
 		}
 	}
 	return nil, fmt.Errorf("Grok Web 首个流事件超过安全检查上限")
-}
-
-func (a *Adapter) openChat(ctx context.Context, credential account.Credential, previousResponseID string, spec ModelSpec, input normalizedChatInput, options gatewayOpenOptions) (*http.Response, *infraegress.Lease, *inferencedomain.WebResponseState, string, error) {
-	return a.openGatewayChat(ctx, credential, previousResponseID, spec, input, options)
 }
 
 func (a *Adapter) handleResponseResource(ctx context.Context, request provider.ResponseResourceRequest) (*provider.Response, error) {

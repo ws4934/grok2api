@@ -61,20 +61,20 @@ func (s *gatewaySender) write(value any) error {
 	return s.connection.WriteJSON(value)
 }
 
-func (a *Adapter) openGatewayChat(ctx context.Context, credential account.Credential, previousResponseID string, spec ModelSpec, input normalizedChatInput, options gatewayOpenOptions) (*http.Response, *infraegress.Lease, *inferencedomain.WebResponseState, string, error) {
+func (a *Adapter) openGatewayChat(ctx context.Context, credential account.Credential, previousResponseID string, spec ModelSpec, input normalizedChatInput, options gatewayOpenOptions) (*http.Response, *infraegress.Lease, *inferencedomain.WebResponseState, error) {
 	cfg := a.config()
 	token, err := a.cipher.Decrypt(credential.EncryptedAccessToken)
 	if err != nil {
-		return nil, nil, nil, "", err
+		return nil, nil, nil, err
 	}
 	lease, err := a.egress.AcquireCredential(ctx, domainegress.ScopeWeb, credential)
 	if err != nil {
-		return nil, nil, nil, "", err
+		return nil, nil, nil, err
 	}
 	userID, err := a.resolveGatewayUserID(ctx, cfg.BaseURL, credential, token, lease)
 	if err != nil {
 		lease.Release()
-		return nil, nil, nil, "", err
+		return nil, nil, nil, err
 	}
 	var previous *inferencedomain.WebResponseState
 	if previousResponseID != "" {
@@ -82,25 +82,25 @@ func (a *Adapter) openGatewayChat(ctx context.Context, credential account.Creden
 		if stateErr != nil {
 			lease.Release()
 			if errors.Is(stateErr, repository.ErrNotFound) {
-				return nil, nil, nil, "", fmt.Errorf("previous_response_id 不存在或已过期")
+				return nil, nil, nil, fmt.Errorf("previous_response_id 不存在或已过期")
 			}
-			return nil, nil, nil, "", stateErr
+			return nil, nil, nil, stateErr
 		}
 		if state.AccountID != credential.ID {
 			lease.Release()
-			return nil, nil, nil, "", fmt.Errorf("previous_response_id 绑定的账号不一致")
+			return nil, nil, nil, fmt.Errorf("previous_response_id 绑定的账号不一致")
 		}
 		previous = &state
 	}
 	attachments, err := a.prepareChatAttachments(ctx, cfg, lease, token, input.Attachments)
 	if err != nil {
 		lease.Release()
-		return nil, nil, nil, "", err
+		return nil, nil, nil, err
 	}
 	endpoint, origin, err := gatewayEndpoint(cfg.BaseURL, userID)
 	if err != nil {
 		lease.Release()
-		return nil, nil, nil, "", err
+		return nil, nil, nil, err
 	}
 	requestCtx, totalCancel := context.WithTimeout(ctx, time.Duration(cfg.ChatTimeoutSeconds)*time.Second)
 	var idleCancel context.CancelCauseFunc
@@ -124,11 +124,11 @@ func (a *Adapter) openGatewayChat(ctx context.Context, credential account.Creden
 	if dialErr != nil {
 		cancel()
 		if handshake != nil {
-			return gatewayHandshakeResponse(handshake, endpoint), lease, previous, "", nil
+			return gatewayHandshakeResponse(handshake, endpoint), lease, previous, nil
 		}
 		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, dialErr)
 		lease.Release()
-		return nil, nil, nil, "", dialErr
+		return nil, nil, nil, dialErr
 	}
 	reader, writer := io.Pipe()
 	go func() {
@@ -152,7 +152,7 @@ func (a *Adapter) openGatewayChat(ctx context.Context, credential account.Creden
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       body,
 		Request:    request,
-	}, lease, previous, "", nil
+	}, lease, previous, nil
 }
 
 func (a *Adapter) resolveGatewayUserID(ctx context.Context, baseURL string, credential account.Credential, token string, lease *infraegress.Lease) (string, error) {
