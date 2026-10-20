@@ -1,8 +1,10 @@
 package egress
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
+	"math"
 	"net/url"
 	"strings"
 	"testing"
@@ -319,5 +321,13 @@ func TestProxyPoolRequiresConfiguredProxy(t *testing.T) {
 	}, true)
 	if !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("proxy pool without a proxy error = %v", err)
+	}
+}
+
+// An ID beyond the column's range cannot exist; looking it up failed with a 500.
+func TestResolveProxyProfileRejectsIDsBeyondTheColumn(t *testing.T) {
+	id := uint64(math.MaxInt64) + 1
+	if _, err := (&Service{}).resolveProxyProfile(context.Background(), 0, Input{ProxyProfileID: &id}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
 }

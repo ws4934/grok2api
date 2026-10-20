@@ -256,22 +256,6 @@ func (value nodeRequest) input() egressapp.Input {
 func (h *Handler) list(c *gin.Context) {
 	scope := egressdomain.Scope(c.Query("scope"))
 	sort := repository.SortQuery{Field: c.Query("sortBy"), Direction: repository.SortDirection(c.Query("sortOrder"))}
-	if legacyEgressListRequest(c) {
-		values, err := h.service.ListAll(c.Request.Context(), scope, sort)
-		if h.writeListError(c, err) {
-			return
-		}
-		items := make([]nodeResponse, 0, len(values))
-		for _, value := range values {
-			items = append(items, newNodeResponse(value))
-		}
-		pageSize := len(items)
-		if pageSize == 0 {
-			pageSize = repository.DefaultPageSize
-		}
-		response.Success(c, http.StatusOK, gin.H{"items": items, "page": 1, "pageSize": pageSize, "total": len(items), "defaultUserAgents": h.service.DefaultUserAgents()})
-		return
-	}
 	page, pageSize := params.Page(c)
 	values, total, err := h.service.List(c.Request.Context(), page, pageSize, c.Query("search"), egressapp.ListFilter{
 		Scope: scope, Enabled: c.Query("enabled"), ProbeStatus: c.Query("probe"), Assignment: c.Query("assignment"),
@@ -285,16 +269,6 @@ func (h *Handler) list(c *gin.Context) {
 		items = append(items, newNodeResponse(value))
 	}
 	response.Success(c, http.StatusOK, gin.H{"items": items, "page": page, "pageSize": pageSize, "total": total, "defaultUserAgents": h.service.DefaultUserAgents()})
-}
-
-func legacyEgressListRequest(c *gin.Context) bool {
-	if _, exists := c.GetQuery("page"); exists {
-		return false
-	}
-	if _, exists := c.GetQuery("pageSize"); exists {
-		return false
-	}
-	return c.Query("search") == "" && c.Query("enabled") == "" && c.Query("probe") == "" && c.Query("assignment") == ""
 }
 
 func (h *Handler) writeListError(c *gin.Context, err error) bool {

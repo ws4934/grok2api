@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	domain "github.com/chenyme/grok2api/backend/internal/domain/egress"
@@ -203,6 +204,10 @@ func (s *Service) resolveProxyProfile(ctx context.Context, currentProfileID uint
 	}
 	if profileID == currentProfileID {
 		return input, nil
+	}
+	if profileID > math.MaxInt64 {
+		// Beyond the ID column's range, so no such profile; querying it would fail.
+		return Input{}, fmt.Errorf("%w: 共享代理配置不存在", ErrInvalidInput)
 	}
 	if s.proxyProfiles == nil {
 		return Input{}, ErrProxyProfileUnavailable

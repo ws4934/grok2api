@@ -150,20 +150,6 @@ func (s *Service) List(ctx context.Context, page, pageSize int, search string, f
 	return s.publicNodes(values), total, nil
 }
 
-func (s *Service) ListAll(ctx context.Context, scope domain.Scope, sort repository.SortQuery) ([]domain.PublicNode, error) {
-	if !validListScope(scope) {
-		return nil, ErrInvalidFilter
-	}
-	if !repository.IsValidSort(sort, "name", "scope", "proxy", "clearance", "health") {
-		return nil, ErrInvalidSort
-	}
-	values, err := s.repository.ListEgressNodes(ctx, scope, sort)
-	if err != nil {
-		return nil, err
-	}
-	return s.publicNodes(values), nil
-}
-
 func (s *Service) publicNodes(values []domain.Node) []domain.PublicNode {
 	result := make([]domain.PublicNode, 0, len(values))
 	for _, value := range values {
