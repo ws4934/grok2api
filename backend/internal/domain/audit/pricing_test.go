@@ -268,8 +268,4 @@ func TestReconstructOfficialCostReturnsExactStoredFormulaInputs(t *testing.T) {
 	if !ok || videoResult.CostInUSDTicks != 8_500_000_000 || len(videoResult.Components) != 2 || videoResult.Components[0].Unit != PricingUnitSecond || videoResult.Components[1].Kind != PricingComponentInputImage {
 		t.Fatalf("video reconstruction = %#v, %v", videoResult, ok)
 	}
-	legacyImage20, ok := ReconstructOfficialCost("grok-imagine-image-2.0", 0, 0, 0, 0, 0, 2, 0)
-	if !ok || legacyImage20.CostInUSDTicks != 800_000_000 {
-		t.Fatalf("legacy Image 2.0 reconstruction = %#v, %v", legacyImage20, ok)
-	}
 }

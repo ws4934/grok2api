@@ -480,11 +480,6 @@ func ReconstructOfficialCost(model string, inputTokens, cachedInputTokens, outpu
 	switch normalized {
 	case "grok-imagine-image":
 		return reconstructImageCost(normalized, "", "", outputImages)
-	case "grok-imagine-image-2.0":
-		// Records written before the quality-aware pricing revision stored the
-		// former flat $0.04 estimate under this identifier. Preserve an exact
-		// reconstruction for those immutable audit rows.
-		return reconstructLegacyImage20Cost(normalized, outputImages, 400_000_000)
 	case "grok-imagine-image-2.0-low-1k":
 		return reconstructImageCost("grok-imagine-image-2.0", "1k", "low", outputImages)
 	case "grok-imagine-image-2.0-low-2k":
@@ -509,8 +504,6 @@ func ReconstructOfficialCost(model string, inputTokens, cachedInputTokens, outpu
 		return reconstructImageEditCost("grok-imagine-image-2.0", "1k", "medium", inputImages, outputImages)
 	case "grok-imagine-image-2.0-edit-medium-2k":
 		return reconstructImageEditCost("grok-imagine-image-2.0", "2k", "medium", inputImages, outputImages)
-	case "grok-imagine-image-2.0-edit-1k", "grok-imagine-image-2.0-edit-2k":
-		return reconstructLegacyImage20EditCost(normalized, inputImages, outputImages)
 	case "grok-imagine-image-quality-edit-1k":
 		return reconstructImageEditCost("grok-imagine-image-quality", "1k", "", inputImages, outputImages)
 	case "grok-imagine-image-quality-edit-2k":
@@ -532,25 +525,6 @@ func ReconstructOfficialCost(model string, inputTokens, cachedInputTokens, outpu
 	default:
 		return reconstructTextCost(normalized, inputTokens, cachedInputTokens, outputTokens, contextInputTokens)
 	}
-}
-
-func reconstructLegacyImage20Cost(model string, outputCount, outputTicks int64) (PricingBreakdown, bool) {
-	if outputCount <= 0 {
-		return PricingBreakdown{}, false
-	}
-	return NewPricingBreakdown(model, PricingTierMedia,
-		NewPricingComponent(PricingComponentOutputImage, PricingUnitImage, outputCount, outputTicks),
-	), true
-}
-
-func reconstructLegacyImage20EditCost(model string, inputCount, outputCount int64) (PricingBreakdown, bool) {
-	if inputCount <= 0 || outputCount <= 0 {
-		return PricingBreakdown{}, false
-	}
-	return NewPricingBreakdown(model, PricingTierMedia,
-		NewPricingComponent(PricingComponentOutputImage, PricingUnitImage, outputCount, 400_000_000),
-		NewPricingComponent(PricingComponentInputImage, PricingUnitImage, inputCount, officialImageEditInputTicks),
-	), true
 }
 
 func reconstructTextCost(model string, inputTokens, cachedInputTokens, outputTokens, contextInputTokens int64) (PricingBreakdown, bool) {
