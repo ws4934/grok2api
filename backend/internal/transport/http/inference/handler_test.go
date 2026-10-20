@@ -1439,6 +1439,31 @@ func TestAnthropicUsageReconstructsCacheCreationAndSaturates(t *testing.T) {
 	}
 }
 
+// A Messages stream reports input tokens only in message_start; message_delta
+// carries the output tokens.
+func TestAnthropicStreamReadsInputTokensFromMessageStart(t *testing.T) {
+	body := strings.Join([]string{
+		"event: message_start",
+		`data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"grok-4","content":[],"usage":{"input_tokens":1234,"output_tokens":0}}}`,
+		"",
+		`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}`,
+		"",
+		"event: message_delta",
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":50}}`,
+		"",
+		"event: message_stop",
+		`data: {"type":"message_stop"}`,
+		"",
+		"",
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	metadata, err := copyStream(context.Writer, strings.NewReader(body), streamProtocolAnthropic, nil)
+	if err != nil || metadata.Usage.InputTokens != 1234 || metadata.Usage.OutputTokens != 50 || metadata.ResponseID != "msg_1" {
+		t.Fatalf("metadata = %+v, err = %v", metadata, err)
+	}
+}
+
 func TestExtractMetadataPreservesReportedZeroUsage(t *testing.T) {
 	metadata := extractMetadata([]byte(`{"id":"resp_zero","usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}}`))
 	if !metadata.Usage.Reported {

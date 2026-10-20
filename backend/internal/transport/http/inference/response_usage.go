@@ -42,18 +42,22 @@ func extractMetadata(data []byte) responseMetadata {
 func (root responsePayloadDTO) toMetadata() responseMetadata {
 	metadata := responseMetadata{ResponseID: root.ID, Model: root.Model, SequenceNumber: root.SequenceNumber}
 	usage := root.Usage
-	if root.Response != nil {
+	// Responses nests the payload in "response", the Messages message_start event in "message".
+	for _, nested := range []*responsePayloadDTO{root.Response, root.Message.responsePayloadDTO} {
+		if nested == nil {
+			continue
+		}
 		if metadata.ResponseID == "" {
-			metadata.ResponseID = root.Response.ID
+			metadata.ResponseID = nested.ID
 		}
 		if metadata.Model == "" {
-			metadata.Model = root.Response.Model
+			metadata.Model = nested.Model
 		}
 		if metadata.SequenceNumber == 0 {
-			metadata.SequenceNumber = root.Response.SequenceNumber
+			metadata.SequenceNumber = nested.SequenceNumber
 		}
 		if usage == nil {
-			usage = root.Response.Usage
+			usage = nested.Usage
 		}
 	}
 	if usage == nil {
@@ -70,6 +74,20 @@ type responsePayloadDTO struct {
 	SequenceNumber int64               `json:"sequence_number"`
 	Usage          *responseUsageDTO   `json:"usage"`
 	Response       *responsePayloadDTO `json:"response"`
+	Message        messagePayload      `json:"message"`
+}
+
+// messagePayload is the Messages message_start "message" object. Any other
+// value, such as an error event's message string, is ignored rather than
+// failing the whole line.
+type messagePayload struct{ *responsePayloadDTO }
+
+func (m *messagePayload) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || data[0] != '{' {
+		return nil
+	}
+	m.responsePayloadDTO = new(responsePayloadDTO)
+	return json.Unmarshal(data, m.responsePayloadDTO)
 }
 
 type responseUsageDTO struct {

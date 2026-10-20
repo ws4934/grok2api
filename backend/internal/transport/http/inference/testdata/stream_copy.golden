@@ -132,7 +132,7 @@ data: [DONE]
 == anthropic
 err: <nil>
 first_token: 1
-meta: {Usage:{Reported:true OutputObserved:true InputTokens:105 CachedInputTokens:80 OutputTokens:15 ReasoningTokens:0 TotalTokens:120 CostInUSDTicks:0 NumSourcesUsed:0 NumServerSideToolsUsed:0 ContextInputTokens:0 ContextOutputTokens:0 ResponseModel: OutputImages:0} cacheCreationInputTokens:5 ResponseID: Model: SequenceNumber:0 StreamFailure:<nil>}
+meta: {Usage:{Reported:true OutputObserved:true InputTokens:105 CachedInputTokens:80 OutputTokens:15 ReasoningTokens:0 TotalTokens:120 CostInUSDTicks:0 NumSourcesUsed:0 NumServerSideToolsUsed:0 ContextInputTokens:0 ContextOutputTokens:0 ResponseModel:claude-x OutputImages:0} cacheCreationInputTokens:5 ResponseID:msg_1 Model:claude-x SequenceNumber:0 StreamFailure:<nil>}
 output:
 event: message_start
 data: {"type":"message_start","message":{"id":"msg_1","model":"claude-x","usage":{"input_tokens":20,"output_tokens":1}}}
