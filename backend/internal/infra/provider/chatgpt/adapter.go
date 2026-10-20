@@ -121,10 +121,17 @@ func wire(ctx context.Context, c credentials) (wireAccount, error) {
 	return wireAccount{Token: c.AccessToken, Fields: fields}, nil
 }
 
-// loadInput reads a client image given as a base64 data URI or an https URL.
+// loadInput reads a client image given as a base64 data URI, an https URL or
+// a job input staged on disk.
 func (a *Adapter) loadInput(ctx context.Context, s string) (OpenAIImageInput, error) {
 	var raw []byte
-	if strings.HasPrefix(s, "data:") {
+	if provider.IsInputReference(s) {
+		data, _, err := provider.ReadInput(ctx, s)
+		if err != nil {
+			return OpenAIImageInput{}, err
+		}
+		raw = data
+	} else if strings.HasPrefix(s, "data:") {
 		head, data, ok := strings.Cut(s, ",")
 		if !ok || !strings.HasSuffix(head, ";base64") {
 			return OpenAIImageInput{}, invalidRequest("invalid input image")

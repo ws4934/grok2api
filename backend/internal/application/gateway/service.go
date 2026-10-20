@@ -33,6 +33,8 @@ var (
 	ErrConversationUnsupported    = errors.New("目标模型不支持当前对话协议")
 	ErrVideoInputTooLarge         = errors.New("视频参考图片编码后总输入超过 32 MiB")
 	ErrVideoInputUnavailable      = errors.New("视频临时输入不存在或已过期")
+	ErrMediaInputInvalid          = errors.New("媒体输入无效")
+	ErrMediaStorageFull           = errors.New("媒体存储空间不足，暂时无法保存输入文件")
 	ErrVideoParameterInvalid      = provider.ErrVideoParameterInvalid
 	ErrVideoOperationUnsupported  = provider.ErrVideoOperationUnsupported
 	ErrLedgerUnavailable          = errors.New("计费账本暂不可用")
@@ -140,6 +142,8 @@ type mediaAssetStore interface {
 	OpenVideo(ctx context.Context, id string) (mediadomain.Asset, io.ReadCloser, error)
 	SaveImage(ctx context.Context, data []byte) (mediadomain.Asset, error)
 	OpenImage(ctx context.Context, id string) (mediadomain.Asset, io.ReadCloser, error)
+	SaveInputImage(ctx context.Context, data []byte) (mediadomain.Asset, error)
+	SaveInputVideo(ctx context.Context, contentType string, body io.Reader) (mediadomain.Asset, error)
 	OpenInputAsset(ctx context.Context, id string) (mediadomain.Asset, io.ReadCloser, error)
 	ReleaseInputAssets(ctx context.Context, references []string) error
 }
@@ -165,7 +169,6 @@ type Service struct {
 	mediaMu                     sync.Mutex
 	mediaQueued                 map[string]struct{}
 	mediaWorker                 int
-	mediaInputSlots             chan struct{}
 	mediaQueueFull              atomic.Uint64
 	logger                      *slog.Logger
 	rateLimitMu                 sync.Mutex
@@ -190,7 +193,6 @@ func (s *Service) ConfigureMedia(repository repository.MediaJobRepository, concu
 	// Image jobs get their own pool of the same size: a long video and a draw
 	// never wait for each other's workers.
 	s.imageQueue = make(chan string, cap(s.mediaQueue))
-	s.mediaInputSlots = make(chan struct{}, min(concurrency, videoInputMaterializeConcurrency))
 	s.mediaQueued = make(map[string]struct{})
 }
 

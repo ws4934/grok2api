@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"time"
 
@@ -25,9 +24,7 @@ const (
 	videoJobTimeout          = 2 * time.Hour
 	videoJobRecoveryInterval = 30 * time.Second
 	videoOutputAttempts      = 3
-	// Base64 物化会同时持有原图和编码后字符串，单独限流避免高 mediaConcurrency 放大内存峰值。
-	videoInputMaterializeConcurrency = 4
-	videoInputJSONBaseBytes          = int64(len(`{}`))
+	videoInputJSONBaseBytes  = int64(len(`{}`))
 )
 
 // VideoInputFileReference 将本地临时 file_id 编码为只在 Gateway 内部解释的引用。
@@ -111,15 +108,16 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		imageURL: input.ImageURL, lastFrameURL: input.LastFrameURL, referenceURLs: input.ReferenceURLs,
 		referenceVideoURLs: input.ReferenceVideoURLs, referenceAudios: input.ReferenceAudios, videoURL: input.VideoURL,
 	}
-	// 图像与视频输入共用一个物化预算。
+	// 图像与视频输入共用一个预算。
 	budget := videoInputJSONBaseBytes
-	if err := s.validateVideoInputBudget(ctx, inputs.imageRefs(), "image", &budget); err != nil {
+	if err := s.validateInputBudget(ctx, inputs.imageRefs(), "image", &budget); err != nil {
 		return media.Job{}, err
 	}
-	videos := trimmedValues(append(slices.Clone(input.ReferenceVideoURLs), input.VideoURL))
-	if err := s.validateVideoInputBudget(ctx, videos, "video", &budget); err != nil {
+	if err := s.validateInputBudget(ctx, inputs.videoRefs(), "video", &budget); err != nil {
 		return media.Job{}, err
 	}
+	// The digest covers the inputs as the client sent them, so a retried
+	// request matches its first job although staging names new files.
 	inputJSON, err := encodeVideoInputs(inputs)
 	if err != nil {
 		return media.Job{}, err
@@ -161,6 +159,20 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err != nil {
 		return media.Job{}, err
 	}
+	// Inline data URIs become staged files: the job holds references, not bytes.
+	stager := inputStager{service: s}
+	created := false
+	defer func() {
+		if !created {
+			stager.abort()
+		}
+	}()
+	if inputs, err = stager.stageVideoInputs(ctx, inputs); err != nil {
+		return media.Job{}, err
+	}
+	if inputJSON, err = encodeVideoInputs(inputs); err != nil {
+		return media.Job{}, err
+	}
 	now := time.Now().UTC()
 	job := media.Job{
 		ID: "video_" + token, Kind: media.KindVideo, RequestID: input.RequestID,
@@ -190,6 +202,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		}
 		return media.Job{}, err
 	}
+	created = true
 	if !s.enqueueMediaJob(job.ID) {
 		s.logger.Warn("video_job_queue_full", "job_id", job.ID)
 	}

@@ -1,6 +1,7 @@
 package adobe
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -21,6 +23,7 @@ import (
 	"github.com/bogdanfinn/tls-client/profiles"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
+	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
@@ -299,11 +302,13 @@ type fakeAdobe struct {
 	submits      atomic.Int32
 	mintDown     bool
 
-	mu         sync.Mutex
-	uploads    []string       // 上传路径与 Content-Type
-	videoBody  map[string]any // 最近一次视频提交的请求体
-	videoNonce string         // 最近一次视频提交的 x-nonce
-	agents     []string       // 发往 Adobe（mint 除外）的每个请求的 User-Agent 与 sec-ch-ua
+	mu      sync.Mutex
+	uploads []string // 上传路径与 Content-Type
+	// uploadBodies 是每次上传声明的 Content-Length 与收到的内容。
+	uploadBodies []string
+	videoBody    map[string]any // 最近一次视频提交的请求体
+	videoNonce   string         // 最近一次视频提交的 x-nonce
+	agents       []string       // 发往 Adobe（mint 除外）的每个请求的 User-Agent 与 sec-ch-ua
 }
 
 func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
@@ -339,8 +344,10 @@ func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
 		case r.URL.Path == "/out.png":
 			_, _ = w.Write([]byte("PNGDATA"))
 		case strings.HasPrefix(r.URL.Path, "/storage/"):
+			data, _ := io.ReadAll(r.Body)
 			fake.mu.Lock()
 			fake.uploads = append(fake.uploads, r.URL.Path+" "+r.Header.Get("Content-Type"))
+			fake.uploadBodies = append(fake.uploadBodies, fmt.Sprintf("%d %q", r.ContentLength, data))
 			n := len(fake.uploads)
 			fake.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": fmt.Sprintf("asset%d", n)})
@@ -1074,6 +1081,50 @@ func TestVideoSubmitSendsTheWebNonce(t *testing.T) {
 }
 
 // 端到端：参考视频上传到 /v2/storage/video，并以 source 用途进入提交的请求体。
+// A staged input streams from disk into the upload with its exact length.
+func TestGenerateVideoStreamsStagedInputs(t *testing.T) {
+	previous := pollInterval
+	pollInterval = time.Millisecond
+	t.Cleanup(func() { pollInterval = previous })
+	fake, adapter, credential := newFakeAdobe(t)
+	clip := mp4Header()
+	reference := media.InputReference("input_" + strings.Repeat("A", 32))
+	ctx := provider.WithInputOpener(context.Background(), func(_ context.Context, ref string) (provider.InputFile, error) {
+		if ref != reference {
+			return provider.InputFile{}, provider.ErrInputUnavailable
+		}
+		return provider.InputFile{Body: io.NopCloser(bytes.NewReader(clip)), MIMEType: "video/mp4", Size: int64(len(clip))}, nil
+	})
+	upstream := mustVersion(t, "seedance-2.0").upstream()
+	result, err := adapter.GenerateVideo(ctx, provider.VideoRequest{
+		Credential: credential, Model: upstream, Prompt: "dance like the clip", Duration: 5, AspectRatio: "16:9", Resolution: "720p",
+		ReferenceVideoURLs: []string{reference},
+	})
+	if err != nil || !strings.HasSuffix(result.URL, "/out.mp4") {
+		t.Fatalf("GenerateVideo = %+v, %v", result, err)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if want := fmt.Sprintf("%d %q", len(clip), clip); len(fake.uploads) != 1 || fake.uploads[0] != "/storage/video video/mp4" || fake.uploadBodies[0] != want {
+		t.Fatalf("uploads = %v %v, want one %s", fake.uploads, fake.uploadBodies, want)
+	}
+}
+
+func TestStagedInputOfUnsupportedTypeIsRejected(t *testing.T) {
+	_, adapter, credential := newFakeAdobe(t)
+	reference := media.InputReference("input_" + strings.Repeat("A", 32))
+	ctx := provider.WithInputOpener(context.Background(), func(context.Context, string) (provider.InputFile, error) {
+		return provider.InputFile{Body: io.NopCloser(strings.NewReader("GIF89a")), MIMEType: "image/gif", Size: 6}, nil
+	})
+	_, err := adapter.GenerateVideo(ctx, provider.VideoRequest{
+		Credential: credential, Model: mustVersion(t, "seedance-2.0").upstream(), Prompt: "a fox", Duration: 5, AspectRatio: "16:9", Resolution: "720p",
+		ImageURL: reference,
+	})
+	if err == nil || !strings.Contains(err.Error(), "PNG、JPEG 或 WebP") {
+		t.Fatalf("GenerateVideo with a staged GIF = %v", err)
+	}
+}
+
 func TestGenerateVideoUploadsReferenceVideos(t *testing.T) {
 	previous := pollInterval
 	pollInterval = time.Millisecond

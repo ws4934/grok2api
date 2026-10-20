@@ -297,6 +297,16 @@ func (a *Adapter) WithImageJobScope(ctx context.Context) context.Context {
 	return context.WithValue(ctx, preparedImageKey{}, &preparedImage{})
 }
 
+// forgetPreparedImage drops a job's cached inputs once the upstream accepted
+// it, so they are not held while the job polls; a resubmission reloads them.
+func forgetPreparedImage(ctx context.Context) {
+	if scope, _ := ctx.Value(preparedImageKey{}).(*preparedImage); scope != nil {
+		scope.mu.Lock()
+		scope.inputs, scope.mask, scope.done = nil, nil, false
+		scope.mu.Unlock()
+	}
+}
+
 // prepareImage loads the inputs and converts the mask before anything is sent.
 func (a *Adapter) prepareImage(ctx context.Context, job imageJob) ([]OpenAIImageInput, *OpenAIImageInput, error) {
 	scope, _ := ctx.Value(preparedImageKey{}).(*preparedImage)
@@ -432,6 +442,19 @@ func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequ
 	c, err := a.decrypt(request.Credential)
 	if err != nil {
 		return cp, err
+	}
+	if len(request.ImageURLs) > 0 || request.MaskURL != "" {
+		// The decoded inputs live only while this submission uploads them.
+		release, err := provider.HoldInputs(ctx)
+		if err != nil {
+			return cp, err
+		}
+		defer release()
+		defer func() {
+			if cp.UpstreamID != "" {
+				forgetPreparedImage(ctx)
+			}
+		}()
 	}
 	var inputs []OpenAIImageInput
 	var mask *OpenAIImageInput

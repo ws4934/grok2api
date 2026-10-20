@@ -10,10 +10,14 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
+	"io"
 	"runtime"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/chenyme/grok2api/backend/internal/domain/media"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
 func TestUpstreamErrorTextStaysValidUTF8(t *testing.T) {
@@ -83,6 +87,26 @@ func TestImageJobScopePreparesInputsOnce(t *testing.T) {
 	}
 	if fresh, _, _ := a.prepareImage(context.Background(), job); &fresh[0] == &inputs[0] {
 		t.Fatal("inputs leaked out of their job scope")
+	}
+}
+
+// A staged job input loads like a data URI, and a job whose upstream accepted
+// it forgets its cached inputs.
+func TestStagedInputLoadsAndAcceptedJobForgetsIt(t *testing.T) {
+	a := &Adapter{}
+	raw := maskFixture(t, 2, 2, 255)
+	reference := media.InputReference("input_" + strings.Repeat("A", 32))
+	ctx := provider.WithInputOpener(a.WithImageJobScope(context.Background()), func(context.Context, string) (provider.InputFile, error) {
+		return provider.InputFile{Body: io.NopCloser(bytes.NewReader(raw)), MIMEType: "image/png", Size: int64(len(raw))}, nil
+	})
+	job := imageJob{inputs: []string{reference}}
+	inputs, _, err := a.prepareImage(ctx, job)
+	if err != nil || len(inputs) != 1 || inputs[0].MIME != "image/png" || !bytes.Equal(inputs[0].Data, raw) {
+		t.Fatalf("prepare = %v %v", inputs, err)
+	}
+	forgetPreparedImage(ctx)
+	if again, _, err := a.prepareImage(ctx, job); err != nil || &again[0] == &inputs[0] {
+		t.Fatalf("the accepted job kept its inputs: err = %v", err)
 	}
 }
 

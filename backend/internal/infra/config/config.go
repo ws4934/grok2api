@@ -670,8 +670,8 @@ func (c Config) Validate() error {
 	if idle := c.Provider.Web.StreamIdleTimeout.Value(); idle < settingsdomain.MinProviderStreamIdleTimeout || idle > settingsdomain.MaxProviderStreamIdleTimeout {
 		return errors.New("Grok Web 流式空闲超时必须在 30 秒到 10 分钟之间")
 	}
-	if c.Provider.Web.MediaConcurrency < 1 || c.Provider.Web.MediaConcurrency > 64 {
-		return errors.New("provider.web 媒体并发必须在 1 到 64 之间")
+	if c.Provider.Web.MediaConcurrency < 1 || c.Provider.Web.MediaConcurrency > 256 {
+		return errors.New("provider.web 媒体并发必须在 1 到 256 之间")
 	}
 	if c.Provider.Web.FreeVideoDurationCap != 0 && (c.Provider.Web.FreeVideoDurationCap < settingsdomain.MinWebFreeVideoDurationCap || c.Provider.Web.FreeVideoDurationCap > settingsdomain.MaxWebFreeVideoDurationCap) {
 		return errors.New("provider.web free 视频时长上限必须在 1 到 15 秒之间")

@@ -84,7 +84,7 @@ export const settingsSchema = z.object({
     clearanceTimeout: durationSchema.refine((value) => durationSeconds(value) >= 10 && durationSeconds(value) <= 300),
     clearanceRefresh: durationSchema.refine((value) => durationSeconds(value) >= 60 && durationSeconds(value) <= 86_400),
     quotaTimeout: durationSchema, chatTimeout: durationSchema, streamIdleTimeout: providerStreamIdleDuration, imageTimeout: durationSchema, videoTimeout: durationSchema,
-    mediaConcurrency: positiveInteger.max(64), allowNSFW: z.boolean(),
+    mediaConcurrency: positiveInteger.max(256), allowNSFW: z.boolean(),
     freeVideoDurationCap: z.number().int().min(1).max(15),
     recoveryBackoffBase: durationSchema, recoveryBackoffMax: durationSchema,
   }).superRefine((value, context) => {

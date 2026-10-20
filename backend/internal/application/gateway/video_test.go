@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,7 @@ import (
 
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
+	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
@@ -24,6 +26,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/domain/model"
 	pricingdomain "github.com/chenyme/grok2api/backend/internal/domain/pricing"
+	localmedia "github.com/chenyme/grok2api/backend/internal/infra/media"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/adobe"
@@ -316,7 +319,11 @@ func TestCreateVideoBillsTheParametersTheProviderPicks(t *testing.T) {
 // changeVideoAdapter stands in for a provider whose edit and extension rules
 // are not xAI's: it takes any duration and aspect ratio, defaults to 1080p,
 // and records what the job runner sends.
-type changeVideoAdapter struct{ requests []provider.VideoRequest }
+type changeVideoAdapter struct {
+	requests []provider.VideoRequest
+	// read holds each staged source video the provider read through its context.
+	read []string
+}
 
 func (a *changeVideoAdapter) Provider() account.Provider { return account.ProviderWeb }
 
@@ -335,8 +342,12 @@ func (a *changeVideoAdapter) NormalizeVideoRequest(options provider.VideoRequest
 	return options, nil
 }
 
-func (a *changeVideoAdapter) GenerateVideo(_ context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
+func (a *changeVideoAdapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
 	a.requests = append(a.requests, request)
+	if provider.IsInputReference(request.VideoURL) {
+		data, _, err := provider.ReadInput(ctx, request.VideoURL)
+		a.read = append(a.read, fmt.Sprintf("%q %v", data, err))
+	}
 	return provider.VideoResult{AssetID: "video_asset_change", ContentType: "video/mp4"}, nil
 }
 
@@ -409,6 +420,80 @@ func TestVideoEditAndExtensionFollowTheProviderRules(t *testing.T) {
 				t.Fatalf("request = %s %ds %q %q", got.Operation, got.Duration, got.AspectRatio, got.Resolution)
 			}
 		})
+	}
+}
+
+// An inline source video is staged when the job is created, read from disk by
+// the provider, and deleted once the job is done.
+func TestVideoJobStagesInlineInputsAndReleasesThem(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "video-staged.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accountRepo, modelRepo, auditRepo, keyRepo := relational.NewAccountRepository(database), relational.NewModelRepository(database), relational.NewAuditRepository(database), relational.NewClientKeyRepository(database)
+	credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
+		Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierSuper, Name: "staged", SourceKey: "staged",
+		EncryptedAccessToken: "staged-token", ExpiresAt: time.Now().Add(time.Hour), Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := modelRepo.UpsertDiscovered(ctx, account.ProviderWeb, []string{"grok-imagine-video"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := modelRepo.ReplaceAccountCapabilities(ctx, credential.ID, []string{"grok-imagine-video"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	route, err := modelRepo.GetByProviderUpstream(ctx, account.ProviderWeb, "grok-imagine-video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := keyRepo.Create(ctx, clientkey.Key{Name: "video-staged", Prefix: "vstaged", SecretHash: strings.Repeat("f", 64), EncryptedSecret: "f",
+		Enabled: true, RPMLimit: 60, MaxConcurrent: 4, ProviderScope: clientkey.AllProviders()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &changeVideoAdapter{}
+	registry := provider.NewRegistry(adapter)
+	sticky := memory.NewStickyStore()
+	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
+	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
+	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(keyRepo, nil, nil, 60, 4, nil), registry, selector, nil, 1)
+	jobs := relational.NewMediaJobRepository(database)
+	service.ConfigureMedia(jobs, 1)
+	objects, err := localmedia.NewLocalStore(filepath.Join(t.TempDir(), "objects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.ConfigureMediaAssets(mediaapp.NewService(relational.NewMediaAssetRepository(database), jobs, objects, nil, mediaapp.Config{PublicBaseURL: "https://example.test", MaxImageBytes: 32 << 20, MaxTotalBytes: 1 << 30, CleanupThresholdPercent: 90, CleanupInterval: time.Hour}))
+
+	clip := "\x00\x00\x00\x18ftypisom\x00\x00\x02\x00isomiso2"
+	job, err := service.CreateVideo(ctx, VideoInput{
+		RequestID: "video-staged", ClientKey: key, PublicModel: route.PublicID, Operation: provider.VideoOperationEdit, Prompt: "change it",
+		VideoURL: "data:video/mp4;base64," + base64.StdEncoding.EncodeToString([]byte(clip)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := jobs.GetMediaJobInput(ctx, job.ID)
+	if err != nil || strings.Contains(input, "base64") {
+		t.Fatalf("job input = %q err = %v, want only a staged reference", input, err)
+	}
+	fileID, ok := media.ParseInputReference(decodeVideoInputs(input).videoURL)
+	if !ok {
+		t.Fatalf("job input = %q names no staged file", input)
+	}
+	service.processMediaJob(ctx, job.ID)
+	if want := fmt.Sprintf("%q %v", clip, error(nil)); len(adapter.read) != 1 || adapter.read[0] != want {
+		t.Fatalf("provider read = %v, want [%s]", adapter.read, want)
+	}
+	if _, _, err := service.mediaAssets.OpenInputAsset(ctx, fileID); err == nil {
+		t.Fatal("the finished job kept its staged input")
 	}
 }
 
@@ -532,14 +617,14 @@ func TestVideoInputBudgetIsSharedAcrossKinds(t *testing.T) {
 	service := &Service{mediaAssets: store}
 	reference := VideoInputFileReference(store.inputID)
 	budget := videoInputJSONBaseBytes
-	if err := service.validateVideoInputBudget(context.Background(), []string{reference}, "image", &budget); err != nil {
+	if err := service.validateInputBudget(context.Background(), []string{reference}, "image", &budget); err != nil {
 		t.Fatal(err)
 	}
 	fresh := videoInputJSONBaseBytes
-	if err := service.validateVideoInputBudget(context.Background(), []string{reference}, "image", &fresh); err != nil {
+	if err := service.validateInputBudget(context.Background(), []string{reference}, "image", &fresh); err != nil {
 		t.Fatalf("a single 14 MiB input must fit its own budget: %v", err)
 	}
-	if err := service.validateVideoInputBudget(context.Background(), []string{reference}, "image", &budget); !errors.Is(err, ErrVideoInputTooLarge) {
+	if err := service.validateInputBudget(context.Background(), []string{reference}, "image", &budget); !errors.Is(err, ErrVideoInputTooLarge) {
 		t.Fatalf("two 14 MiB inputs on one budget = %v, want ErrVideoInputTooLarge", err)
 	}
 }
@@ -683,7 +768,9 @@ func TestPersistRemoteVideoRetriesSameResultWithoutRegeneration(t *testing.T) {
 	}
 }
 
-func TestResolveVideoInputFileReferenceToDataURI(t *testing.T) {
+// A staged input is checked before the job runs and read from disk by the
+// adapter; the job never carries its bytes.
+func TestStagedVideoInputIsCheckedAndOpenedFromDisk(t *testing.T) {
 	raw := []byte("png-bytes")
 	inputID := "input_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	store := &videoAssetStoreStub{inputID: inputID, inputData: raw}
@@ -691,22 +778,20 @@ func TestResolveVideoInputFileReferenceToDataURI(t *testing.T) {
 	reference := VideoInputFileReference(inputID)
 	validate := func(references []string, kind string) error {
 		budget := videoInputJSONBaseBytes
-		return service.validateVideoInputBudget(context.Background(), references, kind, &budget)
+		return service.validateInputBudget(context.Background(), references, kind, &budget)
 	}
-	if err := validate([]string{reference}, "image"); err != nil {
+	if err := validate([]string{"https://example.com/a.png", reference}, "image"); err != nil {
 		t.Fatal(err)
 	}
 	if err := validate([]string{reference}, "video"); !errors.Is(err, ErrVideoInputUnavailable) {
 		t.Fatalf("image accepted as video input: %v", err)
 	}
-	budget := videoInputJSONBaseBytes
-	resolved, err := service.resolveVideoInputBudget(context.Background(), []string{"https://example.com/a.png", reference}, "image", &budget)
-	if err != nil {
-		t.Fatal(err)
+	ctx := provider.WithInputOpener(context.Background(), service.openStagedInput)
+	if data, mimeType, err := provider.ReadInput(ctx, reference); err != nil || string(data) != string(raw) || mimeType != "image/png" {
+		t.Fatalf("read staged input = %q %q %v", data, mimeType, err)
 	}
-	want := "data:image/png;base64," + base64.StdEncoding.EncodeToString(raw)
-	if len(resolved) != 2 || resolved[0] != "https://example.com/a.png" || resolved[1] != want {
-		t.Fatalf("resolved=%#v", resolved)
+	if _, err := provider.OpenInput(ctx, VideoInputFileReference("missing")); !errors.Is(err, provider.ErrInputUnavailable) {
+		t.Fatalf("missing staged input open error = %v", err)
 	}
 	if err := validate([]string{VideoInputFileReference("missing")}, "image"); !errors.Is(err, ErrVideoInputUnavailable) {
 		t.Fatalf("missing input error=%v", err)
@@ -717,31 +802,30 @@ func TestResolveVideoInputFileReferenceToDataURI(t *testing.T) {
 	}
 }
 
-func TestVideoInputMaterializationHasIndependentBulkhead(t *testing.T) {
-	service := &Service{}
-	service.ConfigureMedia(nil, 64)
-	reference := VideoInputFileReference("input_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-	releases := make([]func(), 0, videoInputMaterializeConcurrency)
-	for range videoInputMaterializeConcurrency {
-		release, err := service.acquireVideoInputSlot(context.Background(), []string{reference})
-		if err != nil {
-			t.Fatal(err)
-		}
-		releases = append(releases, release)
-	}
-	canceled, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := service.acquireVideoInputSlot(canceled, []string{reference}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("fifth local input acquire error=%v", err)
-	}
-	for _, release := range releases {
-		release()
-		release() // 释放函数必须可幂等调用。
-	}
-	if release, err := service.acquireVideoInputSlot(context.Background(), []string{"https://example.com/image.png"}); err != nil {
+func TestInputStagerStagesDataURIsAndAbortReleasesThem(t *testing.T) {
+	store := &videoAssetStoreStub{}
+	stager := inputStager{service: &Service{mediaAssets: store}}
+	png := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\npixels"))
+	in, err := stager.stageVideoInputs(context.Background(), videoInputs{
+		imageURL: png, referenceURLs: []string{"https://example.com/ref.png"}, referenceAudios: []string{"eve"},
+	})
+	if err != nil {
 		t.Fatal(err)
-	} else {
-		release()
+	}
+	if !provider.IsInputReference(in.imageURL) || in.referenceURLs[0] != "https://example.com/ref.png" || in.referenceAudios[0] != "eve" {
+		t.Fatalf("staged inputs = %#v", in)
+	}
+	if string(store.inputData) != "\x89PNG\r\n\x1a\npixels" || store.inputKind != "image" {
+		t.Fatalf("saved %q as %q", store.inputData, store.inputKind)
+	}
+	stager.abort()
+	if len(store.released) != 1 || !slices.Equal(store.released[0], []string{in.imageURL}) {
+		t.Fatalf("released = %v, want the staged file", store.released)
+	}
+	for _, bad := range []string{"data:image/png,AAAA", "data:image/png;base64,%%%"} {
+		if _, err := stager.stage(context.Background(), bad, "image"); !errors.Is(err, ErrMediaInputInvalid) {
+			t.Fatalf("%q: error = %v, want ErrMediaInputInvalid", bad, err)
+		}
 	}
 }
 
@@ -792,6 +876,7 @@ type videoAssetStoreStub struct {
 	inputSize      int64
 	inputKind      string
 	inputMIME      string
+	released       [][]string
 }
 
 func (s *videoAssetStoreStub) SaveVideo(_ context.Context, jobID, contentType string, body io.Reader) (media.Asset, error) {
@@ -839,7 +924,28 @@ func (s *videoAssetStoreStub) OpenInputAsset(_ context.Context, id string) (medi
 	return media.Asset{ID: id, Kind: kind, MIMEType: mimeType, SizeBytes: size}, io.NopCloser(bytes.NewReader(s.inputData)), nil
 }
 
-func (*videoAssetStoreStub) ReleaseInputAssets(context.Context, []string) error { return nil }
+func (s *videoAssetStoreStub) ReleaseInputAssets(_ context.Context, references []string) error {
+	s.released = append(s.released, references)
+	return nil
+}
+
+func (s *videoAssetStoreStub) SaveInputImage(_ context.Context, data []byte) (media.Asset, error) {
+	return s.saveInput(data, "image", "image/png")
+}
+
+func (s *videoAssetStoreStub) SaveInputVideo(_ context.Context, contentType string, body io.Reader) (media.Asset, error) {
+	data, err := io.ReadAll(body)
+	if err != nil {
+		return media.Asset{}, err
+	}
+	return s.saveInput(data, "video", contentType)
+}
+
+// saveInput keeps the one staged input the stub can open.
+func (s *videoAssetStoreStub) saveInput(data []byte, kind, mimeType string) (media.Asset, error) {
+	s.inputID, s.inputData, s.inputKind, s.inputMIME = "input_"+strings.Repeat("B", 32), data, kind, mimeType
+	return media.Asset{ID: s.inputID, Kind: kind, MIMEType: mimeType, SizeBytes: int64(len(data))}, nil
+}
 
 func (*videoAssetStoreStub) SaveImage(context.Context, []byte) (media.Asset, error) {
 	return media.Asset{}, errors.New("not implemented")

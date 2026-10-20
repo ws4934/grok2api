@@ -216,8 +216,9 @@ func TestMediaAssetRepositoryExpiresInputOnlyWhenUnreferenced(t *testing.T) {
 	expiresAt := now.Add(-time.Hour)
 	activeID := "input_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	terminalID := "input_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+	imageJobInputID := "input_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
 	assets := NewMediaAssetRepository(database)
-	for _, id := range []string{activeID, terminalID} {
+	for _, id := range []string{activeID, terminalID, imageJobInputID} {
 		if err := assets.CreateMediaAsset(ctx, mediadomain.Asset{
 			ID: id, Kind: "image", StorageKey: id + ".png", MIMEType: "image/png",
 			SizeBytes: 68, SHA256: strings.Repeat("a", 64), ExpiresAt: &expiresAt, CreatedAt: now.Add(-2 * time.Hour),
@@ -238,10 +239,21 @@ func TestMediaAssetRepositoryExpiresInputOnlyWhenUnreferenced(t *testing.T) {
 	if err := jobs.CreateMediaJob(ctx, terminal); err != nil {
 		t.Fatal(err)
 	}
+	// Image jobs stage their inline inputs too; an active one protects them.
+	imageJob := testMediaJob("resp_img_protected_input", accountValue.ID, key.ID, mediadomain.StatusInProgress, now)
+	imageJob.Kind, imageJob.Provider, imageJob.Seconds = mediadomain.KindImage, string(accountdomain.ProviderChatGPT), 0
+	imageJob.InputJSON = `{"image_urls":["` + mediadomain.InputReference(imageJobInputID) + `"]}`
+	imageJob.InputImageCount = 1
+	if err := jobs.CreateMediaJob(ctx, imageJob); err != nil {
+		t.Fatal(err)
+	}
 
 	markedAt := now.Add(time.Minute)
 	if expired, err := assets.ExpireMediaInputIfUnreferenced(ctx, activeID, markedAt); err != nil || expired {
 		t.Fatalf("active input expired=%t err=%v", expired, err)
+	}
+	if expired, err := assets.ExpireMediaInputIfUnreferenced(ctx, imageJobInputID, markedAt); err != nil || expired {
+		t.Fatalf("input of an active image job expired=%t err=%v", expired, err)
 	}
 	if expired, err := assets.ExpireMediaInputIfUnreferenced(ctx, terminalID, markedAt); err != nil || !expired {
 		t.Fatalf("terminal input expired=%t err=%v", expired, err)

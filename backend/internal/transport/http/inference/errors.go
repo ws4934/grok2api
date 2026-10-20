@@ -63,8 +63,11 @@ func writeGatewayError(c *gin.Context, err error) {
 	case errors.Is(err, gateway.ErrMediaJobNotCancellable):
 		status, code = http.StatusConflict, "response_not_cancellable"
 		message = "The image was already submitted upstream and can no longer be cancelled"
-	case errors.Is(err, gateway.ErrVideoInputTooLarge), errors.Is(err, gateway.ErrVideoInputUnavailable), errors.Is(err, gateway.ErrVideoParameterInvalid), errors.Is(err, gateway.ErrImageInputTooLarge):
+	case errors.Is(err, gateway.ErrVideoInputTooLarge), errors.Is(err, gateway.ErrVideoInputUnavailable), errors.Is(err, gateway.ErrVideoParameterInvalid), errors.Is(err, gateway.ErrImageInputTooLarge), errors.Is(err, gateway.ErrMediaInputInvalid):
 		status, code = http.StatusBadRequest, "invalid_request"
+		message = err.Error()
+	case errors.Is(err, gateway.ErrMediaStorageFull):
+		status, code = http.StatusServiceUnavailable, "media_storage_full"
 		message = err.Error()
 	case errors.Is(err, gateway.ErrVideoOperationUnsupported):
 		status, code = http.StatusBadRequest, "unsupported_model"

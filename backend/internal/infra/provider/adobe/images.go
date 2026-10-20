@@ -231,18 +231,39 @@ func (a *Adapter) prepareImage(ctx context.Context, c *client, v *modelVersion, 
 // uploadInput 读取客户端给的输入（kind 为 "image" 或 "video"），按模型表的单文件
 // 上限检查后上传到 Adobe 存储，返回 asset id。
 func (a *Adapter) uploadInput(ctx context.Context, c *client, v *modelVersion, ref, kind string) (string, error) {
-	data, mime, err := a.readInput(ctx, ref, kind)
-	if err != nil {
-		return "", err
-	}
-	if limit := v.fileBytes[kind]; limit > 0 && int64(len(data)) > limit {
-		return "", &requestError{msg: fmt.Sprintf("%s 的%s不能超过 %d MB", v.slug, inputLabel(kind), limit>>20)}
-	}
 	uploadURL := endpoints.imageUpload
 	if kind == "video" {
 		uploadURL = endpoints.videoUpload
 	}
-	return c.upload(ctx, uploadURL, data, mime, kind)
+	tooLarge := func(size int64) error {
+		if limit := v.fileBytes[kind]; limit > 0 && size > limit {
+			return &requestError{msg: fmt.Sprintf("%s 的%s不能超过 %d MB", v.slug, inputLabel(kind), limit>>20)}
+		}
+		return nil
+	}
+	if provider.IsInputReference(ref) {
+		// A staged input streams from disk: the job never holds its bytes.
+		file, err := provider.OpenInput(ctx, ref)
+		if err != nil {
+			return "", err
+		}
+		defer file.Body.Close()
+		if err := checkInputMIME(kind, file.MIMEType); err != nil {
+			return "", err
+		}
+		if err := tooLarge(file.Size); err != nil {
+			return "", err
+		}
+		return c.upload(ctx, uploadURL, sizedReader{Reader: file.Body, size: file.Size}, file.MIMEType, kind)
+	}
+	data, mime, err := a.readInput(ctx, ref, kind)
+	if err != nil {
+		return "", err
+	}
+	if err := tooLarge(int64(len(data))); err != nil {
+		return "", err
+	}
+	return c.upload(ctx, uploadURL, bytes.NewReader(data), mime, kind)
 }
 
 func inputLabel(kind string) string {
@@ -277,19 +298,29 @@ func (a *Adapter) readInput(ctx context.Context, ref, kind string) ([]byte, stri
 	default:
 		return nil, "", &requestError{msg: label + "必须是 Base64 data URI 或 https URL"}
 	}
+	mime := http.DetectContentType(data)
 	if kind == "video" {
-		// 官网只收 MP4 与 QuickTime。
-		switch mime := mediafile.VideoType(data); mime {
-		case "video/mp4", "video/quicktime":
-			return data, mime, nil
+		mime = mediafile.VideoType(data)
+	}
+	if err := checkInputMIME(kind, mime); err != nil {
+		return nil, "", err
+	}
+	return data, mime, nil
+}
+
+// checkInputMIME accepts the input types the Firefly site does.
+func checkInputMIME(kind, mime string) error {
+	if kind == "video" {
+		if mime == "video/mp4" || mime == "video/quicktime" {
+			return nil
 		}
-		return nil, "", &requestError{msg: "视频只支持 MP4 或 QuickTime（MOV）"}
+		return &requestError{msg: "视频只支持 MP4 或 QuickTime（MOV）"}
 	}
-	switch mime := http.DetectContentType(data); mime {
+	switch mime {
 	case "image/png", "image/jpeg", "image/webp":
-		return data, mime, nil
+		return nil
 	}
-	return nil, "", &requestError{msg: "输入图片只支持 PNG、JPEG 或 WebP"}
+	return &requestError{msg: "输入图片只支持 PNG、JPEG 或 WebP"}
 }
 
 func jsonResponse(status int, body any) *provider.Response {

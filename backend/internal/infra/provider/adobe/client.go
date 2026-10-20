@@ -127,6 +127,9 @@ func (c *client) send(ctx context.Context, method, rawURL string, body io.Reader
 	if err != nil {
 		return nil, nil, &transportError{err: err}
 	}
+	if sized, ok := body.(sizedReader); ok {
+		req.ContentLength = sized.size
+	}
 	for k, v := range browserHeaders(c.rc.userAgent) {
 		req.Header.Set(k, v)
 	}
@@ -276,13 +279,20 @@ func pollUntilDone(ctx context.Context, c *client, pollURL, kind string, progres
 	}
 }
 
-func (c *client) upload(ctx context.Context, uploadURL string, data []byte, mime, kind string) (string, error) {
+// sizedReader is a request body of known length that is not in memory, such
+// as a staged input streamed from disk.
+type sizedReader struct {
+	io.Reader
+	size int64
+}
+
+func (c *client) upload(ctx context.Context, uploadURL string, data io.Reader, mime, kind string) (string, error) {
 	headers := map[string]string{}
 	headers["Authorization"] = "Bearer " + c.rc.token
 	headers["x-api-key"] = c.rc.apiKey
 	headers["Content-Type"] = mime
 	headers["Accept"] = "application/json"
-	status, body, _, reqErr := c.request(ctx, http.MethodPost, uploadURL, bytes.NewReader(data), headers)
+	status, body, _, reqErr := c.request(ctx, http.MethodPost, uploadURL, data, headers)
 	if reqErr != nil {
 		return "", reqErr
 	}

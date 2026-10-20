@@ -572,10 +572,6 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		return provider.VideoResult{}, err
 	}
 	defer lease.Release()
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return provider.VideoResult{}, err
-	}
 	baseURL := a.config().BaseURL
 	createPath := "/videos/generations"
 	switch operation {
@@ -591,12 +587,23 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		if checkpoint.Submitting {
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, errors.New("Console 视频任务已提交但未记录 request_id，无法恢复"))
 		}
+		// Staged inputs become data URLs only for the create request.
+		release, err := provider.MaterializeInputs(ctx, payload)
+		if err != nil {
+			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
+		}
+		defer release()
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return provider.VideoResult{}, err
+		}
 		// Persist the marker before the irreversible create and the upstream ID
 		// after it, so recovery polls instead of creating a second job.
 		if err := provider.SaveVideoCheckpoint(request, consoleVideoCheckpoint{Submitting: true}); err != nil {
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 		}
 		created, err := a.doConsoleVideoJSON(ctx, request.Credential, token, lease, http.MethodPost, consoleV1Endpoint(baseURL, createPath), body)
+		release()
 		if err != nil {
 			return provider.VideoResult{}, provider.VideoCreateFailed(request, err)
 		}
@@ -794,6 +801,10 @@ func resolveConsoleImageAspectRatio(aspectRatio, size string) (string, error) {
 }
 
 func validConsoleMediaInputURL(value, mediaType string) bool {
+	if provider.IsInputReference(value) {
+		// A staged job input: the gateway checked its kind; it becomes a data URL at create time.
+		return true
+	}
 	lower := strings.ToLower(strings.TrimSpace(value))
 	if strings.HasPrefix(lower, "data:"+mediaType+"/") {
 		return strings.Contains(lower, ";base64,")

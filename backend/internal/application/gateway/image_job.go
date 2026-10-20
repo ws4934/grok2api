@@ -303,6 +303,25 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 	if err != nil {
 		return media.Job{}, err
 	}
+	// Inline data URIs become staged files: the job holds references, not bytes.
+	stager := inputStager{service: s}
+	created := false
+	defer func() {
+		if !created {
+			stager.abort()
+		}
+	}()
+	stagedImages, err := stager.stageAll(ctx, input.ImageURLs, "image")
+	if err != nil {
+		return media.Job{}, err
+	}
+	stagedMask, err := stager.stage(ctx, input.MaskURL, "image")
+	if err != nil {
+		return media.Job{}, err
+	}
+	if inputJSON, err = json.Marshal(imageJobInputs{ImageURLs: stagedImages, MaskURL: stagedMask}); err != nil {
+		return media.Job{}, err
+	}
 	now := time.Now().UTC()
 	job := media.Job{
 		ID: ImageJobIDPrefix + token, Kind: media.KindImage, RequestID: input.RequestID,
@@ -332,6 +351,7 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 		}
 		return media.Job{}, err
 	}
+	created = true
 	if !s.enqueueMediaJob(job.ID) {
 		s.logger.Warn("image_job_queue_full", "job_id", job.ID)
 	}
@@ -357,6 +377,9 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 	}); ok {
 		ctx = scoped.WithImageJobScope(ctx)
 	}
+	// The adapter reads staged inputs from disk only while it uploads them.
+	// Set before the heartbeat goroutine captures ctx.
+	ctx = provider.WithInputOpener(ctx, s.openStagedInput)
 	heartbeat, claim := make(chan struct{}), job
 	go func() {
 		defer close(heartbeat)
@@ -368,6 +391,14 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 	}()
 	var inputs imageJobInputs
 	_ = json.Unmarshal([]byte(job.InputJSON), &inputs)
+	if !job.Submitted {
+		// A submitted job only polls; ended ones already released their inputs.
+		budget := videoInputJSONBaseBytes
+		if err := s.validateInputBudget(ctx, append(slices.Clone(inputs.ImageURLs), inputs.MaskURL), "image", &budget); err != nil {
+			s.endImageJob(parent, &job, media.StatusFailed, "input_unavailable", err, 0)
+			return
+		}
+	}
 	request := provider.ImageJobRequest{
 		Model: route.UpstreamModel, Prompt: job.Prompt, ImageURLs: inputs.ImageURLs, MaskURL: inputs.MaskURL,
 		Size: job.Size, Quality: job.Quality, OutputFormat: job.Params.OutputFormat, Background: job.Params.Background,
@@ -717,6 +748,9 @@ func (s *Service) endImageJob(ctx context.Context, job *media.Job, status media.
 	if auditErr := s.recordImageJobAudits(context.Background(), *job, upstreamStatus, attempts...); auditErr != nil {
 		s.logger.Error("image_usage_record_failed", "job_id", job.ID, "error", auditErr)
 	}
+	if status != media.StatusUncertain {
+		s.releaseJobInputs(*job)
+	}
 }
 
 // jobErrorMessage is err's text as valid UTF-8 cut to the 512-byte column on
@@ -870,7 +904,7 @@ func (s *Service) cancelMediaJob(ctx context.Context, id string, clientKeyID uin
 		return media.Job{}, err
 	}
 	if job.Status == media.StatusCanceled {
-		// ponytail: canceled video inputs are left to the 24h input TTL.
+		// ponytail: canceled job inputs are left to the 24h input TTL.
 		s.releaseJobReservations(job)
 		// An image delivered just before the cancel is billed; its audit may not
 		// be written yet. Reconciliation retries a failed write.

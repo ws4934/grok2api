@@ -186,15 +186,14 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	}
 	// 非 bot-flagged 账号先走 Build 主地址，不读取历史回退标记。
 	primaryBase := a.primaryBaseURL()
-	payload, err := videoCreatePayload(request, "", buildVideoRequestProfile)
+	body, release, err := buildVideoCreateBody(ctx, request, "", buildVideoRequestProfile)
 	if err != nil {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
-	}
+	defer release()
 	jobID, createErr := a.createVideoJob(ctx, request, credential, accessToken, primaryBase, body, buildVideoRequestProfile)
+	// The XAI fallback builds its own body; never hold two input slots.
+	release()
 	if createErr == nil {
 		// A failed write only costs resumability; the job itself is running.
 		_ = provider.SaveVideoCheckpoint(request, buildVideoCheckpoint{RequestID: jobID})
@@ -228,17 +227,15 @@ func (a *Adapter) generateVideoOnXAI(ctx context.Context, request provider.Video
 		// 配置错误（例如 PublicAPIBaseURL 不可用）不得误标降级。
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 	}
-	payload, err := videoCreatePayload(request, uploadURL, xaiVideoRequestProfile)
+	body, release, err := buildVideoCreateBody(ctx, request, uploadURL, xaiVideoRequestProfile)
 	if err != nil {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
-	}
+	defer release()
 	base := a.fallbackBaseURL()
 	// 必须先解析到可用 job ID，再标记降级；畸形 2xx 不得激活或本地置位。
 	jobID, err := a.createVideoJob(ctx, request, credential, accessToken, base, body, xaiVideoRequestProfile)
+	release()
 	if err != nil {
 		return provider.VideoResult{}, err
 	}
@@ -313,6 +310,25 @@ func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credenti
 		return nil, "", 0, fmt.Errorf("上游视频 Content-Type 无效")
 	}
 	return response.Body, contentType, response.ContentLength, nil
+}
+
+// buildVideoCreateBody encodes the create request with staged inputs read into
+// data URLs. It holds an input slot until release; release once it was sent.
+func buildVideoCreateBody(ctx context.Context, request provider.VideoRequest, uploadURL string, profile videoRequestProfile) ([]byte, func(), error) {
+	payload, err := videoCreatePayload(request, uploadURL, profile)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	release, err := provider.MaterializeInputs(ctx, payload)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		release()
+		return nil, func() {}, err
+	}
+	return body, release, nil
 }
 
 func videoCreatePayload(request provider.VideoRequest, uploadURL string, profile videoRequestProfile) (map[string]any, error) {

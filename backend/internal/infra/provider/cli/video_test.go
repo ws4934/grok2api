@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
@@ -76,6 +77,30 @@ func TestBuildVideoCreatePayloadNoImageAndSingleR2URL(t *testing.T) {
 	output, ok := withUpload["output"].(map[string]any)
 	if !ok || output["upload_url"] != "https://api.example/v1/media/uploads/tok" {
 		t.Fatalf("upload payload = %#v", withUpload)
+	}
+}
+
+// A staged input becomes a data URL only in the encoded create body.
+func TestBuildVideoCreateBodyReadsStagedInputs(t *testing.T) {
+	reference := media.InputReference("input_" + strings.Repeat("A", 32))
+	ctx := provider.WithInputOpener(context.Background(), func(context.Context, string) (provider.InputFile, error) {
+		return provider.InputFile{Body: io.NopCloser(strings.NewReader("png")), MIMEType: "image/png", Size: 3}, nil
+	})
+	request := provider.VideoRequest{Prompt: "animate", Duration: 6, ReferenceURLs: []string{reference, "https://example.com/b.png"}}
+	body, release, err := buildVideoCreateBody(ctx, request, "", buildVideoRequestProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	var payload struct {
+		References []map[string]string `json:"reference_images"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || len(payload.References) != 2 ||
+		payload.References[0]["image_url"] != "data:image/png;base64,cG5n" || payload.References[1]["image_url"] != "https://example.com/b.png" {
+		t.Fatalf("body = %s, err = %v", body, err)
+	}
+	if request.ReferenceURLs[0] != reference {
+		t.Fatalf("the request must keep its reference, got %q", request.ReferenceURLs[0])
 	}
 }
 

@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
@@ -52,6 +53,8 @@ type asyncImageAdapter struct {
 	submit func(provider.ImageJobRequest, func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error)
 	// fetchErr, when set, fails every download.
 	fetchErr error
+	// read holds the staged inputs each submit read through its context.
+	read []string
 }
 
 func (a *asyncImageAdapter) record(call string) {
@@ -70,8 +73,16 @@ func (a *asyncImageAdapter) ListModels(context.Context, account.Credential) ([]s
 	return []string{"gpt-5"}, nil
 }
 
-func (a *asyncImageAdapter) SubmitImage(_ context.Context, request provider.ImageJobRequest, save func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error) {
+func (a *asyncImageAdapter) SubmitImage(ctx context.Context, request provider.ImageJobRequest, save func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error) {
 	a.record(fmt.Sprintf("submit:%d", request.Credential.ID))
+	for _, ref := range request.ImageURLs {
+		if provider.IsInputReference(ref) {
+			data, _, err := provider.ReadInput(ctx, ref)
+			a.mu.Lock()
+			a.read = append(a.read, fmt.Sprintf("%q %v", data, err))
+			a.mu.Unlock()
+		}
+	}
 	if a.submit != nil {
 		return a.submit(request, save)
 	}
@@ -321,6 +332,52 @@ func TestImageJobRecoveryPollsTheCheckpointWithoutResubmitting(t *testing.T) {
 	}
 }
 
+// An inline input is staged on creation, read from disk by the adapter, and
+// deleted once the job finishes.
+func TestImageJobStagesInlineInputsAndReleasesThemWhenDone(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	content := []byte("\x89PNG\r\n\x1a\nstaged")
+	job := f.create(t, ImageJobInput{ImageURLs: []string{"data:image/png;base64," + base64.StdEncoding.EncodeToString(content)}, Prompt: "edit me"})
+	ctx := context.Background()
+	input, err := f.jobs.GetMediaJobInput(ctx, job.ID)
+	if err != nil || strings.Contains(input, "base64") {
+		t.Fatalf("job input = %q err = %v, want only a staged reference", input, err)
+	}
+	fileID, ok := media.ParseInputReference(jobInputReferences(media.Job{Kind: media.KindImage, InputJSON: input})[0])
+	if !ok {
+		t.Fatalf("job input = %q names no staged file", input)
+	}
+	f.service.processMediaJob(ctx, job.ID)
+	if stored := f.job(t, job.ID); stored.Status != media.StatusCompleted {
+		t.Fatalf("job = %#v", stored)
+	}
+	if want := fmt.Sprintf("%q %v", content, error(nil)); len(f.adapter.read) != 1 || f.adapter.read[0] != want {
+		t.Fatalf("adapter read = %v, want [%s]", f.adapter.read, want)
+	}
+	if _, _, err := f.service.mediaAssets.OpenInputAsset(ctx, fileID); err == nil {
+		t.Fatal("the finished job kept its staged input")
+	}
+}
+
+// A job whose staged input disappeared fails before any account is used.
+func TestImageJobWithAMissingStagedInputFailsBeforeSubmitting(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	job := f.create(t, ImageJobInput{ImageURLs: []string{"data:image/png;base64,iVBORw0KGgo="}, Prompt: "edit me"})
+	ctx := context.Background()
+	input, err := f.jobs.GetMediaJobInput(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileID, _ := media.ParseInputReference(jobInputReferences(media.Job{Kind: media.KindImage, InputJSON: input})[0])
+	if err := f.assets.DeleteMediaAsset(ctx, fileID); err != nil {
+		t.Fatal(err)
+	}
+	f.service.processMediaJob(ctx, job.ID)
+	if stored := f.job(t, job.ID); stored.Status != media.StatusFailed || stored.ErrorCode != "input_unavailable" || len(f.adapter.Calls()) != 0 {
+		t.Fatalf("job = %s %s, calls = %v", stored.Status, stored.ErrorCode, f.adapter.Calls())
+	}
+}
+
 func TestImageJobSubmittedWithoutUpstreamIDIsUncertainAndRetriedOnce(t *testing.T) {
 	f := newImageJobFixture(t, 1)
 	source := "data:image/png;base64,iVBORw0KGgo="
@@ -347,8 +404,13 @@ func TestImageJobSubmittedWithoutUpstreamIDIsUncertainAndRetriedOnce(t *testing.
 	if retried.ID == job.ID || retried.Status != media.StatusQueued || retried.Prompt != "edit me" || retried.InputImageCount != 1 || retried.IdempotencyKey != "retry:"+job.ID {
 		t.Fatalf("retried job = %#v", retried)
 	}
-	if input, err := f.jobs.GetMediaJobInput(ctx, retried.ID); err != nil || !strings.Contains(input, source) {
-		t.Fatalf("retry input = %q err = %v", input, err)
+	// The uncertain job kept its staged input; the retry names the same file.
+	original, err := f.jobs.GetMediaJobInput(ctx, job.ID)
+	if err != nil || !strings.Contains(original, media.InputReferencePrefix) || strings.Contains(original, source) {
+		t.Fatalf("original input = %q err = %v, want a staged reference", original, err)
+	}
+	if input, err := f.jobs.GetMediaJobInput(ctx, retried.ID); err != nil || input != original {
+		t.Fatalf("retry input = %q err = %v, want %q", input, err, original)
 	}
 	again, err := f.service.RetryMediaJob(ctx, job.ID, "")
 	if err != nil || again.ID != retried.ID {

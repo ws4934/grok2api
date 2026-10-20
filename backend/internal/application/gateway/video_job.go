@@ -22,6 +22,9 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	defer lose(nil)
 	ctx, cancel := context.WithTimeout(ctx, videoJobTimeout)
 	ctx, egressTrace := infraegress.WithTrace(ctx)
+	// The adapter reads staged inputs from disk only while it uploads them.
+	// Set before the heartbeat goroutine captures ctx.
+	ctx = provider.WithInputOpener(ctx, s.openStagedInput)
 	heartbeat, claim := make(chan struct{}), job
 	go func() {
 		defer close(heartbeat)
@@ -36,20 +39,13 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	if err := s.saveMediaJob(ctx, &job); err != nil {
 		s.logger.Warn("video_job_progress_write_failed", "job_id", job.ID, "error", err)
 	}
-	inputReferences := decodeVideoInput(job.InputJSON)
-	releaseInputSlot, err := s.acquireVideoInputSlot(ctx, inputReferences)
-	if err != nil {
-		s.deferVideoJob(parent, job)
-		return
-	}
-	defer releaseInputSlot()
 	adapter, ok := s.providers.Videos(route.Provider)
 	if !ok {
 		s.failVideoJob(parent, job, "provider_unavailable", ErrNoAvailableAccount, 0, nil)
 		return
 	}
 	operation := provider.VideoOperation(job.Operation)
-	inputs, err := s.resolveVideoJobInputs(ctx, operation, job.InputJSON)
+	inputs, err := s.checkVideoJobInputs(ctx, operation, job.InputJSON)
 	if err != nil {
 		s.failVideoJob(parent, job, "input_unavailable", err, 0, nil)
 		return
@@ -294,10 +290,6 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	}
 	defer lease.Release()
 
-	// Provider 已消费请求体，尽早释放 Base64 物化名额和大字符串。
-	inputs = videoInputs{}
-	releaseInputSlot()
-
 	if result.Seconds > 0 && result.Seconds != job.Seconds {
 		// The provider generated a shorter video (the Web free-tier cap): record
 		// and bill what was delivered.
@@ -325,7 +317,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		s.logger.Error("video_usage_record_failed", "job_id", job.ID, "event_id", "video_usage_"+job.ID, "error", err)
 	}
 	// 输入回收放在账号状态、计费和审计收尾之后，存储抖动不得延迟关键终态逻辑。
-	s.releaseVideoInputs(job)
+	s.releaseJobInputs(job)
 }
 
 // persistRemoteVideo 只重试已经生成的视频结果下载与本地归档，不重新调用生成接口，
@@ -394,7 +386,7 @@ func (s *Service) endVideoJob(ctx context.Context, job media.Job, status media.S
 	}
 	s.cancelBillingReservation("video_usage_" + job.ID)
 	if status != media.StatusUncertain {
-		s.releaseVideoInputs(job)
+		s.releaseJobInputs(job)
 	}
 }
 

@@ -2089,6 +2089,50 @@ func TestConsoleVideoCreateFailureStagesPreserveRetrySafety(t *testing.T) {
 	}
 }
 
+// A staged first frame is read from disk into a data URL only for the create.
+func TestConsoleVideoPostsStagedImageAsDataURL(t *testing.T) {
+	reference := mediadomain.InputReference("input_" + strings.Repeat("A", 32))
+	opens := 0
+	ctx := provider.WithInputOpener(context.Background(), func(_ context.Context, ref string) (provider.InputFile, error) {
+		if ref != reference {
+			return provider.InputFile{}, provider.ErrInputUnavailable
+		}
+		opens++
+		return provider.InputFile{Body: io.NopCloser(strings.NewReader("png")), MIMEType: "image/png", Size: 3}, nil
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if serveTestDPoPToken(t, writer, request) {
+			return
+		}
+		verifyTestDPoPProof(t, request)
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/v1/videos/generations":
+			var payload struct {
+				Image struct {
+					URL string `json:"url"`
+				} `json:"image"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil || payload.Image.URL != "data:image/png;base64,cG5n" {
+				t.Errorf("image = %q, err = %v", payload.Image.URL, err)
+			}
+			_, _ = writer.Write([]byte(`{"request_id":"upstream-video-staged"}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/v1/videos/upstream-video-staged":
+			_, _ = writer.Write([]byte(`{"status":"done","progress":100,"video":{"url":"https://vidgen.x.ai/result-staged.mp4"}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	adapter, credential := newConsoleTestAdapter(t, server.URL)
+	result, err := adapter.GenerateVideo(ctx, provider.VideoRequest{
+		Credential: credential, Prompt: "animate", Duration: 6, AspectRatio: "16:9", Resolution: "720p", ImageURL: reference,
+	})
+	if err != nil || result.URL != "https://vidgen.x.ai/result-staged.mp4" || opens != 1 {
+		t.Fatalf("video result = %#v, err = %v, opens = %d", result, err, opens)
+	}
+}
+
 func TestConsoleVideoPostsReferenceImages(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if serveTestDPoPToken(t, writer, request) {

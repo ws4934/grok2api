@@ -199,7 +199,7 @@ export function SettingsPage() {
           <SettingsSection title={t("settings.media.jobsTitle")}>
             <div className="space-y-0">
               {/* The backend key stays providerWeb.mediaConcurrency, but it sizes every provider's media workers. */}
-              <SettingsField controlId="media-job-concurrency" label={t("settings.media.jobConcurrency")} description={t("settings.media.jobConcurrencyHelp")} badge={t("settings.restartRequired")} error={form.formState.errors.providerWeb?.mediaConcurrency?.message}><Input id="media-job-concurrency" type="number" min={1} max={64} {...form.register("providerWeb.mediaConcurrency", { valueAsNumber: true })} /></SettingsField>
+              <SettingsField controlId="media-job-concurrency" label={t("settings.media.jobConcurrency")} description={t("settings.media.jobConcurrencyHelp")} badge={t("settings.restartRequired")} error={form.formState.errors.providerWeb?.mediaConcurrency?.message}><Input id="media-job-concurrency" type="number" min={1} max={256} {...form.register("providerWeb.mediaConcurrency", { valueAsNumber: true })} /></SettingsField>
             </div>
           </SettingsSection>
           <SettingsSection title={t("settings.media.title")}>
