@@ -119,7 +119,7 @@ func pagination(c *gin.Context) (int, int) {
 }
 
 func pathID(c *gin.Context) (uint64, bool) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 63)
 	if err != nil || id == 0 {
 		response.Error(c, http.StatusBadRequest, "invalidId", "ID 无效")
 		return 0, false
@@ -130,7 +130,7 @@ func pathID(c *gin.Context) (uint64, bool) {
 func parseIDs(values []string) ([]uint64, error) {
 	ids := make([]uint64, 0, len(values))
 	for _, value := range values {
-		id, err := strconv.ParseUint(value, 10, 64)
+		id, err := strconv.ParseUint(value, 10, 63)
 		if err != nil || id == 0 {
 			return nil, errors.New("ID 无效")
 		}

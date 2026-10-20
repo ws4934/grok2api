@@ -54,7 +54,7 @@ func (value operationsConfigRequest) input() (egressapp.OperationsConfigInput, e
 	for rawScope, fallback := range value.Fallbacks {
 		nodeID := uint64(0)
 		if strings.TrimSpace(fallback.NodeID) != "" {
-			parsed, err := strconv.ParseUint(fallback.NodeID, 10, 64)
+			parsed, err := strconv.ParseUint(fallback.NodeID, 10, 63)
 			if err != nil || parsed == 0 {
 				return egressapp.OperationsConfigInput{}, fmt.Errorf("%w: 固定回退节点 ID 无效", egressapp.ErrInvalidInput)
 			}

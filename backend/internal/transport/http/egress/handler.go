@@ -147,7 +147,7 @@ func (h *Handler) writeQualityProbeError(c *gin.Context, err error) {
 }
 
 func pathID(c *gin.Context) (uint64, bool) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 63)
 	if err != nil || id == 0 {
 		response.Error(c, http.StatusBadRequest, "invalidId", "ID 无效")
 		return 0, false

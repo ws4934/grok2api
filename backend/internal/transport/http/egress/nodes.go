@@ -132,7 +132,7 @@ func (h *Handler) testQuality(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	clientKeyID, err := strconv.ParseUint(request.ClientKeyID, 10, 64)
+	clientKeyID, err := strconv.ParseUint(request.ClientKeyID, 10, 63)
 	if err != nil || clientKeyID == 0 {
 		response.Error(c, http.StatusBadRequest, "invalidClientKeyId", "Client Key ID 无效")
 		return
@@ -392,7 +392,7 @@ func parseAccountIDs(values []string) ([]uint64, error) {
 	result := make([]uint64, 0, len(values))
 	seen := make(map[uint64]struct{}, len(values))
 	for _, value := range values {
-		id, err := strconv.ParseUint(value, 10, 64)
+		id, err := strconv.ParseUint(value, 10, 63)
 		if err != nil || id == 0 {
 			return nil, errors.New("invalid id")
 		}
@@ -412,7 +412,7 @@ func parseEgressNodeIDs(values []string) ([]uint64, error) {
 	result := make([]uint64, 0, len(values))
 	seen := make(map[uint64]struct{}, len(values))
 	for _, value := range values {
-		id, err := strconv.ParseUint(value, 10, 64)
+		id, err := strconv.ParseUint(value, 10, 63)
 		if err != nil || id == 0 {
 			return nil, errors.New("invalid id")
 		}

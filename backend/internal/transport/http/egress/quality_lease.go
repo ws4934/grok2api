@@ -108,8 +108,8 @@ func (h *Handler) quarantineQualityGuardLease(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	accountID, accountErr := strconv.ParseUint(request.AccountID, 10, 64)
-	nodeID, nodeErr := strconv.ParseUint(request.NodeID, 10, 64)
+	accountID, accountErr := strconv.ParseUint(request.AccountID, 10, 63)
+	nodeID, nodeErr := strconv.ParseUint(request.NodeID, 10, 63)
 	if accountErr != nil || nodeErr != nil || accountID == 0 || nodeID == 0 {
 		response.Error(c, http.StatusBadRequest, "invalidId", "账号或节点 ID 无效")
 		return
@@ -130,8 +130,8 @@ func (h *Handler) restoreQualityGuardLease(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	accountID, accountErr := strconv.ParseUint(request.AccountID, 10, 64)
-	nodeID, nodeErr := strconv.ParseUint(request.NodeID, 10, 64)
+	accountID, accountErr := strconv.ParseUint(request.AccountID, 10, 63)
+	nodeID, nodeErr := strconv.ParseUint(request.NodeID, 10, 63)
 	if accountErr != nil || nodeErr != nil || accountID == 0 || nodeID == 0 {
 		response.Error(c, http.StatusBadRequest, "invalidId", "账号或节点 ID 无效")
 		return

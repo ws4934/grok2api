@@ -198,12 +198,12 @@ func (h *Handler) exportCredentials(c *gin.Context) {
 			response.Error(c, http.StatusBadRequest, "accountExportFailed", "导出数量必须为整数")
 			return
 		}
-		afterID, err := strconv.ParseUint(strings.TrimSpace(c.DefaultQuery("afterId", "0")), 10, 64)
+		afterID, err := strconv.ParseUint(strings.TrimSpace(c.DefaultQuery("afterId", "0")), 10, 63)
 		if err != nil {
 			response.Error(c, http.StatusBadRequest, "accountExportFailed", "导出游标必须为非负整数")
 			return
 		}
-		snapshotMaxID, err := strconv.ParseUint(strings.TrimSpace(c.DefaultQuery("snapshotMaxId", "0")), 10, 64)
+		snapshotMaxID, err := strconv.ParseUint(strings.TrimSpace(c.DefaultQuery("snapshotMaxId", "0")), 10, 63)
 		if err != nil {
 			response.Error(c, http.StatusBadRequest, "accountExportFailed", "导出快照上界必须为非负整数")
 			return

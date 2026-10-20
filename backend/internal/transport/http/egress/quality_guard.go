@@ -385,7 +385,7 @@ func (h *Handler) testQualityGuardNode(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(request.AccountID) != "" {
-		accountID, parseErr := strconv.ParseUint(request.AccountID, 10, 64)
+		accountID, parseErr := strconv.ParseUint(request.AccountID, 10, 63)
 		if parseErr != nil || accountID == 0 {
 			response.Error(c, http.StatusBadRequest, "invalidAccountId", "账号 ID 无效")
 			return
