@@ -611,6 +611,12 @@ func mediaConfig(cfg config.Config) mediaapp.Config {
 
 // Run 启动 HTTP 服务和本地后台维护任务。
 func (a *Application) Run(ctx context.Context) error {
+	// Bind first: a second process on a taken address must exit before it runs
+	// startup recovery and background loops against the shared database.
+	listener, err := net.Listen("tcp", a.server.Addr)
+	if err != nil {
+		return fmt.Errorf("监听 %s: %w", a.server.Addr, err)
+	}
 	a.audits.Start()
 	defer func() {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -629,8 +635,8 @@ func (a *Application) Run(ctx context.Context) error {
 	defer cancelRequests()
 	errCh := make(chan error, 1)
 	go func() {
-		a.logger.Info("server_started", "listen", a.server.Addr)
-		errCh <- a.server.ListenAndServe()
+		a.logger.Info("server_started", "listen", listener.Addr().String())
+		errCh <- a.server.Serve(listener)
 	}()
 	a.reconcileStartup(runCtx)
 	startBackground := func(name string, task func(context.Context) error) {
