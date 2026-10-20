@@ -202,7 +202,6 @@ func extractWebMediaUpstreamErrorFields(body []byte) (code, message string, stru
 	if err := json.Unmarshal(body, &root); err != nil {
 		return "", "", false
 	}
-	structured = true
 	if errorObject, ok := root["error"].(map[string]any); ok {
 		code = firstWebMediaDiagnosticCode(errorObject, "code", "type", "error")
 		message = firstString(errorObject, "message", "error", "detail")

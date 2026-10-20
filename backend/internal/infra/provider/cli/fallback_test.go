@@ -246,8 +246,8 @@ func TestForwardResponseRouteModePrecedence(t *testing.T) {
 }
 
 func TestForwardResponseForceBuildDoesNotFallbackOn403(t *testing.T) {
-	adapter, encrypted := newFallbackTestAdapter(t)
-	encrypted = encryptFallbackTestJWT(t, adapter, map[string]any{"bot_flag_source": 1})
+	adapter, _ := newFallbackTestAdapter(t)
+	encrypted := encryptFallbackTestJWT(t, adapter, map[string]any{"bot_flag_source": 1})
 	var primaryHits, fallbackHits atomic.Int32
 	adapter.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if strings.Contains(request.URL.Host, "xai.test") {

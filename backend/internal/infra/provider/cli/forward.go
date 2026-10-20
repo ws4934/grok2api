@@ -75,7 +75,6 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	}
 	if request.Operation == conversation.OperationMessages && conversationOptions.AnthropicWebSearch {
 		request.ReasoningReplayKey = ""
-		conversationScope = ""
 		conversationOptions = conversationOptions.WithReasoningReplay(nil, "")
 	}
 	if compactionRequested {
@@ -163,7 +162,7 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 					}
 					a.activateBuildAPIFallback(ctx, &request.Credential)
 					call = fallbackCall
-					resp, reqURL, base, body, replayKey = call.response, call.upstreamURL, fallbackBase, fallbackBody, fallbackReplayKey
+					resp, reqURL, base, replayKey = call.response, call.upstreamURL, fallbackBase, fallbackReplayKey
 					conversationOptions = conversationOptions.WithReasoningReplay(a.conversationReasoningCache, a.conversationReasoningScope(request, base))
 					reasoningRecovery = reasoningRecovery.merge(fallbackRecovery)
 				} else {

@@ -887,8 +887,7 @@ func TestPeekQualityStreamCipherBurstWaitsAcrossEventSplits(t *testing.T) {
 
 func TestPeekQualityStreamWithholdsNoThinkEnough(t *testing.T) {
 	t.Parallel()
-	content := strings.Repeat("abcd", 16) // 64 runes → 16 tokens... need 32 tokens = 128 runes
-	content = strings.Repeat("abcd", 40)  // 160 runes → 40 tokens
+	content := strings.Repeat("abcd", 40) // 160 runes → 40 tokens, above the 32-token minimum
 	body := io.NopCloser(strings.NewReader(sse(
 		`data: {"choices":[{"delta":{"content":"`+content+`"}}]}`,
 		`data: {"usage":{"completion_tokens":40,"completion_tokens_details":{"reasoning_tokens":0}}}`,
