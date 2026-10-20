@@ -40,9 +40,6 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		return
 	}
 	operation := provider.VideoOperation(job.Operation)
-	if operation == "" {
-		operation = decodeVideoOperation(job.InputJSON)
-	}
 	inputs, err := s.resolveVideoJobInputs(ctx, operation, job.InputJSON)
 	if err != nil {
 		s.failVideoJob(parent, job, "input_unavailable", err, 0, nil)
@@ -386,13 +383,7 @@ func (s *Service) endVideoJob(ctx context.Context, job media.Job, status media.S
 }
 
 func (s *Service) videoAttemptPolicy() routingAttemptPolicy {
-	configured := int(s.videoMaxAttempts.Load())
-	// Legacy installs may still have 0 from the short-lived "inherit" default.
-	// Treat it as the general default pool size instead of reintroducing inherit UI.
-	if configured == 0 {
-		configured = 999
-	}
-	return newRoutingAttemptPolicy(configured)
+	return newRoutingAttemptPolicy(int(s.videoMaxAttempts.Load()))
 }
 
 func (s *Service) logVideoGenerationFailure(job media.Job, credential account.Credential, err error) {

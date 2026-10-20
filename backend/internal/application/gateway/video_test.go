@@ -140,6 +140,7 @@ func TestRecoverVideoJobsRetriesUsageWithoutRegeneratingVideo(t *testing.T) {
 		ClientKeyID: 1, ClientKeyName: "client", AccountID: 2, AccountName: "account",
 		Provider: "grok_web", Model: "custom-video", ModelRouteID: 3, UpstreamModel: "Web/grok-imagine-video",
 		Seconds: 8, Quality: "720p", Status: media.StatusCompleted, InputImageCount: 2, CreatedAt: completedAt.Add(-time.Minute), CompletedAt: &completedAt,
+		Price: &audit.PricingResult{Model: "grok-imagine-video", CostInUSDTicks: 1234},
 	}}
 	recorder := &durableVideoAuditRecorder{failures: 1}
 	service := &Service{mediaJobs: repository, audits: recorder}
@@ -451,20 +452,20 @@ func TestVideo1080pValidationUsesResolvedUpstreamModel(t *testing.T) {
 
 func TestEncodeVideoInputEnforcesPersistedLimit(t *testing.T) {
 	atLimit := strings.Repeat("A", media.MaxInputJSONBytes-len(`{"image_url":""}`))
-	encoded, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{imageURL: atLimit})
+	encoded, err := encodeVideoInputs(videoInputs{imageURL: atLimit})
 	if err != nil {
 		t.Fatalf("encode at limit: %v", err)
 	}
 	if len(encoded) != media.MaxInputJSONBytes {
 		t.Fatalf("encoded len=%d, want exactly the limit", len(encoded))
 	}
-	if _, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{imageURL: atLimit + "A"}); !errors.Is(err, ErrVideoInputTooLarge) {
+	if _, err := encodeVideoInputs(videoInputs{imageURL: atLimit + "A"}); !errors.Is(err, ErrVideoInputTooLarge) {
 		t.Fatalf("oversized input error = %v", err)
 	}
 }
 
 func TestEncodeDecodeVideoInputPreservesImageAndReferences(t *testing.T) {
-	encoded, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{imageURL: "https://example.com/first.png", referenceURLs: []string{"https://example.com/ref.png"}})
+	encoded, err := encodeVideoInputs(videoInputs{imageURL: "https://example.com/first.png", referenceURLs: []string{"https://example.com/ref.png"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +475,7 @@ func TestEncodeDecodeVideoInputPreservesImageAndReferences(t *testing.T) {
 		t.Fatalf("decoded split = %q %#v from %s", imageURL, refs, encoded)
 	}
 
-	encoded, err = encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{referenceURLs: []string{"https://example.com/ref-only.png"}})
+	encoded, err = encodeVideoInputs(videoInputs{referenceURLs: []string{"https://example.com/ref-only.png"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +488,7 @@ func TestEncodeDecodeVideoInputPreservesImageAndReferences(t *testing.T) {
 
 // 尾帧单独保存，参与临时输入的物化与回收。
 func TestEncodeDecodeVideoInputPreservesLastFrame(t *testing.T) {
-	encoded, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{imageURL: "https://example.com/first.png", lastFrameURL: media.InputReference("last")})
+	encoded, err := encodeVideoInputs(videoInputs{imageURL: "https://example.com/first.png", lastFrameURL: media.InputReference("last")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -502,7 +503,7 @@ func TestEncodeDecodeVideoInputPreservesLastFrame(t *testing.T) {
 
 // 参考视频单独保存，参与物化与回收。
 func TestEncodeDecodeVideoInputPreservesReferenceVideos(t *testing.T) {
-	encoded, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{referenceVideoURLs: []string{media.InputReference("clip"), " https://example.com/b.mp4 "}})
+	encoded, err := encodeVideoInputs(videoInputs{referenceVideoURLs: []string{media.InputReference("clip"), " https://example.com/b.mp4 "}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,8 +534,8 @@ func TestVideoInputBudgetIsSharedAcrossKinds(t *testing.T) {
 	}
 }
 
-func TestEncodeDecodeVideoInputPreservesOperationAndReferenceAudio(t *testing.T) {
-	encoded, err := encodeVideoInputFull(provider.VideoOperationGenerate, videoInputs{
+func TestEncodeDecodeVideoInputPreservesReferenceAudioAndVideo(t *testing.T) {
+	encoded, err := encodeVideoInputs(videoInputs{
 		referenceURLs: []string{"https://example.com/ref.png"}, referenceAudios: []string{"eve", " ara "},
 	})
 	if err != nil {
@@ -545,16 +546,10 @@ func TestEncodeDecodeVideoInputPreservesOperationAndReferenceAudio(t *testing.T)
 	if imageURL != "" || videoURL != "" || len(refs) != 1 || refs[0] != "https://example.com/ref.png" || len(audios) != 2 || audios[0] != "eve" || audios[1] != "ara" {
 		t.Fatalf("decoded reference input = image %q refs %#v audios %#v video %q from %s", imageURL, refs, audios, videoURL, encoded)
 	}
-	if operation := decodeVideoOperation(encoded); operation != provider.VideoOperationGenerate {
-		t.Fatalf("generation operation = %q", operation)
-	}
 
-	encoded, err = encodeVideoInputFull(provider.VideoOperationExtend, videoInputs{videoURL: media.InputReference("source-video")})
+	encoded, err = encodeVideoInputs(videoInputs{videoURL: media.InputReference("source-video")})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if operation := decodeVideoOperation(encoded); operation != provider.VideoOperationExtend {
-		t.Fatalf("extension operation = %q from %s", operation, encoded)
 	}
 	videoURL = decodeVideoInputs(encoded).videoURL
 	if videoURL != media.InputReference("source-video") {
@@ -959,13 +954,8 @@ func TestResolveVideoAuditStatusCodePrefersUpstream429(t *testing.T) {
 func TestVideoAttemptPolicyStandaloneAndUnlimited(t *testing.T) {
 	service := &Service{}
 	service.UpdateMaxAttempts(3)
-	service.UpdateVideoMaxAttempts(0)
-	policy := service.videoAttemptPolicy()
-	if policy.unlimited || policy.limit != 999 {
-		t.Fatalf("legacy zero policy = %#v", policy)
-	}
 	service.UpdateVideoMaxAttempts(-1)
-	policy = service.videoAttemptPolicy()
+	policy := service.videoAttemptPolicy()
 	if !policy.unlimited {
 		t.Fatalf("unlimited video policy = %#v", policy)
 	}

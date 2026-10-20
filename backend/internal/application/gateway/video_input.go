@@ -152,14 +152,8 @@ func (in videoInputs) all() []string {
 	return values
 }
 
-func encodeVideoInputFull(operation provider.VideoOperation, in videoInputs) (string, error) {
+func encodeVideoInputs(in videoInputs) (string, error) {
 	payload := map[string]any{}
-	if operation == "" {
-		operation = provider.VideoOperationGenerate
-	}
-	if operation != provider.VideoOperationGenerate {
-		payload["operation"] = string(operation)
-	}
 	if value := strings.TrimSpace(in.imageURL); value != "" {
 		payload["image_url"] = value
 	}
@@ -203,7 +197,6 @@ func decodeVideoInput(value string) []string { return decodeVideoInputs(value).a
 
 func decodeVideoInputs(value string) videoInputs {
 	var input struct {
-		Operation          string   `json:"operation"`
 		ImageURL           string   `json:"image_url"`
 		LastFrameURL       string   `json:"last_frame_url"`
 		ReferenceURLs      []string `json:"reference_urls"`
@@ -216,21 +209,6 @@ func decodeVideoInputs(value string) videoInputs {
 		imageURL: strings.TrimSpace(input.ImageURL), lastFrameURL: strings.TrimSpace(input.LastFrameURL),
 		videoURL: strings.TrimSpace(input.VideoURL), referenceURLs: trimmedValues(input.ReferenceURLs),
 		referenceVideoURLs: trimmedValues(input.ReferenceVideoURLs), referenceAudios: normalizeVideoReferenceAudios(input.ReferenceAudios),
-	}
-}
-
-func decodeVideoOperation(value string) provider.VideoOperation {
-	var input struct {
-		Operation string `json:"operation"`
-	}
-	_ = json.Unmarshal([]byte(value), &input)
-	switch provider.VideoOperation(strings.TrimSpace(input.Operation)) {
-	case provider.VideoOperationEdit:
-		return provider.VideoOperationEdit
-	case provider.VideoOperationExtend:
-		return provider.VideoOperationExtend
-	default:
-		return provider.VideoOperationGenerate
 	}
 }
 

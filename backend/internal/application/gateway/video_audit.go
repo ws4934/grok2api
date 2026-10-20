@@ -66,16 +66,9 @@ func (s *Service) recordVideoAudit(ctx context.Context, job media.Job, durationM
 	if operation == "" {
 		operation = provider.VideoOperationGenerate
 	}
-	// Settle at the quote reserved at submission; jobs created before price
-	// snapshots fall back to the current price.
-	if job.Status == media.StatusCompleted && operation == provider.VideoOperationGenerate {
-		if job.Price != nil {
-			if job.Price.Model != "" {
-				job.Price.Apply(&record)
-			}
-		} else if pricing, ok := s.pricing.QuoteVideo(account.Provider(job.Provider), job.UpstreamModel, job.Quality, job.Seconds, job.InputImageCount); ok {
-			pricing.Apply(&record)
-		}
+	// Settle at the quote reserved at submission.
+	if job.Status == media.StatusCompleted && operation == provider.VideoOperationGenerate && job.Price != nil && job.Price.Model != "" {
+		job.Price.Apply(&record)
 	}
 	if durable, ok := s.audits.(interface {
 		CreateDurable(context.Context, audit.Record) error

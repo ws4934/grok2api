@@ -161,7 +161,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	if err := s.validateVideoInputBudget(ctx, videos, "video", &budget); err != nil {
 		return media.Job{}, err
 	}
-	inputJSON, err := encodeVideoInputFull(operation, inputs)
+	inputJSON, err := encodeVideoInputs(inputs)
 	if err != nil {
 		return media.Job{}, err
 	}

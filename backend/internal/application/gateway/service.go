@@ -227,7 +227,6 @@ func (s *Service) ProviderDefinition(value accountdomain.Provider) (provider.Def
 }
 
 // UpdateVideoMaxAttempts configures create-phase account failover for video jobs.
-// 0 is treated as the general default pool size for legacy configs.
 func (s *Service) UpdateVideoMaxAttempts(maxAttempts int) {
 	s.videoMaxAttempts.Store(int64(maxAttempts))
 }

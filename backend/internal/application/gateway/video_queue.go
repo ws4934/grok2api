@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
-	"github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
 )
@@ -116,12 +115,7 @@ func (s *Service) processMediaJob(ctx context.Context, id string) {
 	if !claimed {
 		return
 	}
-	var route model.Route
-	if job.ModelRouteID != 0 {
-		route, err = s.models.Get(ctx, job.ModelRouteID)
-	} else {
-		route, err = s.models.GetByPublicID(ctx, job.Model)
-	}
+	route, err := s.models.Get(ctx, job.ModelRouteID)
 	if job.Kind == media.KindImage {
 		if err != nil {
 			s.endImageJob(ctx, &job, media.StatusFailed, "model_not_found", errors.New("模型路由不存在"), 0)
