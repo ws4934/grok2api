@@ -427,8 +427,10 @@ function hasNumericResult(value: AccountTaskStreamPayload, fields: string[]): bo
 
 type AccountTaskOptions = {
   onProgress?: (value: AccountTaskProgressDTO) => void;
+  onItem?: (item: BuildDetectItemDTO) => void;
   signal?: AbortSignal;
   phases?: readonly AccountTaskProgressPhase[];
+  errorCode?: string;
 };
 
 const importSyncPhases = ["importing", "syncing"] as const;
@@ -449,13 +451,17 @@ async function runAccountTask<T>(path: string, body: BodyInit | object | undefin
         progress.report({ completed: data.completed, total: data.total, phase });
         return;
       }
+      if (event === "item" && options.onItem && typeof data.id === "string" && typeof data.name === "string" && (data.outcome === "ok" || data.outcome === "invalid" || data.outcome === "failed")) {
+        options.onItem({ id: data.id, name: data.name, email: data.email, outcome: data.outcome, reason: data.reason, httpStatus: data.httpStatus });
+        return;
+      }
       if (event === "complete") {
         progress.flush();
         if (hasNumericResult(data, resultFields)) result = data as T;
         return;
       }
       if (event === "error") {
-        const code = data.code ?? "accountConversionFailed";
+        const code = data.code ?? options.errorCode ?? "accountConversionFailed";
         throw new ApiError(502, code, i18n.exists(`apiErrors.${code}`) ? i18n.t(`apiErrors.${code}`) : (data.message ?? i18n.t("apiErrors.requestFailed")));
       }
     });
@@ -476,54 +482,9 @@ export type DetectBuildAccountsInput =
   | { all: true; ids?: never }
   | { all?: false; ids: string[] };
 
-export function detectBuildAccounts(input: DetectBuildAccountsInput, handlers?: BuildDetectHandlers | ((value: AccountTaskProgressDTO) => void), signal?: AbortSignal): Promise<AccountBatchResultDTO> {
+export function detectBuildAccounts(input: DetectBuildAccountsInput, handlers: BuildDetectHandlers = {}, signal?: AbortSignal): Promise<AccountBatchResultDTO> {
   const body = input.all ? { provider: "grok_build" as const, all: true } : { provider: "grok_build" as const, ids: input.ids };
-  const resolved: BuildDetectHandlers = typeof handlers === "function" ? { onProgress: handlers } : (handlers ?? {});
-  return runDetectBuildAccountsTask(body, resolved, signal);
-}
-
-async function runDetectBuildAccountsTask(body: object, handlers: BuildDetectHandlers, signal?: AbortSignal): Promise<AccountBatchResultDTO> {
-  let result: AccountBatchResultDTO | undefined;
-  const progress = createAccountTaskProgressController({ onProgress: handlers.onProgress });
-  try {
-    await apiEventStream("/api/admin/v1/accounts/detect", {
-      method: "POST",
-      headers: { Accept: "text/event-stream" },
-      body,
-      signal,
-    }, decodeAccountTaskStreamPayload, ({ event, data }) => {
-      if (event === "progress" && typeof data.completed === "number" && typeof data.total === "number") {
-        progress.report({ completed: data.completed, total: data.total });
-        return;
-      }
-      if (event === "item" && typeof data.id === "string" && typeof data.name === "string" && (data.outcome === "ok" || data.outcome === "invalid" || data.outcome === "failed")) {
-        handlers.onItem?.({
-          id: data.id,
-          name: data.name,
-          email: data.email,
-          outcome: data.outcome,
-          reason: data.reason,
-          httpStatus: data.httpStatus,
-        });
-        return;
-      }
-      if (event === "complete") {
-        progress.flush();
-        if (hasNumericResult(data, ["succeeded", "failed"])) result = data as AccountBatchResultDTO;
-        return;
-      }
-      if (event === "error") {
-        const code = data.code ?? "accountDetectFailed";
-        throw new ApiError(502, code, i18n.exists(`apiErrors.${code}`) ? i18n.t(`apiErrors.${code}`) : (data.message ?? i18n.t("apiErrors.requestFailed")));
-      }
-    });
-  } finally {
-    progress.dispose();
-  }
-  if (!result) {
-    throw new ApiError(502, "invalidResponse", i18n.t("apiErrors.invalidResponse"));
-  }
-  return result;
+  return runAccountTask("/api/admin/v1/accounts/detect", body, ["succeeded", "failed"], { ...handlers, signal, errorCode: "accountDetectFailed" });
 }
 
 export function refreshAllAccountTokens(onProgress?: (value: AccountTaskProgressDTO) => void, signal?: AbortSignal): Promise<AccountTokenRefreshResultDTO> {
