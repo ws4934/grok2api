@@ -79,8 +79,8 @@ func TestPostgresCanceledImageJobsAwaitUsageRecording(t *testing.T) {
 	verifyCanceledImageJobsAwaitUsageRecording(t, openPostgresTestDatabase(t))
 }
 
-// A canceled image job may have delivered images before the cancel; their
-// usage is recorded like any other ended job. Canceled videos have none.
+// A canceled image job may have delivered its image just before the cancel;
+// its usage is recorded like any other ended job. Canceled videos have none.
 func verifyCanceledImageJobsAwaitUsageRecording(t *testing.T, database *Database) {
 	ctx := context.Background()
 	suffix := time.Now().UTC().Format("150405.000000")
@@ -88,7 +88,7 @@ func verifyCanceledImageJobsAwaitUsageRecording(t *testing.T, database *Database
 	jobs := NewMediaJobRepository(database)
 	now := time.Now().UTC()
 	image := testImageJob("resp_img_cancel_"+suffix, accountID, keyID, mediadomain.StatusCanceled)
-	image.ResultAssetIDs, image.CompletedAt = []string{"asset_delivered_000001"}, &now
+	image.ResultAssetID, image.CompletedAt = "asset_delivered_000001", &now
 	video := mediadomain.Job{
 		ID: "video_cancel_" + suffix, RequestID: "request-video-cancel", ClientKeyID: keyID, Provider: "grok_web", Model: "grok-imagine-video",
 		ModelRouteID: 1, UpstreamModel: "video", Prompt: "test", Seconds: 8, Size: "16:9", Quality: "720p", Status: mediadomain.StatusCanceled,

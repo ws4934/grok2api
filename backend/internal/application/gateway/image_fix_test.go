@@ -115,28 +115,28 @@ func TestSyncImageBillsDeliveredImagesOnly(t *testing.T) {
 	}
 }
 
-// deliverFirstImageWithoutAudit leaves a two-image job as a worker that saved
-// its first image and stopped before writing that image's audit.
-func deliverFirstImageWithoutAudit(t *testing.T, f *imageJobFixture) media.Job {
+// deliverImageWithoutAudit leaves an image job as a worker that saved its
+// image and stopped before writing its audit and terminal state.
+func deliverImageWithoutAudit(t *testing.T, f *imageJobFixture) media.Job {
 	t.Helper()
 	ctx := context.Background()
-	job := f.create(t, ImageJobInput{Count: 2})
+	job := f.create(t, ImageJobInput{})
 	now := time.Now().UTC()
 	claimed, ok, err := f.jobs.TryClaimMediaJob(ctx, job.ID, now, now.Add(time.Hour), "claim_delivered_first_image")
 	if err != nil || !ok {
 		t.Fatalf("claim = %v %v", ok, err)
 	}
-	claimed.ResultAssetIDs = []string{"asset_delivered_000001"}
+	claimed.ResultAssetID = "asset_delivered_000001"
 	if err := f.jobs.UpdateMediaJob(ctx, claimed); err != nil {
 		t.Fatal(err)
 	}
 	return job
 }
 
-func TestCanceledImageJobBillsImagesDeliveredBeforeTheCancel(t *testing.T) {
+func TestCanceledImageJobBillsAnImageDeliveredBeforeTheCancel(t *testing.T) {
 	f := newImageJobFixture(t, 1)
 	ctx := context.Background()
-	job := deliverFirstImageWithoutAudit(t, f)
+	job := deliverImageWithoutAudit(t, f)
 	canceled, err := f.service.CancelImageJob(ctx, f.key, job.ID)
 	if err != nil || canceled.Status != media.StatusCanceled {
 		t.Fatalf("cancel = %#v err = %v", canceled, err)
@@ -145,7 +145,7 @@ func TestCanceledImageJobBillsImagesDeliveredBeforeTheCancel(t *testing.T) {
 		t.Fatalf("billed = %d reserved = %d", billed, reserved)
 	}
 	audits := f.auditsByEvent(t)
-	if record := audits[imageUsageEventID(job.ID, 0)]; record.StatusCode != http.StatusOK || record.MediaOutputImages != 1 || len(audits) != 1 {
+	if record := audits[imageEventID(job)]; record.StatusCode != http.StatusOK || record.MediaOutputImages != 1 || len(audits) != 1 {
 		t.Fatalf("audits = %#v", audits)
 	}
 	if stored := f.job(t, job.ID); stored.UsageRecordedAt == nil {
@@ -153,11 +153,11 @@ func TestCanceledImageJobBillsImagesDeliveredBeforeTheCancel(t *testing.T) {
 	}
 }
 
-func TestReconciliationBillsImagesOfACanceledJob(t *testing.T) {
+func TestReconciliationBillsTheImageOfACanceledJob(t *testing.T) {
 	f := newImageJobFixture(t, 1)
 	ctx := context.Background()
-	job := deliverFirstImageWithoutAudit(t, f)
-	// The cancel committed but its process died before writing the audits.
+	job := deliverImageWithoutAudit(t, f)
+	// The cancel committed but its process died before writing the audit.
 	if _, err := f.jobs.CancelMediaJob(ctx, job.ID, f.key.ID, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
@@ -237,5 +237,32 @@ func TestImageJobErrorMessageIsCutOnARuneBoundary(t *testing.T) {
 	stored := f.job(t, job.ID)
 	if stored.Status != media.StatusFailed || len(stored.ErrorMessage) != 511 || !strings.HasPrefix(message, stored.ErrorMessage) {
 		t.Fatalf("stored = %s %d bytes %q", stored.Status, len(stored.ErrorMessage), stored.ErrorMessage)
+	}
+}
+
+// A worker that died after saving the image left only the terminal write:
+// recovery completes the job without drawing the image again.
+func TestRecoveredImageJobWithItsImageCompletesWithoutRedrawing(t *testing.T) {
+	f := newImageJobFixture(t, 1)
+	ctx := context.Background()
+	job := f.create(t, ImageJobInput{})
+	now := time.Now().UTC()
+	claimed, ok, err := f.jobs.TryClaimMediaJob(ctx, job.ID, now, now.Add(-time.Second), "claim_dead_after_delivery")
+	if err != nil || !ok {
+		t.Fatalf("claim = %v %v", ok, err)
+	}
+	claimed.ResultAssetID = "asset_delivered_000001"
+	if err := f.jobs.UpdateMediaJob(ctx, claimed); err != nil {
+		t.Fatal(err)
+	}
+	f.service.processMediaJob(ctx, job.ID)
+	if calls := f.adapter.Calls(); len(calls) != 0 {
+		t.Fatalf("recovery drew again: %v", calls)
+	}
+	if stored := f.job(t, job.ID); stored.Status != media.StatusCompleted || stored.UsageRecordedAt == nil {
+		t.Fatalf("recovered job = %#v", stored)
+	}
+	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
+		t.Fatalf("billed = %d reserved = %d", billed, reserved)
 	}
 }

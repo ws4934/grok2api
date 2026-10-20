@@ -76,7 +76,7 @@ describe("media jobs polling", () => {
 // The job payload the server sends: every field present, empty values where unset.
 const jobPayload = {
   id: "img_1", kind: "image", provider: "", model: "", operation: "", prompt: "", status: "queued", progress: 0, seconds: 0,
-  size: "", quality: "", itemCount: 1, assetIds: [], accountName: "", clientKeyName: "", createdAt: "2026-10-18T00:00:00Z",
+  size: "", quality: "", assetIds: [], accountName: "", clientKeyName: "", createdAt: "2026-10-18T00:00:00Z",
   completedAt: null, errorCode: "", errorMessage: "", cancellable: true, retryable: false,
 };
 

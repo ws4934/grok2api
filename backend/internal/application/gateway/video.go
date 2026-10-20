@@ -163,7 +163,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	}
 	now := time.Now().UTC()
 	job := media.Job{
-		ID: "video_" + token, Kind: media.KindVideo, ItemCount: 1, RequestID: input.RequestID,
+		ID: "video_" + token, Kind: media.KindVideo, RequestID: input.RequestID,
 		ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name,
 		ClientIP:  requestmeta.ClientIP(ctx),
 		AccountID: accountID, AccountName: lease.Credential.Name,

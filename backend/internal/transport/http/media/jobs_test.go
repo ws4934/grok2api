@@ -65,7 +65,7 @@ func TestAdminMediaJobsListStatsActionsAndDelete(t *testing.T) {
 		job := mediadomain.Job{
 			ID: id, Kind: kind, RequestID: "request-" + id, ClientKeyID: key.ID, ClientKeyName: key.Name, AccountID: accountValue.ID,
 			Provider: provider, Model: "model", ModelRouteID: 1, UpstreamModel: "upstream", Prompt: "prompt " + id,
-			Status: status, ItemCount: 1, InputJSON: "{}", CreatedAt: created, UpdatedAt: created,
+			Status: status, InputJSON: "{}", CreatedAt: created, UpdatedAt: created,
 		}
 		if kind == mediadomain.KindVideo {
 			job.Seconds, job.ResultAssetID = 6, "vid_jobs_result_0000001"
@@ -78,7 +78,7 @@ func TestAdminMediaJobsListStatsActionsAndDelete(t *testing.T) {
 	newJob("video_jobs_done", mediadomain.KindVideo, string(accountdomain.ProviderConsole), mediadomain.StatusCompleted, now.Add(-3*time.Minute))
 	uncertain := newJob("resp_img_jobs_uncertain", mediadomain.KindImage, string(accountdomain.ProviderChatGPT), mediadomain.StatusUncertain, now.Add(-2*time.Minute))
 	queued := newJob("resp_img_jobs_queued", mediadomain.KindImage, string(accountdomain.ProviderChatGPT), mediadomain.StatusQueued, now.Add(-time.Minute))
-	uncertain.ResultAssetIDs = []string{"img_jobs_result_00000001"}
+	uncertain.ResultAssetID = "img_jobs_result_00000001"
 	if err := jobs.UpdateMediaJob(ctx, uncertain); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestAdminMediaJobsListStatsActionsAndDelete(t *testing.T) {
 	if code != 200 || len(images) != 2 || images[0]["id"] != queued.ID || images[0]["cancellable"] != true || images[0]["retryable"] != false {
 		t.Fatalf("image jobs: %d %v", code, envelope)
 	}
-	if images[1]["kind"] != "image" || images[1]["retryable"] != true || images[1]["itemCount"] != float64(1) ||
+	if images[1]["kind"] != "image" || images[1]["retryable"] != true ||
 		images[1]["assetUrls"].([]any)[0] != "https://api.example/v1/media/images/img_jobs_result_00000001" {
 		t.Fatalf("uncertain image job: %v", images[1])
 	}
@@ -141,7 +141,7 @@ func TestAdminMediaJobsListStatsActionsAndDelete(t *testing.T) {
 	if code, envelope := call("POST", "/media/jobs/"+queued.ID+"/cancel", ""); code != 200 || envelope["data"].(map[string]any)["status"] != "canceled" {
 		t.Fatalf("cancel: %d %v", code, envelope)
 	}
-	control.job = mediadomain.Job{ID: "resp_img_jobs_retried", Kind: mediadomain.KindImage, Status: mediadomain.StatusQueued, ItemCount: 1, CreatedAt: now}
+	control.job = mediadomain.Job{ID: "resp_img_jobs_retried", Kind: mediadomain.KindImage, Status: mediadomain.StatusQueued, CreatedAt: now}
 	if code, envelope := call("POST", "/media/jobs/"+uncertain.ID+"/retry", "", "Idempotency-Key", "admin-1"); code != 200 || control.key != "admin-1" || envelope["data"].(map[string]any)["id"] != "resp_img_jobs_retried" || envelope["data"].(map[string]any)["resumed"] != false {
 		t.Fatalf("retry: %d %v key=%q", code, envelope, control.key)
 	}

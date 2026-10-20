@@ -45,9 +45,6 @@ const MaxReferenceVideos = 10
 // MaxInputAssetBytes limits each temporary image or video input to 20 MiB.
 const MaxInputAssetBytes = 20 << 20
 
-// MaxImageJobItems bounds the images of one image job (media_jobs.item_count).
-const MaxImageJobItems = 10
-
 // VideoOperation is the job operation; image jobs use generate and edit.
 type VideoOperation string
 
@@ -94,16 +91,13 @@ type Job struct {
 	InputJSON       string
 	InputImageCount int
 	UpstreamURL     string
-	// ResultAssetID 指向本地媒体资产；XAI ZDR 上传完成后优先从此读取。
+	// ResultAssetID is the job's result in local media storage: the video, or
+	// the image once delivered.
 	ResultAssetID string
-	// ResultAssetIDs are the delivered images of an image job, in order.
-	ResultAssetIDs []string
-	// ItemCount is the number of images an image job produces (1 for video).
-	ItemCount int
-	// Checkpoint is provider-owned JSON of the item in flight, saved before
+	// Checkpoint is provider-owned JSON of the upstream task in flight, saved before
 	// and after irreversible upstream sends so recovery resumes instead of resubmitting.
 	Checkpoint string
-	// Submitted marks that the item in flight may have reached the upstream.
+	// Submitted marks that the task in flight may have reached the upstream.
 	Submitted bool
 	Params    ImageParams
 	// IdempotencyKey and PayloadHash deduplicate client retries per client key.
@@ -124,8 +118,7 @@ type Job struct {
 	CompletedAt     *time.Time
 	UsageRecordedAt *time.Time
 
-	// ResumeItem is the image the latest administrator resume re-fetches and
-	// ResumeGeneration the generation it resumed from (0: never resumed).
-	ResumeItem       int
+	// ResumeGeneration is the generation the latest administrator resume of an
+	// image job started from (0: never resumed).
 	ResumeGeneration int
 }

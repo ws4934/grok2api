@@ -259,13 +259,13 @@ func (f *imageJobFixture) crashAfter(t *testing.T, id string, checkpoint string)
 	return claimed
 }
 
-func TestImageJobDeliversEachImageAndBillsItsReservedShare(t *testing.T) {
+func TestImageJobDeliversTheImageAndBillsItsReservedQuote(t *testing.T) {
 	f := newImageJobFixture(t, 1)
-	job := f.create(t, ImageJobInput{Count: 2, Size: "1024x1024"})
-	if job.Status != media.StatusQueued || job.Kind != media.KindImage || !strings.HasPrefix(job.ID, ImageJobIDPrefix) || job.Price == nil || job.Price.CostInUSDTicks != 800_000_000 {
+	job := f.create(t, ImageJobInput{Size: "1024x1024"})
+	if job.Status != media.StatusQueued || job.Kind != media.KindImage || !strings.HasPrefix(job.ID, ImageJobIDPrefix) || job.Price == nil || job.Price.CostInUSDTicks != 400_000_000 {
 		t.Fatalf("created job = %#v price=%#v", job, job.Price)
 	}
-	if _, reserved := f.billing(t); reserved != 800_000_000 {
+	if _, reserved := f.billing(t); reserved != 400_000_000 {
 		t.Fatalf("reserved = %d", reserved)
 	}
 	// A price edit after submission does not change what the job settles at.
@@ -273,30 +273,27 @@ func TestImageJobDeliversEachImageAndBillsItsReservedShare(t *testing.T) {
 	f.service.processMediaJob(context.Background(), job.ID)
 
 	stored := f.job(t, job.ID)
-	if stored.Status != media.StatusCompleted || len(stored.ResultAssetIDs) != 2 || stored.Progress != 100 || stored.UsageRecordedAt == nil || stored.Submitted {
+	if stored.Status != media.StatusCompleted || stored.ResultAssetID == "" || stored.Progress != 100 || stored.UsageRecordedAt == nil {
 		t.Fatalf("stored job = %#v", stored)
 	}
 	want := []string{fmt.Sprintf("submit:%d", f.accounts[0].ID), fmt.Sprintf("poll:%d:conv", f.accounts[0].ID), "fetch"}
-	if calls := f.adapter.Calls(); !slices.Equal(calls, append(append([]string{}, want...), want...)) {
+	if calls := f.adapter.Calls(); !slices.Equal(calls, want) {
 		t.Fatalf("calls = %v", calls)
 	}
-	if billed, reserved := f.billing(t); billed != 800_000_000 || reserved != 0 {
+	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
 		t.Fatalf("billed = %d reserved = %d", billed, reserved)
 	}
-	audits := f.auditsByEvent(t)
-	for index := range 2 {
-		record, ok := audits[imageUsageEventID(job.ID, index)]
-		if !ok || record.StatusCode != 200 || record.EstimatedCostInUSDTicks != 400_000_000 || record.PriceID != job.Price.PriceID || record.MediaOutputImages != 1 || record.Operation != audit.OperationImage {
-			t.Fatalf("audit %d = %#v", index, record)
-		}
+	record, ok := f.auditsByEvent(t)[imageEventID(job)]
+	if !ok || record.StatusCode != 200 || record.EstimatedCostInUSDTicks != 400_000_000 || record.PriceID != job.Price.PriceID || record.MediaOutputImages != 1 || record.Operation != audit.OperationImage {
+		t.Fatalf("audit = %#v", record)
 	}
-	asset, err := f.assets.GetMediaAsset(context.Background(), stored.ResultAssetIDs[0])
+	asset, err := f.assets.GetMediaAsset(context.Background(), stored.ResultAssetID)
 	if err != nil || asset.Origin.JobID != job.ID || asset.Origin.Operation != string(audit.OperationImage) || asset.Origin.AccountID != f.accounts[0].ID {
 		t.Fatalf("asset origin = %#v err = %v", asset.Origin, err)
 	}
-	images, usage, err := f.service.ImageJobOutput(context.Background(), stored)
-	if err != nil || len(images) != 2 || images[0].Width != 1 || usage["output_tokens"] == nil {
-		t.Fatalf("output = %d images, usage %v, err %v", len(images), usage, err)
+	result, usage, err := f.service.ImageJobOutput(context.Background(), stored)
+	if err != nil || result == nil || result.Width != 1 || usage["output_tokens"] == nil {
+		t.Fatalf("output = %#v, usage %v, err %v", result, usage, err)
 	}
 }
 
@@ -311,7 +308,7 @@ func TestImageJobRecoveryPollsTheCheckpointWithoutResubmitting(t *testing.T) {
 		t.Fatalf("recovery calls = %v", calls)
 	}
 	stored := f.job(t, job.ID)
-	if stored.Status != media.StatusCompleted || len(stored.ResultAssetIDs) != 1 || stored.Generation != 2 {
+	if stored.Status != media.StatusCompleted || stored.ResultAssetID == "" || stored.Generation != 2 {
 		t.Fatalf("recovered job = %#v", stored)
 	}
 	// The crashed worker's claim is fenced out.
@@ -339,7 +336,7 @@ func TestImageJobSubmittedWithoutUpstreamIDIsUncertainAndRetriedOnce(t *testing.
 	if billed, reserved := f.billing(t); billed != 0 || reserved != 0 {
 		t.Fatalf("uncertain billing: billed %d reserved %d", billed, reserved)
 	}
-	if record := f.auditsByEvent(t)[imageUsageEventID(job.ID, 0)]; record.StatusCode < 400 || record.ErrorCode != "submission_uncertain" || record.Operation != audit.OperationImageEdit {
+	if record := f.auditsByEvent(t)[imageEventID(job)]; record.StatusCode < 400 || record.ErrorCode != "submission_uncertain" || record.Operation != audit.OperationImageEdit {
 		t.Fatalf("failure audit = %#v", record)
 	}
 	ctx := context.Background()
@@ -478,7 +475,7 @@ func TestImageJobFailureAuditKeepsUpstreamDiagnostic(t *testing.T) {
 	if stored := f.job(t, job.ID); stored.Status != media.StatusFailed || stored.ErrorCode != "media_download_failed" {
 		t.Fatalf("job = %#v", stored)
 	}
-	record, ok := f.auditsByEvent(t)[imageUsageEventID(job.ID, 0)]
+	record, ok := f.auditsByEvent(t)[imageEventID(job)]
 	if !ok {
 		t.Fatal("missing failure audit")
 	}
@@ -492,7 +489,7 @@ func TestImageJobFailureAuditKeepsUpstreamDiagnostic(t *testing.T) {
 }
 
 // ResumeMediaJob completes the video test double; resumes are image-only.
-func (r *videoUsageRepository) ResumeMediaJob(context.Context, string, int, int, time.Time) (media.Job, error) {
+func (r *videoUsageRepository) ResumeMediaJob(context.Context, string, int, time.Time) (media.Job, error) {
 	return r.job, repository.ErrConflict
 }
 
@@ -571,7 +568,7 @@ func TestRetryResumesDownloadFailedImageJobWithoutResubmitting(t *testing.T) {
 		t.Fatalf("resume calls = %v", calls)
 	}
 	stored := f.job(t, job.ID)
-	if stored.Status != media.StatusCompleted || len(stored.ResultAssetIDs) != 1 || stored.UsageRecordedAt == nil || stored.Submitted || ImageJobResumable(stored) {
+	if stored.Status != media.StatusCompleted || stored.ResultAssetID == "" || stored.UsageRecordedAt == nil || ImageJobResumable(stored) {
 		t.Fatalf("resumed job = %#v", stored)
 	}
 	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
@@ -585,7 +582,8 @@ func TestRetryResumesDownloadFailedImageJobWithoutResubmitting(t *testing.T) {
 		t.Fatalf("billed after replay = %d", billed)
 	}
 	audits := f.auditsByEvent(t)
-	original, first, second := imageUsageEventID(job.ID, 0), imageUsageEventID(job.ID, 0)+"_r1", imageUsageEventID(job.ID, 0)+"_r2"
+	original := imageEventID(job)
+	first, second := original+"_r1", original+"_r2"
 	if record := audits[original]; record.StatusCode < 400 || record.ErrorCode != "media_download_failed" {
 		t.Fatalf("original failure audit = %#v", record)
 	}
@@ -690,53 +688,6 @@ func TestResumedImageJobStaysResumableAndCountsClaimsFromTheResume(t *testing.T)
 	}
 	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
 		t.Fatalf("after resume: billed %d reserved %d", billed, reserved)
-	}
-}
-
-func TestResumeOfMultiImageJobFetchesOnlyTheImageInFlight(t *testing.T) {
-	f := newImageJobFixture(t, 1)
-	ctx := context.Background()
-	submits := 0
-	f.adapter.submit = func(_ provider.ImageJobRequest, save func(provider.ImageCheckpoint) error) (provider.ImageCheckpoint, error) {
-		submits++
-		if submits == 2 {
-			f.adapter.fetchErr = downloadDeniedError{}
-		}
-		cp := provider.ImageCheckpoint{Submitted: true, UpstreamID: fmt.Sprintf("conv-%d", submits)}
-		return cp, save(cp)
-	}
-	job := f.create(t, ImageJobInput{Count: 3})
-	f.service.processMediaJob(ctx, job.ID)
-	failed := f.job(t, job.ID)
-	if failed.Status != media.StatusFailed || len(failed.ResultAssetIDs) != 1 || !ImageJobResumable(failed) {
-		t.Fatalf("failed job = %#v", failed)
-	}
-	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
-		t.Fatalf("after failure: billed %d reserved %d", billed, reserved)
-	}
-
-	f.adapter.fetchErr = nil
-	f.resetCalls()
-	if _, err := f.service.RetryMediaJob(ctx, job.ID, ""); err != nil {
-		t.Fatal(err)
-	}
-	f.service.processMediaJob(ctx, job.ID)
-	if calls := f.adapter.Calls(); !slices.Equal(calls, []string{fmt.Sprintf("poll:%d:conv-2", f.accounts[0].ID), "fetch"}) {
-		t.Fatalf("resume calls = %v", calls)
-	}
-	stored := f.job(t, job.ID)
-	if stored.Status != media.StatusFailed || stored.ErrorCode != "partial_result" || len(stored.ResultAssetIDs) != 2 || stored.ResultAssetIDs[0] != failed.ResultAssetIDs[0] || ImageJobResumable(stored) {
-		t.Fatalf("resumed job = %#v", stored)
-	}
-	if billed, reserved := f.billing(t); billed != 800_000_000 || reserved != 0 {
-		t.Fatalf("after resume: billed %d reserved %d", billed, reserved)
-	}
-	audits := f.auditsByEvent(t)
-	if record := audits[imageUsageEventID(job.ID, 1)+"_r1"]; record.StatusCode != 200 || record.EstimatedCostInUSDTicks != 400_000_000 {
-		t.Fatalf("resumed image audit = %#v", record)
-	}
-	if _, ok := audits[imageUsageEventID(job.ID, 2)]; ok || len(audits) != 3 {
-		t.Fatalf("audits = %v", audits)
 	}
 }
 

@@ -39,7 +39,6 @@ type mediaJobDTO struct {
 	Seconds   int    `json:"seconds"`
 	Size      string `json:"size"`
 	Quality   string `json:"quality"`
-	ItemCount int    `json:"itemCount"`
 	// AssetID is the video result; AssetIDs/AssetURLs list every result.
 	AssetID       string   `json:"assetId"`
 	AssetIDs      []string `json:"assetIds"`

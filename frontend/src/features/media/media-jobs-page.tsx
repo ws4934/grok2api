@@ -293,7 +293,7 @@ export function MediaJobsPage() {
                     <TableCell>
                       <div className="space-y-0.5 text-xs">
                         <span className="block truncate" title={formatSpec(job)}>{formatSpec(job)}</span>
-                        <span className="block text-[11px] text-muted-foreground">{job.kind === "video" ? t("media.jobs.seconds", { count: job.seconds }) : t("media.jobs.images", { count: job.itemCount })}</span>
+                        {job.kind === "video" ? <span className="block text-[11px] text-muted-foreground">{t("media.jobs.seconds", { count: job.seconds })}</span> : null}
                       </div>
                     </TableCell>
                     <TableCell className="min-w-0">
@@ -371,7 +371,7 @@ function JobDetails({ job, providers, locale }: { job: MediaJobDTO; providers?: 
     [t("media.provider"), <ProviderTag key="provider" id={job.provider} providers={providers} />],
     [t("media.model"), job.model || "-"],
     [t("media.operation"), `${t(`media.kind.${job.kind}`)} · ${job.operation ? t(`media.jobOperation.${job.operation}`, { defaultValue: job.operation }) : "-"}`],
-    [t("media.jobs.spec"), `${formatSpec(job)} · ${job.kind === "video" ? t("media.jobs.seconds", { count: job.seconds }) : t("media.jobs.images", { count: job.itemCount })}`],
+    [t("media.jobs.spec"), job.kind === "video" ? `${formatSpec(job)} · ${t("media.jobs.seconds", { count: job.seconds })}` : formatSpec(job)],
     [t("media.account"), job.accountName || "-"],
     [t("media.key"), job.clientKeyName || "-"],
     [t("media.createdAt"), formatDateTime(job.createdAt, locale)],

@@ -19,7 +19,6 @@ export const mediaJobSchema = z.object({
   seconds: z.number(),
   size: z.string(),
   quality: z.string(),
-  itemCount: z.number(),
   assetIds: z.array(z.string()),
   accountName: z.string(),
   clientKeyName: z.string(),

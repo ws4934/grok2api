@@ -300,21 +300,21 @@ func (h *Handler) cancelResponse(c *gin.Context) {
 }
 
 func (h *Handler) writeImageResponse(c *gin.Context, job mediadomain.Job) {
-	images, usage, err := h.gateway.ImageJobOutput(c.Request.Context(), job)
+	result, usage, err := h.gateway.ImageJobOutput(c.Request.Context(), job)
 	if err != nil {
 		writeOpenAIError(c, http.StatusServiceUnavailable, "result_unavailable", "Image result unavailable")
 		return
 	}
-	c.JSON(http.StatusOK, imageResponseObject(job, images, usage))
+	c.JSON(http.StatusOK, imageResponseObject(job, result, usage))
 }
 
-func imageCallID(job mediadomain.Job, index int) string {
-	return fmt.Sprintf("ig_%s%02d", strings.TrimPrefix(job.ID, gateway.ImageJobIDPrefix), index)
+func imageCallID(job mediadomain.Job) string {
+	return "ig_" + strings.TrimPrefix(job.ID, gateway.ImageJobIDPrefix)
 }
 
-// imageResponseObject renders a job as an OpenAI Response with one
-// image_generation_call per image.
-func imageResponseObject(job mediadomain.Job, images []gateway.ImageJobImage, usage map[string]any) gin.H {
+// imageResponseObject renders a job as an OpenAI Response with its
+// image_generation_call; result is nil until the image is delivered.
+func imageResponseObject(job mediadomain.Job, result *gateway.ImageJobImage, usage map[string]any) gin.H {
 	status := "failed"
 	switch job.Status {
 	case mediadomain.StatusQueued:
@@ -338,26 +338,25 @@ func imageResponseObject(job mediadomain.Job, images []gateway.ImageJobImage, us
 		quality = "auto"
 	}
 	output := []any{}
-	for index := range job.ItemCount {
-		call := gin.H{"id": imageCallID(job, index), "type": "image_generation_call", "status": "failed", "result": nil}
-		switch {
-		case index < len(images) && images[index].Missing:
-			call["error"] = gin.H{"code": "result_unavailable", "message": "The generated image was removed from storage and can no longer be returned"}
-		case index < len(images):
-			size := job.Size
-			if images[index].Width > 0 && images[index].Height > 0 {
-				size = fmt.Sprintf("%dx%d", images[index].Width, images[index].Height)
-			}
-			call["status"], call["result"] = "completed", base64.StdEncoding.EncodeToString(images[index].Data)
-			call["output_format"], call["background"], call["quality"], call["size"] = format, background, quality, size
-		case index > len(images) || job.Status == mediadomain.StatusQueued || job.Status == mediadomain.StatusCanceled:
-			continue
-		case job.Status == mediadomain.StatusInProgress:
-			call["status"] = "in_progress"
-			if job.Submitted {
-				call["status"] = "generating"
-			}
+	call := gin.H{"id": imageCallID(job), "type": "image_generation_call", "status": "failed", "result": nil}
+	switch {
+	case result != nil && result.Missing:
+		call["error"] = gin.H{"code": "result_unavailable", "message": "The generated image was removed from storage and can no longer be returned"}
+	case result != nil:
+		size := job.Size
+		if result.Width > 0 && result.Height > 0 {
+			size = fmt.Sprintf("%dx%d", result.Width, result.Height)
 		}
+		call["status"], call["result"] = "completed", base64.StdEncoding.EncodeToString(result.Data)
+		call["output_format"], call["background"], call["quality"], call["size"] = format, background, quality, size
+	case job.Status == mediadomain.StatusInProgress:
+		call["status"] = "in_progress"
+		if job.Submitted {
+			call["status"] = "generating"
+		}
+	}
+	// A queued or canceled job has not started its call.
+	if result != nil || (job.Status != mediadomain.StatusQueued && job.Status != mediadomain.StatusCanceled) {
 		output = append(output, call)
 	}
 	var problem any
@@ -408,7 +407,7 @@ func (h *Handler) streamImageResponse(c *gin.Context, key clientkeydomain.Key, j
 	head["status"], head["output"] = "in_progress", []any{}
 	send("response.created", gin.H{"response": head})
 	send("response.in_progress", gin.H{"response": head})
-	id := imageCallID(job, 0)
+	id := imageCallID(job)
 	send("response.output_item.added", gin.H{"output_index": 0, "item": gin.H{"id": id, "type": "image_generation_call", "status": "in_progress", "result": nil}})
 	send("response.image_generation_call.in_progress", gin.H{"output_index": 0, "item_id": id})
 	generating := false
@@ -433,10 +432,10 @@ func (h *Handler) streamImageResponse(c *gin.Context, key clientkeydomain.Key, j
 	}
 	var final gin.H
 	if err == nil {
-		var images []gateway.ImageJobImage
+		var result *gateway.ImageJobImage
 		var usage map[string]any
-		if images, usage, err = h.gateway.ImageJobOutput(ctx, job); err == nil {
-			final = imageResponseObject(job, images, usage)
+		if result, usage, err = h.gateway.ImageJobOutput(ctx, job); err == nil {
+			final = imageResponseObject(job, result, usage)
 		}
 	}
 	if err != nil {

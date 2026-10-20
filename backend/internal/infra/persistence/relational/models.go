@@ -457,14 +457,11 @@ type mediaJobModel struct {
 	InputImageCount int    `gorm:"not null;default:0;check:chk_media_jobs_input_image_count,input_image_count BETWEEN 0 AND 8"`
 	UpstreamURL     string `gorm:"type:text;not null;default:'';check:chk_media_jobs_upstream_url,length(upstream_url) <= 8192"`
 	ResultAssetID   string `gorm:"size:64;not null;default:'';check:chk_media_jobs_result_asset_id,result_asset_id = '' OR length(trim(result_asset_id)) BETWEEN 16 AND 64"`
-	// ResultAssetIDs is the JSON list of delivered image assets (image jobs).
-	ResultAssetIDs string `gorm:"type:text;not null;default:'[]';check:chk_media_jobs_result_asset_ids,length(result_asset_ids) <= 4096"`
-	ItemCount      int    `gorm:"not null;default:1;check:chk_media_jobs_item_count,item_count BETWEEN 1 AND 10"`
-	CheckpointJSON string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_checkpoint_json,length(checkpoint_json) <= 65536"`
-	Submitted      bool   `gorm:"not null;default:false"`
-	ParamsJSON     string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_params_json,length(params_json) <= 65536"`
-	IdempotencyKey string `gorm:"size:160;not null;default:''"`
-	PayloadHash    string `gorm:"size:64;not null;default:''"`
+	CheckpointJSON  string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_checkpoint_json,length(checkpoint_json) <= 65536"`
+	Submitted       bool   `gorm:"not null;default:false"`
+	ParamsJSON      string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_params_json,length(params_json) <= 65536"`
+	IdempotencyKey  string `gorm:"size:160;not null;default:''"`
+	PayloadHash     string `gorm:"size:64;not null;default:''"`
 	// PriceID/PricingModel/PriceTicks snapshot the reserved quote; NULL ticks = no snapshot.
 	PriceID         uint64 `gorm:"not null;default:0"`
 	PricingModel    string `gorm:"size:255;not null;default:''"`
@@ -482,8 +479,7 @@ type mediaJobModel struct {
 	Account         *accountModel   `gorm:"foreignKey:AccountID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL"`
 	ClientKey       *clientKeyModel `gorm:"foreignKey:ClientKeyID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT"`
 
-	// ResumeItem/ResumeGeneration are written only by an administrator resume.
-	ResumeItem       int `gorm:"not null;default:0"`
+	// ResumeGeneration is written only by an administrator resume.
 	ResumeGeneration int `gorm:"not null;default:0"`
 }
 

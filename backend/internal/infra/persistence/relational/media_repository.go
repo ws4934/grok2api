@@ -211,20 +211,6 @@ func (r *MediaAssetRepository) ListProtectedMediaAssetIDs(ctx context.Context) (
 			protected[id] = struct{}{}
 		}
 	}
-	// Images already delivered by a running image job stay until it ends.
-	var imageResults []string
-	if err := r.db.db.WithContext(ctx).Model(&mediaJobModel{}).
-		Where("kind = ? AND result_asset_ids <> '[]' AND status IN ?", media.KindImage, activeMediaJobStatuses()).
-		Pluck("result_asset_ids", &imageResults).Error; err != nil {
-		return nil, err
-	}
-	for _, raw := range imageResults {
-		var ids []string
-		_ = json.Unmarshal([]byte(raw), &ids)
-		for _, id := range ids {
-			protected[id] = struct{}{}
-		}
-	}
 	var ticketAssetIDs []string
 	now := time.Now().UTC()
 	if err := r.db.db.WithContext(ctx).Model(&mediaUploadTicketModel{}).
@@ -439,7 +425,7 @@ func (r *MediaJobRepository) UpdateMediaJob(ctx context.Context, value media.Job
 	}
 	// InputJSON and InputImageCount are immutable creation metadata. Progress and
 	// terminal updates must not resend a multi-megabyte Base64 payload.
-	result := query.Select("request_id", "client_key_name", "account_id", "account_name", "egress_node_id", "egress_node_name", "egress_scope", "egress_mode", "provider", "model", "model_route_id", "upstream_model", "prompt", "seconds", "size", "quality", "status", "progress", "upstream_url", "result_asset_id", "result_asset_ids", "checkpoint_json", "submitted", "content_type", "error_code", "error_message", "lease_until", "claim_token", "updated_at", "completed_at", "usage_recorded_at", "price_id", "pricing_model", "price_ticks").Updates(updates)
+	result := query.Select("request_id", "client_key_name", "account_id", "account_name", "egress_node_id", "egress_node_name", "egress_scope", "egress_mode", "provider", "model", "model_route_id", "upstream_model", "prompt", "seconds", "size", "quality", "status", "progress", "upstream_url", "result_asset_id", "checkpoint_json", "submitted", "content_type", "error_code", "error_message", "lease_until", "claim_token", "updated_at", "completed_at", "usage_recorded_at", "price_id", "pricing_model", "price_ticks").Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -471,7 +457,7 @@ func (r *MediaJobRepository) CancelMediaJob(ctx context.Context, id string, clie
 		return query
 	}
 	// Clearing the claim fences out the worker; an image job is cancellable
-	// until its item in flight is submitted.
+	// until its image is submitted.
 	result := scoped().Where("(status = ? OR (status = ? AND kind = ? AND submitted = ?))", media.StatusQueued, media.StatusInProgress, media.KindImage, false).
 		Updates(map[string]any{"status": media.StatusCanceled, "claim_token": "", "lease_until": nil, "completed_at": now, "updated_at": now, "error_code": "canceled", "error_message": ""})
 	if result.Error != nil {
@@ -491,12 +477,12 @@ func (r *MediaJobRepository) CancelMediaJob(ctx context.Context, id string, clie
 // ResumeMediaJob compares and sets failed → in_progress with no lease, so the
 // recovery claim (new generation and token) runs it once; the checkpoint and
 // delivered images stay, and usage is recorded again when it ends.
-func (r *MediaJobRepository) ResumeMediaJob(ctx context.Context, id string, generation, item int, now time.Time) (media.Job, error) {
+func (r *MediaJobRepository) ResumeMediaJob(ctx context.Context, id string, generation int, now time.Time) (media.Job, error) {
 	result := r.db.db.WithContext(ctx).Model(&mediaJobModel{}).
 		Where("id = ? AND kind = ? AND status = ? AND submitted = ? AND generation = ?", id, media.KindImage, media.StatusFailed, true, generation).
 		Updates(map[string]any{
 			"status": media.StatusInProgress, "error_code": "", "error_message": "", "completed_at": nil, "usage_recorded_at": nil,
-			"lease_until": nil, "claim_token": "", "resume_item": item, "resume_generation": generation, "updated_at": now,
+			"lease_until": nil, "claim_token": "", "resume_generation": generation, "updated_at": now,
 		})
 	if result.Error != nil {
 		return media.Job{}, result.Error
@@ -559,7 +545,7 @@ func (r *MediaJobRepository) ListMediaJobs(ctx context.Context, input repository
 	// account_id and checkpoint_json tell whether a failed image job can resume.
 	if err := query.Select(
 		"id", "kind", "provider", "client_key_name", "account_id", "account_name", "model", "operation", "prompt", "seconds", "size", "quality",
-		"status", "progress", "result_asset_id", "result_asset_ids", "item_count", "checkpoint_json", "submitted", "error_code", "error_message", "created_at", "completed_at",
+		"status", "progress", "result_asset_id", "checkpoint_json", "submitted", "error_code", "error_message", "created_at", "completed_at",
 	).Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
@@ -682,12 +668,10 @@ func mediaJobFromDomain(value media.Job) *mediaJobModel {
 	if kind == "" {
 		kind = media.KindVideo
 	}
-	itemCount := max(1, value.ItemCount)
 	checkpoint := value.Checkpoint
 	if checkpoint == "" {
 		checkpoint = "{}"
 	}
-	resultAssetIDs, _ := json.Marshal(append([]string{}, value.ResultAssetIDs...))
 	params, _ := json.Marshal(value.Params)
 	row := &mediaJobModel{
 		ID: value.ID, Kind: string(kind), RequestID: value.RequestID, ClientKeyID: value.ClientKeyID, ClientKeyName: value.ClientKeyName, ClientIP: value.ClientIP,
@@ -697,10 +681,10 @@ func mediaJobFromDomain(value media.Job) *mediaJobModel {
 		Model:    value.Model, ModelRouteID: value.ModelRouteID, UpstreamModel: value.UpstreamModel, Operation: string(operation),
 		Prompt: value.Prompt, Seconds: value.Seconds, Size: value.Size, Quality: value.Quality,
 		Status: string(value.Status), Progress: value.Progress, InputJSON: value.InputJSON, InputImageCount: value.InputImageCount, UpstreamURL: value.UpstreamURL,
-		ResultAssetID: value.ResultAssetID, ResultAssetIDs: string(resultAssetIDs), ItemCount: itemCount, CheckpointJSON: checkpoint, Submitted: value.Submitted,
+		ResultAssetID: value.ResultAssetID, CheckpointJSON: checkpoint, Submitted: value.Submitted,
 		ParamsJSON: string(params), IdempotencyKey: value.IdempotencyKey, PayloadHash: value.PayloadHash, Generation: value.Generation,
-		ResumeItem: value.ResumeItem, ResumeGeneration: value.ResumeGeneration,
-		ContentType: value.ContentType, ErrorCode: value.ErrorCode,
+		ResumeGeneration: value.ResumeGeneration,
+		ContentType:      value.ContentType, ErrorCode: value.ErrorCode,
 		// Upstream error text may carry invalid UTF-8 or NUL, which PostgreSQL
 		// rejects: the terminal write would fail and leave the job running.
 		ErrorMessage: strings.ToValidUTF8(strings.ReplaceAll(value.ErrorMessage, "\x00", ""), "�"),
@@ -727,8 +711,6 @@ func mediaJobToDomain(row mediaJobModel) media.Job {
 	if kind == "" {
 		kind = media.KindVideo
 	}
-	var resultAssetIDs []string
-	_ = json.Unmarshal([]byte(row.ResultAssetIDs), &resultAssetIDs)
 	var params media.ImageParams
 	_ = json.Unmarshal([]byte(row.ParamsJSON), &params)
 	job := media.Job{
@@ -739,10 +721,10 @@ func mediaJobToDomain(row mediaJobModel) media.Job {
 		Model:    row.Model, ModelRouteID: row.ModelRouteID, UpstreamModel: row.UpstreamModel, Operation: operation,
 		Prompt: row.Prompt, Seconds: row.Seconds, Size: row.Size, Quality: row.Quality,
 		Status: media.Status(row.Status), Progress: row.Progress, InputJSON: row.InputJSON, InputImageCount: row.InputImageCount, UpstreamURL: row.UpstreamURL,
-		ResultAssetID: row.ResultAssetID, ResultAssetIDs: resultAssetIDs, ItemCount: max(1, row.ItemCount), Checkpoint: row.CheckpointJSON, Submitted: row.Submitted,
+		ResultAssetID: row.ResultAssetID, Checkpoint: row.CheckpointJSON, Submitted: row.Submitted,
 		Params: params, IdempotencyKey: row.IdempotencyKey, PayloadHash: row.PayloadHash, Generation: row.Generation,
-		ResumeItem: row.ResumeItem, ResumeGeneration: row.ResumeGeneration,
-		ContentType: row.ContentType, ErrorCode: row.ErrorCode, ErrorMessage: row.ErrorMessage,
+		ResumeGeneration: row.ResumeGeneration,
+		ContentType:      row.ContentType, ErrorCode: row.ErrorCode, ErrorMessage: row.ErrorMessage,
 		LeaseUntil: row.LeaseUntil, ClaimToken: row.ClaimToken, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		CompletedAt: row.CompletedAt, UsageRecordedAt: row.UsageRecordedAt,
 	}

@@ -129,7 +129,7 @@ func testImageJob(id string, accountID, keyID uint64, status mediadomain.Status)
 	return mediadomain.Job{
 		ID: id, Kind: mediadomain.KindImage, RequestID: "request-" + id, ClientKeyID: keyID, AccountID: accountID,
 		Provider: string(accountdomain.ProviderChatGPT), Model: "gpt-image-2", ModelRouteID: 1, UpstreamModel: "chatgpt/gpt-image-2",
-		Operation: mediadomain.VideoOperationEdit, Prompt: "edit", Size: "1024x1024", Status: status, ItemCount: 2,
+		Operation: mediadomain.VideoOperationEdit, Prompt: "edit", Size: "1024x1024", Status: status,
 		InputJSON: `{"image_urls":["data:image/png;base64,AAAA"]}`, InputImageCount: 1,
 		Params:    mediadomain.ImageParams{OutputFormat: "webp", ResponseModel: "gpt-5", ResponseBackground: true},
 		CreatedAt: now, UpdatedAt: now,
@@ -207,12 +207,12 @@ func verifyMediaJobLifecycle(t *testing.T, database *Database) {
 	// The first worker stalls past its lease; recovery claims the next generation.
 	expired := now.Add(-time.Second)
 	first.LeaseUntil = &expired
-	first.ResultAssetIDs = []string{"img_lifecycle_result_0001"}
+	first.ResultAssetID = "img_lifecycle_result_0001"
 	if err := jobs.UpdateMediaJob(ctx, first); err != nil {
 		t.Fatal(err)
 	}
 	second, ok, err := jobs.TryClaimMediaJob(ctx, job.ID, now, now.Add(time.Hour), "claim_lifecycle_second")
-	if err != nil || !ok || second.Generation != 2 || len(second.ResultAssetIDs) != 1 {
+	if err != nil || !ok || second.Generation != 2 || second.ResultAssetID == "" {
 		t.Fatalf("recovery claim = %#v ok=%v err=%v", second, ok, err)
 	}
 	first.Status = mediadomain.StatusCompleted
@@ -276,7 +276,7 @@ func verifyMediaJobLifecycle(t *testing.T, database *Database) {
 		Page:   repository.PageQuery{Limit: 10, Search: "resp_img_lifecycle"},
 		Filter: repository.MediaJobListFilter{Kind: string(mediadomain.KindImage), Provider: string(accountdomain.ProviderChatGPT), Status: string(mediadomain.StatusUncertain)},
 	})
-	if err != nil || total != 1 || listed[0].ID != uncertain.ID || listed[0].ItemCount != 2 || listed[0].Kind != mediadomain.KindImage {
+	if err != nil || total != 1 || listed[0].ID != uncertain.ID || listed[0].Kind != mediadomain.KindImage {
 		t.Fatalf("filtered list = %#v total=%d err=%v", listed, total, err)
 	}
 	stats, err := jobs.SummarizeMediaJobs(ctx, string(mediadomain.KindImage))

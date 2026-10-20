@@ -276,19 +276,16 @@ func (h *Handler) jobDTO(job mediadomain.Job) mediaJobDTO {
 		completedAt = &formatted
 	}
 	assetID, assetIDs, assetURLs := "", []string{}, []string{}
-	if job.Kind == mediadomain.KindImage {
-		assetIDs = append(assetIDs, job.ResultAssetIDs...)
-		for _, id := range assetIDs {
-			assetURLs = append(assetURLs, h.service.PublicImageURL(id))
-		}
-	} else if job.Status == mediadomain.StatusCompleted && job.ResultAssetID != "" {
+	if job.Kind == mediadomain.KindImage && job.ResultAssetID != "" {
+		assetIDs, assetURLs = []string{job.ResultAssetID}, []string{h.service.PublicImageURL(job.ResultAssetID)}
+	} else if job.Kind != mediadomain.KindImage && job.Status == mediadomain.StatusCompleted && job.ResultAssetID != "" {
 		assetID = job.ResultAssetID
 		assetIDs, assetURLs = []string{assetID}, []string{h.service.PublicVideoURL(assetID)}
 	}
 	return mediaJobDTO{
 		ID: job.ID, Kind: string(job.Kind), Provider: job.Provider, Model: job.Model, Operation: string(job.Operation),
 		Prompt: job.Prompt, Status: string(job.Status), Progress: job.Progress, Seconds: job.Seconds, Size: job.Size, Quality: job.Quality,
-		ItemCount: job.ItemCount, AccountName: job.AccountName, ClientKeyName: job.ClientKeyName,
+		AccountName: job.AccountName, ClientKeyName: job.ClientKeyName,
 		CreatedAt: job.CreatedAt.Format("2006-01-02T15:04:05Z"), CompletedAt: completedAt,
 		ErrorCode: job.ErrorCode, ErrorMessage: job.ErrorMessage, AssetID: assetID, AssetIDs: assetIDs, AssetURLs: assetURLs,
 		Cancellable: job.Status == mediadomain.StatusQueued || (job.Kind == mediadomain.KindImage && job.Status == mediadomain.StatusInProgress && !job.Submitted),

@@ -63,7 +63,6 @@ type ImageJobInput struct {
 	// ImageURLs and MaskURL are data URIs or https URLs; images make it an edit.
 	ImageURLs    []string
 	MaskURL      string
-	Count        int
 	Size         string
 	Quality      string
 	OutputFormat string
@@ -80,8 +79,8 @@ type imageJobInputs struct {
 	MaskURL   string   `json:"mask_url,omitempty"`
 }
 
-// ImageJobImage is one delivered image of an image job. Missing marks an
-// image whose stored result was removed (capacity cleanup, gallery deletion).
+// ImageJobImage is the delivered image of an image job. Missing marks an image
+// whose stored result was removed (capacity cleanup, gallery deletion).
 type ImageJobImage struct {
 	Data          []byte
 	MIMEType      string
@@ -89,7 +88,7 @@ type ImageJobImage struct {
 	Missing       bool
 }
 
-type imageItemOutcome struct {
+type imageOutcome struct {
 	status         media.Status
 	code           string
 	err            error
@@ -98,24 +97,14 @@ type imageItemOutcome struct {
 	attempts []audit.Attempt
 }
 
-func imageUsageEventID(jobID string, index int) string {
-	return fmt.Sprintf("image_usage_%s_%d", jobID, index)
-}
-
-// imageItemEventID is the usage event (audit and reservation) of image index.
-// The image a resume re-fetches gets a fresh event per resume, since the
-// attempt that failed it already wrote the earlier one.
-func imageItemEventID(job media.Job, index int) string {
-	if job.ResumeGeneration > 0 && index == job.ResumeItem {
-		return fmt.Sprintf("%s_r%d", imageUsageEventID(job.ID, index), job.ResumeGeneration)
+// imageEventID is the usage event (audit and billing reservation) of an image
+// job. A resume re-fetches the image under a fresh event, since the attempt
+// that failed it already wrote the first one.
+func imageEventID(job media.Job) string {
+	if job.ResumeGeneration > 0 {
+		return fmt.Sprintf("image_usage_%s_r%d", job.ID, job.ResumeGeneration)
 	}
-	return imageUsageEventID(job.ID, index)
-}
-
-// resumeDone reports that a resumed job delivered the image it re-fetches. A
-// resume never draws new images, so the job ends there.
-func resumeDone(job media.Job) bool {
-	return job.ResumeGeneration > 0 && len(job.ResultAssetIDs) > job.ResumeItem
+	return "image_usage_" + job.ID
 }
 
 // ImageJobResumable reports whether a failed image job can re-fetch, on its
@@ -126,11 +115,6 @@ func ImageJobResumable(job media.Job) bool {
 	}
 	var cp provider.ImageCheckpoint
 	return json.Unmarshal([]byte(job.Checkpoint), &cp) == nil && cp.Submitted && cp.UpstreamID != ""
-}
-
-// itemShare splits the reserved total so the per-image charges sum to it exactly.
-func itemShare(total int64, count, index int) int64 {
-	return total*int64(index+1)/int64(count) - total*int64(index)/int64(count)
 }
 
 func payloadHash(value any) string {
@@ -223,13 +207,13 @@ func (s *Service) idempotentJob(ctx context.Context, clientKeyID uint64, key, ha
 	return job, true, nil
 }
 
-// CreateImageJob admits a durable image job on a route whose provider draws
-// resumable images, reserves each image's share of the price and queues it.
+// CreateImageJob admits a durable job for one image on a route whose provider
+// draws resumable images, reserves its price and queues it. Several images
+// are several jobs, which run in parallel on different accounts.
 func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (media.Job, error) {
 	if s.mediaJobs == nil || s.mediaQueue == nil {
 		return media.Job{}, errors.New("图片任务服务未配置")
 	}
-	count := max(1, input.Count)
 	edit := len(input.ImageURLs) > 0
 	operation, capability := media.VideoOperationGenerate, modeldomain.CapabilityImage
 	if edit {
@@ -240,8 +224,6 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 		return media.Job{}, &ImageRequestRejectedError{Err: errors.New("prompt 不能为空")}
 	case len(input.Prompt) > 100000:
 		return media.Job{}, &ImageRequestRejectedError{Err: errors.New("prompt 过长")}
-	case count > media.MaxImageJobItems:
-		return media.Job{}, &ImageRequestRejectedError{Err: fmt.Errorf("n 最多为 %d", media.MaxImageJobItems)}
 	case len(input.ImageURLs) > media.MaxInputImages:
 		return media.Job{}, &ImageRequestRejectedError{Err: fmt.Errorf("最多支持 %d 张输入图片", media.MaxInputImages)}
 	}
@@ -257,9 +239,8 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 	hash := payloadHash(struct {
 		Model, Prompt, Size, Quality string
 		Input                        [sha256.Size]byte
-		Count                        int
 		Params                       media.ImageParams
-	}{input.PublicModel, input.Prompt, input.Size, input.Quality, sha256.Sum256(inputJSON), count, params})
+	}{input.PublicModel, input.Prompt, input.Size, input.Quality, sha256.Sum256(inputJSON), params})
 	if existing, found, err := s.idempotentJob(ctx, input.ClientKey.ID, input.IdempotencyKey, hash); err != nil || found {
 		return existing, err
 	}
@@ -277,7 +258,7 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 		return media.Job{}, &ImageRequestRejectedError{Err: errors.New("该模型不支持异步生图任务，请使用 Images API")}
 	}
 	options := provider.ImageRequestOptions{
-		Edit: edit, Count: count, InputImages: len(input.ImageURLs), HasMask: input.MaskURL != "",
+		Edit: edit, Count: 1, InputImages: len(input.ImageURLs), HasMask: input.MaskURL != "",
 		Size: input.Size, Quality: input.Quality, OutputFormat: input.OutputFormat, Background: input.Background,
 	}
 	var rejection error
@@ -308,9 +289,9 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 	pricingModel := s.providers.PricingModel(route.Provider, route.UpstreamModel)
 	var price audit.PricingResult
 	if edit {
-		price, _ = s.pricing.QuoteImageEdit(route.Provider, pricingModel, "", input.Quality, count, len(input.ImageURLs))
+		price, _ = s.pricing.QuoteImageEdit(route.Provider, pricingModel, "", input.Quality, 1, len(input.ImageURLs))
 	} else {
-		price, _ = s.pricing.QuoteImage(route.Provider, pricingModel, "", input.Quality, count)
+		price, _ = s.pricing.QuoteImage(route.Provider, pricingModel, "", input.Quality, 1)
 	}
 	lease, err := selection.Acquire(ctx, nil, false)
 	if err != nil {
@@ -324,7 +305,7 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 	}
 	now := time.Now().UTC()
 	job := media.Job{
-		ID: ImageJobIDPrefix + token, Kind: media.KindImage, ItemCount: count, RequestID: input.RequestID,
+		ID: ImageJobIDPrefix + token, Kind: media.KindImage, RequestID: input.RequestID,
 		ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name, ClientIP: requestmeta.ClientIP(ctx),
 		AccountID: accountID, AccountName: accountName,
 		Provider: string(route.Provider), Model: modeldomain.ExternalPublicID(route.Provider, route.PublicID), ModelRouteID: route.ID,
@@ -335,25 +316,15 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 	if job.RequestID == "" {
 		job.RequestID = job.ID
 	}
-	var reserved []string
-	releaseReservations := func() {
-		for _, eventID := range reserved {
-			s.cancelBillingReservation(eventID)
-		}
-	}
-	for index := range count {
-		eventID := imageUsageEventID(job.ID, index)
-		ok, err := s.clientKeys.ReserveBilling(ctx, input.ClientKey, eventID, itemShare(price.CostInUSDTicks, count, index), mediaBillingReservationTTL)
-		if err != nil {
-			releaseReservations()
-			return media.Job{}, err
-		}
-		if ok {
-			reserved = append(reserved, eventID)
-		}
+	eventID := imageEventID(job)
+	reserved, err := s.clientKeys.ReserveBilling(ctx, input.ClientKey, eventID, price.CostInUSDTicks, mediaBillingReservationTTL)
+	if err != nil {
+		return media.Job{}, err
 	}
 	if err := s.mediaJobs.CreateMediaJob(ctx, job); err != nil {
-		releaseReservations()
+		if reserved {
+			s.cancelBillingReservation(eventID)
+		}
 		if errors.Is(err, repository.ErrConflict) {
 			if existing, found, findErr := s.idempotentJob(ctx, input.ClientKey.ID, input.IdempotencyKey, hash); findErr != nil || found {
 				return existing, findErr
@@ -367,8 +338,8 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 	return job, nil
 }
 
-// runImageJob draws the job's images one after another on one account,
-// resuming the image in flight from its checkpoint after a crash.
+// runImageJob draws the job's image, resuming it from its checkpoint after a
+// crash.
 func (s *Service) runImageJob(parent context.Context, job media.Job, route modeldomain.Route) {
 	adapter, ok := s.providers.AsyncImages(route.Provider)
 	if !ok {
@@ -380,7 +351,7 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 	ctx, cancel := context.WithTimeout(ctx, imageJobTimeout)
 	defer cancel()
 	ctx, egressTrace := infraegress.WithTrace(ctx)
-	// The job's images share inputs loaded and checked once.
+	// The job's attempts share inputs loaded and checked once.
 	if scoped, ok := adapter.(interface {
 		WithImageJobScope(context.Context) context.Context
 	}); ok {
@@ -401,8 +372,9 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 		Model: route.UpstreamModel, Prompt: job.Prompt, ImageURLs: inputs.ImageURLs, MaskURL: inputs.MaskURL,
 		Size: job.Size, Quality: job.Quality, OutputFormat: job.Params.OutputFormat, Background: job.Params.Background,
 	}
-	for len(job.ResultAssetIDs) < job.ItemCount && !resumeDone(job) {
-		outcome := s.runImageItem(ctx, &job, route, adapter, request, egressTrace)
+	// A worker that died after delivering the image left only the terminal write.
+	if job.ResultAssetID == "" {
+		outcome := s.drawImage(ctx, &job, route, adapter, request, egressTrace)
 		if errors.Is(outcome.err, errJobLost) || errors.Is(context.Cause(ctx), errJobLost) {
 			return
 		}
@@ -421,10 +393,6 @@ func (s *Service) runImageJob(parent context.Context, job media.Job, route model
 			s.endImageJob(parent, &job, outcome.status, outcome.code, outcome.err, outcome.upstreamStatus, outcome.attempts...)
 			return
 		}
-	}
-	if missing := job.ItemCount - len(job.ResultAssetIDs); missing > 0 {
-		s.endImageJob(parent, &job, media.StatusFailed, "partial_result", fmt.Errorf("已重新获取上游生成的图片，其余 %d 张未生成", missing), 0)
-		return
 	}
 	s.endImageJob(parent, &job, media.StatusCompleted, "", nil, 0)
 }
@@ -467,10 +435,9 @@ func (s *Service) saveMediaJob(ctx context.Context, job *media.Job) error {
 	return err
 }
 
-// runImageItem draws the next image. A zero outcome means it was delivered.
-func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeldomain.Route, adapter provider.AsyncImageAdapter, request provider.ImageJobRequest, egressTrace *infraegress.Trace) imageItemOutcome {
+// drawImage draws the job's image. A zero outcome means it was delivered.
+func (s *Service) drawImage(ctx context.Context, job *media.Job, route modeldomain.Route, adapter provider.AsyncImageAdapter, request provider.ImageJobRequest, egressTrace *infraegress.Trace) imageOutcome {
 	startedAt := time.Now()
-	index := len(job.ResultAssetIDs)
 	attempts := newFailureAttemptRecorder(http.MethodPost, "/v1/responses")
 	var cp provider.ImageCheckpoint
 	_ = json.Unmarshal([]byte(job.Checkpoint), &cp)
@@ -486,17 +453,17 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 	var lease *accountLease
 	switch {
 	case cp.Submitted && cp.UpstreamID == "":
-		return imageItemOutcome{status: media.StatusUncertain, code: "submission_uncertain", err: errors.New("上游可能已接收请求，但未记录上游 ID")}
+		return imageOutcome{status: media.StatusUncertain, code: "submission_uncertain", err: errors.New("上游可能已接收请求，但未记录上游 ID")}
 	case cp.Submitted:
 		// Resume on the account that submitted the image.
 		credential, err := s.jobCredential(ctx, *job)
 		if err != nil {
-			return imageItemOutcome{status: media.StatusUncertain, code: "account_unavailable", err: errors.New("提交任务的账号已不可用，无法恢复上游任务")}
+			return imageOutcome{status: media.StatusUncertain, code: "account_unavailable", err: errors.New("提交任务的账号已不可用，无法恢复上游任务")}
 		}
 		request.Credential = credential
 	default:
-		var outcome *imageItemOutcome
-		lease, cp, outcome = s.submitImageItem(ctx, job, route, adapter, request, save, quotaMode, attempts)
+		var outcome *imageOutcome
+		lease, cp, outcome = s.submitImage(ctx, job, route, adapter, request, save, quotaMode, attempts)
 		if outcome != nil {
 			return *outcome
 		}
@@ -509,19 +476,19 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 		lease.Release()
 	}()
 	stageStarted := time.Now()
-	fail := func(code string, err error) imageItemOutcome {
+	fail := func(code string, err error) imageOutcome {
 		if ctx.Err() != nil {
-			return imageItemOutcome{err: context.Cause(ctx)}
+			return imageOutcome{err: context.Cause(ctx)}
 		}
 		_ = attempts.captureResponse(request.Credential, stageStarted, nil, err)
-		return imageItemOutcome{status: media.StatusFailed, code: code, err: err, upstreamStatus: provider.ErrorHTTPStatusOrZero(err), attempts: attempts.snapshot()}
+		return imageOutcome{status: media.StatusFailed, code: code, err: err, upstreamStatus: provider.ErrorHTTPStatusOrZero(err), attempts: attempts.snapshot()}
 	}
 	cp, err := adapter.PollImage(ctx, request, cp)
 	if err != nil {
 		return fail("generation_failed", err)
 	}
 	if err := save(cp); err != nil {
-		return imageItemOutcome{err: err}
+		return imageOutcome{err: err}
 	}
 	var data []byte
 	stageStarted = time.Now()
@@ -542,18 +509,18 @@ func (s *Service) runImageItem(ctx context.Context, job *media.Job, route modeld
 		return fail("media_storage_failed", err)
 	}
 	applyMediaJobEgress(job, egressTrace, route.Provider)
-	job.ResultAssetIDs = append(job.ResultAssetIDs, asset.ID)
+	job.ResultAssetID = asset.ID
 	job.Checkpoint, job.Submitted = "", false
-	job.Progress = min(99, len(job.ResultAssetIDs)*100/job.ItemCount)
+	job.Progress = 99
 	if err := s.saveMediaJob(ctx, job); err != nil {
-		return imageItemOutcome{err: err}
+		return imageOutcome{err: err}
 	}
 	succeeded = true
 	s.consumeMediaQuota(route, job.AccountID, quotaMode)
-	if err := s.recordImageItemAudit(context.WithoutCancel(ctx), *job, index, http.StatusOK, "", time.Since(startedAt).Milliseconds()); err != nil {
-		s.logger.Error("image_usage_record_failed", "job_id", job.ID, "event_id", imageItemEventID(*job, index), "error", err)
+	if err := s.recordImageAudit(context.WithoutCancel(ctx), *job, http.StatusOK, "", time.Since(startedAt).Milliseconds()); err != nil {
+		s.logger.Error("image_usage_record_failed", "job_id", job.ID, "event_id", imageEventID(*job), "error", err)
 	}
-	return imageItemOutcome{}
+	return imageOutcome{}
 }
 
 // isImageOutputFailure reports a fetched image that fails the requested output
@@ -563,16 +530,16 @@ func isImageOutputFailure(err error) bool {
 	return errors.As(err, &output) && output.ImageOutputFailure()
 }
 
-// submitImageItem sends the image from the job's account, failing over to
+// submitImage sends the image from the job's account, failing over to
 // others while nothing has reached the upstream.
-func (s *Service) submitImageItem(ctx context.Context, job *media.Job, route modeldomain.Route, adapter provider.AsyncImageAdapter, request provider.ImageJobRequest, save func(provider.ImageCheckpoint) error, quotaMode string, attempts *failureAttemptRecorder) (*accountLease, provider.ImageCheckpoint, *imageItemOutcome) {
+func (s *Service) submitImage(ctx context.Context, job *media.Job, route modeldomain.Route, adapter provider.AsyncImageAdapter, request provider.ImageJobRequest, save func(provider.ImageCheckpoint) error, quotaMode string, attempts *failureAttemptRecorder) (*accountLease, provider.ImageCheckpoint, *imageOutcome) {
 	var cp provider.ImageCheckpoint
-	stop := func(status media.Status, code string, err error) (*accountLease, provider.ImageCheckpoint, *imageItemOutcome) {
+	stop := func(status media.Status, code string, err error) (*accountLease, provider.ImageCheckpoint, *imageOutcome) {
 		if ctx.Err() != nil {
 			err = context.Cause(ctx)
 			status = ""
 		}
-		return nil, cp, &imageItemOutcome{status: status, code: code, err: err, upstreamStatus: provider.ErrorHTTPStatusOrZero(err), attempts: attempts.snapshot()}
+		return nil, cp, &imageOutcome{status: status, code: code, err: err, upstreamStatus: provider.ErrorHTTPStatusOrZero(err), attempts: attempts.snapshot()}
 	}
 	scope := clientkey.AccountScope{}
 	if job.ClientKeyID > 0 {
@@ -761,23 +728,22 @@ func jobErrorMessage(err error) string {
 	return truncateDiagnosticText(strings.ToValidUTF8(err.Error(), "�"), 512)
 }
 
-// recordImageJobAudits writes the audit of every delivered image and of the
-// image that ended the job; repeated calls are idempotent per event ID.
+// recordImageJobAudits writes the audit of the delivered image, or of the
+// failure that ended the job; repeated calls are idempotent per event ID.
 func (s *Service) recordImageJobAudits(ctx context.Context, job media.Job, upstreamStatus int, attempts ...audit.Attempt) error {
 	durationMS := int64(0)
 	if job.CompletedAt != nil {
 		durationMS = max(int64(0), job.CompletedAt.Sub(job.CreatedAt).Milliseconds())
 	}
-	for index := range job.ResultAssetIDs {
-		if err := s.recordImageItemAudit(ctx, job, index, http.StatusOK, "", 0); err != nil {
+	switch {
+	case job.ResultAssetID != "":
+		if err := s.recordImageAudit(ctx, job, http.StatusOK, "", 0); err != nil {
 			return err
 		}
-	}
-	// A resumed job that delivered its image ends on images it never drew:
-	// the failure that stopped them is already recorded. A cancel is no failure.
-	if job.Status != media.StatusCompleted && job.Status != media.StatusCanceled && len(job.ResultAssetIDs) < job.ItemCount && !resumeDone(job) {
+	case job.Status != media.StatusCompleted && job.Status != media.StatusCanceled:
+		// A cancel is no failure.
 		statusCode := resolveVideoAuditStatusCode(job, upstreamStatus, nil)
-		if err := s.recordImageItemAudit(ctx, job, len(job.ResultAssetIDs), statusCode, job.ErrorCode, durationMS, attempts...); err != nil {
+		if err := s.recordImageAudit(ctx, job, statusCode, job.ErrorCode, durationMS, attempts...); err != nil {
 			return err
 		}
 	}
@@ -786,15 +752,15 @@ func (s *Service) recordImageJobAudits(ctx context.Context, job media.Job, upstr
 	return s.mediaJobs.MarkMediaJobUsageRecorded(markCtx, job.ID, time.Now().UTC())
 }
 
-// recordImageItemAudit bills a delivered image at its share of the reserved
-// quote, or records the failure of the image that ended the job.
-func (s *Service) recordImageItemAudit(ctx context.Context, job media.Job, index, statusCode int, errorCode string, durationMS int64, attempts ...audit.Attempt) error {
+// recordImageAudit bills the delivered image at the reserved quote, or records
+// the failure that ended the job.
+func (s *Service) recordImageAudit(ctx context.Context, job media.Job, statusCode int, errorCode string, durationMS int64, attempts ...audit.Attempt) error {
 	createdAt := time.Now().UTC()
 	if statusCode != http.StatusOK && job.CompletedAt != nil {
 		createdAt = job.CompletedAt.UTC()
 	}
 	record := audit.Record{
-		EventID: imageItemEventID(job, index), RequestID: job.RequestID, ClientKeyID: job.ClientKeyID, ClientKeyName: job.ClientKeyName,
+		EventID: imageEventID(job), RequestID: job.RequestID, ClientKeyID: job.ClientKeyID, ClientKeyName: job.ClientKeyName,
 		ClientIP: job.ClientIP, ModelRouteID: job.ModelRouteID, ModelPublicID: job.Model, ModelUpstreamModel: job.UpstreamModel,
 		Provider: job.Provider, Operation: imageJobOperation(job), UsageSource: audit.UsageSourceNone,
 		AccountID: auditAccountID(job.AccountID), AccountName: job.AccountName, StatusCode: statusCode, ErrorCode: errorCode,
@@ -808,9 +774,7 @@ func (s *Service) recordImageItemAudit(ctx context.Context, job media.Job, index
 	if statusCode == http.StatusOK {
 		record.MediaOutputImages = 1
 		if job.Price != nil && job.Price.Model != "" {
-			share := *job.Price
-			share.CostInUSDTicks = itemShare(job.Price.CostInUSDTicks, job.ItemCount, index)
-			share.Apply(&record)
+			job.Price.Apply(&record)
 		}
 	}
 	return s.audits.Create(ctx, record)
@@ -822,8 +786,8 @@ func (s *Service) releaseJobReservations(job media.Job) {
 		s.cancelBillingReservation("video_usage_" + job.ID)
 		return
 	}
-	for index := len(job.ResultAssetIDs); index < job.ItemCount; index++ {
-		s.cancelBillingReservation(imageItemEventID(job, index))
+	if job.ResultAssetID == "" {
+		s.cancelBillingReservation(imageEventID(job))
 	}
 }
 
@@ -908,7 +872,7 @@ func (s *Service) cancelMediaJob(ctx context.Context, id string, clientKeyID uin
 	if job.Status == media.StatusCanceled {
 		// ponytail: canceled video inputs are left to the 24h input TTL.
 		s.releaseJobReservations(job)
-		// Images delivered before the cancel are billed; their audits may not
+		// An image delivered just before the cancel is billed; its audit may not
 		// be written yet. Reconciliation retries a failed write.
 		if job.Kind == media.KindImage {
 			if err := s.recordImageJobAudits(context.WithoutCancel(ctx), job, 0); err != nil {
@@ -919,8 +883,7 @@ func (s *Service) cancelMediaJob(ctx context.Context, id string, clientKeyID uin
 	return job, nil
 }
 
-// RetryMediaJob resubmits the undelivered part of an uncertain job as a new
-// job of the same client key, deduplicated by idempotencyKey (default: one
+// RetryMediaJob resubmits an uncertain job as a new job of the same client key, deduplicated by idempotencyKey (default: one
 // retry per job). A resumable failed image job is instead resumed in place
 // and returned with its own ID.
 func (s *Service) RetryMediaJob(ctx context.Context, id, idempotencyKey string) (media.Job, error) {
@@ -958,7 +921,7 @@ func (s *Service) RetryMediaJob(ctx context.Context, id, idempotencyKey string) 
 		_ = json.Unmarshal([]byte(inputJSON), &inputs)
 		return s.CreateImageJob(ctx, ImageJobInput{
 			RequestID: job.RequestID, ClientKey: key, PublicModel: job.Model, Prompt: job.Prompt,
-			ImageURLs: inputs.ImageURLs, MaskURL: inputs.MaskURL, Count: job.ItemCount - len(job.ResultAssetIDs),
+			ImageURLs: inputs.ImageURLs, MaskURL: inputs.MaskURL,
 			Size: job.Size, Quality: job.Quality, OutputFormat: job.Params.OutputFormat, Background: job.Params.Background,
 			ResponseModel: job.Params.ResponseModel, ResponseBackground: job.Params.ResponseBackground, IdempotencyKey: idempotencyKey,
 		})
@@ -974,23 +937,23 @@ func (s *Service) RetryMediaJob(ctx context.Context, id, idempotencyKey string) 
 
 // resumeImageJob sends a failed image job back to the workers to poll, fetch
 // and save the image in flight from its checkpoint on the job's account; it
-// is never resubmitted. The image's share of the job's price is reserved
-// again under the resume's event, which its audit settles or its end releases.
+// is never resubmitted. The job's price is reserved again under the resume's
+// event, which its audit settles or its end releases.
 func (s *Service) resumeImageJob(ctx context.Context, job media.Job, key clientkey.Key) (media.Job, error) {
 	if err := s.checkLedgerReady(); err != nil {
 		return media.Job{}, err
 	}
-	job.ResumeItem, job.ResumeGeneration = len(job.ResultAssetIDs), job.Generation
-	eventID := imageItemEventID(job, job.ResumeItem)
+	job.ResumeGeneration = job.Generation
+	eventID := imageEventID(job)
 	amount := int64(0)
 	if job.Price != nil {
-		amount = itemShare(job.Price.CostInUSDTicks, job.ItemCount, job.ResumeItem)
+		amount = job.Price.CostInUSDTicks
 	}
 	reserved, err := s.clientKeys.ReserveBilling(ctx, key, eventID, amount, mediaBillingReservationTTL)
 	if err != nil {
 		return media.Job{}, err
 	}
-	resumed, err := s.mediaJobs.ResumeMediaJob(ctx, job.ID, job.Generation, job.ResumeItem, time.Now().UTC())
+	resumed, err := s.mediaJobs.ResumeMediaJob(ctx, job.ID, job.Generation, time.Now().UTC())
 	if err != nil {
 		// A concurrent resume of the same generation shares the event and its
 		// reservation: the repeated request resolves to that resume.
@@ -1015,42 +978,36 @@ func (s *Service) resumeImageJob(ctx context.Context, job media.Job, key clientk
 	return resumed, nil
 }
 
-// ImageJobOutput reads the delivered images and the usage estimate of a job.
-func (s *Service) ImageJobOutput(ctx context.Context, job media.Job) ([]ImageJobImage, map[string]any, error) {
-	if len(job.ResultAssetIDs) == 0 {
+// ImageJobOutput reads the delivered image (nil before delivery) and the
+// usage estimate of a job.
+func (s *Service) ImageJobOutput(ctx context.Context, job media.Job) (*ImageJobImage, map[string]any, error) {
+	if job.ResultAssetID == "" {
 		return nil, nil, nil
 	}
 	if s.mediaAssets == nil {
 		return nil, nil, errors.New("媒体存储未配置")
 	}
-	images := make([]ImageJobImage, 0, len(job.ResultAssetIDs))
-	sizes := make([]image.Point, 0, len(job.ResultAssetIDs))
-	for _, id := range job.ResultAssetIDs {
-		asset, body, err := s.mediaAssets.OpenImage(ctx, id)
-		if errors.Is(err, mediaapp.ErrAssetNotFound) {
-			// Still delivered and billed: it stays in the usage estimate at the default size.
-			images = append(images, ImageJobImage{Missing: true})
-			sizes = append(sizes, image.Point{})
-			continue
-		}
-		if err != nil {
-			return nil, nil, err
-		}
+	result := &ImageJobImage{Missing: true}
+	asset, body, err := s.mediaAssets.OpenImage(ctx, job.ResultAssetID)
+	switch {
+	case errors.Is(err, mediaapp.ErrAssetNotFound):
+		// Still delivered and billed: it stays in the usage estimate at the default size.
+	case err != nil:
+		return nil, nil, err
+	default:
 		data, err := io.ReadAll(io.LimitReader(body, imageResultMaxBytes))
 		_ = body.Close()
 		if err != nil {
 			return nil, nil, err
 		}
-		item := ImageJobImage{Data: data, MIMEType: asset.MIMEType}
+		result = &ImageJobImage{Data: data, MIMEType: asset.MIMEType}
 		if config, _, err := image.DecodeConfig(bytes.NewReader(data)); err == nil {
-			item.Width, item.Height = config.Width, config.Height
+			result.Width, result.Height = config.Width, config.Height
 		}
-		images = append(images, item)
-		sizes = append(sizes, image.Pt(item.Width, item.Height))
 	}
 	var usage map[string]any
 	if adapter, ok := s.providers.AsyncImages(accountdomain.Provider(job.Provider)); ok {
-		usage = adapter.ImageUsage(job.Prompt, job.InputImageCount, job.Quality, sizes)
+		usage = adapter.ImageUsage(job.Prompt, job.InputImageCount, job.Quality, []image.Point{image.Pt(result.Width, result.Height)})
 	}
-	return images, usage, nil
+	return result, usage, nil
 }
