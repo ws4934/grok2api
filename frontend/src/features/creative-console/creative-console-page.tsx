@@ -276,8 +276,8 @@ export function CreativeConsolePage() {
         <div className="min-h-0 flex-1">
           <div className="h-full" hidden={mode !== "chat"}><ChatPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "chat" ? toolbarElement : null} {...panelProps("chat")} /></div>
           <div className="h-full" hidden={mode !== "image"}><ImagePanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "image" ? toolbarElement : null} {...panelProps("image")} /></div>
-          <div className="h-full" hidden={mode !== "video"}><VideoPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "video" ? toolbarElement : null} grokVoiceRoute={grokVoiceRoute} {...panelProps("video")} /></div>
-          <div className="h-full" hidden={mode !== "voice"}><VoicePanel apiKey={apiKey} modelOptions={modelGroups.voice} /></div>
+          <div className="h-full" hidden={mode !== "video"}><VideoPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "video" ? toolbarElement : null} grokVoiceRoute={grokVoiceRoute} active={mode === "video"} {...panelProps("video")} /></div>
+          <div className="h-full" hidden={mode !== "voice"}><VoicePanel apiKey={apiKey} modelOptions={modelGroups.voice} active={mode === "voice"} /></div>
         </div>
       </section>
     </div>
@@ -1133,7 +1133,8 @@ function ImageJobPoller({ record, apiKey, onSettle }: { record: ImageHistoryReco
   return query.isError ? <ErrorDetail error={describeError(query.error)} onRetry={() => void query.refetch()} /> : null;
 }
 
-function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement, grokVoiceRoute }: CreativePanelProps & HistoryPanelProps & { grokVoiceRoute: boolean }) {
+// Panels stay mounted while hidden; active gates their upstream lookups to the open tab.
+function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement, grokVoiceRoute, active }: CreativePanelProps & HistoryPanelProps & { grokVoiceRoute: boolean; active: boolean }) {
   const { t, i18n } = useTranslation();
   const [action, setAction] = useState<VideoAction>("generate");
   const [prompt, setPrompt] = useState("");
@@ -1191,7 +1192,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
     queryKey: ["creative-console", "voices", apiKey, "grok-voice-latest"],
     queryFn: ({ signal }) => listVoices({ apiKey, model: "grok-voice-latest", signal }),
     // Reference voices come from the grok-voice-latest catalog; without that route the request can only 404.
-    enabled: Boolean(apiKey && action === "generate" && grokVoiceRoute),
+    enabled: Boolean(active && apiKey && action === "generate" && grokVoiceRoute),
     retry: false,
     staleTime: 60_000,
   });
@@ -1731,7 +1732,7 @@ function ClearHistoryButton({ disabled, onConfirm }: { disabled: boolean; onConf
   );
 }
 
-function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" | "modelOptions">) {
+function VoicePanel({ apiKey, modelOptions, active }: Pick<CreativePanelProps, "apiKey" | "modelOptions"> & { active: boolean }) {
   const { t } = useTranslation();
   const [subMode, setSubMode] = useState<"tts" | "stt">("tts");
   // Separate choices so switching sub-mode never overwrites the other mode's model.
@@ -1769,7 +1770,7 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
   const voicesQuery = useQuery({
     queryKey: ["creative-console", "voices", apiKey, activeModel],
     queryFn: ({ signal }) => listVoices({ apiKey, model: activeModel, signal }),
-    enabled: Boolean(apiKey && activeModel) && subMode === "tts",
+    enabled: Boolean(active && apiKey && activeModel) && subMode === "tts",
     retry: false,
     staleTime: 60_000,
   });
