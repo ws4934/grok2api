@@ -63,10 +63,6 @@ export type ProviderAccountUI = {
   AuthHelp?: ComponentType;
 };
 
-export function isAbortError(error: unknown): boolean {
-  return (error instanceof DOMException || error instanceof Error) && error.name === "AbortError";
-}
-
 export function resolveAccountUI<T extends object>(provider: string, modules: Readonly<Record<string, Partial<T>>>, fallback: T): T {
   return { ...fallback, ...modules[provider] };
 }

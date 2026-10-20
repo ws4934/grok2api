@@ -14,11 +14,12 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AccountTypeText } from "@/features/accounts/account-cells";
-import { accountTaskKey, isAbortError, type AccountEditForm, type AccountUIContext, type ProviderAccountUI } from "@/features/accounts/account-ui";
+import { accountTaskKey, type AccountEditForm, type AccountUIContext, type ProviderAccountUI } from "@/features/accounts/account-ui";
 import { detectBuildAccounts, refreshAccountBilling, refreshAllAccountBilling, type AccountDTO, type AccountTaskProgressDTO, type BillingDTO, type BuildDetectItemDTO, type BuildRouteMode, type QuotaDTO } from "@/features/accounts/accounts-api";
 import { webAssociationFilter } from "@/features/accounts/providers/grok-web";
 import { cn } from "@/shared/lib/cn";
 import { formatDateTime, formatNumber, formatTokenMillions } from "@/shared/lib/format";
+import { isAbortError } from "@/shared/api/client";
 
 type DetectCounts = Record<BuildDetectItemDTO["outcome"], number>;
 

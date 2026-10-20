@@ -25,6 +25,10 @@ const eventStreamInactivityTimeoutMs = 60_000;
 
 export type RefreshResult = "refreshed" | "invalid" | "unavailable";
 
+export function isAbortError(error: unknown): boolean {
+  return (error instanceof DOMException || error instanceof Error) && error.name === "AbortError";
+}
+
 export function setAccessToken(token: string | null): void {
   accessToken = token;
 }

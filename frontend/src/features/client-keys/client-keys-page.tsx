@@ -36,8 +36,8 @@ import { useDebouncedValue } from "@/shared/hooks/use-debounced-value";
 import { cn } from "@/shared/lib/cn";
 import { formatDateTime, toDateTimeLocal } from "@/shared/lib/format";
 import { nextTableSort, type SortOrder, type TableSort } from "@/shared/lib/table-sort";
+import { USD_TICKS_PER_DOLLAR } from "@/shared/lib/usd";
 
-const USD_TICKS = 10_000_000_000;
 const MAX_BILLING_LIMIT_USD = 900_000;
 
 type SecretDialogState = {
@@ -134,7 +134,7 @@ export function ClientKeysPage() {
         enabled: values.enabled,
         rpmLimit: values.rpmUnlimited ? 0 : values.rpmLimit,
         maxConcurrent: values.concurrencyUnlimited ? 0 : values.maxConcurrent,
-        billingLimitUsdTicks: values.billingUnlimited ? 0 : Math.round(values.billingLimitUsd * USD_TICKS),
+        billingLimitUsdTicks: values.billingUnlimited ? 0 : Math.round(values.billingLimitUsd * USD_TICKS_PER_DOLLAR),
         allowModelAliases: values.allowModelAliases,
         allowedModelIds: values.allowedModelIds,
         providerScope: values.providerScope,
@@ -222,7 +222,7 @@ export function ClientKeysPage() {
       concurrencyUnlimited: key.maxConcurrent === 0,
       maxConcurrent: key.maxConcurrent > 0 ? key.maxConcurrent : 8,
       billingUnlimited: key.billingLimitUsdTicks === 0,
-      billingLimitUsd: key.billingLimitUsdTicks > 0 ? key.billingLimitUsdTicks / USD_TICKS : 10,
+      billingLimitUsd: key.billingLimitUsdTicks > 0 ? key.billingLimitUsdTicks / USD_TICKS_PER_DOLLAR : 10,
       allowModelAliases: key.allowModelAliases,
       modelScopeMode: key.allowedModelIds.length > 0 ? "restricted" : "all",
       allowedModelIds: key.allowedModelIds,
@@ -643,7 +643,7 @@ export function ClientKeysPage() {
 
 function BillingUsage({ value }: { value: ClientKeyDTO }) {
   const { t, i18n } = useTranslation();
-  const used = value.billedUsageUsdTicks / USD_TICKS;
+  const used = value.billedUsageUsdTicks / USD_TICKS_PER_DOLLAR;
   if (value.billingLimitUsdTicks <= 0) {
     return (
       <div className="min-w-0">
@@ -652,7 +652,7 @@ function BillingUsage({ value }: { value: ClientKeyDTO }) {
       </div>
     );
   }
-  const limit = value.billingLimitUsdTicks / USD_TICKS;
+  const limit = value.billingLimitUsdTicks / USD_TICKS_PER_DOLLAR;
   const percent = Math.min(100, Math.max(0, (used / limit) * 100));
   return (
     <div className="min-w-0 space-y-1.5">

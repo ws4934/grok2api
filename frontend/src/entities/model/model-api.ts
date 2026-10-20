@@ -67,6 +67,16 @@ const decodeModelGroupPage: ApiDecoder<PaginatedDTO<ModelRouteGroupDTO>> = (valu
 const modelAccountValidator = hasShape({ id: isString, name: isString });
 const decodeModelAccounts = createObjectDecoder<{ items: ModelAccountOptionDTO[] }>("model accounts", { items: isArrayOf(modelAccountValidator) });
 
+// uniqueModelsByPublicID keeps the first route of each public model name.
+export function uniqueModelsByPublicID(models: ModelRouteDTO[]): ModelRouteDTO[] {
+  const seen = new Set<string>();
+  return models.filter((model) => {
+    if (seen.has(model.publicId)) return false;
+    seen.add(model.publicId);
+    return true;
+  });
+}
+
 // useModelRoutes lists every route once, shared by the filters and the docs examples.
 export function useModelRoutes() {
   return useQuery({

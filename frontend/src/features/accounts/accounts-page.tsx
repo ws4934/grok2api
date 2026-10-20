@@ -66,9 +66,10 @@ import {
 } from "@/features/accounts/accounts-api";
 import { AccountAuthDialog } from "@/features/accounts/account-auth-dialog";
 import { AccountNameCell } from "@/features/accounts/account-name-cell";
-import { accountEditSchema, accountEgressScopes, accountTaskKey, connectMethods, isAbortError, type AccountEditForm, type AccountFilterId, type AccountTask, type AccountUIContext } from "@/features/accounts/account-ui";
+import { accountEditSchema, accountEgressScopes, accountTaskKey, connectMethods, type AccountEditForm, type AccountFilterId, type AccountTask, type AccountUIContext } from "@/features/accounts/account-ui";
 import { accountUI } from "@/features/accounts/providers";
 import { assignEgressAccounts, listAllEgressNodes, listEgressNodes, listEgressSources, unassignEgressAccounts } from "@/features/settings/settings-api";
+import { isAbortError } from "@/shared/api/client";
 
 type QuotaTask = "sync" | "reset";
 type EgressConfigurationTask = "bind" | "unbind";

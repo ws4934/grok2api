@@ -16,7 +16,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AccountTypeText, QuotaModeBar, QuotaNotSynced, QuotaWindowRow, type QuotaWindow } from "@/features/accounts/account-cells";
-import { accountTaskKey, isAbortError, type AccountEditForm, type AccountFilterDef, type AccountUIContext, type ProviderAccountUI } from "@/features/accounts/account-ui";
+import { accountTaskKey, type AccountEditForm, type AccountFilterDef, type AccountUIContext, type ProviderAccountUI } from "@/features/accounts/account-ui";
 import {
   acceptWebAccountTerms,
   convertWebAccountsToBuild,
@@ -34,6 +34,7 @@ import { WebAccountScriptsDialog } from "@/features/accounts/web-account-scripts
 import { WebAccountSettingsDialogs, WebAccountSettingsMenu, type WebAccountConfirmationAction, type WebAccountConfirmationTarget } from "@/features/accounts/web-account-settings";
 import { cn } from "@/shared/lib/cn";
 import { formatDateTime, formatNumber } from "@/shared/lib/format";
+import { isAbortError } from "@/shared/api/client";
 
 const visibleWebQuotaModes = ["auto", "fast", "expert", "heavy"] as const;
 

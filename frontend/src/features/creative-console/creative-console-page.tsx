@@ -17,7 +17,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { listModels } from "@/entities/model/model-api";
+import { listModels, uniqueModelsByPublicID } from "@/entities/model/model-api";
 import type { ModelRouteDTO } from "@/entities/model/types";
 import { isGrokProvider } from "@/entities/provider/provider-presentation";
 import {
@@ -71,6 +71,7 @@ import { useProviders } from "@/entities/provider/provider-api";
 import { listAllPaginatedItems } from "@/shared/api/paginate";
 import { PageHeader } from "@/shared/components/page-header";
 import { cn } from "@/shared/lib/cn";
+import { isAbortError } from "@/shared/api/client";
 
 type CreativeMode = "chat" | "image" | "video" | "voice";
 // VoicePanel keeps separate TTS/STT model choices itself; the page tracks the other modes.
@@ -1186,7 +1187,8 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const operationParams = adobeOperation ? { resolution: operationResolution, ...(klingEdit ? { aspectRatio: operationAspectRatio } : {}) } : {};
 
   const voicesQuery = useQuery({
-    queryKey: ["creative-console", "video-voices", apiKey],
+    // Same key as the voice panel's grok-voice-latest list, so the two panels share one request.
+    queryKey: ["creative-console", "voices", apiKey, "grok-voice-latest"],
     queryFn: ({ signal }) => listVoices({ apiKey, model: "grok-voice-latest", signal }),
     // Reference voices come from the grok-voice-latest catalog; without that route the request can only 404.
     enabled: Boolean(apiKey && action === "generate" && grokVoiceRoute),
@@ -2134,15 +2136,6 @@ function validDuration(value: string): boolean {
   return Number.isInteger(duration) && duration >= 1 && duration <= 15;
 }
 
-function uniqueModelsByPublicID(models: ModelRouteDTO[]): ModelRouteDTO[] {
-  const seen = new Set<string>();
-  return models.filter((model) => {
-    if (seen.has(model.publicId)) return false;
-    seen.add(model.publicId);
-    return true;
-  });
-}
-
 // Grok routes speak the xAI dialect (search tools, reasoning controls, aspect_ratio/resolution images);
 // other providers get the plain OpenAI-compatible request. Unknown routes default to Grok as before.
 function usesGrokDialect(model: ModelRouteDTO | undefined): boolean {
@@ -2245,10 +2238,6 @@ function parseChatToolActivity(value: unknown): ChatToolActivity[] {
 
 function isReasoningEffort(value: unknown): value is ReasoningEffort {
   return value === "auto" || value === "none" || value === "low" || value === "medium" || value === "high" || value === "xhigh";
-}
-
-function isAbortError(error: unknown): boolean {
-  return (error instanceof DOMException || error instanceof Error) && error.name === "AbortError";
 }
 
 function hasChatStreamContent(snapshot: ChatStreamSnapshot): boolean {
