@@ -14,6 +14,9 @@ type buildPromptCacheRoute struct {
 	clientDeclaredTools map[string]struct{}
 }
 
+// prepareBuildPromptCacheRoute writes the client's prompt_cache_key and, for
+// plain-text conversations, the internal tools that select the cache-capable
+// route, encoding the body once.
 func prepareBuildPromptCacheRoute(body []byte, operation, model, promptCacheKey string, allowClientTools bool) ([]byte, buildPromptCacheRoute, error) {
 	route := buildPromptCacheRoute{
 		injectedToolTypes:   make(map[string]struct{}),
@@ -42,34 +45,38 @@ func prepareBuildPromptCacheRoute(body []byte, operation, model, promptCacheKey 
 		}
 	}
 
-	// Hide upstream internal subcalls even when the client explicitly declares x_search.
-	// Cache routing itself applies only to plain-text conversations with a stable cache session identity.
-	if strings.TrimSpace(promptCacheKey) == "" || !isBuildCacheConversationOperation(operation) || isBuildCacheMediaModel(model) || hasBuildCacheToolType(tools, "image_generation") {
+	key := strings.TrimSpace(promptCacheKey)
+	if key == "" {
 		return body, route, nil
 	}
+	payload["prompt_cache_key"] = mustJSON(key)
 
-	if len(tools) == 0 {
-		// A tool-free request uses none to select the cache-capable route without granting search capability.
-		tools = append(tools, json.RawMessage(`{"type":"web_search"}`), json.RawMessage(`{"type":"x_search"}`))
-		payload["tool_choice"] = mustJSON("none")
-		route.injectedToolTypes["web_search"] = struct{}{}
-		route.injectedToolTypes["x_search"] = struct{}{}
-		route.filterXSearch = true
-	} else if !hasBuildCacheToolType(tools, "x_search") && (allowClientTools || hasBuildCacheToolType(tools, "web_search")) {
-		// With client tools, add only the x_search route required by the official Build behavior and preserve
-		// the original tool_choice. Do not also expose web_search.
-		tools = append(tools, json.RawMessage(`{"type":"x_search"}`))
-		route.injectedToolTypes["x_search"] = struct{}{}
-		route.filterXSearch = true
-	}
-	payload["tools"] = mustJSON(tools)
-	if _, injected := route.injectedToolTypes["x_search"]; injected {
-		updatedChoice, choiceErr := appendBuildCacheXSearchToAllowedTools(payload["tool_choice"])
-		if choiceErr != nil {
-			return nil, route, choiceErr
+	// Hide upstream internal subcalls even when the client explicitly declares x_search.
+	// Cache routing itself applies only to plain-text conversations with a stable cache session identity.
+	if isBuildCacheConversationOperation(operation) && !isBuildCacheMediaModel(model) && !hasBuildCacheToolType(tools, "image_generation") {
+		if len(tools) == 0 {
+			// A tool-free request uses none to select the cache-capable route without granting search capability.
+			tools = append(tools, json.RawMessage(`{"type":"web_search"}`), json.RawMessage(`{"type":"x_search"}`))
+			payload["tool_choice"] = mustJSON("none")
+			route.injectedToolTypes["web_search"] = struct{}{}
+			route.injectedToolTypes["x_search"] = struct{}{}
+			route.filterXSearch = true
+		} else if !hasBuildCacheToolType(tools, "x_search") && (allowClientTools || hasBuildCacheToolType(tools, "web_search")) {
+			// With client tools, add only the x_search route required by the official Build behavior and preserve
+			// the original tool_choice. Do not also expose web_search.
+			tools = append(tools, json.RawMessage(`{"type":"x_search"}`))
+			route.injectedToolTypes["x_search"] = struct{}{}
+			route.filterXSearch = true
 		}
-		if len(updatedChoice) > 0 {
-			payload["tool_choice"] = updatedChoice
+		payload["tools"] = mustJSON(tools)
+		if _, injected := route.injectedToolTypes["x_search"]; injected {
+			updatedChoice, choiceErr := appendBuildCacheXSearchToAllowedTools(payload["tool_choice"])
+			if choiceErr != nil {
+				return nil, route, choiceErr
+			}
+			if len(updatedChoice) > 0 {
+				payload["tool_choice"] = updatedChoice
+			}
 		}
 	}
 	encoded, err := json.Marshal(payload)

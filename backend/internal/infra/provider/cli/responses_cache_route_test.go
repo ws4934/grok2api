@@ -143,6 +143,14 @@ func TestPrepareBuildPromptCacheRouteRespectsBoundaries(t *testing.T) {
 			if strings.Contains(string(body), `"x_search"`) || route.filterXSearch || len(route.injectedToolTypes) != 0 {
 				t.Fatalf("unexpected cache route: body=%s route=%#v", body, route)
 			}
+			// The client key is still forwarded where cache routing does not apply.
+			var payload map[string]any
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if key, _ := payload["prompt_cache_key"].(string); key != test.key {
+				t.Fatalf("prompt_cache_key = %q, want %q", key, test.key)
+			}
 		})
 	}
 }

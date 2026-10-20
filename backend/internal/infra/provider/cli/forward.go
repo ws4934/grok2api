@@ -95,14 +95,6 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 				}
 				return invalidResponsesResponse(err), nil
 			}
-			body, err = injectPromptCacheKey(body, request.PromptCacheKey)
-			if err != nil {
-				err = fmt.Errorf("写入 prompt_cache_key: %w", err)
-				if request.Operation == conversation.OperationChat || request.Operation == conversation.OperationMessages {
-					return invalidConversationResponse(request.Operation, err), nil
-				}
-				return invalidResponsesResponse(err), nil
-			}
 		}
 	}
 	if compactionRequested {
@@ -516,20 +508,4 @@ func invalidConversationResponse(operation string, err error) *provider.Response
 		Header: http.Header{"Content-Type": []string{"application/json"}, "Content-Length": []string{strconv.Itoa(len(data))}},
 		Body:   io.NopCloser(bytes.NewReader(data)),
 	}
-}
-
-func injectPromptCacheKey(body []byte, clientKey string) ([]byte, error) {
-	key := strings.TrimSpace(clientKey)
-	if key == "" {
-		return body, nil
-	}
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
-	}
-	if payload == nil {
-		payload = make(map[string]json.RawMessage)
-	}
-	payload["prompt_cache_key"] = mustJSON(key)
-	return json.Marshal(payload)
 }
