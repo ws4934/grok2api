@@ -226,11 +226,11 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
   核对官网后改表，并用线上条目更新 `testdata/discovery-reviewed.json`。
 - **参数校验**：
   - 图像：显式给出但模型不支持的 `aspect_ratio` / `resolution`、超过 schema 上限的 `n`、不支持的输入图 / 蒙版 / 透明背景直接 400；未给比例时按 `size` 取最接近的比例。不支持 `stream` / `partial_images`。
-  - 视频：首帧（`image`）、尾帧（`last_frame`，必须同时给 `image`）、参考图与参考视频（`reference_videos`）按表里的数量与素材总数上限校验；`duration` / `aspect_ratio` / `resolution` 没传时用模型默认值（Kling 5 秒、Veo 8 秒、Seedance 4 秒；比例 16:9；分辨率通常 720p），传了但不支持的就近对齐（如 2K 取最高档 1080p）；入队前就选定实际值，任务记录、计费与结果里的 `video.duration` 都用它。参考视频只对 Seedance 2.0 / 2.0 Fast / 2.5 开放（MP4 或 QuickTime，上传到 `/v2/storage/video`，以 `source` 用途引用）。Seedance 与 Veo 3.1 的首尾帧不能与参考图、参考视频同时使用（与官网一致）；Seedance 2.5 按官网只开放 9 张参考图、3 个参考视频、合计 12 个。Seedance 官方要求参考视频 480–720p、总时长 2–15 秒，由 Adobe 校验并返回原因。不支持 `reference_audios`。
+  - 视频：首帧（`image`）、尾帧（`last_frame`，必须同时给 `image`）、参考图与参考视频（`reference_videos`）按表里的数量与素材总数上限校验；`duration` / `aspect_ratio` / `resolution` 没传时用模型默认值（Kling 5 秒、Veo 8 秒、Seedance 4 秒；比例 16:9；分辨率通常 720p），传了但不支持的就近对齐（如 2K 取最高档 1080p）；入队前就选定实际值，任务记录、计费与结果里的 `video.duration` 都用它。参考视频只对 Seedance 2.0 / 2.0 Fast / 2.5 开放（MP4 或 QuickTime，上传到 `/v2/storage/video`，以 `source` 用途引用）。Seedance 与 Veo 3.1 的首尾帧不能与参考图、参考视频同时使用（与官网一致）；Seedance 2.5 按官网只开放 9 张参考图、3 个参考视频、合计 12 个。官网前端还要求 Seedance 参考视频 480–720p、总时长 2–15 秒；网关不预检，超限时以 Adobe 的返回为准。不支持 `reference_audios`。
 - **视频编辑与延长**（`/v1/videos/edits`、`/v1/videos/extensions`，与官网一样按操作换上游版本，路由不变）：
-  - `seedance-2.5`：编辑提交到 `seedance/seedance_2.5_editing`，延长提交到 `seedance/seedance_2.5_extension`（官网未开放延长，按 schema 接）。比例固定 auto，分辨率 480p / 720p（默认 720p）；延长时长 4–30 秒，默认 4 秒。
-  - `kling-3.0-omni`：编辑提交到 `kling/kling_v3_omni_v2v_edit`。可选 16:9 / 9:16 / 1:1 与 720p / 1080p（默认 16:9、720p），保留原音轨（`keepAudio`）。不支持延长。
-  - 源视频上传到 `/v2/storage/video`，以 `source` 用途引用；`generationMetadata.submodule` 为 `ff-video-editor`。编辑的时长跟随源视频，传 `duration` 返回 400。官网对源视频的要求（Seedance 480–1080p、4–30 秒；Kling 720–2160p、3–10 秒）由 Adobe 校验并返回原因。与 Grok 一样，编辑与延长不计费。
+  - `seedance-2.5`：编辑提交到 `seedance/seedance_2.5_editing`，延长提交到 `seedance/seedance_2.5_extension`（官网未开放延长，按 schema 接）。比例固定 auto，分辨率 480p / 720p（默认 720p）；延长时长 4–30 秒，默认 4 秒。编辑按官网默认不另生成音轨（`generateAudio: false`），延长与生成一样生成音轨。
+  - `kling-3.0-omni`：编辑提交到 `kling/kling_v3_omni_v2v_edit`。可选 16:9 / 9:16 / 1:1 与 720p / 1080p（默认 16:9、720p；竖屏或方形源视频请传与之一致的 `aspect_ratio`），保留原音轨（`keepAudio`）。不支持延长。
+  - 源视频上传到 `/v2/storage/video`，以 `source` 用途引用；`generationMetadata.submodule` 为 `ff-video-editor`。编辑的时长跟随源视频，传 `duration` 返回 400。源视频与其他输入一样受网关单个文件 20 MiB 的上限（Adobe 本身收到 200 MiB）。官网前端对源视频的要求（Seedance 480–1080p、4–30 秒；Kling 720–2160p、3–10 秒）网关不预检，超限时以 Adobe 的返回为准。与 Grok 一样，编辑与延长不计费。
 - 输入图支持 Base64 data URI 与 `https` URL（经带 SSRF 防护的下载器，不走账号出口），只接受 PNG/JPEG/WebP。
 - Veo 3.1 带参考图时固定 16:9、8 秒，Veo 3.1 Fast 不接受参考图；`generateAudio` 按 schema 默认值（Kling 3.0 / Omni 关闭，其余开启）。图像 4K：Nano Banana Pro / 2 / 2.1 按 schema 的 4K 尺寸（如 16:9 为 5504×3072）；GPT Image 2 / 2.5 的 4K 取 schema 上限内的最大尺寸（边长 ≤3840、总像素 ≤8,294,400，如 16:9 为 3840×2160、1:1 为 2880×2880），官网前端只开放到 1K/2K；推导尺寸超限时按比例缩进上限。
 - 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"；价格按上游模型（`modelId/版本`）存储。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口，所有 Adobe 路由都消费它。
