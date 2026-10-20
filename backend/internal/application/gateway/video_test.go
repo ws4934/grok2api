@@ -252,6 +252,16 @@ func TestRoutesForVideoParametersKeepsCompatibleSameNameProviders(t *testing.T) 
 
 // 不传 duration 时用模型默认值，计费和任务记录也用它：Kling 3.0 默认 5 秒（以前网关先填
 // 8 秒，就按 8 秒生成和计费）。
+// An over-long prompt is a client error (400), not an upstream failure.
+func TestCreateVideoRejectsAnOverlongPromptAsInvalid(t *testing.T) {
+	service := NewService(nil, nil, nil, nil, nil, nil, nil, 3)
+	service.ConfigureMedia(&videoUsageRepository{}, 1)
+	_, err := service.CreateVideo(context.Background(), VideoInput{PublicModel: "grok-imagine-video", Prompt: strings.Repeat("a", 100001)})
+	if !errors.Is(err, ErrVideoParameterInvalid) {
+		t.Fatalf("err = %v, want ErrVideoParameterInvalid", err)
+	}
+}
+
 func TestCreateVideoBillsTheParametersTheProviderPicks(t *testing.T) {
 	ctx := context.Background()
 	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "video-params.db"))
@@ -554,13 +564,6 @@ func TestEncodeDecodeVideoInputPreservesReferenceAudioAndVideo(t *testing.T) {
 	videoURL = decodeVideoInputs(encoded).videoURL
 	if videoURL != media.InputReference("source-video") {
 		t.Fatalf("extension video = %q", videoURL)
-	}
-
-	if err := validateVideoReferenceAudios([]string{"eve", ""}); err == nil {
-		t.Fatal("blank reference voice was accepted")
-	}
-	if err := validateVideoReferenceAudios([]string{"a", "b", "c", "d"}); err == nil {
-		t.Fatal("too many reference voices were accepted")
 	}
 }
 

@@ -75,53 +75,12 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	default:
 		return media.Job{}, fmt.Errorf("不支持的视频操作")
 	}
+	// The HTTP handler enforces the input combination rules; RetryMediaJob
+	// replays inputs that already passed them.
 	if len(input.Prompt) > 100000 {
-		return media.Job{}, fmt.Errorf("prompt 过长")
+		return media.Job{}, fmt.Errorf("%w: prompt 过长", ErrVideoParameterInvalid)
 	}
 	hasLastFrame := strings.TrimSpace(input.LastFrameURL) != ""
-	if hasLastFrame && (operation != provider.VideoOperationGenerate || strings.TrimSpace(input.ImageURL) == "") {
-		return media.Job{}, fmt.Errorf("last_frame 只能用于视频生成，且必须同时提供 image（首帧）")
-	}
-	if len(input.ReferenceVideoURLs) > 0 {
-		switch {
-		case operation != provider.VideoOperationGenerate:
-			return media.Job{}, fmt.Errorf("reference_videos 只能用于视频生成")
-		case len(input.ReferenceVideoURLs) > media.MaxReferenceVideos:
-			return media.Job{}, fmt.Errorf("reference_videos 最多 %d 个", media.MaxReferenceVideos)
-		case strings.TrimSpace(input.Prompt) == "":
-			return media.Job{}, fmt.Errorf("参考视频生成必须提供 prompt")
-		}
-	}
-	if operation == provider.VideoOperationGenerate {
-		hasImage := strings.TrimSpace(input.ImageURL) != ""
-		hasRefs := len(input.ReferenceURLs) > 0
-		hasRefAudio := len(input.ReferenceAudios) > 0
-		if hasImage && (hasRefs || hasRefAudio) {
-			return media.Job{}, fmt.Errorf("image 不能与 reference_images/reference_audios 同时使用")
-		}
-		if (hasRefs || hasRefAudio) && len(input.Prompt) == 0 {
-			return media.Job{}, fmt.Errorf("参考图/参考音频视频必须提供 prompt")
-		}
-		if len(input.Prompt) == 0 && !hasImage && !hasRefs && !hasRefAudio {
-			return media.Job{}, fmt.Errorf("文本生视频必须提供 prompt；图片生视频可以省略 prompt")
-		}
-		if strings.TrimSpace(input.VideoURL) != "" {
-			return media.Job{}, fmt.Errorf("视频生成不支持 video 输入")
-		}
-		if err := validateVideoReferenceAudios(input.ReferenceAudios); err != nil {
-			return media.Job{}, err
-		}
-	} else {
-		if strings.TrimSpace(input.Prompt) == "" {
-			return media.Job{}, fmt.Errorf("视频编辑/延长必须提供 prompt")
-		}
-		if strings.TrimSpace(input.VideoURL) == "" {
-			return media.Job{}, fmt.Errorf("视频编辑/延长必须提供 video")
-		}
-		if strings.TrimSpace(input.ImageURL) != "" || len(input.ReferenceURLs) > 0 || len(input.ReferenceAudios) > 0 {
-			return media.Job{}, fmt.Errorf("视频编辑/延长不支持 image、reference_images 或 reference_audios")
-		}
-	}
 	routes, err := s.models.GetByPublicIDCandidates(ctx, input.PublicModel)
 	if err != nil {
 		return media.Job{}, ErrModelNotFound

@@ -255,18 +255,6 @@ func (s *Service) resolveVideoJobInputs(ctx context.Context, operation provider.
 	return out, nil
 }
 
-func validateVideoReferenceAudios(values []string) error {
-	if len(values) > 3 {
-		return fmt.Errorf("reference_audios 最多 3 个")
-	}
-	for _, raw := range values {
-		if strings.TrimSpace(raw) == "" {
-			return fmt.Errorf("reference_audios.voice_id 不能为空")
-		}
-	}
-	return nil
-}
-
 func normalizeVideoReferenceAudios(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, raw := range values {
