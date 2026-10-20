@@ -166,6 +166,44 @@ func TestImageOutputFormatRoundTrips(t *testing.T) {
 	}
 }
 
+// eachAlphaRow must report the alpha the per-pixel At loop it replaced read, for
+// every pixel type and for bounds that do not start at the origin.
+func TestEachAlphaRowMatchesAt(t *testing.T) {
+	nrgba := image.NewNRGBA(image.Rect(3, 5, 40, 30))
+	nrgba.SetNRGBA(10, 10, color.NRGBA{R: 9, A: 128})
+	nrgba.SetNRGBA(39, 29, color.NRGBA{A: 255})
+	rgba := image.NewRGBA(image.Rect(-2, 2, 9, 9))
+	rgba.SetRGBA(0, 4, color.RGBA{R: 7, A: 200})
+	deep := image.NewNRGBA64(image.Rect(0, 0, 4, 3))
+	deep.SetNRGBA64(1, 1, color.NRGBA64{A: 1})
+	deep.SetNRGBA64(2, 2, color.NRGBA64{A: 0xfffe})
+	paletted := image.NewPaletted(image.Rect(1, 1, 5, 4), color.Palette{color.Transparent, color.NRGBA{G: 9, A: 90}})
+	paletted.SetColorIndex(2, 2, 1)
+	for _, img := range []image.Image{nrgba, nrgba.SubImage(image.Rect(8, 8, 20, 12)), rgba, deep, paletted, image.NewGray(image.Rect(0, 0, 3, 2))} {
+		bounds, next := img.Bounds(), img.Bounds().Min.Y
+		eachAlphaRow(img, func(y int, alpha []uint16) bool {
+			if y != next || len(alpha) != bounds.Dx() {
+				t.Fatalf("%T %v: row %d with %d pixels, want row %d", img, bounds, y, len(alpha), next)
+			}
+			for i, got := range alpha {
+				if _, _, _, want := img.At(bounds.Min.X+i, y).RGBA(); uint32(got) != want {
+					t.Fatalf("%T %v at %d,%d: alpha %d, want %d", img, bounds, bounds.Min.X+i, y, got, want)
+				}
+			}
+			next++
+			return true
+		})
+		if next != bounds.Max.Y {
+			t.Fatalf("%T %v: stopped before row %d", img, bounds, next)
+		}
+	}
+	rows := 0
+	eachAlphaRow(nrgba, func(int, []uint16) bool { rows++; return false })
+	if rows != 1 {
+		t.Fatalf("visited %d rows after fn returned false", rows)
+	}
+}
+
 func TestImageOutputWebPEdgeLimit(t *testing.T) {
 	source := image.NewNRGBA(image.Rect(0, 0, 16385, 1))
 	var input bytes.Buffer

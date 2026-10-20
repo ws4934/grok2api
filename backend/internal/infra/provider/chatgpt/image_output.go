@@ -132,15 +132,16 @@ func (o ImageOutputOptions) applyDecoded(download downloadedImage) ([]byte, stri
 	}
 	if o.Background == "transparent" || o.Background == "opaque" {
 		var transparent, visible, nonOpaque bool
-		bounds := decoded.Bounds()
-		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-			for x := bounds.Min.X; x < bounds.Max.X; x++ {
-				_, _, _, alpha := decoded.At(x, y).RGBA()
-				transparent = transparent || alpha == 0
-				visible = visible || alpha > 0
-				nonOpaque = nonOpaque || alpha < 65535
+		eachAlphaRow(decoded, func(_ int, alpha []uint16) bool {
+			for _, a := range alpha {
+				transparent, visible, nonOpaque = transparent || a == 0, visible || a > 0, nonOpaque || a < 0xffff
 			}
-		}
+			// Stop once the requested background is decided.
+			if o.Background == "opaque" {
+				return !nonOpaque
+			}
+			return !transparent || !visible
+		})
 		if o.Background == "transparent" && (!transparent || !visible) {
 			return nil, "", invalidImageOutput("OpenAI image output did not satisfy background=transparent: expected transparent and visible pixels")
 		}
@@ -175,6 +176,35 @@ func (o ImageOutputOptions) applyDecoded(download downloadedImage) ([]byte, stri
 		return nil, "", invalidImageOutput("OpenAI image output could not be encoded as " + target + " within the size limit")
 	}
 	return output.Bytes(), "image/" + target, nil
+}
+
+// eachAlphaRow calls fn with the alpha of each row of img, as color.Color.RGBA
+// reports it, until fn returns false. *image.NRGBA and *image.RGBA, which the
+// decoders return for 8-bit images, are read straight from Pix: At would box
+// every pixel.
+func eachAlphaRow(img image.Image, fn func(y int, alpha []uint16) bool) {
+	bounds := img.Bounds()
+	row := make([]uint16, bounds.Dx())
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		var pix []uint8
+		switch m := img.(type) {
+		case *image.NRGBA:
+			pix = m.Pix[m.PixOffset(bounds.Min.X, y):]
+		case *image.RGBA:
+			pix = m.Pix[m.PixOffset(bounds.Min.X, y):]
+		}
+		for i := range row {
+			if pix == nil {
+				_, _, _, a := img.At(bounds.Min.X+i, y).RGBA()
+				row[i] = uint16(a)
+				continue
+			}
+			row[i] = uint16(pix[4*i+3]) * 0x101
+		}
+		if !fn(y, row) {
+			return
+		}
+	}
 }
 
 func gcd(a, b int) int {

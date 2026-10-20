@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"image"
-	"image/color"
 	"image/png"
 )
 
@@ -55,13 +54,14 @@ func ParseImageMask(raw []byte, inputs []OpenAIImageInput) (*ImageMask, error) {
 	}
 	web := image.NewGray(decoded.Bounds())
 	selected := false
-	for y := 0; y < cfg.Height; y++ {
-		for x := 0; x < cfg.Width; x++ {
-			_, _, _, alpha := decoded.At(x, y).RGBA()
-			web.SetGray(x, y, color.Gray{Y: uint8(alpha >> 8)})
-			selected = selected || alpha == 0
+	eachAlphaRow(decoded, func(y int, alpha []uint16) bool {
+		line := web.Pix[web.PixOffset(web.Rect.Min.X, y):]
+		for x, a := range alpha {
+			line[x] = uint8(a >> 8)
+			selected = selected || a == 0
 		}
-	}
+		return true
+	})
 	if !selected {
 		return invalid("mask must contain a fully transparent editing region")
 	}
