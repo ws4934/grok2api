@@ -1,6 +1,9 @@
 import { decodeRoutePrice, priceComponentKeys, priceOperations, type ModelPriceDTO, type PriceComponents, type PriceOperation } from "@/entities/model/model-price";
 import type { ModelRouteDTO, ModelRouteGroupDTO } from "@/entities/model/types";
+import { useQuery } from "@tanstack/react-query";
+
 import { ApiError, apiEventStream, apiRequest, type PaginatedDTO } from "@/shared/api/client";
+import { listAllPaginatedItems } from "@/shared/api/paginate";
 import { createObjectDecoder, createPaginatedDecoder, createValidatedDecoder, decodeBooleanResult, decodeCountResult, hasShape, isArrayOf, isBoolean, isNumber, isOneOf, isOptional, isString, type ApiDecoder } from "@/shared/api/decoder";
 import { i18n } from "@/shared/i18n";
 import type { SortOrder } from "@/shared/lib/table-sort";
@@ -63,6 +66,15 @@ const decodeModelGroupPage: ApiDecoder<PaginatedDTO<ModelRouteGroupDTO>> = (valu
 };
 const modelAccountValidator = hasShape({ id: isString, name: isString });
 const decodeModelAccounts = createObjectDecoder<{ items: ModelAccountOptionDTO[] }>("model accounts", { items: isArrayOf(modelAccountValidator) });
+
+// useModelRoutes lists every route once, shared by the filters and the docs examples.
+export function useModelRoutes() {
+  return useQuery({
+    queryKey: ["models", "all-routes"],
+    queryFn: () => listAllPaginatedItems((page, pageSize) => listModels({ page, pageSize })),
+    staleTime: 60_000,
+  });
+}
 
 export function listModels(input: ListModelsInput): Promise<PaginatedDTO<ModelRouteDTO>> {
   const query = new URLSearchParams({ page: String(input.page), pageSize: String(input.pageSize) });

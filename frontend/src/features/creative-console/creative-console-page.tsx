@@ -68,6 +68,7 @@ import { getClientKeySecret, listClientKeys, type ClientKeyDTO } from "@/feature
 import { importVideoInputFromURL, listMediaAssets, uploadMediaInput } from "@/features/media/media-api";
 import { mediaAssetPath } from "@/features/media/media-model";
 import { useProviders } from "@/entities/provider/provider-api";
+import { listAllPaginatedItems } from "@/shared/api/paginate";
 import { PageHeader } from "@/shared/components/page-header";
 import { cn } from "@/shared/lib/cn";
 
@@ -320,6 +321,8 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
   const requestSeqRef = useRef(0);
   const activeRequestSeqRef = useRef(0);
   const restoredInitialModelRef = useRef(false);
+  // Opening a conversation keeps its stored updatedAt; only changed messages move it to the top.
+  const loadedMessagesRef = useRef({ messages: initialHistory.active.messages, updatedAt: initialHistory.active.updatedAt });
   const selectedModelRoute = useMemo(() => modelOptions.find((option) => option.publicId === model), [model, modelOptions]);
   const basicProtocol = !usesGrokDialect(selectedModelRoute);
   const fixedReasoningModel = isFixedReasoningConsoleModel(selectedModelRoute);
@@ -341,7 +344,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
         id: sessionId,
         title: createChatSessionTitle(messages),
         createdAt: sessionCreatedAt,
-        updatedAt: currentTimestamp(),
+        updatedAt: savedAt(messages, loadedMessagesRef.current),
         model,
         promptCacheKey,
         reasoningEffort: effectiveReasoningEffort,
@@ -671,7 +674,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
         id: sessionId,
         title: createChatSessionTitle(messages),
         createdAt: sessionCreatedAt,
-        updatedAt: currentTimestamp(),
+        updatedAt: savedAt(messages, loadedMessagesRef.current),
         model,
         promptCacheKey,
         reasoningEffort: effectiveReasoningEffort,
@@ -703,7 +706,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
         id: sessionId,
         title: createChatSessionTitle(messages),
         createdAt: sessionCreatedAt,
-        updatedAt: currentTimestamp(),
+        updatedAt: savedAt(messages, loadedMessagesRef.current),
         model,
         promptCacheKey,
         reasoningEffort: effectiveReasoningEffort,
@@ -719,6 +722,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
     setSessionId(target.id);
     setSessionCreatedAt(target.createdAt);
     setMessages(target.messages);
+    loadedMessagesRef.current = { messages: target.messages, updatedAt: target.updatedAt };
     setPromptCacheKey(target.promptCacheKey || createCreativeCacheKey());
     setReasoningEffort(target.reasoningEffort);
     setWebSearch(target.webSearch);
@@ -1180,10 +1184,6 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const operationResolution = operationResolutions.includes(resolution) ? resolution : "720p";
   const operationAspectRatio = klingEditAspectRatios.includes(aspectRatio) ? aspectRatio : "16:9";
   const operationParams = adobeOperation ? { resolution: operationResolution, ...(klingEdit ? { aspectRatio: operationAspectRatio } : {}) } : {};
-
-  useEffect(() => {
-    if (activeModel && activeModel !== model) onModelChange(activeModel);
-  }, [activeModel, model, onModelChange]);
 
   const voicesQuery = useQuery({
     queryKey: ["creative-console", "video-voices", apiKey],
@@ -1846,7 +1846,7 @@ function VoicePanel({ apiKey, modelOptions }: Pick<CreativePanelProps, "apiKey" 
           <Textarea id="voice-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t("creativeConsole.voicePlaceholder")} className="min-h-24 resize-none border-0 bg-transparent px-4 py-3 text-sm focus-visible:ring-0" />
         ) : (
           <div className="flex items-center gap-2 px-4 py-3">
-            <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac" className="hidden" onChange={(event) => setAudioFile(event.target.files?.[0] ?? null)} />
+            <input ref={fileInputRef} type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac" className="hidden" onChange={(event) => { setAudioFile(event.target.files?.[0] ?? null); event.target.value = ""; }} />
             <Button type="button" variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()}><Upload />{audioFile ? audioFile.name : t("creativeConsole.uploadAudio")}</Button>
             {audioFile ? <Button type="button" variant="ghost" size="icon" aria-label={t("creativeConsole.clearAudio")} onClick={() => setAudioFile(null)}><X /></Button> : null}
           </div>
@@ -2165,8 +2165,9 @@ function createCreativeCacheKey(): string {
   return `creative-console-${createCreativeMessageId()}`;
 }
 
-function currentTimestamp(): number {
-  return Date.now();
+// savedAt is the updatedAt to store: unchanged loaded messages keep their timestamp.
+function savedAt(messages: ConversationMessage[], loaded: { messages: ConversationMessage[]; updatedAt: number }): number {
+  return messages === loaded.messages ? loaded.updatedAt : Date.now();
 }
 
 function createBlankChatSession(model: string): ChatSession {
@@ -2357,14 +2358,4 @@ function safeAssistantImage(value: string | null): string {
 function boundedTableSpan(value: string | null): string {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= 100 ? String(parsed) : "";
-}
-
-async function listAllPaginatedItems<T>(loadPage: (page: number, pageSize: number) => Promise<{ items: T[]; total: number }>): Promise<T[]> {
-  const items: T[] = [];
-  for (let page = 1; page <= 50; page += 1) {
-    const result = await loadPage(page, 100);
-    items.push(...result.items);
-    if (result.items.length === 0 || items.length >= result.total) break;
-  }
-  return items;
 }

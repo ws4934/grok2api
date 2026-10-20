@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { listModels } from "@/entities/model/model-api";
+import { useModelRoutes } from "@/entities/model/model-api";
 import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api";
 import { providerLabel, providerShortLabel } from "@/entities/provider/provider-presentation";
 import { listClientKeys } from "@/features/client-keys/client-keys-api";
@@ -91,11 +91,7 @@ export function RequestAuditsPage() {
     placeholderData: (previous) => previous,
     gcTime: AUDIT_SUMMARY_CACHE_TIME_MS,
   });
-  const modelOptionsQuery = useQuery({
-    queryKey: ["models", "audit-filter"],
-    queryFn: () => listModels({ page: 1, pageSize: 100 }),
-    staleTime: 60_000,
-  });
+  const modelOptionsQuery = useModelRoutes();
   // 选中的密钥/账号以 #ID 精确筛选；名称或数字 ID 的文字仍按模糊匹配。
   const keyFilterOption = useLookupFilter("client-keys", t("audits.key"), t("audits.keyFilterPlaceholder"), listClientKeys, (key) => ({ value: `#${key.id}`, label: key.name || key.prefix, description: `#${key.id} · ${key.prefix}` }));
   // 账号范围覆盖全部 provider，审计记录可能来自任一 provider 的账号。
@@ -108,7 +104,7 @@ export function RequestAuditsPage() {
   const estimatedCostTicks = summary?.usage.estimatedCostInUsdTicks ?? 0;
   const hasEstimatedCost = (summary?.pricing.pricedRequests ?? 0) > 0;
   const customPricedRequests = summary?.pricing.customPricedRequests ?? 0;
-  const modelOptions = useMemo(() => [...new Map((modelOptionsQuery.data?.items ?? []).map((model) => [model.publicId, { value: model.publicId, label: model.publicId }])).values()], [modelOptionsQuery.data?.items]);
+  const modelOptions = useMemo(() => [...new Map((modelOptionsQuery.data ?? []).map((model) => [model.publicId, { value: model.publicId, label: model.publicId }])).values()], [modelOptionsQuery.data]);
   const openAudit = useCallback((audit: AuditDTO) => setSelectedAudit(audit), []);
   const renderAuditRow = useCallback((audit: AuditDTO) => <AuditRow key={audit.id} audit={audit} locale={i18n.language} providers={providers} onOpen={openAudit} />, [i18n.language, openAudit, providers]);
 

@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { listModels } from "@/entities/model/model-api";
+import { useModelRoutes } from "@/entities/model/model-api";
 import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api";
 import { providerShortLabel } from "@/entities/provider/provider-presentation";
 import { listAccounts } from "@/features/accounts/accounts-api";
@@ -61,12 +61,8 @@ export function GalleryPage() {
     queryFn: getImageStats,
     staleTime: 30_000,
   });
-  const modelsQuery = useQuery({
-    queryKey: ["models", "media-filter"],
-    queryFn: () => listModels({ page: 1, pageSize: 100 }),
-    staleTime: 60_000,
-  });
-  const modelOptions = useMemo(() => [...new Set((modelsQuery.data?.items ?? []).filter((model) => mediaCapabilities.has(model.capability)).map((model) => model.publicId))].map((id) => ({ value: id, label: id })), [modelsQuery.data?.items]);
+  const modelsQuery = useModelRoutes();
+  const modelOptions = useMemo(() => [...new Set((modelsQuery.data ?? []).filter((model) => mediaCapabilities.has(model.capability)).map((model) => model.publicId))].map((id) => ({ value: id, label: id })), [modelsQuery.data]);
   const keyFilter = useLookupFilter("client-keys", t("media.key"), t("audits.keyFilterPlaceholder"), listClientKeys, (key) => ({ value: key.id, label: key.name || key.prefix, description: `#${key.id} · ${key.prefix}` }));
   const accountFilter = useLookupFilter("accounts", t("media.account"), t("audits.accountFilterPlaceholder"), listAccounts, (account) => ({ value: account.id, label: account.name || account.email || `#${account.id}`, description: `#${account.id}`, badge: providerShortLabel(account.provider, providers) }));
 

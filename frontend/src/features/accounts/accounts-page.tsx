@@ -1156,7 +1156,8 @@ export function AccountsPage() {
       {authOpen ? <AccountAuthDialog provider={provider} providerName={providerName} help={AuthHelp ? <AuthHelp /> : undefined} onClose={() => setAuthOpen(false)} /> : null}
 
       <AlertDialog open={syncAllOpen} onOpenChange={(open) => {
-        if (quotaSyncMutation.isPending || allQuotaResetMutation.isPending) return;
+        // 额度同步可以中途取消（与续期一致）；重置一旦发出就等它完成。
+        if (allQuotaResetMutation.isPending) return;
         if (!open) quotaSyncAbortRef.current?.abort();
         setSyncAllOpen(open);
       }}>
