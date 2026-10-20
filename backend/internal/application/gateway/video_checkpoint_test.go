@@ -12,10 +12,12 @@ import (
 
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
+	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/domain/model"
+	pricingdomain "github.com/chenyme/grok2api/backend/internal/domain/pricing"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
@@ -29,6 +31,8 @@ type checkpointVideoAdapter struct {
 	fail  error
 	// submitted, when set, runs after the submission checkpoint is saved.
 	submitted func()
+	// seconds is the shortened duration the result reports.
+	seconds int
 }
 
 func (a *checkpointVideoAdapter) Provider() account.Provider { return account.ProviderWeb }
@@ -57,7 +61,7 @@ func (a *checkpointVideoAdapter) GenerateVideo(_ context.Context, request provid
 			return provider.VideoResult{}, err
 		}
 	}
-	return provider.VideoResult{URL: "https://assets.example/video.mp4", ContentType: "video/mp4", AssetID: "video_asset_checkpoint"}, nil
+	return provider.VideoResult{URL: "https://assets.example/video.mp4", ContentType: "video/mp4", AssetID: "video_asset_checkpoint", Seconds: a.seconds}, nil
 }
 
 // videoJobFixture serves grok-imagine-video from two Web accounts through
@@ -66,6 +70,7 @@ type videoJobFixture struct {
 	service  *Service
 	jobs     *relational.MediaJobRepository
 	adapter  *checkpointVideoAdapter
+	prices   *pricingapp.Service
 	key      clientkey.Key
 	accounts []account.Credential
 	route    model.Route
@@ -122,8 +127,13 @@ func newVideoJobFixture(t *testing.T) *videoJobFixture {
 	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
 	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
 	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(keyRepo, nil, nil, 60, 4, nil), registry, selector, nil, 3)
+	prices, err := pricingapp.NewService(ctx, relational.NewModelPriceRepository(database), func(account.Provider) bool { return true }, registry.PricingModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.SetPricing(prices)
 	service.ConfigureMedia(mediaRepo, 1)
-	return &videoJobFixture{service: service, jobs: mediaRepo, adapter: adapter, key: key, accounts: accounts, route: route}
+	return &videoJobFixture{service: service, jobs: mediaRepo, adapter: adapter, prices: prices, key: key, accounts: accounts, route: route}
 }
 
 func (f *videoJobFixture) create(t *testing.T, id string) media.Job {
@@ -213,5 +223,23 @@ func TestVideoJobEndsAfterTooManyClaims(t *testing.T) {
 	f.service.processMediaJob(ctx, job.ID)
 	if stored := f.job(t, job.ID); stored.Status != media.StatusFailed || stored.ErrorCode != "recovery_exhausted" || len(f.adapter.calls) != 0 {
 		t.Fatalf("job = %#v calls = %v", stored, f.adapter.calls)
+	}
+}
+
+// A provider that generates a shorter video than requested (the Web free-tier
+// cap) gets the job recorded and billed at the delivered duration.
+func TestShortenedVideoIsBilledAtItsDuration(t *testing.T) {
+	f := newVideoJobFixture(t)
+	if _, err := f.prices.Put(context.Background(), pricingapp.Input{Provider: string(account.ProviderWeb), PricingModel: "grok-imagine-video", Operation: string(pricingdomain.OperationVideo),
+		Rates: map[pricingdomain.Component]string{pricingdomain.OutputSecond: "0.1"}}); err != nil {
+		t.Fatal(err)
+	}
+	job := f.create(t, "video_shortened")
+	f.adapter.seconds = 3
+	f.service.processMediaJob(context.Background(), job.ID)
+	want, ok := f.prices.QuoteVideo(account.ProviderWeb, "grok-imagine-video", job.Quality, 3, 0)
+	stored := f.job(t, job.ID)
+	if !ok || stored.Status != media.StatusCompleted || stored.Seconds != 3 || stored.Price == nil || stored.Price.CostInUSDTicks != want.CostInUSDTicks {
+		t.Fatalf("job = %s %ds price %+v, want completed 3s at %+v (priced %t)", stored.Status, stored.Seconds, stored.Price, want, ok)
 	}
 }

@@ -298,6 +298,14 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	inputs = videoInputs{}
 	releaseInputSlot()
 
+	if result.Seconds > 0 && result.Seconds != job.Seconds {
+		// The provider generated a shorter video (the Web free-tier cap): record
+		// and bill what was delivered.
+		job.Seconds = result.Seconds
+		if pricing, ok := s.resolveVideoPricing(operation, route.Provider, route.UpstreamModel, job.Quality, job.Seconds, job.InputImageCount); ok {
+			job.Price = &pricing
+		}
+	}
 	now := time.Now().UTC()
 	job.Status, job.Progress, job.UpstreamURL, job.ContentType = media.StatusCompleted, 100, result.URL, result.ContentType
 	// 成功终态必须清空历史错误字段，避免管理端/恢复路径把中间失败文案当成最终结果。

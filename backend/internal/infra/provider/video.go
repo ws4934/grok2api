@@ -262,6 +262,9 @@ type VideoResult struct {
 	ContentType string
 	// A non-empty AssetID means the result is stored as a local media asset; content reads must use MediaObjectStorage.
 	AssetID string
+	// Seconds is the generated duration when the provider shortened the
+	// request, such as the Web free-tier cap; 0 means as requested.
+	Seconds int
 }
 
 type VideoAdapter interface {

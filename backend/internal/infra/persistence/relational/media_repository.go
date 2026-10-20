@@ -439,7 +439,7 @@ func (r *MediaJobRepository) UpdateMediaJob(ctx context.Context, value media.Job
 	}
 	// InputJSON and InputImageCount are immutable creation metadata. Progress and
 	// terminal updates must not resend a multi-megabyte Base64 payload.
-	result := query.Select("request_id", "client_key_name", "account_id", "account_name", "egress_node_id", "egress_node_name", "egress_scope", "egress_mode", "provider", "model", "model_route_id", "upstream_model", "prompt", "seconds", "size", "quality", "status", "progress", "upstream_url", "result_asset_id", "result_asset_ids", "checkpoint_json", "submitted", "content_type", "error_code", "error_message", "lease_until", "claim_token", "updated_at", "completed_at", "usage_recorded_at").Updates(updates)
+	result := query.Select("request_id", "client_key_name", "account_id", "account_name", "egress_node_id", "egress_node_name", "egress_scope", "egress_mode", "provider", "model", "model_route_id", "upstream_model", "prompt", "seconds", "size", "quality", "status", "progress", "upstream_url", "result_asset_id", "result_asset_ids", "checkpoint_json", "submitted", "content_type", "error_code", "error_message", "lease_until", "claim_token", "updated_at", "completed_at", "usage_recorded_at", "price_id", "pricing_model", "price_ticks").Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}

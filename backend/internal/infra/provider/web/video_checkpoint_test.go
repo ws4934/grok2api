@@ -88,4 +88,16 @@ func TestWebVideoCheckpointNeverGeneratesASubmittedVideoAgain(t *testing.T) {
 	if !slices.Equal(saved, []string{`{"submitting":true}`, ""}) || creates.Load() != 2 {
 		t.Fatalf("saved after refusal = %v creates = %d", saved, creates.Load())
 	}
+
+	// A free account gets the capped duration, and the result says so, also on resume.
+	rejectCreate.Store(false)
+	request.Checkpoint, saved = "", nil
+	request.Credential.WebTier, request.Duration = account.WebTierBasic, 10
+	if result, err := adapter.GenerateVideo(context.Background(), request); err != nil || result.Seconds != 6 {
+		t.Fatalf("free result = %#v err = %v", result, err)
+	}
+	request.Checkpoint = saved[len(saved)-1]
+	if result, err := adapter.GenerateVideo(context.Background(), request); err != nil || result.Seconds != 6 {
+		t.Fatalf("resumed free result = %#v err = %v from %s", result, err, request.Checkpoint)
+	}
 }

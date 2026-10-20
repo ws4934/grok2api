@@ -259,7 +259,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	_ = json.Unmarshal([]byte(request.Checkpoint), &checkpoint)
 	if checkpoint.URL != "" {
 		// The stream already delivered the video; only its download was lost.
-		return provider.VideoResult{URL: checkpoint.URL, ContentType: "video/mp4"}, nil
+		return provider.VideoResult{URL: checkpoint.URL, ContentType: "video/mp4", Seconds: checkpoint.Seconds}, nil
 	}
 	if checkpoint.Submitting {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, fmt.Errorf("Grok Web 视频已提交，但结果只经由已中断的生成流返回，无法恢复"))
@@ -306,8 +306,11 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	if result.URL == "" {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, fmt.Errorf("视频生成完成但没有返回内容 URL"))
 	}
+	if seconds != request.Duration {
+		result.Seconds = seconds
+	}
 	// A failed write only costs resuming the download.
-	_ = provider.SaveVideoCheckpoint(request, webVideoCheckpoint{URL: result.URL})
+	_ = provider.SaveVideoCheckpoint(request, webVideoCheckpoint{URL: result.URL, Seconds: result.Seconds})
 	return result, nil
 }
 
@@ -318,6 +321,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 // generating (and paying for) the video again.
 type webVideoCheckpoint struct {
 	URL        string `json:"url,omitempty"`
+	Seconds    int    `json:"seconds,omitempty"`
 	Submitting bool   `json:"submitting,omitempty"`
 }
 
