@@ -65,10 +65,6 @@ func (s *Service) DecrementQuota(ctx context.Context, id uint64, mode string, am
 	return updated, nil
 }
 
-func (s *Service) DecrementWebQuota(ctx context.Context, id uint64, mode string, amount int) (bool, error) {
-	return s.DecrementQuota(ctx, id, mode, amount)
-}
-
 func (s *Service) ExhaustQuota(ctx context.Context, id uint64, mode string, resetAt *time.Time) error {
 	if resetAt == nil {
 		windows, err := s.accounts.GetQuotaWindows(ctx, []uint64{id})

@@ -449,7 +449,7 @@ func (s *Service) executeImage(
 					var updated bool
 					err := budget.run("quota_decrement", finalizationQuotaBudget, func(stageCtx context.Context) error {
 						var decrementErr error
-						updated, decrementErr = s.accounts.DecrementWebQuota(stageCtx, accountID, decrementMode, units)
+						updated, decrementErr = s.accounts.DecrementQuota(stageCtx, accountID, decrementMode, units)
 						return decrementErr
 					})
 					if err != nil {

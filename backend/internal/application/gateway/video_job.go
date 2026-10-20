@@ -50,7 +50,6 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	}
 
 	quotaMode := s.providers.VideoQuotaMode(route.Provider, s.providers.QuotaMode(route.Provider, route.UpstreamModel), job.Quality)
-	quotaRefreshGroup := s.providers.QuotaRefreshGroup(route.Provider, route.UpstreamModel)
 	// The initial creation path (selectSchedulableEligibleMediaRouteWithQuotaMode,
 	// called from CreateVideoJob) always scopes account selection to the
 	// requesting client key's AccountScope. A retry here must not silently
@@ -308,25 +307,9 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		return
 	}
 	s.selector.markSuccess(context.Background(), lease.Credential, lease.QuotaProbe)
-	refreshMode, decrementMode, availabilityMode := quotaFinalizationModes(lease.QuotaMode, quotaRefreshGroup)
-	if decrementMode != "" && decrementMode != "weekly" {
-		quotaCtx, quotaCancel := context.WithTimeout(context.Background(), accountStateWriteTimeout)
-		updated, quotaErr := s.accounts.DecrementQuota(quotaCtx, job.AccountID, decrementMode, 1)
-		quotaCancel()
-		if quotaErr != nil {
-			s.logger.Warn("video_quota_decrement_failed", "provider", route.Provider, "account_id", job.AccountID, "mode", decrementMode, "error", quotaErr)
-		} else if updated {
-			s.selector.ConsumeQuota(route.Provider, job.AccountID, decrementMode, 1)
-		}
-	}
+	s.consumeMediaQuota(route, job.AccountID, lease.QuotaMode)
 	if err := s.recordVideoAudit(context.Background(), job, time.Since(startedAt).Milliseconds(), http.StatusOK, failureAttempts.snapshot()); err != nil {
 		s.logger.Error("video_usage_record_failed", "job_id", job.ID, "event_id", "video_usage_"+job.ID, "error", err)
-	}
-	if quotaKind, _ := s.providers.QuotaKind(route.Provider); quotaKind == provider.QuotaRemoteWindow && refreshMode != "" {
-		s.accounts.QueueQuotaRefresh(job.AccountID, refreshMode)
-		if availabilityMode != "" && availabilityMode != refreshMode {
-			s.accounts.QueueQuotaRefresh(job.AccountID, availabilityMode)
-		}
 	}
 	// 输入回收放在账号状态、计费和审计收尾之后，存储抖动不得延迟关键终态逻辑。
 	s.releaseVideoInputs(job)
