@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,5 +65,27 @@ func TestConcurrencyGateHotReloadsAndReleasesCapacity(t *testing.T) {
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/responses", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("released status = %d", recorder.Code)
+	}
+}
+
+// Errors written before a handler runs follow the client's protocol.
+func TestWriteAPIErrorFollowsTheClientProtocol(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		path   string
+		status int
+		want   string
+	}{
+		{"/v1/responses", http.StatusTooManyRequests, `"type":"rate_limit_error"`},
+		{"/v1/chat/completions", http.StatusServiceUnavailable, `"type":"server_error"`},
+		{"/v1/messages", http.StatusServiceUnavailable, `{"error":{"message":"busy","type":"api_error"},"type":"error"}`},
+	} {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, test.path, nil)
+		WriteAPIError(c, test.status, "code", "busy")
+		if recorder.Code != test.status || !strings.Contains(recorder.Body.String(), test.want) {
+			t.Fatalf("%s %d: %d %s, want %s", test.path, test.status, recorder.Code, recorder.Body.String(), test.want)
+		}
 	}
 }

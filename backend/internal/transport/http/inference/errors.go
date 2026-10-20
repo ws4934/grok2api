@@ -9,6 +9,7 @@ import (
 
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -28,16 +29,7 @@ func anthropicUpstreamHTTPErrorType(status int) string {
 }
 
 func writeOpenAIError(c *gin.Context, status int, code, message string) {
-	errorType := "invalid_request_error"
-	switch {
-	case status == http.StatusUnauthorized:
-		errorType = "authentication_error"
-	case status == http.StatusTooManyRequests:
-		errorType = "rate_limit_error"
-	case status >= 500:
-		errorType = "server_error"
-	}
-	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"message": message, "type": errorType, "code": code, "param": nil}})
+	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"message": message, "type": middleware.OpenAIErrorType(status), "code": code, "param": nil}})
 }
 
 func writeGatewayError(c *gin.Context, err error) {

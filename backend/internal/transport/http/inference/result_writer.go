@@ -204,7 +204,11 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 	}
 	if contentLength, parseErr := strconv.ParseInt(result.Header.Get("Content-Length"), 10, 64); parseErr == nil && contentLength > transferLimit {
 		errorCode = "response_too_large"
-		writeOpenAIError(c, http.StatusBadGateway, "response_too_large", "上游响应超过代理安全上限")
+		if anthropic {
+			writeAnthropicError(c, http.StatusBadGateway, "api_error", "上游响应超过代理安全上限", errorCode)
+		} else {
+			writeOpenAIError(c, http.StatusBadGateway, errorCode, "上游响应超过代理安全上限")
+		}
 		return
 	}
 	copyHeaders(c.Writer.Header(), result.Header)

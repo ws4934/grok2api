@@ -97,7 +97,7 @@ func ClientAuth(service *clientkeyapp.Service) gin.HandlerFunc {
 		}
 		value, release, err := service.Authenticate(c.Request.Context(), raw)
 		if err != nil {
-			writeOpenAIError(c, clientErrorStatus(err), clientErrorCode(err), clientErrorMessage(err))
+			WriteAPIError(c, clientErrorStatus(err), clientErrorCode(err), clientErrorMessage(err))
 			return
 		}
 		defer release()
@@ -148,8 +148,10 @@ func clientErrorMessage(err error) string {
 	return err.Error()
 }
 
-func writeOpenAIError(c *gin.Context, status int, code, message string) {
-	if c.Request.URL.Path == "/v1/messages" {
+// WriteAPIError answers a /v1 request before its handler runs, in the error
+// shape its client expects: Anthropic's for the Messages API, OpenAI's otherwise.
+func WriteAPIError(c *gin.Context, status int, code, message string) {
+	if strings.HasPrefix(c.Request.URL.Path, "/v1/messages") {
 		errorType := "authentication_error"
 		if status == http.StatusTooManyRequests {
 			errorType = "rate_limit_error"
@@ -159,5 +161,19 @@ func writeOpenAIError(c *gin.Context, status int, code, message string) {
 		c.AbortWithStatusJSON(status, gin.H{"type": "error", "error": gin.H{"type": errorType, "message": message}})
 		return
 	}
-	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"message": message, "type": "invalid_request_error", "code": code, "param": nil}})
+	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"message": message, "type": OpenAIErrorType(status), "code": code, "param": nil}})
+}
+
+// OpenAIErrorType is the OpenAI error type for an HTTP status.
+func OpenAIErrorType(status int) string {
+	switch {
+	case status == http.StatusUnauthorized:
+		return "authentication_error"
+	case status == http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case status >= 500:
+		return "server_error"
+	default:
+		return "invalid_request_error"
+	}
 }

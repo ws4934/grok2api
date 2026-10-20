@@ -2,11 +2,12 @@ package httpserver
 
 import (
 	"context"
-	"github.com/chenyme/grok2api/backend/internal/application/providercatalog"
-	providercataloghttp "github.com/chenyme/grok2api/backend/internal/transport/http/providercatalog"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/chenyme/grok2api/backend/internal/application/providercatalog"
+	providercataloghttp "github.com/chenyme/grok2api/backend/internal/transport/http/providercatalog"
 
 	_ "github.com/chenyme/grok2api/backend/docs"
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
@@ -197,9 +198,7 @@ func New(deps Dependencies) *gin.Engine {
 				c.Next()
 				return
 			}
-			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{
-				"code": "service_reconciling", "message": "服务正在完成启动恢复，请稍后重试", "param": nil, "type": "server_error",
-			}})
+			middleware.WriteAPIError(c, http.StatusServiceUnavailable, "service_reconciling", "服务正在完成启动恢复，请稍后重试")
 		})
 	}
 	v1.Use(middleware.ClientAuth(deps.ClientKeys))
