@@ -12,6 +12,7 @@ import (
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/pkg/flight"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"golang.org/x/sync/singleflight"
 )
@@ -19,6 +20,10 @@ import (
 var ErrCredentialRefreshPermanent = errors.New("OAuth refresh token 已永久失效")
 
 const permanentRefreshExpiredReason = "OAuth refresh token 已永久失效且 access token 已过期"
+
+// credentialRenewalFlightTimeout bounds one shared renewal: the wait for a
+// peer's lock (TTL 2 minutes) plus the exchange and its writes.
+const credentialRenewalFlightTimeout = 3 * time.Minute
 
 // credentialRenewalAccounts is the account storage credential renewal reads and writes.
 type credentialRenewalAccounts interface {
@@ -98,19 +103,16 @@ func (r *credentialRenewer) ensure(ctx context.Context, value accountdomain.Cred
 	if options.retryPermanentOnce {
 		refreshKey += ":manual-retry"
 	}
-	// The shared refresh runs on its own goroutine so a caller can stop waiting
-	// while a started token exchange still completes and is persisted.
-	shared := r.refreshes.DoChan(refreshKey, func() (any, error) {
+	// One shared renewal per key, detached from every caller: a caller can stop
+	// waiting while a started token exchange still completes and is persisted.
+	return flight.Do(ctx, &r.refreshes, refreshKey, credentialRenewalFlightTimeout, func(ctx context.Context) (accountdomain.Credential, error) {
 		latest, err := r.accounts.Get(ctx, value.ID)
 		if err != nil {
-			return nil, err
+			return accountdomain.Credential{}, err
 		}
 		currentTime := r.now()
 		if credential, err, handled := r.resolvePermanentFailure(ctx, latest, currentTime, options.force, options.retryPermanentOnce); handled {
-			if err != nil {
-				return nil, err
-			}
-			return credential, nil
+			return credential, err
 		}
 		if options.respectSchedule && latest.RefreshDueAt != nil && latest.RefreshDueAt.After(currentTime) {
 			return latest, nil
@@ -126,25 +128,22 @@ func (r *credentialRenewer) ensure(ctx context.Context, value accountdomain.Cred
 		}
 		if options.waitFailedRenewal {
 			if err := refreshDeferred(latest, currentTime); err != nil {
-				return nil, err
+				return accountdomain.Credential{}, err
 			}
 		}
 		release, err := r.acquireLock(ctx, latest.ID)
 		if err != nil {
-			return nil, err
+			return accountdomain.Credential{}, err
 		}
 		if release != nil {
 			defer release()
 			latest, err = r.accounts.Get(ctx, value.ID)
 			if err != nil {
-				return nil, err
+				return accountdomain.Credential{}, err
 			}
 			currentTime = r.now()
 			if credential, err, handled := r.resolvePermanentFailure(ctx, latest, currentTime, options.force, options.retryPermanentOnce); handled {
-				if err != nil {
-					return nil, err
-				}
-				return credential, nil
+				return credential, err
 			}
 			if options.respectSchedule && latest.RefreshDueAt != nil && latest.RefreshDueAt.After(currentTime) {
 				return latest, nil
@@ -154,7 +153,7 @@ func (r *credentialRenewer) ensure(ctx context.Context, value accountdomain.Cred
 			}
 			if options.waitFailedRenewal {
 				if err := refreshDeferred(latest, currentTime); err != nil {
-					return nil, err
+					return accountdomain.Credential{}, err
 				}
 			}
 			if latest.EncryptedAccessToken != "" && latest.EncryptedAccessToken != value.EncryptedAccessToken {
@@ -166,19 +165,19 @@ func (r *credentialRenewer) ensure(ctx context.Context, value accountdomain.Cred
 		}
 		adapter, ok := r.providers.CredentialRefresh(latest.Provider)
 		if !ok {
-			return nil, fmt.Errorf("Provider %s 未注册", latest.Provider)
+			return accountdomain.Credential{}, fmt.Errorf("Provider %s 未注册", latest.Provider)
 		}
 		// The upstream may consume the old refresh token as soon as the exchange
-		// starts. Detach it from the caller so the rotated token is never dropped
-		// by a client disconnect or a caller deadline.
-		refreshCtx, cancelRefresh := context.WithTimeout(context.WithoutCancel(ctx), credentialRefreshTimeout)
+		// starts; ctx is detached from every caller, so a client disconnect or a
+		// caller deadline never drops the rotated token.
+		refreshCtx, cancelRefresh := context.WithTimeout(ctx, credentialRefreshTimeout)
 		refreshed, err := adapter.RefreshCredential(refreshCtx, latest)
 		cancelRefresh()
 		if err != nil {
-			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), credentialRefreshStateTTL)
+			persistCtx, cancel := context.WithTimeout(ctx, credentialRefreshStateTTL)
 			r.recordFailure(persistCtx, latest, err, !options.retryPermanentOnce, release != nil)
 			cancel()
-			return nil, err
+			return accountdomain.Credential{}, err
 		}
 		riskCredential := latest
 		riskCredential.EncryptedAccessToken = refreshed.EncryptedAccessToken
@@ -186,7 +185,7 @@ func (r *credentialRenewer) ensure(ctx context.Context, value accountdomain.Cred
 		if metadata := r.providers.CredentialMetadata(riskCredential); metadata.BuildBotFlagInspected {
 			botFlagSource = metadata.BuildBotFlagSource
 		}
-		persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), credentialStateWriteTimeout)
+		persistCtx, cancelPersist := context.WithTimeout(ctx, credentialStateWriteTimeout)
 		updated, err := r.accounts.UpdateTokens(persistCtx, latest.ID, refreshed.EncryptedAccessToken, refreshed.EncryptedRefreshToken, refreshed.EncryptedState, refreshed.ExpiresAt, botFlagSource)
 		cancelPersist()
 		if err != nil {
@@ -199,27 +198,13 @@ func (r *credentialRenewer) ensure(ctx context.Context, value accountdomain.Cred
 				"distributed_lock", release != nil,
 				"error", err,
 			)
-			return nil, err
+			return accountdomain.Credential{}, err
 		}
 		r.invalidateBotFlags()
 		r.markSuccess(latest.ID, currentTime)
 		r.wakeScheduler()
 		return updated, nil
 	})
-	var result singleflight.Result
-	select {
-	case <-ctx.Done():
-		return accountdomain.Credential{}, ctx.Err()
-	case result = <-shared:
-	}
-	if result.Err != nil {
-		return accountdomain.Credential{}, result.Err
-	}
-	credential, ok := result.Val.(accountdomain.Credential)
-	if !ok {
-		return accountdomain.Credential{}, fmt.Errorf("账号凭据刷新返回类型无效")
-	}
-	return credential, nil
 }
 
 // acquireLock 在 Redis 模式下等待其他实例完成刷新，锁租约过期后可自动接管。

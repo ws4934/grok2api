@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -135,6 +136,52 @@ func (r *renewAfterFirstGet) Get(ctx context.Context, id uint64) (accountdomain.
 	value, err := r.AccountRepository.Get(ctx, id)
 	r.once.Do(r.renew)
 	return value, err
+}
+
+// The first caller of a shared renewal leaves while the renewal waits for a
+// peer instance's lock; a caller still waiting gets the renewed token.
+func TestSharedRenewalOutlivesFirstCallerDeadline(t *testing.T) {
+	service, credential, adapter := newCredentialRefreshTestService(t, time.Now().UTC())
+	service.renewer.lock = peerHeldLock{until: time.Now().Add(400 * time.Millisecond)}
+	first, cancelFirst := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelFirst()
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := service.EnsureCredential(first, credential, true)
+		firstDone <- err
+	}()
+	time.Sleep(20 * time.Millisecond) // the first caller starts the shared renewal
+	second, cancelSecond := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelSecond()
+	renewed, err := service.EnsureCredential(second, credential, true)
+	if err != nil || renewed.EncryptedAccessToken != "access-1" || adapter.refreshCount.Load() != 1 {
+		t.Fatalf("second caller: access=%q err=%v exchanges=%d", renewed.EncryptedAccessToken, err, adapter.refreshCount.Load())
+	}
+	if err := <-firstDone; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("first caller err = %v, want its own deadline", err)
+	}
+}
+
+// peerHeldLock is a distributed lock another instance holds until a deadline.
+type peerHeldLock struct{ until time.Time }
+
+func (l peerHeldLock) Acquire(ctx context.Context, _ string, _ time.Duration) (func(), bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	if time.Now().Before(l.until) {
+		return nil, false, nil
+	}
+	return func() {}, true, nil
+}
+
+// A panicking adapter fails the renewal instead of crashing the process.
+func TestPanickingRenewalFailsInsteadOfCrashing(t *testing.T) {
+	service, credential, adapter := newCredentialRefreshTestService(t, time.Now().UTC())
+	adapter.afterRefresh = func() { panic("adapter bug") }
+	if _, err := service.EnsureCredential(context.Background(), credential, true); err == nil || !strings.Contains(err.Error(), "adapter bug") {
+		t.Fatalf("err = %v, want the adapter panic as an error", err)
+	}
 }
 
 func waitForStoredRefreshToken(t *testing.T, service *Service, id uint64, want string) accountdomain.Credential {
