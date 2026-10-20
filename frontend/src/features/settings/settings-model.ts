@@ -16,10 +16,6 @@ const byteSizeSchema = z.object({ value: z.number().positive(), unit: z.enum(["M
 const routingTTLDuration = durationSchema.refine((value) => durationSeconds(value) <= 30 * 86_400);
 const routingCooldownDuration = durationSchema.refine((value) => durationSeconds(value) <= 86_400);
 const routingCapacityWaitDuration = durationSchema.refine((value) => durationSeconds(value) <= 30);
-const auditFlushDuration = durationSchema.refine((value) => {
-  const seconds = durationSeconds(value);
-  return seconds >= 0.01 && seconds <= 60;
-});
 const consoleChatDuration = durationSchema.refine((value) => {
   const seconds = durationSeconds(value);
   return seconds >= 5 && seconds <= 30 * 60;
@@ -163,7 +159,6 @@ export const settingsSchema = z.object({
   audit: z.object({
     bufferSize: positiveInteger.max(262_144),
     batchSize: positiveInteger.max(4_096),
-    flushInterval: auditFlushDuration,
     commitDelayMS: positiveInteger.max(50),
     retentionDays: z.number().int().min(0).max(365),
   })
@@ -229,7 +224,6 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
     audit: {
       bufferSize: config.audit.bufferSize,
       batchSize: config.audit.batchSize,
-      flushInterval: parseDuration(config.audit.flushInterval),
       commitDelayMS: config.audit.commitDelayMS,
       retentionDays: config.audit.retentionDays ?? 7,
     },
@@ -280,7 +274,6 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
     audit: {
       bufferSize: config.audit.bufferSize,
       batchSize: config.audit.batchSize,
-      flushInterval: formatDuration(config.audit.flushInterval),
       commitDelayMS: config.audit.commitDelayMS,
       retentionDays: config.audit.retentionDays,
     },

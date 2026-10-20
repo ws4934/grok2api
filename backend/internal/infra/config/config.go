@@ -39,8 +39,6 @@ const (
 	maxRoutingCooldown     = 24 * time.Hour
 	maxRoutingCapacityWait = 30 * time.Second
 	maxRoutingAttempts     = 65535
-	minAuditFlushInterval  = 10 * time.Millisecond
-	maxAuditFlushInterval  = time.Minute
 	maxAuditBufferSize     = 262144
 	maxAuditBatchSize      = 4096
 	minAuditCommitDelay    = time.Millisecond
@@ -277,7 +275,6 @@ type RoutingConfig struct {
 type AuditConfig struct {
 	BufferSize                  int      `yaml:"bufferSize"`
 	BatchSize                   int      `yaml:"batchSize"`
-	FlushInterval               Duration `yaml:"flushInterval"`
 	CommitDelay                 Duration `yaml:"commitDelay"`
 	RetentionDays               int      `yaml:"retentionDays"`
 	LedgerMode                  string   `yaml:"ledgerMode"`
@@ -721,7 +718,7 @@ func (c Config) Validate() error {
 	if !validAutoAssignShare(c.Routing.AutoAssignMaxNodeShare) || !validAutoAssignShare(c.Routing.AutoAssignMaxMigrationShare) {
 		return errors.New("routing.autoAssignMaxNodeShare 与 autoAssignMaxMigrationShare 必须为 0 或 0.05 到 1 之间")
 	}
-	if c.Audit.BufferSize < 1 || c.Audit.BufferSize > maxAuditBufferSize || c.Audit.BatchSize < 1 || c.Audit.BatchSize > maxAuditBatchSize || c.Audit.BatchSize > c.Audit.BufferSize || c.Audit.FlushInterval.Value() < minAuditFlushInterval || c.Audit.FlushInterval.Value() > maxAuditFlushInterval {
+	if c.Audit.BufferSize < 1 || c.Audit.BufferSize > maxAuditBufferSize || c.Audit.BatchSize < 1 || c.Audit.BatchSize > maxAuditBatchSize || c.Audit.BatchSize > c.Audit.BufferSize {
 		return errors.New("audit 队列和批量写入配置无效")
 	}
 	if c.Audit.CommitDelay.Value() < minAuditCommitDelay || c.Audit.CommitDelay.Value() > maxAuditCommitDelay {
@@ -978,7 +975,7 @@ func defaultConfig() Config {
 			ReasoningReplayMaxEntries:   10240,
 		},
 		Audit: AuditConfig{
-			BufferSize: 16384, BatchSize: 256, FlushInterval: Duration(250 * time.Millisecond), CommitDelay: Duration(5 * time.Millisecond),
+			BufferSize: 16384, BatchSize: 256, CommitDelay: Duration(5 * time.Millisecond),
 			RetentionDays: 7,
 			LedgerMode:    "enforce", LedgerFailureThreshold: 1,
 			LedgerUnhealthyGrace: Duration(10 * time.Second), LedgerQueueHighWatermarkPct: 90,

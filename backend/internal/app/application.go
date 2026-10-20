@@ -324,8 +324,8 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 	if err != nil {
 		return nil, err
 	}
-	auditService := auditapp.NewService(auditRepo, logger, cfg.Audit.BufferSize, cfg.Audit.BatchSize, cfg.Audit.FlushInterval.Value())
-	auditService.UpdateWriterConfig(cfg.Audit.BatchSize, cfg.Audit.FlushInterval.Value(), cfg.Audit.CommitDelay.Value())
+	auditService := auditapp.NewService(auditRepo, logger, cfg.Audit.BufferSize, cfg.Audit.BatchSize)
+	auditService.UpdateWriterConfig(cfg.Audit.BatchSize, cfg.Audit.CommitDelay.Value())
 	auditService.UpdateLedgerConfig(auditLedgerConfig(cfg.Audit))
 	auditService.SetCommitObserver(clientKeyService.ReleaseBillingProtectionBatch)
 	auditService.SetDropObserver(clientKeyService.ReleaseBillingProtectionBatch)
@@ -423,7 +423,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 		gatewayService.UpdateVideoMaxAttempts(next.Routing.VideoMaxAttempts)
 		gatewayService.UpdateMarkBuildChatDeniedAsReauth(next.Routing.MarkBuildChatDeniedAsReauth)
 		gatewayService.UpdateBuildForbiddenReauthPolicy(next.Accounts.MarkBuildForbiddenReauth, next.Accounts.BuildForbiddenReauthCodes)
-		auditService.UpdateWriterConfig(next.Audit.BatchSize, next.Audit.FlushInterval.Value(), next.Audit.CommitDelay.Value())
+		auditService.UpdateWriterConfig(next.Audit.BatchSize, next.Audit.CommitDelay.Value())
 		auditService.UpdateLedgerConfig(auditLedgerConfig(next.Audit))
 		clientKeyService.UpdateDefaults(next.ClientKeyDefaults.RPMLimit, next.ClientKeyDefaults.MaxConcurrent)
 		accountService.UpdateAutoCleanConfig(accountAutoCleanConfig(next.Accounts))

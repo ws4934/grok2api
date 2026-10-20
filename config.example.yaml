@@ -112,7 +112,6 @@ audit:
   # [通常不要修改] 审计批量写入参数；bufferSize 的修改需重启生效。
   bufferSize: 16384
   batchSize: 256
-  flushInterval: 250ms
   # [通常不要修改] 需要调用方确认提交的审计最多聚合等待该时长；建议保持 1ms–50ms。
   commitDelay: 5ms
   # [按需修改] 自动清理超过该天数的请求审计与尝试诊断；0 表示永久保留。

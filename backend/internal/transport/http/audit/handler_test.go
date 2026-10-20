@@ -41,7 +41,7 @@ func TestAuditDetailReturnsCompleteTextAndBinaryBodies(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	service := auditapp.NewService(repository, slog.Default(), 8, 4, time.Second)
+	service := auditapp.NewService(repository, slog.Default(), 8, 4)
 	router := gin.New()
 	NewHandler(service).Register(router.Group("/api/admin/v1"))
 
@@ -125,7 +125,7 @@ func TestQualityGuardAuditListMarksOwnProbeWithoutExposingKeyIdentity(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	service := auditapp.NewService(repository, slog.Default(), 8, 4, time.Second)
+	service := auditapp.NewService(repository, slog.Default(), 8, 4)
 	router := gin.New()
 	NewQualityGuardHandler(service, 7).RegisterQualityGuard(router.Group(""))
 	recorder := httptest.NewRecorder()
@@ -197,7 +197,7 @@ func TestDegradeAccountsListsHardHitsAndRejectsUnknownWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := gin.New()
-	NewHandler(auditapp.NewService(repo, slog.Default(), 8, 4, time.Second)).Register(router.Group("/api/admin/v1"))
+	NewHandler(auditapp.NewService(repo, slog.Default(), 8, 4)).Register(router.Group("/api/admin/v1"))
 
 	ok := httptest.NewRecorder()
 	router.ServeHTTP(ok, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/degrade-accounts?window=24h&softTPS=500&hardTPS=1000&failClosed=false&page=1&pageSize=20", nil))
@@ -228,7 +228,7 @@ func TestIDParsersRejectTopBitIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := gin.New()
-	NewHandler(auditapp.NewService(relational.NewAuditRepository(database), slog.Default(), 8, 4, time.Second)).Register(router.Group("/api/admin/v1"))
+	NewHandler(auditapp.NewService(relational.NewAuditRepository(database), slog.Default(), 8, 4)).Register(router.Group("/api/admin/v1"))
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/9223372036854775808", nil))
 	if recorder.Code != http.StatusBadRequest {

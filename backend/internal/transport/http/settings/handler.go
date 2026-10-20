@@ -126,11 +126,10 @@ type segmentedSelectorConfigDTO struct {
 }
 
 type auditConfigDTO struct {
-	BufferSize    int    `json:"bufferSize"`
-	BatchSize     int    `json:"batchSize"`
-	FlushInterval string `json:"flushInterval"`
-	CommitDelayMS int    `json:"commitDelayMS"`
-	RetentionDays int    `json:"retentionDays"`
+	BufferSize    int `json:"bufferSize"`
+	BatchSize     int `json:"batchSize"`
+	CommitDelayMS int `json:"commitDelayMS"`
+	RetentionDays int `json:"retentionDays"`
 }
 
 type clientKeyDefaultsConfigDTO struct {
@@ -245,7 +244,7 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 			},
 		},
 		Audit: settingsapp.AuditConfig{
-			BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: value.Audit.FlushInterval, CommitDelayMS: value.Audit.CommitDelayMS,
+			BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, CommitDelayMS: value.Audit.CommitDelayMS,
 			RetentionDays: value.Audit.RetentionDays,
 		},
 		ClientKeyDefaults: settingsapp.ClientKeyDefaultsConfig{
@@ -323,7 +322,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				},
 			},
 			Audit: auditConfigDTO{
-				BufferSize: config.Audit.BufferSize, BatchSize: config.Audit.BatchSize, FlushInterval: config.Audit.FlushInterval, CommitDelayMS: config.Audit.CommitDelayMS,
+				BufferSize: config.Audit.BufferSize, BatchSize: config.Audit.BatchSize, CommitDelayMS: config.Audit.CommitDelayMS,
 				RetentionDays: config.Audit.RetentionDays,
 			},
 			ClientKeyDefaults: clientKeyDefaultsConfigDTO{

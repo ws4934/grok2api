@@ -60,7 +60,7 @@ func TestAuditBreakdownReconstructsCustomPriceVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := gin.New()
-	NewHandler(auditapp.NewService(repo, slog.Default(), 8, 4, time.Second)).WithPrices(prices).Register(router.Group("/api/admin/v1"))
+	NewHandler(auditapp.NewService(repo, slog.Default(), 8, 4)).WithPrices(prices).Register(router.Group("/api/admin/v1"))
 
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/1", nil))

@@ -142,7 +142,6 @@ type SegmentedSelectorConfig struct {
 type AuditConfig struct {
 	BufferSize    int
 	BatchSize     int
-	FlushInterval time.Duration
 	CommitDelay   time.Duration
 	RetentionDays int
 }

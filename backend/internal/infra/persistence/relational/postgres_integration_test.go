@@ -610,8 +610,8 @@ func TestPostgresAuditWriterRecoversAfterTerminatedTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	service := auditapp.NewService(NewAuditRepository(database), slog.New(slog.NewTextHandler(io.Discard, nil)), 32, 16, 100*time.Millisecond)
-	service.UpdateWriterConfig(16, 100*time.Millisecond, time.Millisecond)
+	service := auditapp.NewService(NewAuditRepository(database), slog.New(slog.NewTextHandler(io.Discard, nil)), 32, 16)
+	service.UpdateWriterConfig(16, time.Millisecond)
 	service.Start()
 	defer func() {
 		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)

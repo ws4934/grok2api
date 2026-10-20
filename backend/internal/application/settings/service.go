@@ -123,7 +123,6 @@ type SegmentedSelectorConfig struct {
 type AuditConfig struct {
 	BufferSize    int
 	BatchSize     int
-	FlushInterval string
 	CommitDelayMS int
 	RetentionDays int
 }
@@ -350,7 +349,7 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	routing.SegmentedWindowSize = value.Routing.SegmentedSelector.WindowSize
 	audit := &base.Audit
 	audit.BufferSize, audit.BatchSize = value.Audit.BufferSize, value.Audit.BatchSize
-	audit.FlushInterval, audit.CommitDelay = config.Duration(value.Audit.FlushInterval), config.Duration(value.Audit.CommitDelay)
+	audit.CommitDelay = config.Duration(value.Audit.CommitDelay)
 	audit.RetentionDays = value.Audit.RetentionDays
 	base.ClientKeyDefaults = config.ClientKeyDefaultsConfig{
 		RPMLimit: value.ClientKeyDefaults.RPMLimit, MaxConcurrent: value.ClientKeyDefaults.MaxConcurrent,
@@ -419,7 +418,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			},
 		},
 		Audit: settingsdomain.AuditConfig{
-			BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: value.Audit.FlushInterval.Value(), CommitDelay: value.Audit.CommitDelay.Value(),
+			BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, CommitDelay: value.Audit.CommitDelay.Value(),
 			RetentionDays: value.Audit.RetentionDays,
 		},
 		ClientKeyDefaults: settingsdomain.ClientKeyDefaultsConfig{
@@ -529,7 +528,6 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		{"routing.cooldownBase", input.Routing.CooldownBase, func(value config.Duration) { next.Routing.CooldownBase = value }},
 		{"routing.cooldownMax", input.Routing.CooldownMax, func(value config.Duration) { next.Routing.CooldownMax = value }},
 		{"routing.capacityWait", input.Routing.CapacityWait, func(value config.Duration) { next.Routing.CapacityWait = value }},
-		{"audit.flushInterval", input.Audit.FlushInterval, func(value config.Duration) { next.Audit.FlushInterval = value }},
 		{"providerWeb.quotaTimeout", input.ProviderWeb.QuotaTimeout, func(value config.Duration) { next.Provider.Web.QuotaTimeout = value }},
 		{"providerWeb.chatTimeout", input.ProviderWeb.ChatTimeout, func(value config.Duration) { next.Provider.Web.ChatTimeout = value }},
 		{"providerWeb.imageTimeout", input.ProviderWeb.ImageTimeout, func(value config.Duration) { next.Provider.Web.ImageTimeout = value }},
@@ -622,7 +620,7 @@ func toEditable(cfg config.Config) EditableConfig {
 			},
 		},
 		Audit: AuditConfig{
-			BufferSize: cfg.Audit.BufferSize, BatchSize: cfg.Audit.BatchSize, FlushInterval: cfg.Audit.FlushInterval.String(), CommitDelayMS: int(cfg.Audit.CommitDelay.Value() / time.Millisecond),
+			BufferSize: cfg.Audit.BufferSize, BatchSize: cfg.Audit.BatchSize, CommitDelayMS: int(cfg.Audit.CommitDelay.Value() / time.Millisecond),
 			RetentionDays: cfg.Audit.RetentionDays,
 		},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: cfg.ClientKeyDefaults.RPMLimit, MaxConcurrent: cfg.ClientKeyDefaults.MaxConcurrent},

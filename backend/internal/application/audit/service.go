@@ -95,7 +95,6 @@ type Service struct {
 	logger               *slog.Logger
 	queue                chan auditWriteRequest
 	batchSize            atomic.Int64
-	flushInterval        atomic.Int64
 	commitDelay          atomic.Int64
 	configChanged        chan struct{}
 	lifecycleMu          sync.RWMutex
@@ -125,7 +124,7 @@ type Service struct {
 	dropObserver         func([]string)
 }
 
-func NewService(audits repository.AuditRepository, logger *slog.Logger, bufferSize, batchSize int, flushInterval time.Duration) *Service {
+func NewService(audits repository.AuditRepository, logger *slog.Logger, bufferSize, batchSize int) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -136,7 +135,7 @@ func NewService(audits repository.AuditRepository, logger *slog.Logger, bufferSi
 		degradeCache: resultcache.New[string, DegradeSummary](64, degradeSummaryTTL),
 		ledgerConfig: defaultLedgerConfig(),
 	}
-	service.UpdateConfig(batchSize, flushInterval)
+	service.UpdateWriterConfig(batchSize, 0)
 	return service
 }
 
@@ -226,17 +225,13 @@ func (s *Service) CheckLedgerReady() error {
 	return ErrLedgerUnavailable
 }
 
-func (s *Service) UpdateConfig(batchSize int, flushInterval time.Duration) {
-	s.UpdateWriterConfig(batchSize, flushInterval, time.Duration(s.commitDelay.Load()))
-}
-
-// UpdateWriterConfig hot-reloads batching limits without replacing the active queue.
-func (s *Service) UpdateWriterConfig(batchSize int, flushInterval, commitDelay time.Duration) {
+// UpdateWriterConfig hot-reloads batching limits without replacing the active
+// queue. A batch is committed when full or commitDelay after its first record.
+func (s *Service) UpdateWriterConfig(batchSize int, commitDelay time.Duration) {
 	if commitDelay <= 0 {
 		commitDelay = auditDefaultCommitDelay
 	}
 	s.batchSize.Store(int64(batchSize))
-	s.flushInterval.Store(int64(flushInterval))
 	s.commitDelay.Store(int64(commitDelay))
 	select {
 	case s.configChanged <- struct{}{}:
@@ -728,7 +723,6 @@ func (s *Service) run() {
 	var timer *time.Timer
 	var timerC <-chan time.Time
 	requests := make([]auditWriteRequest, 0, int(s.batchSize.Load()))
-	hasAck := false
 	resetTimer := func(delay time.Duration) {
 		if delay <= 0 {
 			delay = auditDefaultCommitDelay
@@ -757,17 +751,12 @@ func (s *Service) run() {
 		}
 		s.persistBatch(requests)
 		requests = requests[:0]
-		hasAck = false
 		timerC = nil
 	}
 	appendRequest := func(request auditWriteRequest) {
-		wasEmpty := len(requests) == 0
 		requests = append(requests, request)
-		if request.ack != nil && !hasAck {
-			hasAck = true
+		if len(requests) == 1 {
 			resetTimer(time.Duration(s.commitDelay.Load()))
-		} else if wasEmpty {
-			resetTimer(time.Duration(s.flushInterval.Load()))
 		}
 	}
 	for {
@@ -784,11 +773,7 @@ func (s *Service) run() {
 			if len(requests) >= int(s.batchSize.Load()) {
 				flush()
 			} else if len(requests) > 0 {
-				if hasAck {
-					resetTimer(time.Duration(s.commitDelay.Load()))
-				} else {
-					resetTimer(time.Duration(s.flushInterval.Load()))
-				}
+				resetTimer(time.Duration(s.commitDelay.Load()))
 			}
 		case <-s.stop:
 			for {

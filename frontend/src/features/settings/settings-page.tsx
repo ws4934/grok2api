@@ -421,20 +421,6 @@ export function SettingsPage() {
                   />
                 </SettingsField>
                 <SettingsField
-                  controlId="audit-flush-interval"
-                  label={t("settings.audit.flushInterval")}
-                  description={t("settings.audit.flushIntervalHelp")}
-                  error={form.formState.errors.audit?.flushInterval?.message}
-                >
-                  <Controller
-                    control={form.control}
-                    name="audit.flushInterval"
-                    render={({ field }) => (
-                      <DurationInput id="audit-flush-interval" value={field.value} onChange={field.onChange} />
-                    )}
-                  />
-                </SettingsField>
-                <SettingsField
                   controlId="audit-commit-delay"
                   label={t("settings.audit.commitDelay")}
                   description={t("settings.audit.commitDelayHelp")}

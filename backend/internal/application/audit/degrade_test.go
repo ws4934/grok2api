@@ -27,7 +27,7 @@ func (r *degradeCountingRepository) SummarizeDegrade(context.Context, repository
 
 func TestDegradeSummaryCachesUntilFreshRead(t *testing.T) {
 	repo := &degradeCountingRepository{}
-	service := NewService(repo, slog.Default(), 8, 4, time.Second)
+	service := NewService(repo, slog.Default(), 8, 4)
 	service.now = func() time.Time { return time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC) }
 	ctx := context.Background()
 	for _, filter := range []DegradeAccountFilter{{}, {}, {Search: "other"}} {
@@ -65,7 +65,7 @@ func TestDegradeSummaryClassifiesStreamingAnomalies(t *testing.T) {
 	if err := repo.CreateBatch(ctx, records); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(repo, slog.Default(), 8, 4, time.Second)
+	service := NewService(repo, slog.Default(), 8, 4)
 	service.now = func() time.Time { return now }
 	summary, err := service.DegradeSummary(ctx, "24h", DegradeThresholds{SoftTPS: 500, HardTPS: 1000}, DegradeAccountFilter{})
 	if err != nil {
@@ -112,7 +112,7 @@ func TestDegradeSummaryDoesNotDropOlderAnomalyAfterTwentyThousandNewerRows(t *te
 	if err := repo.CreateBatch(ctx, records); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(repo, slog.Default(), 8, 4, time.Second)
+	service := NewService(repo, slog.Default(), 8, 4)
 	service.now = func() time.Time { return now }
 	summary, err := service.DegradeSummary(ctx, "24h", DegradeThresholds{SoftTPS: 500, HardTPS: 1000}, DegradeAccountFilter{})
 	if err != nil {
@@ -144,7 +144,7 @@ func TestDegradeSummaryMatchesFailClosedShortWindowPolicy(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(repo, slog.Default(), 8, 4, time.Second)
+	service := NewService(repo, slog.Default(), 8, 4)
 	service.now = func() time.Time { return now }
 	open, err := service.DegradeSummary(ctx, "1h", DegradeThresholds{SoftTPS: 500, HardTPS: 1000, FailClosed: false}, DegradeAccountFilter{})
 	if err != nil {
@@ -180,7 +180,7 @@ func TestDegradeSummaryUsesReasoningEvidenceForLateFlushFallback(t *testing.T) {
 	if err := repo.CreateBatch(ctx, records); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(repo, slog.Default(), 8, 4, time.Second)
+	service := NewService(repo, slog.Default(), 8, 4)
 	service.now = func() time.Time { return now }
 	summary, err := service.DegradeSummary(ctx, "1h", DegradeThresholds{SoftTPS: 500, HardTPS: 1000, FailClosed: true}, DegradeAccountFilter{})
 	if err != nil {
@@ -214,7 +214,7 @@ func TestDegradeSummaryPaginatesAccountsInRepository(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	service := NewService(repo, slog.Default(), 8, 4, time.Second)
+	service := NewService(repo, slog.Default(), 8, 4)
 	service.now = func() time.Time { return now }
 	summary, err := service.DegradeSummary(ctx, "1h", DegradeThresholds{}, DegradeAccountFilter{Page: 2, PageSize: 2})
 	if err != nil {
@@ -259,7 +259,7 @@ func TestDegradeSummarySearchesEveryAccountIdentityField(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(relational.NewAuditRepository(database), slog.Default(), 8, 4, time.Second)
+	service := NewService(relational.NewAuditRepository(database), slog.Default(), 8, 4)
 	service.now = func() time.Time { return now }
 	summary, err := service.DegradeSummary(ctx, "1h", DegradeThresholds{}, DegradeAccountFilter{Search: "searchable build"})
 	if err != nil {
@@ -309,7 +309,7 @@ func TestDegradeSummaryReportsActiveLeaseQuarantineForEnabledAccount(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(relational.NewAuditRepository(database), slog.Default(), 8, 4, time.Second)
+	service := NewService(relational.NewAuditRepository(database), slog.Default(), 8, 4)
 	service.now = func() time.Time { return now }
 	summary, err := service.DegradeSummary(ctx, "1h", DegradeThresholds{}, DegradeAccountFilter{})
 	if err != nil {
@@ -344,7 +344,7 @@ func TestDegradeSummaryIncludesQualityDegradedThinkingRetries(t *testing.T) {
 	if err := repo.CreateBatch(ctx, records); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(repo, slog.Default(), 8, 4, time.Second)
+	service := NewService(repo, slog.Default(), 8, 4)
 	service.now = func() time.Time { return now }
 	summary, err := service.DegradeSummary(ctx, "1h", DegradeThresholds{SoftTPS: 500, HardTPS: 1000}, DegradeAccountFilter{})
 	if err != nil {
@@ -382,7 +382,7 @@ func TestDegradeSummaryRejectsUnknownWindow(t *testing.T) {
 	if err := database.InitializeSchema(ctx); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(relational.NewAuditRepository(database), slog.Default(), 8, 4, time.Second)
+	service := NewService(relational.NewAuditRepository(database), slog.Default(), 8, 4)
 	if _, err := service.DegradeSummary(ctx, "3h", DegradeThresholds{}, DegradeAccountFilter{}); err != ErrInvalidPeriod {
 		t.Fatalf("error = %v", err)
 	}

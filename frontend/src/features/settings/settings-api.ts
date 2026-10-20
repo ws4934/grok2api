@@ -25,7 +25,7 @@ export type SettingsConfigDTO = {
     accountIsolatedConnections: boolean;
     segmentedSelector: { enabled: boolean; minCandidates: number; windowSize: number };
   };
-  audit: { bufferSize: number; batchSize: number; flushInterval: string; commitDelayMS: number; retentionDays?: number };
+  audit: { bufferSize: number; batchSize: number; commitDelayMS: number; retentionDays?: number };
   clientKeyDefaults: { rpmLimit: number; maxConcurrent: number };
   accounts: {
     autoDisableDegradedAccounts: boolean;
@@ -137,7 +137,7 @@ const settingsConfigValidator = hasShape({
     segmentedSelector: hasShape({ enabled: isBoolean, minCandidates: isNumber, windowSize: isNumber }),
   }),
   audit: hasShape({
-    bufferSize: isNumber, batchSize: isNumber, flushInterval: isString, commitDelayMS: isNumber,
+    bufferSize: isNumber, batchSize: isNumber, commitDelayMS: isNumber,
     retentionDays: isNumber,
   }),
   clientKeyDefaults: hasShape({ rpmLimit: isNumber, maxConcurrent: isNumber }),
