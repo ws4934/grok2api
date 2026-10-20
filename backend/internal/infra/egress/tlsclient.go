@@ -88,7 +88,7 @@ func newBrowserClient(proxyURL, userAgent string) (*browserClient, error) {
 	case dial != nil:
 		options = append(options, tlsclient.WithDialContext(dial))
 	case connect != nil && connect.Scheme == "http":
-		options = append(options, tlsclient.WithDialContext(connectDialContext(connect, direct)))
+		options = append(options, tlsclient.WithDialContext(ConnectDialContext(connect, direct)))
 	case connect != nil:
 		options = append(options, tlsclient.WithProxyUrl(proxyURL))
 	}
@@ -99,9 +99,9 @@ func newBrowserClient(proxyURL, userAgent string) (*browserClient, error) {
 	return &browserClient{inner: client}, nil
 }
 
-// connectDialContext tunnels through an HTTP proxy with CONNECT. The dial and
+// ConnectDialContext tunnels through an HTTP proxy with CONNECT. The dial and
 // the proxy handshake end with ctx and within direct.Timeout.
-func connectDialContext(proxy *url.URL, direct *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+func ConnectDialContext(proxy *url.URL, direct *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
 	host := proxy.Host
 	if proxy.Port() == "" {
 		host = net.JoinHostPort(proxy.Hostname(), "80")

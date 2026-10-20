@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt/browserprofile"
 )
 
 func TestSignedTransfersReachPrivateProxies(t *testing.T) {
@@ -28,6 +33,67 @@ func TestSignedTransfersReachPrivateProxies(t *testing.T) {
 	}
 	if got := <-connects; got != "CONNECT example.com:443" {
 		t.Fatalf("proxy saw %q", got)
+	}
+}
+
+// A proxy that accepts TCP and never answers must fail a browser request at
+// its deadline and must not block a request to another host.
+func TestBrowserHTTPProxyHandshakeEndsWithRequest(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var held []net.Conn
+	t.Cleanup(func() {
+		_ = listener.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range held {
+			_ = conn.Close()
+		}
+	})
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, conn)
+			mu.Unlock()
+		}
+	}()
+	for _, scheme := range []string{"socks5", "http"} {
+		t.Run(scheme, func(t *testing.T) {
+			client, err := newBrowserHTTP("https://chatgpt.com", scheme+"://"+listener.Addr().String(), time.Minute, browserprofile.Default(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 2)
+			for _, target := range []string{"https://203.0.113.1/", "https://203.0.113.2/"} {
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+					defer cancel()
+					request, _ := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+					response, err := client.Do(request)
+					if err == nil {
+						_ = response.Body.Close()
+					}
+					done <- err
+				}()
+			}
+			for range 2 {
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Fatal("request through a silent proxy succeeded")
+					}
+				case <-time.After(time.Second):
+					t.Fatal("request still blocked in the proxy handshake after its deadline")
+				}
+			}
+		})
 	}
 }
 

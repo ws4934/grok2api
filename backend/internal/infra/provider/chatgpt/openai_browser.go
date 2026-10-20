@@ -3,12 +3,14 @@ package chatgpt
 
 import (
 	"io"
+	"net"
 	stdhttp "net/http"
 	"sync"
 	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
 	tlsclient "github.com/bogdanfinn/tls-client"
+	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt/browserprofile"
 )
 
@@ -63,9 +65,15 @@ func newBrowserHTTP(origin, proxyURL string, timeout time.Duration, profile brow
 	if err != nil {
 		return nil, err
 	}
-	if egress.dial != nil {
+	switch {
+	case egress.dial != nil:
 		options = append(options, tlsclient.WithDialContext(egress.dial))
-	} else if egress.url != nil {
+	case egress.url != nil && egress.url.Scheme == "http":
+		// tls-client's own CONNECT dialer ignores the request context and dials
+		// under a client-wide lock: one silent proxy would stall every request
+		// on this browser. HTTPS proxies keep tls-client's dialer.
+		options = append(options, tlsclient.WithDialContext(infraegress.ConnectDialContext(egress.url, &net.Dialer{Timeout: 20 * time.Second})))
+	case egress.url != nil:
 		options = append(options, tlsclient.WithProxyUrl(egress.raw))
 	}
 	client, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(), options...)
