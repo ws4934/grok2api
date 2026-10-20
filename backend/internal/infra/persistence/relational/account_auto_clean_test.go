@@ -193,8 +193,8 @@ func TestDeleteAutoCleanRevalidatesStatusAfterListing(t *testing.T) {
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("candidates=%v err=%v", candidates, err)
 	}
-	value.AuthStatus = accountdomain.AuthStatusActive
-	if _, err := repo.Update(ctx, value); err != nil {
+	// A credential renewal recovers the account between listing and deletion.
+	if _, err := repo.UpdateTokens(ctx, value.ID, testEncryptedToken, "", "", now.Add(time.Hour), 0); err != nil {
 		t.Fatal(err)
 	}
 	deleted, err := repo.DeleteAutoCleanReauthCandidates(ctx, now.Add(-time.Hour), false, candidates)

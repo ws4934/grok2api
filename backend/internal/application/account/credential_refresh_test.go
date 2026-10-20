@@ -72,7 +72,7 @@ func TestEnsureCredentialPreservesBotFlagWhenRefreshedTokenCannotBeInspected(t *
 	service, credential, _ := newCredentialRefreshTestService(t, now)
 	service.now = func() time.Time { return now }
 	credential.BuildBotFlagSource = 2
-	credential, err := service.accounts.Update(ctx, credential)
+	credential, _, err := service.accounts.UpsertByIdentity(ctx, credential)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,40 +102,24 @@ func TestEnsureCredentialPersistsRotatedTokenAfterRequestCancellation(t *testing
 	}
 }
 
-// A whole-account save that read the row before a renewal committed must not
-// roll the rotated tokens back: the upstream already consumed refresh-0.
-func TestMarkReauthRequiredKeepsTokensRotatedAfterItsRead(t *testing.T) {
+// Marking a rejected credential writes only the auth state, so it cannot roll
+// back tokens a renewal rotated: the upstream already consumed refresh-0.
+func TestMarkReauthRequiredKeepsRotatedTokens(t *testing.T) {
 	ctx := context.Background()
 	service, credential, _ := newCredentialRefreshTestService(t, time.Now().UTC())
-	stored := service.accounts
-	service.accounts = &renewAfterFirstGet{AccountRepository: stored, renew: func() {
-		if _, err := service.EnsureCredential(ctx, credential, true); err != nil {
-			t.Error(err)
-		}
-	}}
+	if _, err := service.EnsureCredential(ctx, credential, true); err != nil {
+		t.Fatal(err)
+	}
 	if err := service.MarkReauthRequired(ctx, credential.ID, "account is blocked"); err != nil {
 		t.Fatal(err)
 	}
-	got, err := stored.Get(ctx, credential.ID)
+	got, err := service.accounts.Get(ctx, credential.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.EncryptedAccessToken != "access-1" || got.EncryptedRefreshToken != "refresh-1" || got.AuthStatus != accountdomain.AuthStatusReauthRequired {
 		t.Fatalf("stored access=%q refresh=%q status=%s, want access-1 refresh-1 reauthRequired", got.EncryptedAccessToken, got.EncryptedRefreshToken, got.AuthStatus)
 	}
-}
-
-// renewAfterFirstGet commits a token renewal right after the first account read.
-type renewAfterFirstGet struct {
-	repository.AccountRepository
-	once  sync.Once
-	renew func()
-}
-
-func (r *renewAfterFirstGet) Get(ctx context.Context, id uint64) (accountdomain.Credential, error) {
-	value, err := r.AccountRepository.Get(ctx, id)
-	r.once.Do(r.renew)
-	return value, err
 }
 
 // The first caller of a shared renewal leaves while the renewal waits for a
@@ -812,8 +796,7 @@ func TestRefreshAllTokensSkipsUnrefreshableAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	invalid.AuthStatus = accountdomain.AuthStatusReauthRequired
-	if _, err := service.accounts.Update(ctx, invalid); err != nil {
+	if err := service.accounts.MarkReauthRequired(ctx, invalid.ID, "rejected"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -853,19 +836,15 @@ func TestBatchRefreshTokensRefreshesOnlySelectedEligibleAccounts(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		needsUpdate := false
 		if value.Name == "disabled" {
 			created.Enabled = false
-			needsUpdate = true
+			if created, err = service.accounts.Update(ctx, created); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if value.Name == "invalid" {
-			created.AuthStatus = accountdomain.AuthStatusReauthRequired
 			invalidID = created.ID
-			needsUpdate = true
-		}
-		if needsUpdate {
-			created, err = service.accounts.Update(ctx, created)
-			if err != nil {
+			if err := service.accounts.MarkReauthRequired(ctx, created.ID, "rejected"); err != nil {
 				t.Fatal(err)
 			}
 		}

@@ -158,6 +158,8 @@ type AccountRepository interface {
 	TouchLastUsed(ctx context.Context, id uint64, usedAt time.Time) error
 	// MarkBuildAPIFallback 幂等写入 Build 账号的 XAI 推理回退标记；非 Build 账号返回错误。
 	MarkBuildAPIFallback(ctx context.Context, id uint64, enabled bool) error
+	// MarkReauthRequired records a rejected credential and its reason.
+	MarkReauthRequired(ctx context.Context, id uint64, reason string) error
 	// MarkWebNSFWEnabled 幂等记录 Web 账号首次确认 NSFW 已开启的时间。
 	MarkWebNSFWEnabled(ctx context.Context, id uint64, enabledAt time.Time) error
 	// MarkWebTermsAccepted 幂等记录 Web 账号已完整接受的产品协议版本与时间。

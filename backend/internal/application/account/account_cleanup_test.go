@@ -38,7 +38,7 @@ func TestCleanupAccountsDeletesOnlySelectedCurrentStatuses(t *testing.T) {
 	service := NewService(repo, nil, nil, memory.NewStickyStore(), grokTestRegistry(), cipher, nil)
 	service.now = func() time.Time { return now }
 
-	create := func(name string, providerValue accountdomain.Provider, mutate func(*accountdomain.Credential)) uint64 {
+	create := func(name string, providerValue accountdomain.Provider, mutate func(accountdomain.Credential) error) uint64 {
 		t.Helper()
 		value, _, createErr := repo.UpsertByIdentity(ctx, accountdomain.Credential{
 			Provider: providerValue, AuthType: accountdomain.AuthTypeSSO, Name: name, SourceKey: fmt.Sprintf("cleanup-%s", name),
@@ -48,21 +48,31 @@ func TestCleanupAccountsDeletesOnlySelectedCurrentStatuses(t *testing.T) {
 			t.Fatal(createErr)
 		}
 		if mutate != nil {
-			mutate(&value)
-			value, createErr = repo.Update(ctx, value)
-			if createErr != nil {
+			if createErr = mutate(value); createErr != nil {
 				t.Fatal(createErr)
 			}
 		}
 		return value.ID
 	}
+	disable := func(value accountdomain.Credential) error {
+		value.Enabled = false
+		_, err := repo.Update(ctx, value)
+		return err
+	}
+	coolUntil := func(until time.Time) func(accountdomain.Credential) error {
+		return func(value accountdomain.Credential) error {
+			return repo.UpdateHealth(ctx, value.ID, value.Provider, 0, &until, "", false)
+		}
+	}
 
 	normalID := create("normal", accountdomain.ProviderBuild, nil)
-	disabledID := create("disabled", accountdomain.ProviderBuild, func(value *accountdomain.Credential) { value.Enabled = false })
-	invalidID := create("invalid", accountdomain.ProviderBuild, func(value *accountdomain.Credential) { value.AuthStatus = accountdomain.AuthStatusReauthRequired })
-	coolingID := create("cooling", accountdomain.ProviderBuild, func(value *accountdomain.Credential) { until := now.Add(time.Hour); value.CooldownUntil = &until })
-	expiredCooldownID := create("expired-cooldown", accountdomain.ProviderBuild, func(value *accountdomain.Credential) { until := now.Add(-time.Hour); value.CooldownUntil = &until })
-	otherProviderID := create("web-disabled", accountdomain.ProviderWeb, func(value *accountdomain.Credential) { value.Enabled = false })
+	disabledID := create("disabled", accountdomain.ProviderBuild, disable)
+	invalidID := create("invalid", accountdomain.ProviderBuild, func(value accountdomain.Credential) error {
+		return repo.MarkReauthRequired(ctx, value.ID, "rejected")
+	})
+	coolingID := create("cooling", accountdomain.ProviderBuild, coolUntil(now.Add(time.Hour)))
+	expiredCooldownID := create("expired-cooldown", accountdomain.ProviderBuild, coolUntil(now.Add(-time.Hour)))
+	otherProviderID := create("web-disabled", accountdomain.ProviderWeb, disable)
 
 	result, err := service.CleanupAccounts(ctx, accountdomain.ProviderBuild, []CleanupStatus{CleanupStatusDisabled, CleanupStatusReauthRequired, CleanupStatusCooldown, CleanupStatusDisabled}, nil)
 	if err != nil {
@@ -106,8 +116,7 @@ func TestCleanupAccountsWithLinkedTargets(t *testing.T) {
 
 	web, build, console := seedLinkedTrio(t, repo, strings.Repeat("7", 64), "u-cleanup")
 	// Mark the Web root invalid while keeping active peers to verify peer state is ignored.
-	web.AuthStatus = accountdomain.AuthStatusReauthRequired
-	if _, err := repo.Update(ctx, web); err != nil {
+	if err := repo.MarkReauthRequired(ctx, web.ID, "rejected"); err != nil {
 		t.Fatal(err)
 	}
 	healthyWeb := mustUpsertLinked(t, repo, accountdomain.Credential{

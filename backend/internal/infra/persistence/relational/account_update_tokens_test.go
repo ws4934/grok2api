@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Update saves an account read before a token renewal; the renewed tokens and
-// renewal state must survive it.
+// Update saves an account read before a token renewal; the renewed tokens,
+// the recovered auth state and the inspected bot flag must survive it.
 func TestAccountUpdateKeepsRenewedTokens(t *testing.T) {
 	accountStateDatabases(t, func(t *testing.T, database *Database) {
 		ctx := context.Background()
@@ -18,12 +18,12 @@ func TestAccountUpdateKeepsRenewedTokens(t *testing.T) {
 		stale, _, err := repo.UpsertByIdentity(ctx, account.Credential{
 			Provider: account.ProviderBuild, Name: "renewed", SourceKey: "renewed-" + uuid.NewString(),
 			EncryptedAccessToken: "access-0", EncryptedRefreshToken: "refresh-0", ExpiresAt: time.Now().UTC().Add(time.Hour),
-			Enabled: true, AuthStatus: account.AuthStatusActive,
+			Enabled: true, AuthStatus: account.AuthStatusReauthRequired,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		renewed, err := repo.UpdateTokens(ctx, stale.ID, "access-1", "refresh-1", "", time.Now().UTC().Add(2*time.Hour), 0)
+		renewed, err := repo.UpdateTokens(ctx, stale.ID, "access-1", "refresh-1", "", time.Now().UTC().Add(2*time.Hour), 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -33,8 +33,8 @@ func TestAccountUpdateKeepsRenewedTokens(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got.Name != "edited" || got.EncryptedAccessToken != "access-1" || got.EncryptedRefreshToken != "refresh-1" ||
-			!got.ExpiresAt.Equal(renewed.ExpiresAt) || got.LastRefreshAt == nil {
-			t.Fatalf("after a stale update: name=%q access=%q refresh=%q expires=%v lastRefresh=%v", got.Name, got.EncryptedAccessToken, got.EncryptedRefreshToken, got.ExpiresAt, got.LastRefreshAt)
+			!got.ExpiresAt.Equal(renewed.ExpiresAt) || got.LastRefreshAt == nil || got.AuthStatus != account.AuthStatusActive || got.BuildBotFlagSource != 2 {
+			t.Fatalf("after a stale update: name=%q access=%q refresh=%q expires=%v lastRefresh=%v auth=%s botFlag=%d", got.Name, got.EncryptedAccessToken, got.EncryptedRefreshToken, got.ExpiresAt, got.LastRefreshAt, got.AuthStatus, got.BuildBotFlagSource)
 		}
 	})
 }

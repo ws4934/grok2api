@@ -213,38 +213,56 @@ func upsertKnownAccountByIdentity(tx *gorm.DB, value account.Credential, existin
 	return repository.AccountUpsertResult{ID: row.ID, Created: true}, row, nil
 }
 
+// Update writes only the settings an administrator edits. Tokens, auth state,
+// health, usage, egress and synced provider data have their own writers, and a
+// save based on an earlier read must not roll them back.
 func (r *AccountRepository) Update(ctx context.Context, value account.Credential) (account.Credential, error) {
 	var row accountModel
-	var storedProvider account.Provider
 	if err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing accountModel
-		if err := tx.Select("id", "identity_key", "created_at", "provider", "auth_status", "reauth_marked_at").First(&existing, value.ID).Error; err != nil {
+		if err := tx.Select("id", "provider", "auth_status", "egress_node_id").First(&existing, value.ID).Error; err != nil {
 			return err
 		}
-		storedProvider = account.Provider(existing.Provider)
-		value.Provider = storedProvider
+		value.Provider = account.Provider(existing.Provider)
 		row = fromAccountDomain(value)
-		row.ID = existing.ID
-		// 身份同步补充的 user_id/email 不得让普通编辑重写持久化身份键。
-		row.IdentityKey = existing.IdentityKey
-		row.CreatedAt = existing.CreatedAt
-		applyReauthMarkedAtTransition(&row, existing)
-		if err := tx.Save(&row).Error; err != nil {
+		row.ID, row.AuthStatus, row.EgressNodeID = existing.ID, existing.AuthStatus, existing.EgressNodeID
+		if err := tx.Model(&row).Select("name", "enabled", "priority", "max_concurrent", "minimum_remaining", "build_super_entitled", "build_route_mode", "updated_at").Updates(&row).Error; err != nil {
 			return err
 		}
-		if _, err := deleteInvalidEgressLeaseBlocksForAccount(tx, row); err != nil {
+		if err := tx.Model(&accountCredentialModel{}).Where("account_id = ?", row.ID).Update("encrypted_cloudflare_cookie", value.EncryptedCloudflareCookie).Error; err != nil {
 			return err
 		}
-		// Tokens and renewal state belong to UpdateTokens and the refresh
-		// failure writes; a save from an earlier read must not roll them back.
-		return saveAccountRelations(tx, value, row.ID, "encrypted_primary", "encrypted_refresh", "encrypted_state", "expires_at",
-			"refresh_due_at", "last_refresh_at", "refresh_failures", "refresh_unclassified_auth_failures", "last_refresh_error_status",
-			"last_refresh_error", "last_refresh_error_message", "last_refresh_error_response", "refresh_permanent")
+		_, err := deleteInvalidEgressLeaseBlocksForAccount(tx, row)
+		return err
 	}); err != nil {
 		return account.Credential{}, mapError(err)
 	}
-	r.notifyInvalidation(ctx, repository.InvalidationEvent{Kind: repository.InvalidationAccountStateChanged, Provider: storedProvider, AccountID: row.ID})
+	r.notifyInvalidation(ctx, repository.InvalidationEvent{Kind: repository.InvalidationAccountStateChanged, Provider: account.Provider(row.Provider), AccountID: row.ID})
 	return r.Get(ctx, row.ID)
+}
+
+// MarkReauthRequired records a rejected credential; the reauth anchor keeps
+// the time the account first entered reauthRequired.
+func (r *AccountRepository) MarkReauthRequired(ctx context.Context, id uint64, reason string) error {
+	var row accountModel
+	if err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing accountModel
+		if err := tx.Select("id", "provider", "enabled", "auth_status", "reauth_marked_at", "egress_node_id").First(&existing, id).Error; err != nil {
+			return err
+		}
+		row = existing
+		row.AuthStatus, row.ReauthMarkedAt, row.LastError = string(account.AuthStatusReauthRequired), nil, truncate(reason, 512)
+		applyReauthMarkedAtTransition(&row, existing)
+		if err := tx.Model(&row).Select("auth_status", "reauth_marked_at", "last_error", "updated_at").Updates(&row).Error; err != nil {
+			return err
+		}
+		_, err := deleteInvalidEgressLeaseBlocksForAccount(tx, row)
+		return err
+	}); err != nil {
+		return mapError(err)
+	}
+	r.notifyInvalidation(ctx, repository.InvalidationEvent{Kind: repository.InvalidationAccountStateChanged, Provider: account.Provider(row.Provider), AccountID: id})
+	return nil
 }
 
 // applyReauthMarkedAtTransition 仅在状态切入 reauthRequired 时打锚点；保持 reauth 时保留原锚点；离开 reauth 时清空。
@@ -263,10 +281,10 @@ func applyReauthMarkedAtTransition(row *accountModel, existing accountModel) {
 	row.ReauthMarkedAt = nil
 }
 
-func saveAccountRelations(tx *gorm.DB, value account.Credential, accountID uint64, omit ...string) error {
+func saveAccountRelations(tx *gorm.DB, value account.Credential, accountID uint64) error {
 	value.ID = accountID
 	credential := fromAccountCredentialDomain(value)
-	if err := tx.Omit(omit...).Save(&credential).Error; err != nil {
+	if err := tx.Save(&credential).Error; err != nil {
 		return err
 	}
 	if profile := fromWebProfileDomain(value); profile != nil {

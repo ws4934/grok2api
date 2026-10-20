@@ -475,18 +475,7 @@ func (s *Service) MarkBuildAPIFallback(ctx context.Context, id uint64, enabled b
 }
 
 func (s *Service) MarkReauthRequired(ctx context.Context, id uint64, reason string) error {
-	value, err := s.accounts.Get(ctx, id)
-	if err != nil {
-		return mapRepositoryError(err)
-	}
-	value.AuthStatus = accountdomain.AuthStatusReauthRequired
-	value.LastError = reason
-	if len(value.LastError) > 512 {
-		value.LastError = value.LastError[:512]
-	}
-	// Drop a rune split by the cut (or any invalid byte): PostgreSQL rejects invalid UTF-8.
-	value.LastError = strings.ToValidUTF8(value.LastError, "")
-	if _, err := s.accounts.Update(ctx, value); err != nil {
+	if err := s.accounts.MarkReauthRequired(ctx, id, reason); err != nil {
 		return mapRepositoryError(err)
 	}
 	if s.sticky != nil {

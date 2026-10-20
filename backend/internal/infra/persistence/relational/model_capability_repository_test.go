@@ -143,9 +143,7 @@ func TestConsoleCatalogRoutesUseAutomaticAccountPoolWithoutCapabilitySnapshot(t 
 	if _, err := accounts.Update(ctx, disabled); err != nil {
 		t.Fatal(err)
 	}
-	reauth := createAccount("console-reauth")
-	reauth.AuthStatus = account.AuthStatusReauthRequired
-	if _, err := accounts.Update(ctx, reauth); err != nil {
+	if err := accounts.MarkReauthRequired(ctx, createAccount("console-reauth").ID, "rejected"); err != nil {
 		t.Fatal(err)
 	}
 

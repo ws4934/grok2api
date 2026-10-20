@@ -327,9 +327,7 @@ func TestAccountRepositorySummarizesOperationalStates(t *testing.T) {
 	if err := repo.SaveQuotaWindows(ctx, exhausted.ID, account.WebTierSuper, now, []account.QuotaWindow{{AccountID: exhausted.ID, Mode: "fast", Remaining: 0, Total: 30, UpdatedAt: now}}); err != nil {
 		t.Fatal(err)
 	}
-	reauth := create(account.ProviderWeb, "web-reauth")
-	reauth.AuthStatus = account.AuthStatusReauthRequired
-	if _, err := repo.Update(ctx, reauth); err != nil {
+	if err := repo.MarkReauthRequired(ctx, create(account.ProviderWeb, "web-reauth").ID, "rejected"); err != nil {
 		t.Fatal(err)
 	}
 

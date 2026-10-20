@@ -210,9 +210,7 @@ func TestEgressLeaseBlockKeysetPaginationAndInvalidPruning(t *testing.T) {
 	if err != nil || len(remaining) != 4 {
 		t.Fatalf("remaining blocks = %#v, %v", remaining, err)
 	}
-	reauth := created[1]
-	reauth.AuthStatus = account.AuthStatusReauthRequired
-	if _, err := accounts.Update(ctx, reauth); err != nil {
+	if err := accounts.MarkReauthRequired(ctx, created[1].ID, "rejected"); err != nil {
 		t.Fatal(err)
 	}
 	remaining, err = accounts.ListEgressLeaseBlocks(ctx, 10, nil)

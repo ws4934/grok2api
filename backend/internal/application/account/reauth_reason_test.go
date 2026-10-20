@@ -20,7 +20,7 @@ func TestMarkReauthRequiredKeepsReasonValidUTF8(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !utf8.ValidString(stored.LastError) || stored.LastError != strings.Repeat("a", 511) {
+	if !utf8.ValidString(stored.LastError) || stored.LastError != strings.Repeat("a", 511)+"é" {
 		t.Fatalf("stored reason = %q (%d bytes)", stored.LastError, len(stored.LastError))
 	}
 }

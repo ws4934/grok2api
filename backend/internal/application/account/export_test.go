@@ -242,9 +242,7 @@ func TestExportProviderCredentialsRoundTripsSSOProviders(t *testing.T) {
 			}
 			// 模拟旧账号先按 SSO 来源创建，后续身份同步再补齐邮箱与 user_id；
 			// 回导必须命中原账号，不能因新身份字段生成重复记录。
-			created.Email = test.name + "@example.com"
-			created.UserID = test.name + "-user-id"
-			if _, err := repository.Update(ctx, created); err != nil {
+			if err := repository.UpdateIdentityMetadata(ctx, created.ID, test.name+"@example.com", test.name+"-user-id", "", ""); err != nil {
 				t.Fatal(err)
 			}
 			service := NewService(repository, nil, nil, nil, provider.NewRegistry(test.adapter), cipher, nil)
