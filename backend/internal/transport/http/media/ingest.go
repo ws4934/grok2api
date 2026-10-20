@@ -244,7 +244,14 @@ func readImportedImage(resp *http.Response) ([]byte, error) {
 	if resp.ContentLength > ingestMaxImageBytes {
 		return nil, errImageTooLarge
 	}
-
+	if resp.ContentLength > 0 {
+		// One allocation instead of io.ReadAll's doubling.
+		data := make([]byte, resp.ContentLength)
+		if _, err := io.ReadFull(resp.Body, data); err != nil {
+			return nil, err
+		}
+		return data, nil
+	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, ingestMaxImageBytes+1))
 	if err != nil {
 		return nil, err
@@ -324,13 +331,9 @@ func (h *Handler) uploadInputAsset(c *gin.Context) {
 		return
 	}
 	defer src.Close()
-	data, err := io.ReadAll(io.LimitReader(src, ingestMaxImageBytes+1))
-	if err != nil {
+	data := make([]byte, fileHeader.Size)
+	if _, err := io.ReadFull(src, data); err != nil {
 		response.Error(c, http.StatusInternalServerError, "mediaUploadReadFailed", "读取上传文件失败")
-		return
-	}
-	if int64(len(data)) > ingestMaxImageBytes {
-		response.Error(c, http.StatusRequestEntityTooLarge, "mediaTooLarge", "文件超过大小上限")
 		return
 	}
 	declaredMIME := strings.ToLower(strings.TrimSpace(strings.Split(fileHeader.Header.Get("Content-Type"), ";")[0]))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -87,21 +88,24 @@ func (s *Service) resolveVideoInputBudget(ctx context.Context, references []stri
 			_ = body.Close()
 			return nil, fmt.Errorf("%w: file_id 必须引用%s", ErrVideoInputUnavailable, expectedKind)
 		}
-		data, readErr := io.ReadAll(io.LimitReader(body, media.MaxInputJSONBytes+1))
-		closeErr := body.Close()
-		if readErr != nil {
-			return nil, fmt.Errorf("读取视频临时输入: %w", readErr)
-		}
-		if closeErr != nil {
-			return nil, fmt.Errorf("关闭视频临时输入: %w", closeErr)
-		}
-		if len(data) == 0 || len(data) > media.MaxInputJSONBytes {
+		if !addVideoReferenceBytes(budget, materializedVideoReferenceBytes(asset.MIMEType, asset.SizeBytes)) {
+			_ = body.Close()
 			return nil, ErrVideoInputTooLarge
 		}
-		if !addVideoReferenceBytes(budget, materializedVideoReferenceBytes(asset.MIMEType, int64(len(data)))) {
-			return nil, ErrVideoInputTooLarge
+		// Encode straight from the file: only the data URI is held in memory.
+		var uri strings.Builder
+		uri.Grow(int(materializedVideoReferenceBytes(asset.MIMEType, asset.SizeBytes)))
+		uri.WriteString("data:" + asset.MIMEType + ";base64,")
+		encoder := base64.NewEncoder(base64.StdEncoding, &uri)
+		n, readErr := io.Copy(encoder, io.LimitReader(body, asset.SizeBytes+1))
+		closeErr := errors.Join(encoder.Close(), body.Close())
+		if readErr != nil || closeErr != nil {
+			return nil, fmt.Errorf("读取视频临时输入: %w", errors.Join(readErr, closeErr))
 		}
-		resolved = append(resolved, "data:"+asset.MIMEType+";base64,"+base64.StdEncoding.EncodeToString(data))
+		if n != asset.SizeBytes {
+			return nil, ErrVideoInputUnavailable
+		}
+		resolved = append(resolved, uri.String())
 	}
 	return resolved, nil
 }
