@@ -365,10 +365,5 @@ func (r *Registry) VideoQuotaMode(value account.Provider, quotaMode, resolution 
 }
 
 func (r *Registry) Videos(value account.Provider) (VideoAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(VideoAdapter)
-	return result, ok
+	return adapterAs[VideoAdapter](r, value)
 }

@@ -132,32 +132,17 @@ type ImageAssetStore interface {
 }
 
 func (r *Registry) ImageRequestValidator(value account.Provider) (ImageRequestValidator, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(ImageRequestValidator)
-	return result, ok
+	return adapterAs[ImageRequestValidator](r, value)
 }
 
 // ImageGeneration returns the image-generation capability registered by the Provider.
 func (r *Registry) ImageGeneration(value account.Provider) (ImageGenerationAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(ImageGenerationAdapter)
-	return result, ok
+	return adapterAs[ImageGenerationAdapter](r, value)
 }
 
 // ImageEdit returns the image-editing capability registered by the Provider.
 func (r *Registry) ImageEdit(value account.Provider) (ImageEditAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(ImageEditAdapter)
-	return result, ok
+	return adapterAs[ImageEditAdapter](r, value)
 }
 
 // AsyncImages returns the resumable image capability used by image jobs.
@@ -175,10 +160,5 @@ func (r *Registry) AsyncImageModel(value account.Provider, upstreamModel string)
 }
 
 func (r *Registry) AsyncImages(value account.Provider) (AsyncImageAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(AsyncImageAdapter)
-	return result, ok
+	return adapterAs[AsyncImageAdapter](r, value)
 }

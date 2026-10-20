@@ -254,72 +254,34 @@ type WebAccountSettingsAdapter interface {
 }
 
 func (r *Registry) CredentialRefresh(value account.Provider) (CredentialRefreshAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(CredentialRefreshAdapter)
-	return result, ok
+	return adapterAs[CredentialRefreshAdapter](r, value)
 }
 
 func (r *Registry) InteractiveAuth(value account.Provider) (InteractiveAuthAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(InteractiveAuthAdapter)
-	return result, ok
+	return adapterAs[InteractiveAuthAdapter](r, value)
 }
 
 func (r *Registry) CredentialCodec(value account.Provider) (CredentialCodecAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(CredentialCodecAdapter)
-	return result, ok
+	return adapterAs[CredentialCodecAdapter](r, value)
 }
 
 // CredentialMetadata returns derived credential metadata safe for admin display.
 func (r *Registry) CredentialMetadata(credential account.Credential) CredentialMetadata {
-	if r == nil {
-		return CredentialMetadata{}
+	if inspector, ok := adapterAs[CredentialMetadataAdapter](r, credential.Provider); ok {
+		return inspector.CredentialMetadata(credential)
 	}
-	adapter, ok := r.adapters[credential.Provider]
-	if !ok {
-		return CredentialMetadata{}
-	}
-	inspector, ok := adapter.(CredentialMetadataAdapter)
-	if !ok {
-		return CredentialMetadata{}
-	}
-	return inspector.CredentialMetadata(credential)
+	return CredentialMetadata{}
 }
 
 func (r *Registry) AccountIdentity(value account.Provider) (AccountIdentityAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(AccountIdentityAdapter)
-	return result, ok
+	return adapterAs[AccountIdentityAdapter](r, value)
 }
 
 func (r *Registry) BuildConverter(value account.Provider) (BuildCredentialConverter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(BuildCredentialConverter)
-	return result, ok
+	return adapterAs[BuildCredentialConverter](r, value)
 }
 
 // WebAccountSettings returns the Grok Web-specific account profile settings capability.
 func (r *Registry) WebAccountSettings() (WebAccountSettingsAdapter, bool) {
-	adapter, ok := r.Get(account.ProviderWeb)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(WebAccountSettingsAdapter)
-	return result, ok
+	return adapterAs[WebAccountSettingsAdapter](r, account.ProviderWeb)
 }

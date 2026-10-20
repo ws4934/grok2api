@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"time"
 
@@ -93,45 +94,25 @@ type PricingMetadataAdapter interface {
 }
 
 func (r *Registry) Quota(value account.Provider) (QuotaAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(QuotaAdapter)
-	return result, ok
+	return adapterAs[QuotaAdapter](r, value)
 }
 
 func (r *Registry) QuotaGroup(value account.Provider) (QuotaGroupAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(QuotaGroupAdapter)
-	return result, ok
+	return adapterAs[QuotaGroupAdapter](r, value)
 }
 
 func (r *Registry) QuotaMode(value account.Provider, upstreamModel string) string {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return ""
+	if metadata, ok := adapterAs[RoutingMetadataAdapter](r, value); ok {
+		return metadata.QuotaMode(upstreamModel)
 	}
-	metadata, ok := adapter.(RoutingMetadataAdapter)
-	if !ok {
-		return ""
-	}
-	return metadata.QuotaMode(upstreamModel)
+	return ""
 }
 
 func (r *Registry) QuotaRefreshGroup(value account.Provider, upstreamModel string) string {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return ""
+	if metadata, ok := adapterAs[QuotaRefreshMetadataAdapter](r, value); ok {
+		return metadata.QuotaRefreshGroup(upstreamModel)
 	}
-	metadata, ok := adapter.(QuotaRefreshMetadataAdapter)
-	if !ok {
-		return ""
-	}
-	return metadata.QuotaRefreshGroup(upstreamModel)
+	return ""
 }
 
 // QuotaSnapshotProvider reports a provider whose quota sync reads every
@@ -146,30 +127,17 @@ func (r *Registry) QuotaSnapshotProvider(value account.Provider) bool {
 }
 
 func (r *Registry) TierOrder(value account.Provider, upstreamModel string) []account.WebTier {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil
+	if metadata, ok := adapterAs[RoutingMetadataAdapter](r, value); ok {
+		return metadata.TierOrder(upstreamModel)
 	}
-	metadata, ok := adapter.(RoutingMetadataAdapter)
-	if !ok {
-		return nil
-	}
-	return metadata.TierOrder(upstreamModel)
+	return nil
 }
 
 func (r *Registry) TierOrderForQuotaMode(value account.Provider, upstreamModel, quotaMode string) []account.WebTier {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil
-	}
-	if metadata, ok := adapter.(QuotaTierOrderAdapter); ok {
+	if metadata, ok := adapterAs[QuotaTierOrderAdapter](r, value); ok {
 		return metadata.TierOrderForQuotaMode(upstreamModel, quotaMode)
 	}
-	metadata, ok := adapter.(RoutingMetadataAdapter)
-	if !ok {
-		return nil
-	}
-	return metadata.TierOrder(upstreamModel)
+	return r.TierOrder(value, upstreamModel)
 }
 
 // AccountTier classifies a routing candidate for client-key tier scopes.
@@ -201,16 +169,8 @@ func (r *Registry) SchedulingRisk(value account.Provider, credential account.Cre
 }
 
 func (r *Registry) PricingModel(value account.Provider, upstreamModel string) string {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return upstreamModel
-	}
-	metadata, ok := adapter.(PricingMetadataAdapter)
-	if !ok {
-		return upstreamModel
-	}
-	if model := metadata.PricingModel(upstreamModel); model != "" {
-		return model
+	if metadata, ok := adapterAs[PricingMetadataAdapter](r, value); ok {
+		return cmp.Or(metadata.PricingModel(upstreamModel), upstreamModel)
 	}
 	return upstreamModel
 }

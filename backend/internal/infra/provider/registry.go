@@ -263,30 +263,15 @@ func (r *Registry) Failure(value account.Provider) FailurePolicy {
 }
 
 func (r *Registry) Responses(value account.Provider) (ResponseAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(ResponseAdapter)
-	return result, ok
+	return adapterAs[ResponseAdapter](r, value)
 }
 
 func (r *Registry) Models(value account.Provider) (ModelCatalogAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(ModelCatalogAdapter)
-	return result, ok
+	return adapterAs[ModelCatalogAdapter](r, value)
 }
 
 func (r *Registry) Billing(value account.Provider) (BillingAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(BillingAdapter)
-	return result, ok
+	return adapterAs[BillingAdapter](r, value)
 }
 
 // adapterAs returns the provider's adapter when it implements T.

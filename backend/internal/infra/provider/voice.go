@@ -128,28 +128,13 @@ type VoiceWebSocketAdapter interface {
 }
 
 func (r *Registry) TTS(value account.Provider) (TTSAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(TTSAdapter)
-	return result, ok
+	return adapterAs[TTSAdapter](r, value)
 }
 
 func (r *Registry) STT(value account.Provider) (STTAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(STTAdapter)
-	return result, ok
+	return adapterAs[STTAdapter](r, value)
 }
 
 func (r *Registry) VoiceWebSocket(value account.Provider) (VoiceWebSocketAdapter, bool) {
-	adapter, ok := r.Get(value)
-	if !ok {
-		return nil, false
-	}
-	result, ok := adapter.(VoiceWebSocketAdapter)
-	return result, ok
+	return adapterAs[VoiceWebSocketAdapter](r, value)
 }
