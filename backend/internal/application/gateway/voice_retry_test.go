@@ -29,7 +29,8 @@ func (sharedBackendError) RequestScopedFailure() bool { return true }
 func (sharedBackendError) PublicErrorMessage() string { return "voice backend failed" }
 
 // voiceRetryService serves one STT route from two Console accounts.
-func voiceRetryService(t *testing.T) (*Service, string) {
+// consoleSSOPairService serves one Console route of the given capability from two SSO accounts.
+func consoleSSOPairService(t *testing.T, capability modeldomain.Capability) (*Service, string) {
 	t.Helper()
 	ctx := context.Background()
 	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "voice-retry.db"))
@@ -43,10 +44,10 @@ func voiceRetryService(t *testing.T) (*Service, string) {
 	accountRepo := relational.NewAccountRepository(database)
 	modelRepo := relational.NewModelRepository(database)
 	auditRepo := relational.NewAuditRepository(database)
-	const voiceModel = "voice-retry-stt"
+	voiceModel := "retry-" + string(capability)
 	if err := modelRepo.UpsertRoutes(ctx, []modeldomain.Route{{
 		PublicID: voiceModel, Provider: account.ProviderConsole, UpstreamModel: voiceModel,
-		Capability: modeldomain.CapabilitySTT, Enabled: true,
+		Capability: capability, Enabled: true,
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +73,7 @@ func voiceRetryService(t *testing.T) (*Service, string) {
 
 func runVoiceRetry(t *testing.T, execute func() (voiceExecutionResult, error)) (*Result, int, error) {
 	t.Helper()
-	service, model := voiceRetryService(t)
+	service, model := consoleSSOPairService(t, modeldomain.CapabilitySTT)
 	calls := 0
 	result, err := service.executeVoice(context.Background(), "req-voice-retry", clientkey.Key{ID: 1}, model, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, "", "", nil, func(account.Provider) bool {
 		return true

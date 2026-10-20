@@ -271,6 +271,8 @@ func (s *Service) executeImage(
 	var lastCredentialFailure *accountdomain.Credential
 	var lastCredentialError error
 	for attempt := 0; attemptPolicy.allows(attempt); attempt++ {
+		// A skipped attempt must not leave its error or response to the next one.
+		err, response = nil, nil
 		if selection == nil {
 			selection, err = s.selector.beginSelectionSessionForKey(ctx, route.Provider, route.ID, route.UpstreamModel, quotaMode, "", excluded, false, key.AccountScope())
 		}

@@ -25,7 +25,7 @@ import (
 // A persistent transport failure retries the same account once, not until
 // maxAttempts runs out.
 func TestVoiceTransportFailureRetriesTheAccountOnce(t *testing.T) {
-	service, model := voiceRetryService(t)
+	service, model := consoleSSOPairService(t, modeldomain.CapabilitySTT)
 	service.UpdateMaxAttempts(999) // config default
 	calls := 0
 	accounts := map[uint64]int{}
@@ -128,7 +128,7 @@ func (r *recordingAudits) Create(_ context.Context, value audit.Record) error {
 // A credential rejected through an error fails over to the next account.
 func TestVoiceSSORejectionFailsOver(t *testing.T) {
 	calls := map[uint64]int{}
-	service, model := voiceRetryService(t)
+	service, model := consoleSSOPairService(t, modeldomain.CapabilitySTT)
 	result, err := service.executeVoice(context.Background(), "req-voice-sso", clientkey.Key{ID: 1}, model, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, "", "", nil, func(account.Provider) bool {
 		return true
 	}, func(_ context.Context, _ account.Provider, credential account.Credential, _ string) (voiceExecutionResult, error) {

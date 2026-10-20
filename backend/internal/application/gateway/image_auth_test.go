@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -172,4 +173,24 @@ func TestImageFailureAuditKeepsUpstreamDiagnostic(t *testing.T) {
 		attempt.UpstreamURL != "https://chatgpt.com/backend-api/estuary/content" || !strings.Contains(string(attempt.ResponseBody), "File stream access denied") {
 		t.Fatalf("attempt = %#v", attempt)
 	}
+}
+
+// A credential rejected through an error fails over to the next account.
+func TestImageSSORejectionFailsOver(t *testing.T) {
+	calls := map[uint64]int{}
+	service, model := consoleSSOPairService(t, modeldomain.CapabilityImage)
+	result, err := service.executeImage(context.Background(), "req-image-sso", clientkey.Key{ID: 1}, model, "draw", audit.OperationImage, modeldomain.CapabilityImage,
+		func(account.Provider) bool { return true },
+		func(_ context.Context, _ account.Provider, credential account.Credential, _ string) (*provider.Response, error) {
+			calls[credential.ID]++
+			if len(calls) == 1 {
+				return nil, fmt.Errorf("image: %w", provider.ErrUnauthorized)
+			}
+			return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"data":[]}`))}, nil
+		}, provider.ImageRequestOptions{Count: 1}, "", "", nil, false)
+	if err != nil || len(calls) != 2 {
+		t.Fatalf("no failover after an SSO rejection: calls = %v, err = %v", calls, err)
+	}
+	result.Finalize(Usage{}, "", "")
+	_ = result.Body.Close()
 }
