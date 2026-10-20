@@ -1609,7 +1609,8 @@ func TestAttemptLoopQualityHoldPreservesReplaySafety(t *testing.T) {
 				now := time.Now().UTC()
 				if err := responseRepo.Save(ctx, inferencedomain.ResponseOwnership{
 					ResponseID: "resp-root", AccountID: credentials[0].ID, ClientKeyID: key.ID,
-					Provider: accountdomain.ProviderBuild, PromptCacheKey: "session-root",
+					ModelRouteID: discoveredRouteID(t, modelRepo, accountdomain.ProviderBuild, "grok-4.6"),
+					Provider:     accountdomain.ProviderBuild, PromptCacheKey: "session-root",
 					CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(time.Hour),
 				}); err != nil {
 					t.Fatal(err)

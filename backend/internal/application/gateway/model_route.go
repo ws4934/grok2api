@@ -81,16 +81,8 @@ func (s *Service) eligibleConversationRoutes(routes []modeldomain.Route, key cli
 	conversationSupported := false
 	storedResponseUnsupported := false
 	for _, route := range routes {
-		if ownership != nil {
-			if ownership.ModelRouteID != 0 {
-				if route.ID != ownership.ModelRouteID {
-					continue
-				}
-			} else if route.Provider != ownership.Provider {
-				// Backward compatibility for ownership rows created before route IDs
-				// were persisted: retain the original Provider-scoped pin.
-				continue
-			}
+		if ownership != nil && route.ID != ownership.ModelRouteID {
+			continue
 		}
 		matchedOwnership = true
 		fallback = route

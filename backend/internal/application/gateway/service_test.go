@@ -1145,7 +1145,7 @@ func TestSelectConversationRouteRespectsClientKeyAcrossSharedPublicModel(t *test
 	if !errors.As(err, &unavailable) || unavailable.Code() != "client_key_account_scope_unavailable" {
 		t.Fatalf("provider scope must not fall back: %#v, err = %v", unavailable, err)
 	}
-	ownership := &inferencedomain.ResponseOwnership{Provider: account.ProviderWeb}
+	ownership := &inferencedomain.ResponseOwnership{Provider: account.ProviderWeb, ModelRouteID: 15}
 	_, err = service.selectConversationRoute(routes, clientkey.Key{ProviderScope: clientkey.ProviderScopeOf(account.ProviderBuild)}, audit.OperationResponses, "/responses", true, ownership)
 	if !errors.As(err, &unavailable) || unavailable.Code() != "client_key_account_scope_unavailable" {
 		t.Fatalf("owned response must remain inside the updated provider scope: %#v, err = %v", unavailable, err)
@@ -1853,7 +1853,8 @@ func TestGatewayDoesNotPersistStatelessConsoleResponses(t *testing.T) {
 	now := time.Now().UTC()
 	if err := responseRepo.Save(ctx, inferencedomain.ResponseOwnership{
 		ResponseID: "resp-console-stale", AccountID: credential.ID, ClientKeyID: key.ID, Provider: account.ProviderConsole,
-		ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
+		ModelRouteID: discoveredRouteID(t, modelRepo, account.ProviderConsole, model),
+		ExpiresAt:    now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -4193,7 +4194,8 @@ func TestGatewayPreviousResponseIDDoesNotCrossAccounts(t *testing.T) {
 	now := time.Now().UTC()
 	if err := responseRepo.Save(ctx, inferencedomain.ResponseOwnership{
 		ResponseID: "resp-pin-root", AccountID: credentials[0].ID, ClientKeyID: clientKey.ID,
-		Provider: account.ProviderBuild, PromptCacheKey: "session-pin", ExpiresAt: now.Add(time.Hour),
+		ModelRouteID: discoveredRouteID(t, modelRepo, account.ProviderBuild, "grok-pin"),
+		Provider:     account.ProviderBuild, PromptCacheKey: "session-pin", ExpiresAt: now.Add(time.Hour),
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -4271,7 +4273,8 @@ func TestGatewayPinnedDisabledOwnerRecordsSpecific503(t *testing.T) {
 	now := time.Now().UTC()
 	if err := responseRepo.Save(ctx, inferencedomain.ResponseOwnership{
 		ResponseID: "resp-pinned-disabled", AccountID: owner.ID, ClientKeyID: clientKey.ID,
-		Provider: account.ProviderBuild, PromptCacheKey: "session-pinned-disabled", ExpiresAt: now.Add(time.Hour),
+		ModelRouteID: discoveredRouteID(t, modelRepo, account.ProviderBuild, model),
+		Provider:     account.ProviderBuild, PromptCacheKey: "session-pinned-disabled", ExpiresAt: now.Add(time.Hour),
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -4360,7 +4363,8 @@ func TestGatewayPinnedResponseReturnsCachedTeamRateLimitWithoutSpinning(t *testi
 	now := time.Now().UTC()
 	if err := responseRepo.Save(ctx, inferencedomain.ResponseOwnership{
 		ResponseID: "resp-pinned-team", AccountID: credential.ID, ClientKeyID: clientKey.ID,
-		Provider: account.ProviderBuild, PromptCacheKey: "session-pinned-team", ExpiresAt: now.Add(time.Hour),
+		ModelRouteID: discoveredRouteID(t, modelRepo, account.ProviderBuild, model),
+		Provider:     account.ProviderBuild, PromptCacheKey: "session-pinned-team", ExpiresAt: now.Add(time.Hour),
 		CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -5110,4 +5114,14 @@ func TestUpstreamResponseErrorHealthPenaltyDistinguishesPartialIdle(t *testing.T
 	if _, _, ok = upstreamResponseErrorHealthPenalty(context.DeadlineExceeded, 15*time.Minute); ok {
 		t.Fatal("ordinary timeout must not look like a confirmed response-body failure")
 	}
+}
+
+// discoveredRouteID returns the ID of a route created by UpsertDiscovered.
+func discoveredRouteID(t *testing.T, models *relational.ModelRepository, provider account.Provider, upstreamModel string) uint64 {
+	t.Helper()
+	route, err := models.GetByProviderUpstream(context.Background(), provider, upstreamModel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return route.ID
 }
