@@ -105,6 +105,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 	}
 
 	for attempt := 0; attemptPolicy.allows(attempt); attempt++ {
+		err = nil // a previous attempt's credential failure must not skip this acquire
 		if selection == nil {
 			selection, err = s.selector.beginSelectionSessionForKey(ctx, route.Provider, route.ID, route.UpstreamModel, quotaMode, "", excluded, false, input.ClientKey.AccountScope())
 		}
@@ -223,6 +224,12 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 
 				budget := newFinalizationBudget(string(operation), string(route.Provider))
 				accountID := accountCredential.ID
+				if successful {
+					_ = budget.run("account_health", finalizationHealthBudget, func(stageCtx context.Context) error {
+						s.selector.markSuccess(stageCtx, accountCredential, false)
+						return nil
+					})
+				}
 				if successful && quotaMode != "" && quotaMode != "weekly" {
 					var updated bool
 					err := budget.run("quota_decrement", finalizationQuotaBudget, func(stageCtx context.Context) error {
@@ -274,6 +281,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 			Operation: operation, Capability: capability,
 		}, nil
 	}
+	writeFailureAudit(http.StatusServiceUnavailable, "upstream_unavailable", lastCredentialFailure)
 	if lastErr != nil {
 		return nil, lastErr
 	}

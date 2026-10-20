@@ -360,6 +360,9 @@ func (s *Service) executeVoice(
 		retried = &retriedVoiceResponse{status: response.StatusCode, header: response.Header.Clone(), body: body, credential: credential}
 	}
 	for attempt := 0; attemptPolicy.allows(attempt); attempt++ {
+		// A credential or transport failure of the previous attempt must not
+		// skip this attempt's acquire or leave its drained response behind.
+		err, response = nil, nil
 		if selection == nil {
 			selection, err = s.selector.beginSelectionSessionForKey(ctx, route.Provider, route.ID, route.UpstreamModel, quotaMode, "", excluded, false, key.AccountScope())
 		}
@@ -406,7 +409,7 @@ func (s *Service) executeVoice(
 			} else {
 				failure := newTransportUpstreamFailure(err, credential.ID, credential.Name)
 				lastCredentialError = failure
-				if ctx.Err() == nil && isRetryableTransportFailure(s.providers.Failure(credential.Provider), err) && attemptPolicy.hasNext(attempt) {
+				if ctx.Err() == nil && isRetryableTransportFailure(s.providers.Failure(credential.Provider), err) && attempt == 0 && attemptPolicy.hasNext(attempt) {
 					// Transport failures are normally tied to the selected egress. Retry the
 					// same account after the adapter has invalidated/rebuilt that transport,
 					// without cooling an otherwise healthy credential.
@@ -469,6 +472,10 @@ func (s *Service) executeVoice(
 		}
 		break
 	}
+	if response == nil && retried != nil {
+		writeFailureAudit(retried.status, "upstream_error", &retried.credential)
+		return retried.result(), nil
+	}
 	if response == nil {
 		writeFailureAudit(http.StatusServiceUnavailable, "upstream_unavailable", lastCredentialFailure)
 		if lastCredentialError == nil {
@@ -484,6 +491,12 @@ func (s *Service) executeVoice(
 			lease.completeSelectorObservation(successful)
 			lease.Release()
 			budget := newFinalizationBudget(string(operation), string(route.Provider))
+			if successful {
+				_ = budget.run("account_health", finalizationHealthBudget, func(stageCtx context.Context) error {
+					s.selector.markSuccess(stageCtx, credential, false)
+					return nil
+				})
+			}
 			record := auditBase
 			record.AccountID, record.AccountName, record.StatusCode = &accountID, credential.Name, response.StatusCode
 			record.ErrorCode = errorCode
