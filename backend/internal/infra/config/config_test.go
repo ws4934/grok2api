@@ -198,7 +198,6 @@ bootstrapAdmin:
   password: "password123"
 qualityGuard:
   enabled: true
-  clientKeyID: 999
   model: "grok-4.5"
   nodeIDs: [2, 9]
   minimumHealthyNodes: 1
@@ -214,7 +213,7 @@ qualityGuard:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !value.QualityGuard.Enabled || value.QualityGuard.DeprecatedClientKeyID != 999 || value.QualityGuard.ActiveInterval.Value() != 45*time.Minute {
+	if !value.QualityGuard.Enabled || value.QualityGuard.ActiveInterval.Value() != 45*time.Minute {
 		t.Fatalf("qualityGuard = %#v", value.QualityGuard)
 	}
 	retry := value.QualityGuard.RequestRetry
@@ -350,29 +349,8 @@ secrets:
 
 func TestDefaultConsoleProviderConfig(t *testing.T) {
 	console := defaultConfig().Provider.Console
-	if console.BaseURL != "https://console.x.ai" || console.LegacyUserAgent != "" || console.ChatTimeout.Value() != 5*time.Minute {
+	if console.BaseURL != "https://console.x.ai" || console.ChatTimeout.Value() != 5*time.Minute {
 		t.Fatalf("console defaults = %#v", console)
-	}
-}
-
-func TestLoadAcceptsLegacyConsoleUserAgent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	data := []byte(`provider:
-  console:
-    userAgent: "legacy-console-agent"
-secrets:
-  jwtSecret: "12345678901234567890123456789012"
-  credentialEncryptionKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-`)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Provider.Console.LegacyUserAgent != "legacy-console-agent" {
-		t.Fatalf("legacy userAgent = %q", cfg.Provider.Console.LegacyUserAgent)
 	}
 }
 

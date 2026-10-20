@@ -217,7 +217,6 @@ type WebProviderConfig struct {
 
 type ConsoleProviderConfig struct {
 	BaseURL           string   `yaml:"baseURL"`
-	LegacyUserAgent   string   `yaml:"userAgent"` // Deprecated: 仅用于兼容旧配置文件，不参与请求。
 	ChatTimeout       Duration `yaml:"chatTimeout"`
 	StreamIdleTimeout Duration `yaml:"-"`
 }
@@ -291,10 +290,7 @@ type AuditConfig struct {
 // Docker Compose controls whether the sidecar process is started; Enabled is a
 // separate server-side authorization gate for its internal API.
 type QualityGuardConfig struct {
-	Enabled bool `yaml:"enabled"`
-	// DeprecatedClientKeyID is accepted only so configurations created by the
-	// short-lived manual-ID preview continue to load. It is ignored.
-	DeprecatedClientKeyID   uint64   `yaml:"clientKeyID"`
+	Enabled                 bool     `yaml:"enabled"`
 	Model                   string   `yaml:"model"`
 	NodeIDs                 []uint64 `yaml:"nodeIDs"`
 	Mode                    string   `yaml:"mode"`

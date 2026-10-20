@@ -162,10 +162,6 @@ qualityGuard:
   nodeIDs: []
 ```
 
-The legacy preview `clientKeyID` field is accepted but ignored and can be
-removed. Upgrades intentionally do not delete an operator-created key because
-it may still serve another workload.
-
 An empty `nodeIDs` list discovers every enabled proxied Build node plus nodes
 previously quarantined by this guard. Discovery follows all API pages; fixed
 fallback nodes are reported as protected and excluded from automatic quarantine.

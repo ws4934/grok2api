@@ -415,10 +415,6 @@ qualityGuard:
 docker compose --profile quality-guard up -d --build
 ```
 
-Existing preview deployments that still contain `clientKeyID` can upgrade
-directly. The field is accepted for compatibility but ignored and can be
-removed; any manually created probe key is intentionally left untouched.
-
 After changing this configuration, run `docker compose --profile quality-guard restart grok2api egress-quality-guard` to reload the base settings; policy edits made in the admin page still hot-reload.
 
 The normal `docker compose up -d` command does not start the guard or generate

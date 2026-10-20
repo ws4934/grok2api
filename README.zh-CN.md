@@ -385,8 +385,6 @@ qualityGuard:
 docker compose --profile quality-guard up -d --build
 ```
 
-曾使用预览版 `clientKeyID` 配置的现有部署可以直接升级：该字段会被兼容读取但不再使用，可安全删除；原来手工创建的探测 Key 不会被程序擅自删除。
-
 后续修改该配置时，执行 `docker compose --profile quality-guard restart grok2api egress-quality-guard` 使基础配置重新加载；管理页面中的策略调整仍支持热加载。
 
 普通的 `docker compose up -d` 不会启动守护程序，也不会产生主动探测流量。sidecar 只从主程序获得权限受限的内部凭据，不保存或使用管理员密码。启用自动隔离前请先阅读上面的详细说明。
