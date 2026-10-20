@@ -35,6 +35,10 @@ func (s *Selector) beginSelectionSession(ctx context.Context, provider account.P
 }
 
 func (s *Selector) beginSelectionSessionForKey(ctx context.Context, provider account.Provider, modelRouteID uint64, upstreamModel, quotaMode, affinityKey string, excluded map[uint64]bool, allowQuotaProbe bool, requestedScope clientkeydomain.AccountScope) (session *selectionSession, err error) {
+	return s.beginSelectionSessionOnNode(ctx, provider, modelRouteID, upstreamModel, quotaMode, affinityKey, excluded, allowQuotaProbe, requestedScope, 0)
+}
+
+func (s *Selector) beginSelectionSessionOnNode(ctx context.Context, provider account.Provider, modelRouteID uint64, upstreamModel, quotaMode, affinityKey string, excluded map[uint64]bool, allowQuotaProbe bool, requestedScope clientkeydomain.AccountScope, forcedEgressNodeID uint64) (session *selectionSession, err error) {
 	accountScope, scopeValid := clientkeydomain.NormalizeAccountScope(requestedScope)
 	defer annotateSelectionAccountScope(&err, accountScope)
 	if !scopeValid || !accountScope.AllowsProvider(provider) {
@@ -72,6 +76,9 @@ func (s *Selector) beginSelectionSessionForKey(ctx context.Context, provider acc
 	quotaConsumed := s.quotaConsumptionSnapshot(provider)
 	for index := range values {
 		candidate := &values[index]
+		if forcedEgressNodeID != 0 && candidate.Credential.EgressNodeID != forcedEgressNodeID {
+			continue
+		}
 		if !allTiers && !s.accountScopeAllowsCandidate(provider, accountScope, *candidate) {
 			continue
 		}
