@@ -428,6 +428,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 		clientKeyService.UpdateDefaults(next.ClientKeyDefaults.RPMLimit, next.ClientKeyDefaults.MaxConcurrent)
 		accountService.UpdateAutoCleanConfig(accountAutoCleanConfig(next.Accounts))
 	})
+	settingsService.SetAdobeMintTester(adobeAdapter.TestMint)
 	updateService := updatecheckapp.NewService(buildinfo.CurrentVersion(), cfg.Frontend.StaticPath, nil)
 
 	startup := newStartupState(len(windows))

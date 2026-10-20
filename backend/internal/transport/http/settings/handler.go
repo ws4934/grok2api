@@ -18,6 +18,34 @@ func NewHandler(service *settingsapp.Service) *Handler { return &Handler{service
 func (h *Handler) Register(router *gin.RouterGroup) {
 	router.GET("/settings", h.get)
 	router.PUT("/settings", h.update)
+	router.POST("/settings/adobe/mint-test", h.testAdobeMint)
+}
+
+type adobeMintTestRequest struct {
+	SherlockMintAPI string `json:"sherlockMintAPI"`
+}
+
+type adobeMintTestResponse struct {
+	LatencyMS int64 `json:"latencyMs"`
+}
+
+// testAdobeMint 测试一个尚未保存的 mint 地址：地址不合规返回 400，mint 不可用返回 502。
+func (h *Handler) testAdobeMint(c *gin.Context) {
+	var request adobeMintTestRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效: "+err.Error())
+		return
+	}
+	latency, err := h.service.TestAdobeMint(c.Request.Context(), request.SherlockMintAPI)
+	if errors.Is(err, settingsapp.ErrInvalidInput) {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", err.Error())
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusBadGateway, "adobeMintTestFailed", "mint 测试失败: "+err.Error())
+		return
+	}
+	response.Success(c, http.StatusOK, adobeMintTestResponse{LatencyMS: latency.Milliseconds()})
 }
 
 type settingsConfigDTO struct {

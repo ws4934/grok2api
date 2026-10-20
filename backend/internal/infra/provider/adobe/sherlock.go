@@ -85,29 +85,9 @@ func (s *sherlockService) mint(ctx context.Context, fresh bool) (string, error) 
 	}
 	return flight.Do(ctx, &s.flight, key, mintTimeout, func(ctx context.Context) (string, error) {
 		started := time.Now()
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		value, err := fetchSherlock(ctx, s.client, endpoint)
 		if err != nil {
 			return "", err
-		}
-		req.Header.Set("Accept", "application/json")
-		resp, err := s.client.Do(req)
-		if err != nil {
-			return "", err
-		}
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return "", errors.New("adobe: mint 服务返回 " + resp.Status)
-		}
-		var body struct {
-			Token string `json:"token"`
-		}
-		value := ""
-		if json.Unmarshal(raw, &body) == nil {
-			value = strings.TrimSpace(body.Token)
-		}
-		if !validSherlock(value) {
-			return "", errors.New("adobe: mint 服务未返回有效 sherlockToken")
 		}
 		s.mu.Lock()
 		// 普通拉取可能晚于强制重铸返回（拿的是 sidecar 缓存的旧 token），不能覆盖新的。
@@ -117,6 +97,51 @@ func (s *sherlockService) mint(ctx context.Context, fresh bool) (string, error) 
 		s.mu.Unlock()
 		return value, nil
 	})
+}
+
+// TestMint 按提交时的方式向 base 处的 mint 服务要一枚 token，供管理端测试未保存的
+// 地址；不改动缓存的 token。
+func (a *Adapter) TestMint(ctx context.Context, base string) error {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return errNoSherlockSource
+	}
+	ctx, cancel := context.WithTimeout(ctx, mintTimeout)
+	defer cancel()
+	_, err := fetchSherlock(ctx, a.sherlock.client, base+"/mint")
+	return err
+}
+
+// fetchSherlock 向 mint 服务拉取一枚 token 并校验结构；非 2xx 时带上服务给出的原因。
+func fetchSherlock(ctx context.Context, client *http.Client, endpoint string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var body struct {
+		Token string `json:"token"`
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message := "adobe: mint 服务返回 " + resp.Status
+		if reason := strings.TrimSpace(body.Error); reason != "" {
+			message += ": " + truncate(reason, 200)
+		}
+		return "", errors.New(message)
+	}
+	value := strings.TrimSpace(body.Token)
+	if !validSherlock(value) {
+		return "", errors.New("adobe: mint 服务未返回有效 sherlockToken")
+	}
+	return value, nil
 }
 
 // validSherlock 校验 x-arp-session-id 的结构是否完整。

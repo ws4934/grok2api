@@ -237,6 +237,43 @@ func TestSherlockNoSourceErrors(t *testing.T) {
 	}
 }
 
+func TestTestMintUsesTheGivenAddressWithoutCaching(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.String())
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": validSherlockToken()})
+	}))
+	defer server.Close()
+	adapter := NewAdapter(Config{SherlockMintAPI: "http://saved-mint:8777"}, nil, nil, nil, nil)
+	if err := adapter.TestMint(context.Background(), " "+server.URL+"/ "); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(requests, []string{"/mint"}) || adapter.sherlock.token != "" {
+		t.Fatalf("requests = %v, cached token = %q", requests, adapter.sherlock.token)
+	}
+}
+
+func TestTestMintReportsWhyMintFailed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   map[string]any
+		want   string
+	}{
+		"mint error":    {http.StatusServiceUnavailable, map[string]any{"status": "error", "error": "mint timeout 150s"}, "503 Service Unavailable: mint timeout 150s"},
+		"invalid token": {http.StatusOK, map[string]any{"token": "not-a-token"}, "未返回有效 sherlockToken"},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(tc.status)
+			_ = json.NewEncoder(w).Encode(tc.body)
+		}))
+		err := NewAdapter(Config{}, nil, nil, nil, nil).TestMint(context.Background(), server.URL)
+		server.Close()
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: error = %v, want it to contain %q", name, err, tc.want)
+		}
+	}
+}
+
 type egressRepositoryStub struct{}
 
 func (egressRepositoryStub) ListEgressNodes(context.Context, egressdomain.Scope, repository.SortQuery) ([]egressdomain.Node, error) {

@@ -199,7 +199,7 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
   docker compose --profile adobe up -d --build
   ```
 
-- grok2api 默认指向 compose 的 `mint` 服务（`provider.adobe.sherlockMintAPI=http://mint:8777`），定期自动刷新并缓存；非 compose 部署需自行提供可达的 mint 地址。mint 地址和单次上游请求超时（`provider.adobe.timeout`，默认 60 秒）可在 **运行设置 → Adobe Firefly** 在线修改，立即生效；保存后以数据库中的值为准。公网 mint 地址只能用 HTTPS（443 端口）。
+- grok2api 默认指向 compose 的 `mint` 服务（`provider.adobe.sherlockMintAPI=http://mint:8777`），定期自动刷新并缓存；非 compose 部署需自行提供可达的 mint 地址。mint 地址和单次上游请求超时（`provider.adobe.timeout`，默认 60 秒）可在 **运行设置 → Adobe Firefly** 在线修改，立即生效；保存后以数据库中的值为准。公网 mint 地址只能用 HTTPS（443 端口）。地址框旁的「测试」按钮由网关向输入的地址实际请求一次 `/mint`（不必先保存），失败时显示 mint 返回的原因。
 - mint 容器可选出站代理 `MINT_PROXY`：`http(s)://`（可带 `user:pass@`，由页面应答代理认证）或 `socks5://`（带认证时走容器内置中转）。
 - 账号始终靠导入 Cookie，无自动注册。
 

@@ -649,7 +649,7 @@ func (c Config) Validate() error {
 	switch c.Provider.Web.ClearanceMode {
 	case ClearanceModeManual:
 	case ClearanceModeFlareSolverr, ClearanceModeOnDemand:
-		if err := validateServiceURL(c.Provider.Web.FlareSolverrURL); err != nil {
+		if err := ValidateServiceURL(c.Provider.Web.FlareSolverrURL); err != nil {
 			return fmt.Errorf("provider.web FlareSolverr URL 无效: %w", err)
 		}
 	default:
@@ -684,7 +684,7 @@ func (c Config) Validate() error {
 		return errors.New("provider.chatgpt.outputTokenLimit 必须在 1 到 131072 之间，visionTokens 必须在 0 到 100000 之间")
 	}
 	if strings.TrimSpace(c.Provider.Adobe.SherlockMintAPI) != "" {
-		if err := validateServiceURL(c.Provider.Adobe.SherlockMintAPI); err != nil {
+		if err := ValidateServiceURL(c.Provider.Adobe.SherlockMintAPI); err != nil {
 			return fmt.Errorf("provider.adobe mint 服务地址无效: %w", err)
 		}
 	}
@@ -1015,8 +1015,8 @@ func defaultConfig() Config {
 	}
 }
 
-// validateServiceURL 校验 FlareSolverr、mint 等辅助服务地址：公网须 HTTPS:443，内网可用 HTTP。
-func validateServiceURL(value string) error {
+// ValidateServiceURL 校验 FlareSolverr、mint 等辅助服务地址：公网须 HTTPS:443，内网可用 HTTP。
+func ValidateServiceURL(value string) error {
 	if err := signerurl.Validate(value); err != nil {
 		return errors.New(strings.ReplaceAll(err.Error(), "签名 URL", "URL"))
 	}

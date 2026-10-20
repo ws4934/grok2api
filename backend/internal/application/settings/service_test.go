@@ -711,6 +711,32 @@ func TestUpdateRejectsInvalidProviderAdobe(t *testing.T) {
 	}
 }
 
+func TestAdobeMintTestValidatesTheAddressFirst(t *testing.T) {
+	service := NewService(testConfig(t), time.Time{}, 0, &runtimeSettingsRepositoryStub{}, nil, nil)
+	var tested []string
+	service.SetAdobeMintTester(func(_ context.Context, base string) error {
+		tested = append(tested, base)
+		if base == "http://mint:9999" {
+			return errors.New("connection refused")
+		}
+		return nil
+	})
+	for _, base := range []string{"", "  ", "http://mint.example.com:8777", "http://mint:8777/?a=1"} {
+		if _, err := service.TestAdobeMint(context.Background(), base); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("%q: error = %v, want ErrInvalidInput", base, err)
+		}
+	}
+	if _, err := service.TestAdobeMint(context.Background(), " http://mint:8777 "); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.TestAdobeMint(context.Background(), "http://mint:9999"); err == nil || errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("unreachable mint: error = %v", err)
+	}
+	if !reflect.DeepEqual(tested, []string{"http://mint:8777", "http://mint:9999"}) {
+		t.Fatalf("tested = %v", tested)
+	}
+}
+
 // Fields only the YAML file sets must survive applying persisted settings.
 func TestApplyingSettingsKeepsFileOnlyFields(t *testing.T) {
 	base := testConfig(t)

@@ -233,6 +233,13 @@ export function updateSettings(revision: string, config: SettingsConfigDTO): Pro
   return apiRequest("/api/admin/v1/settings", { method: "PUT", body: { revision, config } }, decodeSettingsSnapshot);
 }
 
+const decodeAdobeMintTest = createObjectDecoder<{ latencyMs: number }>("adobe mint test", { latencyMs: isNumber });
+
+/** Requests one token from an unsaved mint address the way Adobe submits do. */
+export function testAdobeMint(sherlockMintAPI: string): Promise<{ latencyMs: number }> {
+  return apiRequest("/api/admin/v1/settings/adobe/mint-test", { method: "POST", body: { sherlockMintAPI } }, decodeAdobeMintTest);
+}
+
 type ListEgressNodesInput = {
   page?: number;
   pageSize?: number;

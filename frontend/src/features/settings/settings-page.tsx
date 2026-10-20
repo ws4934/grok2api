@@ -1,8 +1,10 @@
+import { useMutation } from "@tanstack/react-query";
 import { RotateCcw, Sparkles } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import { Controller } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
@@ -15,12 +17,14 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { EgressNodes } from "@/features/settings/egress-nodes";
+import { testAdobeMint } from "@/features/settings/settings-api";
 import { VersionUpdateSection } from "@/features/system/version-update";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isByteSizeUnit, isDurationUnit, MAX_ROUTING_ATTEMPTS, type ByteSizeValue, type DurationValue, UNLIMITED_ROUTING_ATTEMPTS } from "@/features/settings/settings-model";
 import { useSettings } from "@/features/settings/use-settings";
 import { ErrorState } from "@/shared/components/data-state";
 import { cn } from "@/shared/lib/cn";
+import { formatDuration } from "@/shared/lib/format";
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -186,7 +190,7 @@ export function SettingsPage() {
           <SettingsPane value="adobe">
           <SettingsSection title={t("settingsAdobe.title")}>
             <div className="space-y-0">
-              <SettingsField controlId="adobe-sherlock-mint-api" label={t("settingsAdobe.sherlockMintAPI")} description={t("settingsAdobe.sherlockMintAPIHelp")} error={form.formState.errors.providerAdobe?.sherlockMintAPI?.message}><Input id="adobe-sherlock-mint-api" type="url" placeholder="http://mint:8777" {...form.register("providerAdobe.sherlockMintAPI")} /></SettingsField>
+              <SettingsField controlId="adobe-sherlock-mint-api" label={t("settingsAdobe.sherlockMintAPI")} description={t("settingsAdobe.sherlockMintAPIHelp")} error={form.formState.errors.providerAdobe?.sherlockMintAPI?.message}><div className="flex min-w-0 gap-2"><Input id="adobe-sherlock-mint-api" type="url" className="min-w-0" placeholder="http://mint:8777" {...form.register("providerAdobe.sherlockMintAPI")} /><MintTestButton address={form.watch("providerAdobe.sherlockMintAPI")} /></div></SettingsField>
               <SettingsField controlId="adobe-timeout" label={t("settingsAdobe.timeout")} description={t("settingsAdobe.timeoutHelp")} error={form.formState.errors.providerAdobe?.timeout?.message}><Controller control={form.control} name="providerAdobe.timeout" render={({ field }) => <DurationInput id="adobe-timeout" value={field.value} onChange={field.onChange} />} /></SettingsField>
             </div>
           </SettingsSection>
@@ -630,6 +634,22 @@ function ByteSizeInput({ id, value, onChange }: { id: string; value?: ByteSizeVa
         </SelectContent>
       </Select>
     </div>
+  );
+}
+
+// MintTestButton tests the address in the box, saved or not, through the gateway.
+function MintTestButton({ address }: { address?: string }) {
+  const { t } = useTranslation();
+  const test = useMutation({
+    mutationFn: testAdobeMint,
+    onSuccess: (result) => toast.success(t("settingsAdobe.mintTestPassed", { duration: formatDuration(result.latencyMs) })),
+    onError: (error) => toast.error(error instanceof Error ? error.message : t("errors.generic")),
+  });
+  const value = (address ?? "").trim();
+  return (
+    <Button type="button" variant="secondary" size="sm" className="shrink-0" disabled={value === "" || test.isPending} onClick={() => test.mutate(value)}>
+      {test.isPending ? <Spinner /> : null}{t("settingsAdobe.testMint")}
+    </Button>
   );
 }
 

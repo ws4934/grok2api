@@ -190,6 +190,7 @@ type Service struct {
 	repository             repository.RuntimeSettingsRepository
 	notify                 func(context.Context)
 	apply                  func(config.Config)
+	testAdobeMint          func(context.Context, string) error
 }
 
 func NewService(cfg config.Config, updatedAt time.Time, revision uint64, repository repository.RuntimeSettingsRepository, notify func(context.Context), apply func(config.Config)) *Service {
@@ -197,6 +198,27 @@ func NewService(cfg config.Config, updatedAt time.Time, revision uint64, reposit
 		updatedAt = time.Now().UTC()
 	}
 	return &Service{cfg: cfg, updatedAt: updatedAt, revision: revision, activeBufferSize: cfg.Audit.BufferSize, activeMediaConcurrency: cfg.Provider.Web.MediaConcurrency, repository: repository, notify: notify, apply: apply}
+}
+
+// SetAdobeMintTester 注入 Adobe mint 服务测试：按提交时的方式向给定地址要一枚 token。
+func (s *Service) SetAdobeMintTester(test func(context.Context, string) error) {
+	s.testAdobeMint = test
+}
+
+// TestAdobeMint 按保存时的规则校验一个尚未保存的 mint 地址，再实际测试它，返回耗时。
+func (s *Service) TestAdobeMint(ctx context.Context, base string) (time.Duration, error) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return 0, fmt.Errorf("%w: mint 服务地址不能为空", ErrInvalidInput)
+	}
+	if err := config.ValidateServiceURL(base); err != nil {
+		return 0, fmt.Errorf("%w: mint 服务地址无效: %v", ErrInvalidInput, err)
+	}
+	started := time.Now()
+	if err := s.testAdobeMint(ctx, base); err != nil {
+		return 0, err
+	}
+	return time.Since(started), nil
 }
 
 // LoadPersisted 将数据库运行设置覆盖到代码默认配置，并执行完整边界校验。
