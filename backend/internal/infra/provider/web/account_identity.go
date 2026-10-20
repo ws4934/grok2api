@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	domainegress "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/sessionidentity"
 )
@@ -15,7 +16,7 @@ func (a *Adapter) SyncAccountIdentity(ctx context.Context, credential account.Cr
 	if credential.Provider != account.ProviderWeb || credential.AuthType != account.AuthTypeSSO {
 		return provider.AccountIdentity{}, fmt.Errorf("仅 Grok Web SSO 账号支持身份同步")
 	}
-	return sessionidentity.Fetch(ctx, a.config().BaseURL, credential, a.egress, a.cipher)
+	return sessionidentity.Fetch(ctx, a.config().BaseURL, domainegress.ScopeWeb, credential, a.egress, a.cipher)
 }
 
 func parseAccountIdentity(body []byte) (provider.AccountIdentity, error) {

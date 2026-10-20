@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/sessionidentity"
 )
@@ -15,7 +16,7 @@ func (a *Adapter) SyncAccountIdentity(ctx context.Context, credential account.Cr
 	if credential.Provider != account.ProviderConsole || credential.AuthType != account.AuthTypeSSO {
 		return provider.AccountIdentity{}, fmt.Errorf("仅 Grok Console SSO 账号支持身份同步")
 	}
-	return sessionidentity.Fetch(ctx, a.config().SessionBaseURL, credential, a.egress, a.cipher)
+	return sessionidentity.Fetch(ctx, a.config().SessionBaseURL, egressdomain.ScopeConsole, credential, a.egress, a.cipher)
 }
 
 var _ provider.AccountIdentityAdapter = (*Adapter)(nil)

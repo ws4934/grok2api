@@ -20,8 +20,8 @@ import (
 const responseBodyLimit = 64 << 10
 
 // Fetch 通过 Grok Web Session 接口读取 SSO 账号的稳定身份元数据。
-// Web 与 Console 共用该链路，确保代理、Cookie、UA 和 Resin 身份一致。
-func Fetch(ctx context.Context, baseURL string, credential account.Credential, egress *infraegress.Manager, cipher *security.Cipher) (provider.AccountIdentity, error) {
+// Web 与 Console 共用该链路；scope 是账号自身的出口作用域，确保代理、Cookie、UA 和 Resin 身份一致。
+func Fetch(ctx context.Context, baseURL string, scope domainegress.Scope, credential account.Credential, egress *infraegress.Manager, cipher *security.Cipher) (provider.AccountIdentity, error) {
 	if credential.AuthType != account.AuthTypeSSO || (credential.Provider != account.ProviderWeb && credential.Provider != account.ProviderConsole) {
 		return provider.AccountIdentity{}, fmt.Errorf("仅 Grok Web 与 Console SSO 账号支持身份同步")
 	}
@@ -35,7 +35,7 @@ func Fetch(ctx context.Context, baseURL string, credential account.Credential, e
 	if strings.TrimSpace(token) == "" {
 		return provider.AccountIdentity{}, provider.ErrUnauthorized
 	}
-	lease, err := egress.AcquireCredential(ctx, domainegress.ScopeWeb, credential)
+	lease, err := egress.AcquireCredential(ctx, scope, credential)
 	if err != nil {
 		return provider.AccountIdentity{}, err
 	}
@@ -43,7 +43,7 @@ func Fetch(ctx context.Context, baseURL string, credential account.Credential, e
 	return FetchWithLease(ctx, baseURL, token, lease, egress)
 }
 
-// FetchWithLease resolves Session identity through an already selected Web
+// FetchWithLease resolves Session identity through an already selected
 // egress lease. It keeps just-in-time Gateway identity resolution on the same
 // physical exit, browser fingerprint, and Clearance as the following request.
 func FetchWithLease(ctx context.Context, baseURL, token string, lease *infraegress.Lease, egress *infraegress.Manager) (provider.AccountIdentity, error) {
@@ -63,7 +63,7 @@ func FetchWithLease(ctx context.Context, baseURL, token string, lease *infraegre
 	request.Header = browserHeaders(token, origin, lease)
 	response, err := lease.Do(request)
 	if err != nil {
-		egress.FeedbackForScope(context.WithoutCancel(ctx), domainegress.ScopeWeb, lease.NodeID, 0, err)
+		egress.FeedbackForScope(context.WithoutCancel(ctx), lease.Scope, lease.NodeID, 0, err)
 		return provider.AccountIdentity{}, err
 	}
 	defer response.Body.Close()
@@ -74,7 +74,7 @@ func FetchWithLease(ctx context.Context, baseURL, token string, lease *infraegre
 	if len(body) > responseBodyLimit {
 		return provider.AccountIdentity{}, fmt.Errorf("Grok Session 响应超过安全上限")
 	}
-	egress.FeedbackForScope(context.WithoutCancel(ctx), domainegress.ScopeWeb, lease.NodeID, response.StatusCode, nil)
+	egress.FeedbackForScope(context.WithoutCancel(ctx), lease.Scope, lease.NodeID, response.StatusCode, nil)
 	if response.StatusCode == http.StatusUnauthorized {
 		return provider.AccountIdentity{}, provider.ErrUnauthorized
 	}
