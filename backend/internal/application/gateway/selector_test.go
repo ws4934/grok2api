@@ -135,7 +135,7 @@ func TestSelectorPrioritizesDueQuotaProbeOnce(t *testing.T) {
 	}
 	lease.Release()
 
-	selector.MarkSuccess(ctx, probe)
+	selector.markSuccess(ctx, probe, true)
 	if _, err := accounts.GetQuotaRecovery(ctx, probe.ID); !errors.Is(err, repository.ErrNotFound) {
 		t.Fatalf("quota recovery should be cleared, err = %v", err)
 	}
@@ -1640,7 +1640,7 @@ func TestMarkMissingThinkingCoolsThenDisables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selector.MarkSuccess(ctx, cooled)
+	selector.markSuccess(ctx, cooled, true)
 	kept, err := accounts.Get(ctx, ok.ID)
 	if err != nil {
 		t.Fatal(err)

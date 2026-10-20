@@ -65,7 +65,7 @@ func TestMarkSuccessKeepsTheAccountSelectable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	selector.MarkSuccess(context.Background(), credential)
+	selector.markSuccess(context.Background(), credential, true)
 	if _, err := acquireOnce(t, selector, "grok-test"); err != nil {
 		t.Fatalf("after MarkSuccess: %v", err)
 	}

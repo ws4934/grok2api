@@ -36,10 +36,6 @@ type routingHealthOverride struct {
 	expiresAt     time.Time
 }
 
-func (s *Selector) MarkSuccess(ctx context.Context, credential account.Credential) {
-	s.markSuccess(ctx, credential, true)
-}
-
 func isMissingThinkingStrike(lastError string) bool {
 	return lastError == lastErrorMissingThinking || lastError == lastErrorMissingThinkingDisabled
 }

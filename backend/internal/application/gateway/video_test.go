@@ -1295,3 +1295,71 @@ func TestVideoRetryDoesNotEscapeClientKeyAccountScope(t *testing.T) {
 		t.Fatalf("expected the job to fail rather than complete via an out-of-scope account, got %#v", stored)
 	}
 }
+
+// A resumed video is no quota probe: its success must not clear the
+// account's quota recovery and return the account to scheduling.
+func TestResumedVideoKeepsTheAccountQuotaRecovery(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "video-resume-quota.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accountRepo := relational.NewAccountRepository(database)
+	modelRepo := relational.NewModelRepository(database)
+	auditRepo := relational.NewAuditRepository(database)
+	mediaRepo := relational.NewMediaJobRepository(database)
+	keyRepo := relational.NewClientKeyRepository(database)
+	key, err := keyRepo.Create(ctx, clientkey.Key{Name: "video-resume", Prefix: "video-resume", SecretHash: strings.Repeat("c", 64), EncryptedSecret: "encrypted", Enabled: true, RPMLimit: 60, MaxConcurrent: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, _, err := accountRepo.UpsertByIdentity(ctx, account.Credential{
+		Provider: account.ProviderWeb, AuthType: account.AuthTypeSSO, WebTier: account.WebTierSuper,
+		Name: "resumed", SourceKey: "resumed", EncryptedAccessToken: "resumed-token", ExpiresAt: time.Now().Add(time.Hour),
+		Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := modelRepo.UpsertDiscovered(ctx, account.ProviderWeb, []string{"grok-imagine-video"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := modelRepo.ReplaceAccountCapabilities(ctx, credential.ID, []string{"grok-imagine-video"}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	route, err := modelRepo.GetByProviderUpstream(ctx, account.ProviderWeb, "grok-imagine-video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextProbe := time.Now().UTC().Add(time.Hour)
+	if err := accountRepo.SaveQuotaRecovery(ctx, account.QuotaRecovery{AccountID: credential.ID, Kind: account.QuotaRecoveryKindPaid, Status: account.QuotaRecoveryStatusExhausted, NextProbeAt: &nextProbe, UpdatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	registry := provider.NewRegistry(&videoCreateFailoverAdapter{})
+	sticky := memory.NewStickyStore()
+	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
+	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
+	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(keyRepo, nil, nil, 60, 4, nil), registry, selector, nil, 3)
+	service.ConfigureMedia(mediaRepo, 1)
+	now := time.Now().UTC()
+	job := media.Job{
+		ID: "video_resumed_quota", RequestID: "request-video-resumed-quota", ClientKeyID: key.ID, ClientKeyName: key.Name, AccountID: credential.ID, AccountName: credential.Name,
+		Provider: string(account.ProviderWeb), Model: route.PublicID, ModelRouteID: route.ID, UpstreamModel: route.UpstreamModel,
+		Operation: provider.VideoOperationGenerate, Prompt: "test", Seconds: 5, Quality: "720p", Checkpoint: `{"id":"upstream"}`, Submitted: true,
+		Status: media.StatusInProgress, InputJSON: `{}`, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := mediaRepo.CreateMediaJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	service.runVideoJob(ctx, job, route)
+	if stored, err := mediaRepo.GetMediaJob(ctx, job.ID, key.ID); err != nil || stored.Status != media.StatusCompleted {
+		t.Fatalf("resumed job = %#v, err = %v", stored, err)
+	}
+	if recovery, err := accountRepo.GetQuotaRecovery(ctx, credential.ID); err != nil || recovery.Status != account.QuotaRecoveryStatusExhausted {
+		t.Fatalf("quota recovery after a resumed video = %#v, err = %v", recovery, err)
+	}
+}

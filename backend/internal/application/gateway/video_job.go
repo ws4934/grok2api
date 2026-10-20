@@ -307,7 +307,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		s.logger.Error("video_job_terminal_write_failed", "job_id", job.ID, "error", err)
 		return
 	}
-	s.selector.MarkSuccess(context.Background(), lease.Credential)
+	s.selector.markSuccess(context.Background(), lease.Credential, lease.QuotaProbe)
 	refreshMode, decrementMode, availabilityMode := quotaFinalizationModes(lease.QuotaMode, quotaRefreshGroup)
 	if decrementMode != "" && decrementMode != "weekly" {
 		quotaCtx, quotaCancel := context.WithTimeout(context.Background(), accountStateWriteTimeout)
