@@ -32,8 +32,8 @@ func TestCatalogFollowsProviderOrderAndDefinitions(t *testing.T) {
 		definedAdapter{definition(account.ProviderConsole, provider.ProfileSurface{Name: "Grok Console", TierExempt: true, EgressScopes: []egressdomain.Scope{egressdomain.ScopeConsole, egressdomain.ScopeConsoleAsset}})},
 		definedAdapter{definition(account.ProviderBuild, provider.ProfileSurface{Name: "Grok Build", ShortName: "Build"})},
 	)
-	entries := New(registry, Entry{ID: "chatgpt", Name: "ChatGPT", EgressScopes: []string{"chatgpt"}}).Entries()
-	if len(entries) != 3 || entries[0].ID != "grok_build" || entries[1].ID != "grok_console" || entries[2].ID != "chatgpt" {
+	entries := New(registry).Entries()
+	if len(entries) != 2 || entries[0].ID != "grok_build" || entries[1].ID != "grok_console" {
 		t.Fatalf("order: %+v", entries)
 	}
 	build, console := entries[0], entries[1]
@@ -43,16 +43,13 @@ func TestCatalogFollowsProviderOrderAndDefinitions(t *testing.T) {
 	if console.ShortName != "Grok Console" || console.TierScoped || len(console.EgressScopes) != 2 {
 		t.Fatalf("console entry: %+v", console)
 	}
-	if entries[2].Order != 2 || !New(registry).Has(account.ProviderBuild) || New(registry).Has("chatgpt") {
-		t.Fatal("catalog membership")
-	}
 }
 
 func TestCatalogPublishesCredentialAndQuotaSurface(t *testing.T) {
 	chat := definition("acme_chat", provider.ProfileSurface{DefaultMaxConcurrent: 1, QuotaModes: []string{"reason", "image_gen"}})
 	chat.Credential = provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true, RedirectOAuth: true}
 	registry := provider.NewRegistry(definedAdapter{chat}, definedAdapter{definition(account.ProviderBuild, provider.ProfileSurface{})})
-	entries := New(registry, Entry{ID: "extra"}).Entries()
+	entries := New(registry).Entries()
 	data, err := json.Marshal(entries)
 	if err != nil {
 		t.Fatal(err)

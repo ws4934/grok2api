@@ -51,15 +51,13 @@ type Entry struct {
 	Credential           Credential `json:"credential"`
 }
 
-// Catalog lists registered providers in account.Providers() order; extra
-// entries (providers served outside the registry) follow in the given order.
+// Catalog lists registered providers in account.Providers() order.
 type Catalog struct {
 	registry *provider.Registry
-	extra    []Entry
 }
 
-func New(registry *provider.Registry, extra ...Entry) *Catalog {
-	return &Catalog{registry: registry, extra: extra}
+func New(registry *provider.Registry) *Catalog {
+	return &Catalog{registry: registry}
 }
 
 func (c *Catalog) Entries() []Entry {
@@ -72,13 +70,6 @@ func (c *Catalog) Entries() []Entry {
 				out = append(out, entry)
 			}
 		}
-	}
-	for _, entry := range c.extra {
-		entry.Order = len(out)
-		if entry.QuotaModes == nil {
-			entry.QuotaModes = []string{}
-		}
-		out = append(out, entry)
 	}
 	return out
 }
@@ -102,14 +93,4 @@ func entryFor(d provider.Definition) Entry {
 		entry.EgressScopes = append(entry.EgressScopes, string(scope))
 	}
 	return entry
-}
-
-// Has reports whether the provider is listed.
-func (c *Catalog) Has(value account.Provider) bool {
-	for _, entry := range c.Entries() {
-		if entry.ID == string(value) {
-			return true
-		}
-	}
-	return false
 }
