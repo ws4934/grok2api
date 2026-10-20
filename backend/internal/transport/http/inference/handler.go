@@ -105,12 +105,14 @@ type responsesRequest struct {
 	Stream             bool   `json:"stream"`
 	PromptCacheKey     string `json:"prompt_cache_key"`
 	PreviousResponseID string `json:"previous_response_id"`
+	promptCacheSignals
 }
 
 type chatCompletionRequest struct {
 	Model          string `json:"model"`
 	Stream         bool   `json:"stream"`
 	PromptCacheKey string `json:"prompt_cache_key"`
+	promptCacheSignals
 }
 
 type messagesRequest struct {
@@ -119,6 +121,7 @@ type messagesRequest struct {
 	Messages       json.RawMessage `json:"messages"`
 	Stream         bool            `json:"stream"`
 	PromptCacheKey string          `json:"prompt_cache_key"`
+	promptCacheSignals
 }
 
 type modelListItem struct {
@@ -254,7 +257,7 @@ func (h *Handler) createChatCompletion(c *gin.Context) {
 	result, err := h.gateway.CreateChatCompletion(c.Request.Context(), gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
 		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
-		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
+		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, request.PromptCacheKey, request.promptCacheSignals),
 		AllowClientToolCacheRoute: allowBuildClientToolCacheRoute(c.Request.Header),
 		GrokTurnIndex:             c.GetHeader("x-grok-turn-idx"),
 		Method:                    c.Request.Method,
@@ -299,7 +302,7 @@ func (h *Handler) createMessage(c *gin.Context) {
 	result, err := h.gateway.CreateMessage(c.Request.Context(), gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
 		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
-		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, body),
+		PromptCacheSeed:           extractPromptCacheSeed(c.Request.Header, request.PromptCacheKey, request.promptCacheSignals),
 		AllowClientToolCacheRoute: allowBuildClientToolCacheRoute(c.Request.Header),
 		GrokTurnIndex:             c.GetHeader("x-grok-turn-idx"),
 		Method:                    c.Request.Method,
@@ -363,7 +366,7 @@ func (h *Handler) handleCreate(c *gin.Context, compact bool) {
 	input := gateway.Input{
 		RequestID: requestIDValue, ClientKey: clientKey, PublicModel: request.Model,
 		Body: body, Streaming: request.Stream, PromptCacheKey: request.PromptCacheKey,
-		PromptCacheSeed: extractPromptCacheSeed(c.Request.Header, body), PreviousResponseID: request.PreviousResponseID,
+		PromptCacheSeed: extractPromptCacheSeed(c.Request.Header, request.PromptCacheKey, request.promptCacheSignals), PreviousResponseID: request.PreviousResponseID,
 		AllowClientToolCacheRoute: allowBuildClientToolCacheRoute(c.Request.Header),
 		GrokTurnIndex:             c.GetHeader("x-grok-turn-idx"),
 		Method:                    c.Request.Method,

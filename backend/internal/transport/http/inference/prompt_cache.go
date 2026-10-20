@@ -11,13 +11,26 @@ const (
 	maxCodexTurnMetadataSize = 16 << 10
 )
 
+// promptCacheSignals holds the body fields the seed reads besides
+// prompt_cache_key. Request types embed it so the body is decoded once; values
+// stay raw so a malformed signal is ignored instead of failing the request.
+type promptCacheSignals struct {
+	ConversationID      json.RawMessage `json:"conversation_id"`
+	ConversationIDCamel json.RawMessage `json:"conversationId"`
+	SessionID           json.RawMessage `json:"session_id"`
+	SessionIDCamel      json.RawMessage `json:"sessionId"`
+	Metadata            json.RawMessage `json:"metadata"`
+	ClientMetadata      json.RawMessage `json:"client_metadata"`
+	System              json.RawMessage `json:"system"`
+}
+
 // extractPromptCacheSeed extracts the client session identifier; the gateway isolates and hashes the key sent upstream.
 // It supports Claude Code, Codex, and OpenAI-compatible session_id, conversation_id, and prompt_cache_key signals.
-func extractPromptCacheSeed(headers http.Header, body []byte) string {
+func extractPromptCacheSeed(headers http.Header, promptCacheKey string, body promptCacheSignals) string {
 	// Claude Code sends auxiliary requests such as title generation concurrently and reuses the main session ID.
 	// If an auxiliary request uses the explicit session seed, it shares reasoning replay with the main conversation.
 	// Falling back to soft identity preserves account affinity without allowing encrypted reasoning to leak across requests.
-	if isClaudeCodeTitleRequest(headers, body) {
+	if isClaudeCodeTitleRequest(headers, body.System) {
 		return ""
 	}
 	if headers != nil {
@@ -39,52 +52,38 @@ func extractPromptCacheSeed(headers http.Header, body []byte) string {
 			}
 		}
 	}
-	var payload struct {
-		PromptCacheKey      string `json:"prompt_cache_key"`
-		ConversationID      string `json:"conversation_id"`
-		ConversationIDCamel string `json:"conversationId"`
-		SessionID           string `json:"session_id"`
-		SessionIDCamel      string `json:"sessionId"`
-		Metadata            struct {
-			SessionID      string `json:"session_id"`
-			SessionIDCamel string `json:"sessionId"`
-			UserID         string `json:"user_id"`
-		} `json:"metadata"`
-		ClientMetadata map[string]json.RawMessage `json:"client_metadata"`
-	}
-	if json.Unmarshal(body, &payload) != nil {
-		return ""
-	}
-	// The handler also writes body.prompt_cache_key to PromptCacheKey. Extract it here as well so middleware
-	// and logs that depend only on the seed path can observe it.
-	if seed := normalizePromptCacheSeed(payload.PromptCacheKey); seed != "" {
+	if seed := normalizePromptCacheSeed(promptCacheKey); seed != "" {
 		return seed
 	}
-	if seed := normalizePromptCacheSeed(payload.Metadata.SessionID); seed != "" {
+	var metadata struct {
+		SessionID      string `json:"session_id"`
+		SessionIDCamel string `json:"sessionId"`
+		UserID         string `json:"user_id"`
+	}
+	var clientMetadata map[string]json.RawMessage
+	_ = json.Unmarshal(body.Metadata, &metadata)
+	_ = json.Unmarshal(body.ClientMetadata, &clientMetadata)
+	if seed := normalizePromptCacheSeed(metadata.SessionID); seed != "" {
 		return seed
 	}
-	if seed := normalizePromptCacheSeed(payload.Metadata.SessionIDCamel); seed != "" {
+	if seed := normalizePromptCacheSeed(metadata.SessionIDCamel); seed != "" {
 		return seed
 	}
-	if seed := promptCacheSeedFromUserID(payload.Metadata.UserID); seed != "" {
+	if seed := promptCacheSeedFromUserID(metadata.UserID); seed != "" {
 		return claudeCodePromptCacheSeed(seed, headers)
 	}
-	if seed := codexPromptCacheSeedFromRawTurnMetadata(payload.ClientMetadata["x-codex-turn-metadata"]); seed != "" {
+	if seed := codexPromptCacheSeedFromRawTurnMetadata(clientMetadata["x-codex-turn-metadata"]); seed != "" {
 		return seed
 	}
-	if seed := normalizeRawPromptCacheSeed(payload.ClientMetadata["x-codex-window-id"]); seed != "" {
+	if seed := normalizeRawPromptCacheSeed(clientMetadata["x-codex-window-id"]); seed != "" {
 		return "codex:window:" + seed
 	}
-	if seed := normalizePromptCacheSeed(payload.SessionID); seed != "" {
-		return seed
+	for _, raw := range []json.RawMessage{body.SessionID, body.SessionIDCamel, body.ConversationID, body.ConversationIDCamel} {
+		if seed := normalizeRawPromptCacheSeed(raw); seed != "" {
+			return seed
+		}
 	}
-	if seed := normalizePromptCacheSeed(payload.SessionIDCamel); seed != "" {
-		return seed
-	}
-	if seed := normalizePromptCacheSeed(payload.ConversationID); seed != "" {
-		return seed
-	}
-	return normalizePromptCacheSeed(payload.ConversationIDCamel)
+	return ""
 }
 
 func claudeCodePromptCacheSeed(sessionID string, headers http.Header) string {
@@ -172,26 +171,20 @@ func allowBuildClientToolCacheRoute(headers http.Header) bool {
 	return strings.Contains(strings.ToLower(headers.Get("User-Agent")), "codex")
 }
 
-func isClaudeCodeTitleRequest(headers http.Header, body []byte) bool {
-	if headers == nil || normalizePromptCacheSeed(headers.Get("X-Claude-Code-Session-Id")) == "" || len(body) == 0 {
-		return false
-	}
-	var payload struct {
-		System json.RawMessage `json:"system"`
-	}
-	if json.Unmarshal(body, &payload) != nil || len(payload.System) == 0 {
+func isClaudeCodeTitleRequest(headers http.Header, system json.RawMessage) bool {
+	if headers == nil || normalizePromptCacheSeed(headers.Get("X-Claude-Code-Session-Id")) == "" || len(system) == 0 {
 		return false
 	}
 	var texts []string
 	var text string
-	if json.Unmarshal(payload.System, &text) == nil {
+	if json.Unmarshal(system, &text) == nil {
 		texts = append(texts, text)
 	} else {
 		var blocks []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		}
-		if json.Unmarshal(payload.System, &blocks) != nil {
+		if json.Unmarshal(system, &blocks) != nil {
 			return false
 		}
 		for _, block := range blocks {

@@ -1,10 +1,20 @@
 package inference
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 )
+
+func seedFromBody(headers http.Header, body []byte) string {
+	var request struct {
+		PromptCacheKey string `json:"prompt_cache_key"`
+		promptCacheSignals
+	}
+	_ = json.Unmarshal(body, &request)
+	return extractPromptCacheSeed(headers, request.PromptCacheKey, request.promptCacheSignals)
+}
 
 func TestExtractPromptCacheSeedSupportsClaudeCodeForms(t *testing.T) {
 	tests := []struct {
@@ -39,7 +49,7 @@ func TestExtractPromptCacheSeedSupportsClaudeCodeForms(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := extractPromptCacheSeed(test.headers, []byte(test.body)); got != test.want {
+			if got := seedFromBody(test.headers, []byte(test.body)); got != test.want {
 				t.Fatalf("seed = %q, want %q", got, test.want)
 			}
 		})
@@ -55,7 +65,7 @@ func TestExtractPromptCacheSeedIsolatesClaudeCodeTitleRequest(t *testing.T) {
 		],
 		"messages":[{"role":"user","content":"<session>hello</session>"}]
 	}`)
-	if seed := extractPromptCacheSeed(headers, body); seed != "" {
+	if seed := seedFromBody(headers, body); seed != "" {
 		t.Fatalf("title request seed = %q, want empty explicit seed", seed)
 	}
 }
@@ -63,7 +73,7 @@ func TestExtractPromptCacheSeedIsolatesClaudeCodeTitleRequest(t *testing.T) {
 func TestExtractPromptCacheSeedRejectsOversizedValues(t *testing.T) {
 	headers := make(http.Header)
 	headers.Set("X-Claude-Code-Session-Id", strings.Repeat("x", maxPromptCacheSeedBytes+1))
-	if seed := extractPromptCacheSeed(headers, nil); seed != "" {
+	if seed := seedFromBody(headers, nil); seed != "" {
 		t.Fatalf("oversized seed = %q", seed)
 	}
 }
