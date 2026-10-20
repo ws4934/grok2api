@@ -29,6 +29,7 @@ func TestSentinelProofCancellationAndBudget(t *testing.T) {
 		t.Fatal("malformed difficulty accepted")
 	}
 }
+
 // marshalProof is the loop solveProof replaced: it marshals config per attempt.
 func marshalProof(ctx context.Context, seed string, target []byte, config []any) string {
 	for i := 0; i < 500000; i++ {

@@ -1797,7 +1797,7 @@ func TestMarkFailureSoftNetworkCooldown(t *testing.T) {
 func TestBoundUpstreamRetryAfter(t *testing.T) {
 	selector := &Selector{cooldownMax: time.Minute}
 	tests := []struct {
-		name string
+		name  string
 		input time.Duration
 		want  time.Duration
 	}{

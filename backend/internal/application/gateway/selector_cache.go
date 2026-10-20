@@ -380,4 +380,3 @@ func (s *Selector) invalidateCandidates(provider account.Provider) {
 	s.ApplyInvalidation(repository.InvalidationEvent{Kind: repository.InvalidationAccountStateChanged, Provider: provider})
 	s.ApplyInvalidation(repository.InvalidationEvent{Kind: repository.InvalidationAccountCapabilityChanged, Provider: provider})
 }
-

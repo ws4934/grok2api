@@ -88,17 +88,17 @@ type SwaggerImageEditRequest struct {
 // 的 grok-imagine-video（编辑不收 duration、比例、分辨率；延长 2–10 秒，默认 6）；Adobe 的
 // seedance-2.5 支持编辑与延长（延长 4–30 秒），kling-3.0-omni 支持编辑。
 type SwaggerVideoGenerationRequest struct {
-	Model            string                    `json:"model" example:"grok-imagine-video"`
-	Prompt           string                    `json:"prompt" example:"A cinematic tracking shot in the rain"`
-	Duration         int                       `json:"duration" example:"8"`
-	AspectRatio      string                    `json:"aspect_ratio,omitempty" example:"16:9"`
-	Resolution       string                    `json:"resolution,omitempty" example:"720p"`
-	Image            *SwaggerVideoMediaInput   `json:"image,omitempty"`
-	LastFrame        *SwaggerVideoMediaInput   `json:"last_frame,omitempty"`
-	ReferenceImages  []SwaggerVideoMediaInput  `json:"reference_images,omitempty"`
-	ReferenceAudios  []SwaggerVideoAudioInput  `json:"reference_audios,omitempty"`
-	ReferenceVideos  []SwaggerVideoMediaInput  `json:"reference_videos,omitempty"`
-	Video            *SwaggerVideoMediaInput   `json:"video,omitempty"`
+	Model           string                   `json:"model" example:"grok-imagine-video"`
+	Prompt          string                   `json:"prompt" example:"A cinematic tracking shot in the rain"`
+	Duration        int                      `json:"duration" example:"8"`
+	AspectRatio     string                   `json:"aspect_ratio,omitempty" example:"16:9"`
+	Resolution      string                   `json:"resolution,omitempty" example:"720p"`
+	Image           *SwaggerVideoMediaInput  `json:"image,omitempty"`
+	LastFrame       *SwaggerVideoMediaInput  `json:"last_frame,omitempty"`
+	ReferenceImages []SwaggerVideoMediaInput `json:"reference_images,omitempty"`
+	ReferenceAudios []SwaggerVideoAudioInput `json:"reference_audios,omitempty"`
+	ReferenceVideos []SwaggerVideoMediaInput `json:"reference_videos,omitempty"`
+	Video           *SwaggerVideoMediaInput  `json:"video,omitempty"`
 }
 
 // SwaggerVideoMediaInput 表示视频相关的图片/视频输入。
