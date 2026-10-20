@@ -9,7 +9,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
-func TestExtensionFallbacksPersistBesideGrokColumns(t *testing.T) {
+func TestEgressFallbacksPersistPerScope(t *testing.T) {
 	dialectDatabases(t, func(t *testing.T, db *Database) {
 		ctx := context.Background()
 		r := NewEgressRepository(db)

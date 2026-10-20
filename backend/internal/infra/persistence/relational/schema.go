@@ -10,7 +10,7 @@ import (
 const postgresSchemaMigrationLockID int64 = 0x47524f4b32415049
 
 var schemaModels = []any{
-	&egressExtensionFallbackModel{},
+	&egressFallbackModel{},
 	&adminModel{},
 	&adminSessionModel{},
 	&egressSubscriptionSourceModel{},
