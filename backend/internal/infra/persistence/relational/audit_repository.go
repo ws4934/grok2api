@@ -24,6 +24,9 @@ const (
 	auditSuccessAggregate  = "COALESCE(SUM(CASE WHEN " + auditSuccessPredicate + " THEN 1 ELSE 0 END), 0)"
 )
 
+// auditBilledCostExpression is auditBillingAmount in SQL.
+const auditBilledCostExpression = "CASE WHEN price_id = 0 AND cost_in_usd_ticks > 0 THEN cost_in_usd_ticks ELSE estimated_cost_in_usd_ticks END"
+
 func (r *AuditRepository) SumTokensByAccountsSince(ctx context.Context, accountIDs []uint64, since time.Time) (map[uint64]int64, error) {
 	result := make(map[uint64]int64, len(accountIDs))
 	if len(accountIDs) == 0 {
@@ -93,7 +96,7 @@ func (r *AuditRepository) ListCursor(ctx context.Context, input repository.Audit
 	fields := map[string]sortSpec{
 		"request":   {expression: "request_audits.request_id"},
 		"model":     {expression: "LOWER(request_audits.model_public_id)"},
-		"billing":   {expression: "CASE WHEN request_audits.price_id = 0 AND request_audits.cost_in_usd_ticks > 0 THEN request_audits.cost_in_usd_ticks ELSE request_audits.estimated_cost_in_usd_ticks END", defaultDirection: repository.SortDescending},
+		"billing":   {expression: auditBilledCostExpression, defaultDirection: repository.SortDescending},
 		"tokens":    {expression: "request_audits.total_tokens", defaultDirection: repository.SortDescending},
 		"status":    {expression: "request_audits.status_code"},
 		"mode":      {expression: "CASE WHEN request_audits.streaming = TRUE THEN 1 ELSE 0 END"},

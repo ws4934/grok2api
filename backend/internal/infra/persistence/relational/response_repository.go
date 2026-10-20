@@ -61,7 +61,7 @@ func (r *ResponseRepository) Delete(ctx context.Context, responseID string, clie
 func (r *ResponseRepository) DeleteExpired(ctx context.Context, now time.Time, ownershipLimit, webStateLimit int) (repository.ResponseCleanupResult, error) {
 	result := repository.ResponseCleanupResult{}
 	if ownershipLimit > 0 {
-		deleted, err := r.deleteExpiredOwnership(ctx, now, ownershipLimit)
+		deleted, err := r.deleteExpired(ctx, &responseOwnershipModel{}, now, ownershipLimit)
 		if err != nil {
 			return result, err
 		}
@@ -69,7 +69,7 @@ func (r *ResponseRepository) DeleteExpired(ctx context.Context, now time.Time, o
 		result.HasMore = result.HasMore || deleted >= int64(ownershipLimit)
 	}
 	if webStateLimit > 0 {
-		deleted, err := r.deleteExpiredWebState(ctx, now, webStateLimit)
+		deleted, err := r.deleteExpired(ctx, &webResponseStateModel{}, now, webStateLimit)
 		if err != nil {
 			return result, err
 		}
@@ -79,30 +79,16 @@ func (r *ResponseRepository) DeleteExpired(ctx context.Context, now time.Time, o
 	return result, nil
 }
 
-func (r *ResponseRepository) deleteExpiredOwnership(ctx context.Context, now time.Time, limit int) (int64, error) {
+// deleteExpired removes up to limit expired rows of a response_id-keyed table, oldest first.
+func (r *ResponseRepository) deleteExpired(ctx context.Context, model any, now time.Time, limit int) (int64, error) {
 	var deleted int64
 	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		ids := tx.Model(&responseOwnershipModel{}).
+		ids := tx.Model(model).
 			Select("response_id").
 			Where("expires_at <= ?", now).
 			Order("expires_at ASC, response_id ASC").
 			Limit(limit)
-		result := tx.Where("response_id IN (?)", ids).Delete(&responseOwnershipModel{})
-		deleted = result.RowsAffected
-		return result.Error
-	})
-	return deleted, err
-}
-
-func (r *ResponseRepository) deleteExpiredWebState(ctx context.Context, now time.Time, limit int) (int64, error) {
-	var deleted int64
-	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		ids := tx.Model(&webResponseStateModel{}).
-			Select("response_id").
-			Where("expires_at <= ?", now).
-			Order("expires_at ASC, response_id ASC").
-			Limit(limit)
-		result := tx.Where("response_id IN (?)", ids).Delete(&webResponseStateModel{})
+		result := tx.Where("response_id IN (?)", ids).Delete(model)
 		deleted = result.RowsAffected
 		return result.Error
 	})

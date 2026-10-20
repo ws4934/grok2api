@@ -178,7 +178,7 @@ func (r *MediaAssetRepository) ListExpiredMediaAssets(ctx context.Context, befor
 func (r *MediaAssetRepository) ExpireMediaInputIfUnreferenced(ctx context.Context, id string, expiresAt time.Time) (bool, error) {
 	referencePattern := "%" + media.InputReference(id) + "%"
 	activeReference := r.db.db.Model(&mediaJobModel{}).Select("1").
-		Where("kind = ? AND status IN ? AND input_json LIKE ?", media.KindVideo, []string{string(media.StatusQueued), string(media.StatusInProgress)}, referencePattern)
+		Where("kind = ? AND status IN ? AND input_json LIKE ?", media.KindVideo, activeMediaJobStatuses(), referencePattern)
 	result := r.db.db.WithContext(ctx).Model(&mediaAssetModel{}).
 		Where("id = ? AND kind IN ? AND expires_at IS NOT NULL", id, []string{"image", "video"}).
 		Where("NOT EXISTS (?)", activeReference).
@@ -202,7 +202,7 @@ func (r *MediaAssetRepository) ListProtectedMediaAssetIDs(ctx context.Context) (
 	protected := make(map[string]struct{})
 	var jobAssetIDs []string
 	if err := r.db.db.WithContext(ctx).Model(&mediaJobModel{}).
-		Where("result_asset_id <> '' AND status IN ?", []string{string(media.StatusQueued), string(media.StatusInProgress)}).
+		Where("result_asset_id <> '' AND status IN ?", activeMediaJobStatuses()).
 		Pluck("result_asset_id", &jobAssetIDs).Error; err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func (r *MediaAssetRepository) ListProtectedMediaAssetIDs(ctx context.Context) (
 	// Images already delivered by a running image job stay until it ends.
 	var imageResults []string
 	if err := r.db.db.WithContext(ctx).Model(&mediaJobModel{}).
-		Where("kind = ? AND result_asset_ids <> '[]' AND status IN ?", media.KindImage, []string{string(media.StatusQueued), string(media.StatusInProgress)}).
+		Where("kind = ? AND result_asset_ids <> '[]' AND status IN ?", media.KindImage, activeMediaJobStatuses()).
 		Pluck("result_asset_ids", &imageResults).Error; err != nil {
 		return nil, err
 	}

@@ -167,7 +167,7 @@ func (r *ClientKeyRepository) GetByPrefix(ctx context.Context, prefix string) (c
 // loadKey adds model permissions and, only for list-mode keys, one primary-key
 // lookup of the provider set.
 func (r *ClientKeyRepository) loadKey(ctx context.Context, row clientKeyModel) (clientkey.Key, error) {
-	models, err := r.allowedModels(ctx, row.ID)
+	models, err := r.allowedModelsForKeys(ctx, []uint64{row.ID})
 	if err != nil {
 		return clientkey.Key{}, err
 	}
@@ -175,7 +175,7 @@ func (r *ClientKeyRepository) loadKey(ctx context.Context, row clientKeyModel) (
 	if err != nil {
 		return clientkey.Key{}, err
 	}
-	return toClientKeyDomain(row, models, providers[row.ID]), nil
+	return toClientKeyDomain(row, models[row.ID], providers[row.ID]), nil
 }
 
 func (r *ClientKeyRepository) Update(ctx context.Context, value clientkey.Key) (clientkey.Key, error) {
@@ -482,18 +482,6 @@ func decrementReservedUsage(tx *gorm.DB, keyID uint64, amount int64) error {
 		"reserved_usage_usd_ticks",
 		gorm.Expr("CASE WHEN reserved_usage_usd_ticks <= ? THEN 0 ELSE reserved_usage_usd_ticks - ? END", amount, amount),
 	).Error
-}
-
-func (r *ClientKeyRepository) allowedModels(ctx context.Context, keyID uint64) ([]uint64, error) {
-	var rows []clientKeyModelPermission
-	if err := r.db.db.WithContext(ctx).Where("client_key_id = ?", keyID).Order("model_route_id ASC").Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	out := make([]uint64, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, row.ModelRouteID)
-	}
-	return out, nil
 }
 
 func (r *ClientKeyRepository) allowedModelsForKeys(ctx context.Context, keyIDs []uint64) (map[uint64][]uint64, error) {

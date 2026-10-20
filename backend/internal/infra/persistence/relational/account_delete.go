@@ -69,7 +69,7 @@ func (r *AccountRepository) ListAutoCleanReauthCandidates(ctx context.Context, m
 		Select("id").
 		Where("auth_status = ? AND reauth_marked_at IS NOT NULL AND reauth_marked_at < ?", account.AuthStatusReauthRequired, markedBefore.UTC()).
 		Where(accountUnclassifiedRefreshReauthPredicate).
-		Where("NOT EXISTS (SELECT 1 FROM media_jobs job WHERE job.account_id = provider_accounts.id AND job.status IN ?)", []string{string(media.StatusQueued), string(media.StatusInProgress)})
+		Where("NOT EXISTS (SELECT 1 FROM media_jobs job WHERE job.account_id = provider_accounts.id AND job.status IN ?)", activeMediaJobStatuses())
 	if afterID > 0 {
 		query = query.Where("id > ?", afterID)
 	}
@@ -158,7 +158,7 @@ func excludeAccountsWithActiveMediaJobs(db *gorm.DB, ids []uint64) ([]uint64, er
 	var blocked []uint64
 	if err := db.Model(&mediaJobModel{}).
 		Distinct("account_id").
-		Where("account_id IN ? AND status IN ?", ids, []string{string(media.StatusQueued), string(media.StatusInProgress)}).
+		Where("account_id IN ? AND status IN ?", ids, activeMediaJobStatuses()).
 		Pluck("account_id", &blocked).Error; err != nil {
 		return nil, err
 	}
