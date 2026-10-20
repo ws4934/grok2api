@@ -300,7 +300,7 @@ func (s *Service) getVideoJob(ctx context.Context, id string, key clientkey.Key)
 		return media.Job{}, ErrResponseNotFound
 	}
 	job, err := s.mediaJobs.GetMediaJob(ctx, id, key.ID)
-	if err != nil {
+	if err != nil || job.Kind == media.KindImage {
 		return media.Job{}, ErrResponseNotFound
 	}
 	return job, nil

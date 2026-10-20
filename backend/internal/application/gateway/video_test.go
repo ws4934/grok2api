@@ -95,6 +95,18 @@ func TestGetVideoExposesOnlyReadableResultAsset(t *testing.T) {
 	}
 }
 
+func TestVideoEndpointsHideImageJobs(t *testing.T) {
+	image := media.Job{ID: "img_job", ClientKeyID: 7, Kind: media.KindImage, Status: media.StatusCompleted, ResultAssetID: "img_asset"}
+	service := &Service{mediaJobs: &videoUsageRepository{job: image}}
+	key := clientkey.Key{ID: image.ClientKeyID}
+	if _, err := service.GetVideo(context.Background(), image.ID, key); !errors.Is(err, ErrResponseNotFound) {
+		t.Fatalf("GetVideo(image job) err = %v, want not found", err)
+	}
+	if _, _, _, err := service.OpenVideoContent(context.Background(), image.ID, key); !errors.Is(err, ErrResponseNotFound) {
+		t.Fatalf("OpenVideoContent(image job) err = %v, want not found", err)
+	}
+}
+
 func TestOpenVideoContentKeepsLocalAssetFastPath(t *testing.T) {
 	completed := media.Job{
 		ID: "video_content", ClientKeyID: 7, Status: media.StatusCompleted,
