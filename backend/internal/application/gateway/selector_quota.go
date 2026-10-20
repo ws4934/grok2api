@@ -79,17 +79,10 @@ func (s *Selector) MarkPaymentQuotaExhausted(ctx context.Context, credential acc
 	return s.markFreeQuotaExhaustedAt(ctx, credential, 0, 0, now, now.Add(defaultFreeQuotaRecoveryPause))
 }
 
-// MarkQuotaStateChanged 在 Billing 探测改变持久化额度状态后更新对应账号的候选快照。
-// 未提供账号 ID 时保留全量失效语义，供无法确定变更范围的调用方使用。
-func (s *Selector) MarkQuotaStateChanged(provider account.Provider, accountIDs ...uint64) {
-	if len(accountIDs) == 0 {
-		s.invalidateCandidates(provider)
-		return
-	}
-	for _, accountID := range accountIDs {
-		s.clearQuotaConsumptionAccount(provider, accountID)
-		s.evictCandidate(provider, accountID)
-	}
+// MarkQuotaStateChanged reloads a provider's candidates after a quota change
+// that no repository write announced.
+func (s *Selector) MarkQuotaStateChanged(provider account.Provider) {
+	s.invalidateCandidates(provider)
 }
 
 // ConsumeQuota records a small local delta instead of Copy-on-Write cloning
@@ -153,16 +146,6 @@ func (s *Selector) clearQuotaConsumption(provider account.Provider) {
 			if key.provider == provider {
 				delete(s.quotaConsumed, key)
 			}
-		}
-	}
-	s.quotaMu.Unlock()
-}
-
-func (s *Selector) clearQuotaConsumptionAccount(provider account.Provider, accountID uint64) {
-	s.quotaMu.Lock()
-	for key := range s.quotaConsumed {
-		if key.provider == provider && key.accountID == accountID {
-			delete(s.quotaConsumed, key)
 		}
 	}
 	s.quotaMu.Unlock()

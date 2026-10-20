@@ -38,6 +38,4 @@ func TestPinnedCandidateIndexMatchesLinearScan(t *testing.T) {
 		}
 	}
 	check("snapshot")
-	selector.evictCandidate(account.ProviderBuild, 1)
-	check("after eviction")
 }

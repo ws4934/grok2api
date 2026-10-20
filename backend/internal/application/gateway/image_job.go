@@ -698,7 +698,6 @@ func (s *Service) submitImageItem(ctx context.Context, job *media.Job, route mod
 		case status == http.StatusTooManyRequests && lease.QuotaMode != "":
 			if quotaKind, _ := s.providers.QuotaKind(credential.Provider); quotaKind == provider.QuotaRemoteWindow {
 				exhausted, reconcileErr := s.accounts.ReconcileWebRateLimit(ctx, credential.ID, lease.QuotaMode, provider.ErrorRetryAfter(err))
-				s.selector.MarkQuotaStateChanged(credential.Provider, credential.ID)
 				if reconcileErr != nil || !exhausted {
 					s.selector.MarkFailure(ctx, credential, status, provider.ErrorRetryAfter(err))
 				}

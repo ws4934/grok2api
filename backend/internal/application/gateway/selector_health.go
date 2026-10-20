@@ -82,9 +82,6 @@ func (s *Selector) markSuccess(ctx context.Context, credential account.Credentia
 	if quotaProbe {
 		_ = s.accounts.ClearQuotaRecovery(ctx, credential.ID)
 	}
-	if quotaProbe {
-		s.evictCandidate(credential.Provider, credential.ID)
-	}
 }
 
 // MarkModelAccessDenied isolates a permission failure to the rejected model.
@@ -105,7 +102,6 @@ func (s *Selector) MarkModelAccessDenied(ctx context.Context, credential account
 	}); err != nil {
 		return err
 	}
-	s.evictCandidate(credential.Provider, credential.ID)
 	return nil
 }
 
@@ -135,7 +131,6 @@ func (s *Selector) markMissingThinking(ctx context.Context, credential account.C
 		Kind: repository.InvalidationAccountHealthChanged, Provider: credential.Provider, AccountID: credential.ID,
 		FailureCount: credential.FailureCount, CooldownUntil: &until, HealthMarker: account.LastErrorMissingThinking,
 	})
-	s.evictCandidate(credential.Provider, credential.ID)
 	return missingThinkingPenaltyCooled, nil
 }
 
@@ -147,7 +142,6 @@ func (s *Selector) disableAccount(ctx context.Context, credential account.Creden
 	s.ApplyInvalidation(repository.InvalidationEvent{
 		Kind: repository.InvalidationAccountStateChanged, Provider: credential.Provider, AccountID: credential.ID,
 	})
-	s.evictCandidate(credential.Provider, credential.ID)
 	if s.sticky != nil {
 		_ = s.sticky.DeleteByAccount(ctx, credential.ID)
 	}

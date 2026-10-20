@@ -131,8 +131,12 @@ func (s *Selector) ApplyInvalidation(event repository.InvalidationEvent) {
 		s.applyHealthInvalidation(event)
 		return
 	}
-	s.clearHealthOverrides(event.Provider, event.AccountID)
 	layer := event.Layer()
+	// Only a base event reloads the persisted cooldowns; clearing the overrides
+	// on an overlay, route or key event would release cooling accounts early.
+	if layer == repository.InvalidationLayerBase {
+		s.clearHealthOverrides(event.Provider, event.AccountID)
+	}
 	if layer != repository.InvalidationLayerRoute && layer != repository.InvalidationLayerBase && layer != repository.InvalidationLayerOverlay {
 		return
 	}
@@ -377,43 +381,3 @@ func (s *Selector) invalidateCandidates(provider account.Provider) {
 	s.ApplyInvalidation(repository.InvalidationEvent{Kind: repository.InvalidationAccountCapabilityChanged, Provider: provider})
 }
 
-// evictCandidate 从当前进程的候选快照中移除一个账号。持久化状态仍由调用方先写入；
-// 下一个缓存周期会以数据库中的新状态重新加载该账号，不会因单账号变化清空整个 Provider。
-func (s *Selector) evictCandidate(provider account.Provider, accountID uint64) {
-	if accountID == 0 {
-		return
-	}
-	s.candidateMu.Lock()
-	defer s.candidateMu.Unlock()
-	for key, snapshot := range s.candidates {
-		if key.provider != provider {
-			continue
-		}
-		// 候选快照会被并发请求的 selectionSession 只读复用；必须 copy-on-write，
-		// 不能复用底层数组，否则会改写正在执行的请求视图。
-		values := make([]account.RoutingCandidate, 0, len(snapshot.values))
-		removed := false
-		for _, candidate := range snapshot.values {
-			if candidate.Credential.ID == accountID {
-				removed = true
-				continue
-			}
-			values = append(values, candidate)
-		}
-		if removed {
-			// also update byAccount index if present
-			if snapshot.byAccount != nil {
-				byAccount := make(map[uint64]int, len(values))
-				for idx, candidate := range values {
-					// Keep the first position, as newCandidateSnapshot does.
-					if _, exists := byAccount[candidate.Credential.ID]; !exists {
-						byAccount[candidate.Credential.ID] = idx
-					}
-				}
-				snapshot.byAccount = byAccount
-			}
-			snapshot.values = values
-			s.candidates[key] = snapshot
-		}
-	}
-}

@@ -138,11 +138,9 @@ func (s *Service) markPermanentlyUnrefreshableCredentialRejected(ctx context.Con
 
 func (s *Service) markCredentialRejectedAfterPermanentRefresh(ctx context.Context, credential accountdomain.Credential) {
 	_ = s.accounts.MarkReauthRequired(ctx, credential.ID, fmt.Sprintf("%s OAuth access token rejected after permanent refresh failure", credential.Provider))
-	s.selector.MarkQuotaStateChanged(credential.Provider, credential.ID)
 }
 
 func (s *Service) applyRateLimitReconciliation(ctx context.Context, credential accountdomain.Credential, status int, retryAfter time.Duration, state accountapp.RateLimitReconcileState, reconcileErr error) {
-	s.selector.MarkQuotaStateChanged(credential.Provider, credential.ID)
 	if reconcileErr == nil && state == accountapp.RateLimitReconcileExhausted {
 		return
 	}

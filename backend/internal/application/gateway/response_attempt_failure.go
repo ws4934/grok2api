@@ -129,7 +129,6 @@ func (a *responseAttempt) recoverUnauthorized(t *responseTry) attemptStep {
 	if t.response.StatusCode == http.StatusUnauthorized {
 		body, _ := readRetryableBody(t.response.Body)
 		_ = s.accounts.MarkReauthRequired(ctx, t.credential.ID, fmt.Sprintf("%s OAuth credential rejected after refresh", t.credential.Provider))
-		s.selector.MarkQuotaStateChanged(t.credential.Provider, t.credential.ID)
 		lease.Release()
 		a.lastErr = fmt.Errorf("刷新后上游仍返回 401")
 		a.lastFailure = newHTTPUpstreamFailure(http.StatusUnauthorized, body, t.credential.ID, t.credential.Name)

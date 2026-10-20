@@ -1097,21 +1097,6 @@ func TestSelectionSessionReusesCandidatePlanAcrossAccountSwitches(t *testing.T) 
 	}
 }
 
-func TestSelectorEvictsOnlyChangedCandidate(t *testing.T) {
-	key := candidateCacheKey{provider: account.ProviderBuild, upstreamModel: "model"}
-	selector := &Selector{candidates: map[candidateCacheKey]candidateSnapshot{
-		key: {values: []account.RoutingCandidate{
-			{Credential: account.Credential{ID: 1, Provider: account.ProviderBuild}},
-			{Credential: account.Credential{ID: 2, Provider: account.ProviderBuild}},
-		}},
-	}}
-	selector.evictCandidate(account.ProviderBuild, 1)
-	values := selector.candidates[key].values
-	if len(values) != 1 || values[0].Credential.ID != 2 {
-		t.Fatalf("remaining candidates = %#v", values)
-	}
-}
-
 func TestSelectorPreferFreeBuildHotReloadAndSaturationFallback(t *testing.T) {
 	ctx := context.Background()
 	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "free-first.db"))

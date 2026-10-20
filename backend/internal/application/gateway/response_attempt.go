@@ -513,7 +513,6 @@ func (a *responseAttempt) applyQuotaProbe(lease *accountLease) attemptStep {
 		return attemptProceed
 	}
 	recovered, probeErr := a.s.accounts.ProbePaidQuota(a.ctx, lease.Credential)
-	a.s.selector.MarkQuotaStateChanged(lease.Credential.Provider, lease.Credential.ID)
 	if probeErr != nil || !recovered {
 		lease.Release()
 		a.lastErr = firstError(probeErr, fmt.Errorf("付费额度尚未恢复"))
