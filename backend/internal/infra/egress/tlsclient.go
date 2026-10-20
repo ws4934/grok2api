@@ -1,10 +1,13 @@
 package egress
 
 import (
+	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -73,26 +76,74 @@ func newBrowserClient(proxyURL, userAgent string) (*browserClient, error) {
 		tlsclient.WithClientProfile(browserProfile(userAgent)),
 		tlsclient.WithNotFollowRedirects(),
 	}
-	if proxyURL != "" {
-		parsed, err := url.Parse(proxyURL)
-		if err != nil {
-			return nil, fmt.Errorf("解析浏览器出口代理: %w", err)
-		}
-		if tunnelproxy.IsSupportedScheme(parsed.Scheme) {
-			dialer, err := tunnelproxy.NewDialer(proxyURL)
-			if err != nil {
-				return nil, fmt.Errorf("创建浏览器隧道代理: %w", err)
-			}
-			options = append(options, tlsclient.WithDialContext(dialer.DialContext))
-		} else {
-			options = append(options, tlsclient.WithProxyUrl(proxyURL))
-		}
+	// tls-client's own SOCKS and HTTP proxy dialers ignore the request context
+	// and dial under a client-wide lock, so one silent proxy would stall every
+	// request on the client. These dialers end with the request and bound the
+	// proxy handshake; HTTPS proxies keep tls-client's dialer.
+	direct := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	connect, dial, err := tunnelproxy.Route(proxyURL, direct)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("浏览器出口代理: %w", err)
+	case dial != nil:
+		options = append(options, tlsclient.WithDialContext(dial))
+	case connect != nil && connect.Scheme == "http":
+		options = append(options, tlsclient.WithDialContext(connectDialContext(connect, direct)))
+	case connect != nil:
+		options = append(options, tlsclient.WithProxyUrl(proxyURL))
 	}
 	client, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(), options...)
 	if err != nil {
 		return nil, err
 	}
 	return &browserClient{inner: client}, nil
+}
+
+// connectDialContext tunnels through an HTTP proxy with CONNECT. The dial and
+// the proxy handshake end with ctx and within direct.Timeout.
+func connectDialContext(proxy *url.URL, direct *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+	host := proxy.Host
+	if proxy.Port() == "" {
+		host = net.JoinHostPort(proxy.Hostname(), "80")
+	}
+	authorization := ""
+	if proxy.User != nil && proxy.User.Username() != "" {
+		password, _ := proxy.User.Password()
+		authorization = "Basic " + base64.StdEncoding.EncodeToString([]byte(proxy.User.Username()+":"+password))
+	}
+	return func(ctx context.Context, _, address string) (net.Conn, error) {
+		conn, err := direct.DialContext(ctx, "tcp", host)
+		if err != nil {
+			return nil, err
+		}
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		request := &http.Request{Method: http.MethodConnect, URL: &url.URL{Opaque: address}, Host: address, Header: make(http.Header)}
+		if authorization != "" {
+			request.Header.Set("Proxy-Authorization", authorization)
+		}
+		if err = conn.SetDeadline(time.Now().Add(direct.Timeout)); err == nil {
+			err = request.Write(conn)
+		}
+		if err == nil {
+			// The target speaks only after the client, so the reader holds
+			// nothing past the proxy's response.
+			var response *http.Response
+			if response, err = http.ReadResponse(bufio.NewReader(conn), request); err == nil && response.StatusCode != http.StatusOK {
+				err = fmt.Errorf("代理 CONNECT 返回 %s", response.Status)
+			}
+		}
+		if !stop() {
+			err = ctx.Err() // ctx ended during the handshake and closed the connection
+		}
+		if err == nil {
+			err = conn.SetDeadline(time.Time{})
+		}
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		return conn, nil
+	}
 }
 
 func browserProfile(userAgent string) profiles.ClientProfile {

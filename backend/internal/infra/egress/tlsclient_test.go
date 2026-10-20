@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	fhttp "github.com/bogdanfinn/fhttp"
 )
@@ -100,5 +104,112 @@ func TestFromFHTTPResponseOwnsHeadersAndPreservesDeferredTrailers(t *testing.T) 
 	}
 	if response.Trailer.Get("X-Usage") != "42" {
 		t.Fatalf("deferred trailer was lost: %#v", response.Trailer)
+	}
+}
+
+// A proxy that accepts TCP and never answers must fail a browser request at
+// its deadline and must not block a request to another host.
+func TestBrowserClientProxyHandshakeEndsWithRequest(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var held []net.Conn
+	t.Cleanup(func() {
+		_ = listener.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, conn := range held {
+			_ = conn.Close()
+		}
+	})
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			held = append(held, conn)
+			mu.Unlock()
+		}
+	}()
+	for _, scheme := range []string{"socks5", "socks4", "http"} {
+		t.Run(scheme, func(t *testing.T) {
+			client, err := newBrowserClient(scheme+"://"+listener.Addr().String(), DefaultUserAgent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 2)
+			for _, target := range []string{"https://203.0.113.1/", "https://203.0.113.2/"} {
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+					defer cancel()
+					request, _ := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+					response, err := client.Do(request)
+					if err == nil {
+						_ = response.Body.Close()
+					}
+					done <- err
+				}()
+			}
+			for range 2 {
+				select {
+				case err := <-done:
+					if err == nil {
+						t.Fatal("request through a silent proxy succeeded")
+					}
+				case <-time.After(time.Second):
+					t.Fatal("request still blocked in the proxy handshake after its deadline")
+				}
+			}
+		})
+	}
+}
+
+func TestBrowserClientTunnelsThroughAuthenticatedHTTPProxy(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer target.Close()
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect || r.Header.Get("Proxy-Authorization") != "Basic dXNlcjpwYXNz" {
+			w.WriteHeader(http.StatusProxyAuthRequired)
+			return
+		}
+		upstream, err := net.Dial("tcp", r.Host)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		conn, buffered, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			_ = upstream.Close()
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+		go func() {
+			_, _ = io.Copy(upstream, buffered)
+			_ = upstream.Close()
+		}()
+		_, _ = io.Copy(conn, upstream)
+	}))
+	defer proxy.Close()
+	client, err := newBrowserClient("http://user:pass@"+proxy.Listener.Addr().String(), DefaultUserAgent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	request, _ := http.NewRequest(http.MethodGet, target.URL, nil)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Fatalf("status=%d body=%q err=%v", response.StatusCode, body, err)
 	}
 }
