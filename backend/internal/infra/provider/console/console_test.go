@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -347,13 +348,37 @@ func TestSyncAccountIdentityUsesConsoleEgressScope(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"user":{"sub":"console-user"}}`))
 	}))
 	t.Cleanup(server.Close)
+	// The node's HTTP proxy tunnels CONNECT to the session server.
+	tunnel := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodConnect {
+			writer.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		upstream, err := net.Dial("tcp", request.Host)
+		if err != nil {
+			writer.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		conn, buffered, err := writer.(http.Hijacker).Hijack()
+		if err != nil {
+			_ = upstream.Close()
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection established\r\n\r\n"))
+		go func() {
+			_, _ = io.Copy(upstream, buffered)
+			_ = upstream.Close()
+		}()
+		_, _ = io.Copy(conn, upstream)
+	}))
+	t.Cleanup(tunnel.Close)
 	cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	token, _ := cipher.Encrypt("test-sso")
-	// The server also stands in for the node's HTTP proxy.
-	proxy, _ := cipher.Encrypt(server.URL)
+	proxy, _ := cipher.Encrypt(tunnel.URL)
 	nodes := &recordingConsoleEgressRepository{node: egressdomain.Node{ID: 7, Name: "console", Scope: egressdomain.ScopeConsole, Enabled: true, Health: 1, EncryptedProxyURL: proxy}}
 	adapter := NewAdapter(Config{SessionBaseURL: server.URL}, infraegress.NewManager(nodes, cipher), cipher, nil)
 	identity, err := adapter.SyncAccountIdentity(context.Background(), account.Credential{
