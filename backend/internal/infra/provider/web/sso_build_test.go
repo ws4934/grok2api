@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
+	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
@@ -218,7 +219,7 @@ func TestSSOBuildCookiesCarrySanitizedCloudflareClearance(t *testing.T) {
 }
 
 func TestSSOBuildConversionSanitizesTokenAndURLs(t *testing.T) {
-	if token := normalizeSSOToken("sso=token-value; x-userid=drop"); token != "token-value" {
+	if token := infraegress.NormalizeSSOToken("sso=token-value; x-userid=drop"); token != "token-value" {
 		t.Fatalf("token = %q", token)
 	}
 	for _, value := range []string{"https://accounts.x.ai/", "https://auth.x.ai/oauth2/device/code"} {

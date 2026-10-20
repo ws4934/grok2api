@@ -89,7 +89,7 @@ func (a *Adapter) SynthesizeSpeech(ctx context.Context, request provider.TTSRequ
 		}
 		if err := json.Unmarshal(data, &envelope); err != nil {
 			if !strings.Contains(contentType, "application/json") {
-				return provider.TTSResult{Audio: data, ContentType: firstNonEmpty(contentType, "audio/mpeg")}, nil
+				return provider.TTSResult{Audio: data, ContentType: provider.FirstNonEmptyFailure(contentType, "audio/mpeg")}, nil
 			}
 			return provider.TTSResult{}, fmt.Errorf("解析 Console TTS JSON 响应失败: %w", err)
 		}
@@ -98,7 +98,7 @@ func (a *Adapter) SynthesizeSpeech(ctx context.Context, request provider.TTSRequ
 			return provider.TTSResult{}, fmt.Errorf("解码 Console TTS audio 失败: %w", err)
 		}
 		result := provider.TTSResult{
-			Audio: audio, ContentType: firstNonEmpty(envelope.ContentType, contentType, "audio/mpeg"),
+			Audio: audio, ContentType: provider.FirstNonEmptyFailure(envelope.ContentType, contentType, "audio/mpeg"),
 			Duration: envelope.Duration, Base64Audio: envelope.Audio, JSONEnvelope: true,
 		}
 		if envelope.AudioTimestamps != nil {
@@ -113,7 +113,7 @@ func (a *Adapter) SynthesizeSpeech(ctx context.Context, request provider.TTSRequ
 		}
 		return result, nil
 	}
-	return provider.TTSResult{Audio: data, ContentType: firstNonEmpty(contentType, "audio/mpeg")}, nil
+	return provider.TTSResult{Audio: data, ContentType: provider.FirstNonEmptyFailure(contentType, "audio/mpeg")}, nil
 }
 
 func (a *Adapter) ListTTSVoices(ctx context.Context, credential account.Credential) ([]provider.VoiceInfo, error) {

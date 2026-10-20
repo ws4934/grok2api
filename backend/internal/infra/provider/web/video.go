@@ -170,7 +170,7 @@ func (a *Adapter) logWebMediaUpstreamRejection(stage string, response *http.Resp
 			"content_encoding", safeWebMediaDiagnostic(response.Header.Get("Content-Encoding"), 64),
 			"server", safeWebMediaDiagnostic(response.Header.Get("Server"), 128),
 			"cf_ray", safeWebMediaDiagnostic(response.Header.Get("CF-Ray"), 128),
-			"upstream_request_id", safeWebMediaDiagnostic(firstNonEmpty(response.Header.Get("X-Request-Id"), response.Header.Get("X-Xai-Request-Id")), 128),
+			"upstream_request_id", safeWebMediaDiagnostic(provider.FirstNonEmptyFailure(response.Header.Get("X-Request-Id"), response.Header.Get("X-Xai-Request-Id")), 128),
 		)
 	}
 	a.log().Warn("web_media_upstream_rejected", attributes...)

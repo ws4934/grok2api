@@ -117,9 +117,9 @@ func Parse(body []byte) (provider.AccountIdentity, error) {
 		return provider.AccountIdentity{}, fmt.Errorf("%w: session status blocked", provider.ErrUnauthorized)
 	}
 	identity := provider.AccountIdentity{
-		UserID: firstNonEmpty(value.Session.UserID, value.User.ID, value.User.UserID, value.User.Sub, value.ID, value.UserID, value.Sub),
-		Email:  firstNonEmpty(value.Session.Email, value.User.Email, value.Email),
-		TeamID: firstNonEmpty(value.Session.OrganizationID, value.User.TeamID, value.TeamID),
+		UserID: provider.FirstNonEmptyFailure(value.Session.UserID, value.User.ID, value.User.UserID, value.User.Sub, value.ID, value.UserID, value.Sub),
+		Email:  provider.FirstNonEmptyFailure(value.Session.Email, value.User.Email, value.Email),
+		TeamID: provider.FirstNonEmptyFailure(value.Session.OrganizationID, value.User.TeamID, value.TeamID),
 	}
 	identity.UserID = strings.TrimSpace(identity.UserID)
 	identity.Email = strings.TrimSpace(identity.Email)
@@ -150,13 +150,4 @@ func browserHeaders(token, origin string, lease *infraegress.Lease) http.Header 
 	value.Set("User-Agent", userAgent)
 	browserheaders.ApplyChromiumClientHints(value, userAgent)
 	return value
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

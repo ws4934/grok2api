@@ -573,15 +573,21 @@ func (m *Manager) RefreshDueClearances(ctx context.Context, force bool) error {
 	return errors.Join(refreshErrors...)
 }
 
+// NormalizeSSOToken extracts the bare token from a raw value or a pasted
+// "sso=...;" cookie and strips line breaks and NUL bytes.
+func NormalizeSSOToken(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(strings.ToLower(value), "sso=") {
+		value = strings.TrimSpace(value[len("sso="):])
+	}
+	if token, _, found := strings.Cut(value, ";"); found {
+		value = token
+	}
+	return strings.TrimSpace(strings.NewReplacer("\r", "", "\n", "", "\x00", "").Replace(value))
+}
+
 func BuildSSOCookie(token, cloudflareCookies string) string {
-	token = strings.TrimSpace(token)
-	if strings.HasPrefix(strings.ToLower(token), "sso=") {
-		token = strings.TrimSpace(token[len("sso="):])
-	}
-	if value, _, found := strings.Cut(token, ";"); found {
-		token = strings.TrimSpace(value)
-	}
-	token = strings.NewReplacer("\r", "", "\n", "", "\x00", "").Replace(token)
+	token = NormalizeSSOToken(token)
 	cookies := "sso=" + token + "; sso-rw=" + token
 	if sanitized := application.SanitizeCloudflareCookies(cloudflareCookies); sanitized != "" {
 		cookies += "; " + sanitized

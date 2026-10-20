@@ -51,7 +51,7 @@ func (a *Adapter) ConvertToBuild(ctx context.Context, credential accountdomain.C
 	if err != nil {
 		return provider.CredentialSeed{}, fmt.Errorf("解密 Grok Web SSO: %w", err)
 	}
-	token = normalizeSSOToken(token)
+	token = infraegress.NormalizeSSOToken(token)
 	if token == "" {
 		return provider.CredentialSeed{}, provider.ErrUnauthorized
 	}
@@ -396,17 +396,6 @@ func safeXAIURL(raw string) bool {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	return host == "x.ai" || strings.HasSuffix(host, ".x.ai")
-}
-
-func normalizeSSOToken(value string) string {
-	value = strings.TrimSpace(value)
-	if strings.HasPrefix(strings.ToLower(value), "sso=") {
-		value = strings.TrimSpace(value[len("sso="):])
-	}
-	if token, _, found := strings.Cut(value, ";"); found {
-		value = strings.TrimSpace(token)
-	}
-	return strings.NewReplacer("\r", "", "\n", "", "\x00", "").Replace(value)
 }
 
 var (

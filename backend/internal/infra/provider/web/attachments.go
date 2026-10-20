@@ -172,7 +172,7 @@ func (a *Adapter) loadChatFile(ctx context.Context, lease *egress.Lease, input, 
 	if err != nil || int64(len(raw)) > maxBytes {
 		return provider.ImageInput{}, fmt.Errorf("%w: 下载失败或文件超过 %d MiB", errInvalidChatFile, maxBytes>>20)
 	}
-	mimeType, err := validatedChatFileMIME(raw, response.Header.Get("Content-Type"), firstNonEmpty(filename, path.Base(target.originalURL.Path)))
+	mimeType, err := validatedChatFileMIME(raw, response.Header.Get("Content-Type"), provider.FirstNonEmptyFailure(filename, path.Base(target.originalURL.Path)))
 	if err != nil {
 		return provider.ImageInput{}, err
 	}
