@@ -415,6 +415,9 @@ func TestCreateImageJobIsIdempotentPerClientKey(t *testing.T) {
 	if _, err := f.service.CreateImageJob(context.Background(), ImageJobInput{ClientKey: f.key, PublicModel: "gpt-image-2", Prompt: "different", IdempotencyKey: "same"}); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("different payload = %v", err)
 	}
+	if _, err := f.service.CreateImageJob(context.Background(), ImageJobInput{ClientKey: f.key, PublicModel: "gpt-image-2", Prompt: "a fox", ImageURLs: []string{"data:image/png;base64,iVBORw0KGgo="}, IdempotencyKey: "same"}); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("different input = %v", err)
+	}
 }
 
 func TestCancelImageJobOnlyBeforeSubmission(t *testing.T) {

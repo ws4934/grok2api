@@ -253,11 +253,13 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 		return media.Job{}, ErrImageInputTooLarge
 	}
 	params := media.ImageParams{OutputFormat: input.OutputFormat, Background: input.Background, ResponseModel: input.ResponseModel, ResponseBackground: input.ResponseBackground}
+	// The inputs enter as a digest: they can be 32 MiB of data URIs.
 	hash := payloadHash(struct {
-		Model, Prompt, Size, Quality, Input string
-		Count                               int
-		Params                              media.ImageParams
-	}{input.PublicModel, input.Prompt, input.Size, input.Quality, string(inputJSON), count, params})
+		Model, Prompt, Size, Quality string
+		Input                        [sha256.Size]byte
+		Count                        int
+		Params                       media.ImageParams
+	}{input.PublicModel, input.Prompt, input.Size, input.Quality, sha256.Sum256(inputJSON), count, params})
 	if existing, found, err := s.idempotentJob(ctx, input.ClientKey.ID, input.IdempotencyKey, hash); err != nil || found {
 		return existing, err
 	}

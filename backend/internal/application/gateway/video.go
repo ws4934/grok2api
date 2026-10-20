@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -124,10 +125,11 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		return media.Job{}, err
 	}
 	hash := payloadHash(struct {
-		Model, Prompt, AspectRatio, Resolution, Input string
-		Operation                                     provider.VideoOperation
-		Duration                                      int
-	}{input.PublicModel, input.Prompt, input.AspectRatio, input.Resolution, inputJSON, operation, input.Duration})
+		Model, Prompt, AspectRatio, Resolution string
+		Input                                  [sha256.Size]byte
+		Operation                              provider.VideoOperation
+		Duration                               int
+	}{input.PublicModel, input.Prompt, input.AspectRatio, input.Resolution, sha256.Sum256([]byte(inputJSON)), operation, input.Duration})
 	if existing, found, err := s.idempotentJob(ctx, input.ClientKey.ID, input.IdempotencyKey, hash); err != nil || found {
 		return existing, err
 	}
