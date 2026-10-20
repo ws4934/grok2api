@@ -18,6 +18,7 @@ import (
 	domainegress "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	settingsdomain "github.com/chenyme/grok2api/backend/internal/domain/settings"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/grokimage"
 )
 
 type webMediaUpstreamError struct {
@@ -325,7 +326,7 @@ type webVideoCheckpoint struct {
 // substitute for this authenticated transfer.
 func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credential, rawURL string) (io.ReadCloser, string, int64, error) {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || parsed.Scheme != "https" || !trustedImageAssetHost(parsed.Hostname()) || parsed.User != nil {
+	if err != nil || parsed.Scheme != "https" || !grokimage.TrustedAssetHost(parsed.Hostname()) || parsed.User != nil {
 		return nil, "", 0, fmt.Errorf("视频内容 URL 不受信任")
 	}
 	token, err := a.cipher.Decrypt(credential.EncryptedAccessToken)

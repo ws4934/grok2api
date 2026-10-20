@@ -16,7 +16,6 @@ import (
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
-	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
@@ -27,7 +26,6 @@ const (
 	consoleMediaBodyLimit       = 2 << 20
 	consoleImageBodyLimit       = 32 << 20
 	consoleImageDownloadTimeout = 45 * time.Second
-	consoleMediaOutputAttempts  = 3
 	consoleMaxEditImages        = 3
 	// Upstream enforces the two video image inputs separately (measured against
 	// console.x.ai on both grok-imagine-video and grok-imagine-video-1.5):
@@ -312,7 +310,7 @@ func (a *Adapter) localizeConsoleImageResponse(ctx context.Context, credential a
 		if err != nil {
 			return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, err)
 		}
-		asset, err := a.saveConsoleImage(ctx, raw)
+		asset, err := grokimage.SaveWithRetry(ctx, a.assets, raw)
 		if err != nil {
 			return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
 		}
@@ -339,16 +337,16 @@ func (a *Adapter) downloadConsoleImage(ctx context.Context, credential account.C
 	downloadCtx, cancel := context.WithTimeout(ctx, consoleImageDownloadTimeout)
 	defer cancel()
 	var lastErr error
-	for attempt := 0; attempt < consoleMediaOutputAttempts; attempt++ {
+	for attempt := 0; attempt < grokimage.OutputAttempts; attempt++ {
 		raw, retryable, attemptErr := a.downloadConsoleImageAttempt(downloadCtx, credential, baseURL, parsed.String())
 		if attemptErr == nil {
 			return raw, nil
 		}
 		lastErr = attemptErr
-		if !retryable || downloadCtx.Err() != nil || attempt+1 >= consoleMediaOutputAttempts {
+		if !retryable || downloadCtx.Err() != nil || attempt+1 >= grokimage.OutputAttempts {
 			break
 		}
-		if err := waitConsoleMediaRetry(downloadCtx, attempt); err != nil {
+		if err := grokimage.WaitRetry(downloadCtx, attempt); err != nil {
 			return nil, err
 		}
 	}
@@ -404,37 +402,12 @@ func (a *Adapter) downloadConsoleImageAttempt(ctx context.Context, credential ac
 	return raw, false, nil
 }
 
-func (a *Adapter) saveConsoleImage(ctx context.Context, raw []byte) (asset mediadomain.Asset, err error) {
-	for attempt := 0; attempt < consoleMediaOutputAttempts; attempt++ {
-		asset, err = a.assets.SaveImage(ctx, raw)
-		if err == nil || ctx.Err() != nil || attempt+1 >= consoleMediaOutputAttempts {
-			return asset, err
-		}
-		if err = waitConsoleMediaRetry(ctx, attempt); err != nil {
-			return mediadomain.Asset{}, err
-		}
-	}
-	return asset, err
-}
-
-func waitConsoleMediaRetry(ctx context.Context, attempt int) error {
-	delays := [...]time.Duration{200 * time.Millisecond, 750 * time.Millisecond}
-	timer := time.NewTimer(delays[min(attempt, len(delays)-1)])
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
 func trustedConsoleImageURL(rawURL, baseURL string) (*url.URL, error) {
 	parsed, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || parsed.User != nil || parsed.Hostname() == "" {
 		return nil, errors.New("Console 图片内容 URL 不受信任")
 	}
-	if parsed.Scheme == "https" && trustedConsoleImageHost(parsed.Hostname()) {
+	if parsed.Scheme == "https" && grokimage.TrustedAssetHost(parsed.Hostname()) {
 		return parsed, nil
 	}
 	base, baseErr := url.Parse(strings.TrimSpace(baseURL))
@@ -442,10 +415,6 @@ func trustedConsoleImageURL(rawURL, baseURL string) (*url.URL, error) {
 		return parsed, nil
 	}
 	return nil, errors.New("Console 图片内容 URL 不受信任")
-}
-
-func trustedConsoleImageHost(host string) bool {
-	return strings.EqualFold(host, "assets.grok.com") || strings.EqualFold(host, "imagine-public.x.ai") || strings.EqualFold(host, "imgen.x.ai")
 }
 
 func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {

@@ -14,7 +14,6 @@ import (
 
 const (
 	maxGeneratedImages            = 10
-	mediaOutputAttempts           = 3
 	imageDownloadTimeout          = 60 * time.Second
 	imagineSelfUploadSource       = "IMAGINE_SELF_UPLOAD_FILE_SOURCE"
 	directFileUploadResponseLimit = 2 << 20

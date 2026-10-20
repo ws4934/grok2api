@@ -12,8 +12,8 @@ import (
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	domainegress "github.com/chenyme/grok2api/backend/internal/domain/egress"
-	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/grokimage"
 )
 
 func (a *Adapter) imageResponse(ctx context.Context, credential account.Credential, urls, blobs []string, count int, format string) (*provider.Response, error) {
@@ -40,7 +40,7 @@ func (a *Adapter) imageDataItem(ctx context.Context, credential account.Credenti
 	if err != nil {
 		return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, err)
 	}
-	asset, err := a.saveImageWithRetry(ctx, raw)
+	asset, err := grokimage.SaveWithRetry(ctx, a.assets, raw)
 	if err != nil {
 		return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
 	}
@@ -48,25 +48,6 @@ func (a *Adapter) imageDataItem(ctx context.Context, credential account.Credenti
 		return map[string]any{"url": a.assets.PublicImageURL(asset.ID), "mime_type": asset.MIMEType, "revised_prompt": ""}, nil
 	}
 	return map[string]any{"b64_json": base64.StdEncoding.EncodeToString(raw), "mime_type": asset.MIMEType, "revised_prompt": ""}, nil
-}
-
-// saveImageWithRetry 只重试当前生成结果的本地持久化，不重新请求上游生成。
-func (a *Adapter) saveImageWithRetry(ctx context.Context, raw []byte) (mediadomain.Asset, error) {
-	var lastErr error
-	for attempt := 0; attempt < mediaOutputAttempts; attempt++ {
-		asset, err := a.assets.SaveImage(ctx, raw)
-		if err == nil {
-			return asset, nil
-		}
-		lastErr = err
-		if ctx.Err() != nil || attempt+1 >= mediaOutputAttempts {
-			break
-		}
-		if err := waitMediaOutputRetry(ctx, attempt); err != nil {
-			return mediadomain.Asset{}, err
-		}
-	}
-	return mediadomain.Asset{}, lastErr
 }
 
 func (a *Adapter) imageBytes(ctx context.Context, credential account.Credential, image imagineImageValue) ([]byte, error) {
@@ -98,7 +79,7 @@ func (a *Adapter) saveStreamImage(ctx context.Context, raw []byte) error {
 	if a.assets == nil {
 		return provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, fmt.Errorf("图片媒体存储未配置"))
 	}
-	if _, err := a.saveImageWithRetry(ctx, raw); err != nil {
+	if _, err := grokimage.SaveWithRetry(ctx, a.assets, raw); err != nil {
 		return provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
 	}
 	return nil
@@ -106,7 +87,7 @@ func (a *Adapter) saveStreamImage(ctx context.Context, raw []byte) error {
 
 func (a *Adapter) downloadImage(ctx context.Context, credential account.Credential, rawURL string) ([]byte, error) {
 	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Scheme != "https" || !trustedImageAssetHost(parsed.Hostname()) || parsed.User != nil {
+	if err != nil || parsed.Scheme != "https" || !grokimage.TrustedAssetHost(parsed.Hostname()) || parsed.User != nil {
 		return nil, fmt.Errorf("图片内容 URL 不受信任")
 	}
 	token, err := a.cipher.Decrypt(credential.EncryptedAccessToken)
@@ -116,16 +97,16 @@ func (a *Adapter) downloadImage(ctx context.Context, credential account.Credenti
 	downloadCtx, cancel := context.WithTimeout(ctx, imageDownloadTimeout)
 	defer cancel()
 	var lastErr error
-	for attempt := 0; attempt < mediaOutputAttempts; attempt++ {
+	for attempt := 0; attempt < grokimage.OutputAttempts; attempt++ {
 		raw, retryable, attemptErr := a.downloadImageAttempt(downloadCtx, credential, token, parsed.String())
 		if attemptErr == nil {
 			return raw, nil
 		}
 		lastErr = attemptErr
-		if !retryable || downloadCtx.Err() != nil || attempt+1 >= mediaOutputAttempts {
+		if !retryable || downloadCtx.Err() != nil || attempt+1 >= grokimage.OutputAttempts {
 			break
 		}
-		if err := waitMediaOutputRetry(downloadCtx, attempt); err != nil {
+		if err := grokimage.WaitRetry(downloadCtx, attempt); err != nil {
 			return nil, err
 		}
 	}
@@ -172,19 +153,6 @@ func (a *Adapter) downloadImageAttempt(ctx context.Context, credential account.C
 	return raw, false, nil
 }
 
-func waitMediaOutputRetry(ctx context.Context, attempt int) error {
-	delays := [...]time.Duration{200 * time.Millisecond, 750 * time.Millisecond}
-	delay := delays[min(attempt, len(delays)-1)]
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
 func decodeImageBlob(value string) ([]byte, error) {
 	value = strings.TrimSpace(value)
 	if strings.HasPrefix(strings.ToLower(value), "data:") {
@@ -205,8 +173,4 @@ func decodeImageBlob(value string) ([]byte, error) {
 		return nil, fmt.Errorf("图片 blob Base64 无效")
 	}
 	return raw, nil
-}
-
-func trustedImageAssetHost(host string) bool {
-	return strings.EqualFold(host, "assets.grok.com") || strings.EqualFold(host, "imagine-public.x.ai") || strings.EqualFold(host, "imgen.x.ai")
 }

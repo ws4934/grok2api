@@ -29,6 +29,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/grokimage"
 	providerstreamidle "github.com/chenyme/grok2api/backend/internal/infra/provider/streamidle"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/neterror"
@@ -1448,7 +1449,7 @@ func TestImagineCollectorSettlesModeratedSlots(t *testing.T) {
 }
 
 func TestGeneratedImageAssetHostsRemainStrict(t *testing.T) {
-	if !trustedImageAssetHost("assets.grok.com") || !trustedImageAssetHost("imagine-public.x.ai") || !trustedImageAssetHost("imgen.x.ai") || trustedImageAssetHost("example.com") {
+	if !grokimage.TrustedAssetHost("assets.grok.com") || !grokimage.TrustedAssetHost("imagine-public.x.ai") || !grokimage.TrustedAssetHost("imgen.x.ai") || grokimage.TrustedAssetHost("example.com") {
 		t.Fatal("generated image host allowlist is incorrect")
 	}
 }
@@ -1489,16 +1490,16 @@ func TestImageDataItemRetriesStorageWithoutRegenerating(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.calls != mediaOutputAttempts || item["url"] != "https://api.example/v1/media/images/img_retry" {
+	if store.calls != grokimage.OutputAttempts || item["url"] != "https://api.example/v1/media/images/img_retry" {
 		t.Fatalf("storage retry calls=%d item=%#v", store.calls, item)
 	}
 }
 
 func TestImageDataItemClassifiesExhaustedStorageFailure(t *testing.T) {
-	store := &imageAssetStoreRetryStub{failures: mediaOutputAttempts}
+	store := &imageAssetStoreRetryStub{failures: grokimage.OutputAttempts}
 	adapter := &Adapter{assets: store}
 	_, err := adapter.imageDataItem(context.Background(), account.Credential{ID: 42}, imagineImageValue{Blob: "aW1hZ2U="}, "url")
-	if err == nil || !provider.IsMediaPostProcessingError(err) || store.calls != mediaOutputAttempts {
+	if err == nil || !provider.IsMediaPostProcessingError(err) || store.calls != grokimage.OutputAttempts {
 		t.Fatalf("storage failure err=%v calls=%d", err, store.calls)
 	}
 	var processingErr *provider.MediaPostProcessingError

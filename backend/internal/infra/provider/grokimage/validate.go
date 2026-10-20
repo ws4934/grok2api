@@ -1,5 +1,5 @@
-// Package grokimage holds the image parameter rules shared by the Grok Web and
-// Grok Console adapters.
+// Package grokimage holds the image parameter rules and output helpers shared
+// by the Grok Web and Grok Console adapters.
 package grokimage
 
 import (
