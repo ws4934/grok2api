@@ -166,7 +166,7 @@ func (h *Handler) put(c *gin.Context) {
 }
 
 func (h *Handler) delete(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 63)
 	if err != nil || id == 0 {
 		response.Error(c, http.StatusBadRequest, "invalidId", "价格 ID 无效")
 		return

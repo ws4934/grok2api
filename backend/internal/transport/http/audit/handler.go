@@ -266,7 +266,7 @@ func (h *Handler) listCursor(c *gin.Context) {
 }
 
 func (h *Handler) get(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 63)
 	if err != nil || id == 0 {
 		response.Error(c, http.StatusBadRequest, "invalidId", "审计 ID 无效")
 		return

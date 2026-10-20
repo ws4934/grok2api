@@ -213,3 +213,25 @@ func TestDegradeAccountsListsHardHitsAndRejectsUnknownWindow(t *testing.T) {
 		t.Fatalf("bad window status=%d body=%s", bad.Code, bad.Body.String())
 	}
 }
+
+// IDs are signed BIGINTs: one with the top bit set is invalid input, not a
+// value database/sql rejects with a 500.
+func TestIDParsersRejectTopBitIDs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "audit-top-bit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	router := gin.New()
+	NewHandler(auditapp.NewService(relational.NewAuditRepository(database), slog.Default(), 8, 4, time.Second)).Register(router.Group("/api/admin/v1"))
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/9223372036854775808", nil))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}

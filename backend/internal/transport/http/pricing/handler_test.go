@@ -131,3 +131,14 @@ func TestRoutePriceResponse(t *testing.T) {
 		t.Fatalf("custom = %s, want %s", encoded, want)
 	}
 }
+
+// IDs are signed BIGINTs: one with the top bit set is invalid input, not a
+// value database/sql rejects with a 500.
+func TestIDParsersRejectTopBitIDs(t *testing.T) {
+	router, _ := newTestRouter(t)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/api/admin/v1/model-prices/9223372036854775808", nil))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+}

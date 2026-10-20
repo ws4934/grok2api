@@ -84,3 +84,27 @@ func TestParseOptionalBoolRejectsAmbiguousValues(t *testing.T) {
 		}
 	}
 }
+
+// IDs are signed BIGINTs: one with the top bit set is invalid input, not a
+// value database/sql rejects with a 500.
+func TestIDParsersRejectTopBitIDs(t *testing.T) {
+	const topBit = "9223372036854775808"
+	if _, err := parseIDs([]string{"1", topBit}); err == nil {
+		t.Fatal("parseIDs accepted a top-bit ID")
+	}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(gin.Recovery())
+	NewHandler(modelapp.NewService(nil, nil, nil, nil)).Register(router.Group("/api"))
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPatch, "/api/models/"+topBit, strings.NewReader(`{}`)),
+		httptest.NewRequest(http.MethodDelete, "/api/models/"+topBit, nil),
+		httptest.NewRequest(http.MethodPatch, "/api/models/batch", strings.NewReader(`{"ids":["`+topBit+`"],"enabled":true}`)),
+	} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("%s %s status = %d", request.Method, request.URL.Path, recorder.Code)
+		}
+	}
+}
