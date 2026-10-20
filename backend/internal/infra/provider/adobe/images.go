@@ -246,7 +246,7 @@ func (a *Adapter) uploadInput(ctx context.Context, c *client, v *modelVersion, r
 
 func inputLabel(kind string) string {
 	if kind == "video" {
-		return "参考视频"
+		return "视频"
 	}
 	return "输入图片"
 }
@@ -280,7 +280,7 @@ func (a *Adapter) readInput(ctx context.Context, ref, kind string) ([]byte, stri
 		if mime := videoMIME(data); mime != "" {
 			return data, mime, nil
 		}
-		return nil, "", &requestError{msg: "参考视频只支持 MP4 或 QuickTime（MOV）"}
+		return nil, "", &requestError{msg: "视频只支持 MP4 或 QuickTime（MOV）"}
 	}
 	switch mime := http.DetectContentType(data); mime {
 	case "image/png", "image/jpeg", "image/webp":
@@ -289,7 +289,7 @@ func (a *Adapter) readInput(ctx context.Context, ref, kind string) ([]byte, stri
 	return nil, "", &requestError{msg: "输入图片只支持 PNG、JPEG 或 WebP"}
 }
 
-// videoMIME 识别参考视频：只认官网接受的 MP4 与 QuickTime，看 ISO BMFF 的 ftyp 品牌，
+// videoMIME 识别输入视频：只认官网接受的 MP4 与 QuickTime，看 ISO BMFF 的 ftyp 品牌，
 // 排除同样以 ftyp 开头的 HEIC/AVIF 图片。
 func videoMIME(data []byte) string {
 	if len(data) < 16 || string(data[4:8]) != "ftyp" {

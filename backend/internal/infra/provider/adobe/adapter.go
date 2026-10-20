@@ -18,7 +18,7 @@ import (
 
 var scope = egressdomain.Scope(account.ProviderAdobe)
 
-// RemoteFetcher 下载客户端给的 https 输入图或参考视频（需自带 SSRF 防护）。
+// RemoteFetcher 下载客户端给的 https 输入图或视频（需自带 SSRF 防护）。
 type RemoteFetcher func(ctx context.Context, rawURL string) ([]byte, error)
 
 // Adapter 提供 Adobe Firefly 的图像与视频生成能力。

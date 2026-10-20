@@ -224,6 +224,7 @@ var models = []*modelVersion{
 		m.edit, m.extend = editVersion(*m, "seedance_2.5_editing"), editVersion(*m, "seedance_2.5_extension")
 		m.edit.aspects, m.extend.aspects = []string{"auto"}, []string{"auto"}
 		m.edit.fields = slices.DeleteFunc(slices.Clone(m.fields), func(f string) bool { return f == "duration" })
+		m.edit.audioOff = true // 编辑按官网默认不另生成音轨；延长与生成一样开启
 	}),
 
 	with(kling30, func(m *modelVersion) { m.slug = "kling-3.0" }),

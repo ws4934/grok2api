@@ -21,7 +21,7 @@ type genInput struct {
 	duration    int
 	frames      []string // 首帧、尾帧（视频）
 	references  []string // 参考图 / 编辑输入图
-	videos      []string // 参考视频
+	videos      []string // 参考视频；编辑、延长的源视频
 	mask        string
 	sizeHint    pixels // 无比例选项、只给尺寸范围的模型直接用客户端尺寸
 }

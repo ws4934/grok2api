@@ -907,26 +907,41 @@ func TestReferenceVideoLimits(t *testing.T) {
 	}
 }
 
-// 端到端：编辑的源视频上传后以 source 用途提交到编辑版本。
+// 端到端：编辑、延长的源视频上传后以 source 用途提交到对应版本；Seedance 编辑不另生成音轨。
 func TestGenerateVideoEditSubmitsSourceVideo(t *testing.T) {
 	previous := pollInterval
 	pollInterval = time.Millisecond
 	t.Cleanup(func() { pollInterval = previous })
-	fake, adapter, credential := newFakeAdobe(t)
 	clip := "data:video/mp4;base64," + base64.StdEncoding.EncodeToString(mp4Header())
-	result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
-		Credential: credential, Model: "seedance/seedance_2.5", Operation: provider.VideoOperationEdit, Prompt: "make it snow",
-		AspectRatio: "auto", Resolution: "480p", VideoURL: clip,
-	})
-	if err != nil || !strings.HasSuffix(result.URL, "/out.mp4") {
-		t.Fatalf("GenerateVideo = %+v, %v", result, err)
-	}
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	refs, _ := fake.videoBody["referenceBlobs"].([]any)
-	if len(fake.uploads) != 1 || fake.uploads[0] != "/storage/video video/mp4" || len(refs) != 1 ||
-		get(refs[0].(map[string]any), "usage") != "source" || fake.videoBody["modelVersion"] != "seedance_2.5_editing" || fake.videoBody["resolution"] != "480p" {
-		t.Fatalf("uploads = %v, submitted body = %v", fake.uploads, fake.videoBody)
+	for _, test := range []struct {
+		model, version, aspect, resolution string
+		operation                          provider.VideoOperation
+		duration                           int
+		audio                              any
+	}{
+		{"seedance/seedance_2.5", "seedance_2.5_editing", "auto", "480p", provider.VideoOperationEdit, 0, false},
+		{"seedance/seedance_2.5", "seedance_2.5_extension", "auto", "720p", provider.VideoOperationExtend, 12, true},
+		{"kling/kling_v3_omni", "kling_v3_omni_v2v_edit", "9:16", "1080p", provider.VideoOperationEdit, 0, nil},
+	} {
+		fake, adapter, credential := newFakeAdobe(t)
+		result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+			Credential: credential, Model: test.model, Operation: test.operation, Prompt: "make it snow",
+			Duration: test.duration, AspectRatio: test.aspect, Resolution: test.resolution, VideoURL: clip,
+		})
+		if err != nil || !strings.HasSuffix(result.URL, "/out.mp4") {
+			t.Fatalf("%s GenerateVideo = %+v, %v", test.version, result, err)
+		}
+		fake.mu.Lock()
+		body := fake.videoBody
+		refs, _ := body["referenceBlobs"].([]any)
+		if len(fake.uploads) != 1 || fake.uploads[0] != "/storage/video video/mp4" || len(refs) != 1 || get(refs[0].(map[string]any), "usage") != "source" ||
+			body["modelVersion"] != test.version || body["resolution"] != test.resolution || body["generateAudio"] != test.audio {
+			t.Errorf("%s: uploads = %v, submitted body = %v", test.version, fake.uploads, body)
+		}
+		if duration, ok := body["duration"].(float64); ok != (test.duration > 0) || int(duration) != test.duration {
+			t.Errorf("%s: duration = %v, want %d", test.version, body["duration"], test.duration)
+		}
+		fake.mu.Unlock()
 	}
 }
 
