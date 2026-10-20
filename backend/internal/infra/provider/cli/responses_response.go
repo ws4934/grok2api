@@ -495,38 +495,35 @@ func (e *compatibleSSEEvent) SetData(data []byte) {
 	e.data = strings.Split(string(data), "\n")
 }
 
+// writeTo writes the event in one Write: each Write on a stream pipe is a
+// synchronous handoff to the reader.
 func (e compatibleSSEEvent) writeTo(writer io.Writer) error {
+	var buffer bytes.Buffer
+	line := func(prefix, value string) {
+		buffer.WriteString(prefix)
+		buffer.WriteString(value)
+		buffer.WriteByte('\n')
+	}
 	for _, comment := range e.Comments {
-		if _, err := fmt.Fprintln(writer, comment); err != nil {
-			return err
-		}
+		line("", comment)
 	}
 	if e.Event != "" {
-		if _, err := fmt.Fprintf(writer, "event: %s\n", e.Event); err != nil {
-			return err
-		}
+		line("event: ", e.Event)
 	}
 	if e.ID != "" {
-		if _, err := fmt.Fprintf(writer, "id: %s\n", e.ID); err != nil {
-			return err
-		}
+		line("id: ", e.ID)
 	}
 	if e.Retry != "" {
-		if _, err := fmt.Fprintf(writer, "retry: %s\n", e.Retry); err != nil {
-			return err
-		}
+		line("retry: ", e.Retry)
 	}
 	for _, field := range e.Other {
-		if _, err := fmt.Fprintln(writer, field); err != nil {
-			return err
-		}
+		line("", field)
 	}
-	for _, line := range e.data {
-		if _, err := fmt.Fprintf(writer, "data: %s\n", line); err != nil {
-			return err
-		}
+	for _, data := range e.data {
+		line("data: ", data)
 	}
-	_, err := fmt.Fprintln(writer)
+	buffer.WriteByte('\n')
+	_, err := writer.Write(buffer.Bytes())
 	return err
 }
 

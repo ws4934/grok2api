@@ -206,7 +206,10 @@ func TestFilterBuildPromptCacheResponseStream(t *testing.T) {
 		injectedToolTypes:   map[string]struct{}{"x_search": {}},
 		clientDeclaredTools: map[string]struct{}{},
 	}
+	passthrough := `data: {"type":"response.output_text.delta","output_index":0,"item_id":"msg_0","delta":"<hi>"}`
 	source := strings.Join([]string{
+		`event: response.output_text.delta`,
+		passthrough, "",
 		`event: response.output_item.added`,
 		`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"custom_tool_call","id":"ctc_1","call_id":"xs_call-1","name":"x_semantic_search"}}`, "",
 		`event: response.custom_tool_call_input.delta`,
@@ -233,5 +236,9 @@ func TestFilterBuildPromptCacheResponseStream(t *testing.T) {
 	}
 	if !strings.Contains(text, `"output_index":1`) || !strings.Contains(text, `"id":"msg_1"`) {
 		t.Fatalf("remaining output was not compacted:\n%s", text)
+	}
+	// Nothing to filter yet: the event is passed through as the upstream sent it.
+	if !strings.Contains(text, passthrough+"\n\n") {
+		t.Fatalf("unfiltered event was rewritten:\n%s", text)
 	}
 }

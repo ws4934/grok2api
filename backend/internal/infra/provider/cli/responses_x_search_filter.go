@@ -104,6 +104,13 @@ func (f *buildXSearchResponseFilter) filterJSON(body []byte) ([]byte, error) {
 }
 
 func (f *buildXSearchResponseFilter) filterEvent(data []byte) ([]byte, bool, error) {
+	// Until a call is dropped there is no reference to drop or index to
+	// compact, so only an item, output, tools or response member can change.
+	if len(f.droppedOutputIndexes) == 0 && len(f.droppedItemIDs) == 0 &&
+		!bytes.Contains(data, []byte(`"item"`)) && !bytes.Contains(data, []byte(`"output"`)) &&
+		!bytes.Contains(data, []byte(`"tools"`)) && !bytes.Contains(data, []byte(`"response"`)) {
+		return data, true, nil
+	}
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return data, true, nil
