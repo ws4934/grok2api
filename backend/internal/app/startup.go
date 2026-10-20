@@ -180,19 +180,30 @@ func readinessSnapshot(
 	required := make(map[accountdomain.Provider]bool, 3)
 	usable := make(map[accountdomain.Provider]bool, 3)
 	providerErrors := make(map[accountdomain.Provider]bool, 3)
+	type providerMode struct {
+		provider accountdomain.Provider
+		mode     string
+	}
+	accountsDown := make(map[providerMode]bool)
 	now := time.Now().UTC()
 	for _, route := range routes {
 		required[route.Provider] = true
-		if usable[route.Provider] || route.SupportedAccounts == 0 {
+		mode := providers.QuotaMode(route.Provider, route.UpstreamModel)
+		if usable[route.Provider] || route.SupportedAccounts == 0 || accountsDown[providerMode{route.Provider, mode}] {
 			continue
 		}
-		candidates, listErr := accounts.ListRoutingCandidates(ctx, route.Provider, route.ID, route.UpstreamModel, providers.QuotaMode(route.Provider, route.UpstreamModel))
+		candidates, listErr := accounts.ListRoutingCandidates(ctx, route.Provider, route.ID, route.UpstreamModel, mode)
 		if listErr != nil {
 			providerErrors[route.Provider] = true
 			continue
 		}
+		accountUsable := false
 		for _, candidate := range candidates {
-			if !startupCandidateUsable(candidate, now, providers) {
+			if !startupAccountUsable(candidate, now, providers) {
+				continue
+			}
+			accountUsable = true
+			if !startupModelUsable(candidate, now) {
 				continue
 			}
 			material, materialErr := accounts.GetCredentialMaterial(ctx, candidate.Credential.ID, candidate.Credential.Provider)
@@ -206,6 +217,11 @@ func readinessSnapshot(
 				usable[route.Provider] = true
 				break
 			}
+		}
+		// Account-level state does not depend on the route: when no account of an
+		// unbound route passes it, no other route with this quota mode can.
+		if !accountUsable && len(route.BoundAccountIDs) == 0 {
+			accountsDown[providerMode{route.Provider, mode}] = true
 		}
 	}
 
@@ -276,7 +292,9 @@ func newReadinessStartupReport(report startupReport) *httpserver.ReadinessStartu
 	}
 }
 
-func startupCandidateUsable(candidate accountdomain.RoutingCandidate, now time.Time, providers *provider.Registry) bool {
+// startupAccountUsable checks the account-level state, which is the same for
+// every route of a provider and quota mode.
+func startupAccountUsable(candidate accountdomain.RoutingCandidate, now time.Time, providers *provider.Registry) bool {
 	credential := candidate.Credential
 	if credential.AuthType == "" || credential.AuthStatus != accountdomain.AuthStatusActive {
 		return false
@@ -291,12 +309,6 @@ func startupCandidateUsable(candidate accountdomain.RoutingCandidate, now time.T
 	if credential.CooldownUntil != nil && now.Before(*credential.CooldownUntil) {
 		return false
 	}
-	if candidate.ModelCapabilityKnown && !candidate.SupportsModel {
-		return false
-	}
-	if candidate.ModelQuotaBlock != nil && now.Before(candidate.ModelQuotaBlock.CooldownUntil) {
-		return false
-	}
 	if candidate.QuotaRecovery != nil && candidate.QuotaRecovery.Status != accountdomain.QuotaRecoveryStatusActive {
 		return false
 	}
@@ -304,6 +316,33 @@ func startupCandidateUsable(candidate accountdomain.RoutingCandidate, now time.T
 		return false
 	}
 	return candidate.QuotaWindow == nil || candidate.QuotaWindow.Remaining > 0
+}
+
+func startupModelUsable(candidate accountdomain.RoutingCandidate, now time.Time) bool {
+	if candidate.ModelCapabilityKnown && !candidate.SupportsModel {
+		return false
+	}
+	return candidate.ModelQuotaBlock == nil || !now.Before(candidate.ModelQuotaBlock.CooldownUntil)
+}
+
+// cachedReadiness serves one snapshot per ttl to every caller: /readyz is
+// unauthenticated and a snapshot lists all enabled routes with their account
+// counts and loads routing candidates per route.
+func cachedReadiness(ttl time.Duration, load func(context.Context) httpserver.ReadinessSnapshot) func(context.Context) httpserver.ReadinessSnapshot {
+	var mu sync.Mutex
+	var loadedAt time.Time
+	var cached httpserver.ReadinessSnapshot
+	return func(ctx context.Context) httpserver.ReadinessSnapshot {
+		mu.Lock()
+		defer mu.Unlock()
+		if time.Since(loadedAt) < ttl {
+			return cached
+		}
+		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		cached, loadedAt = load(loadCtx), time.Now()
+		return cached
+	}
 }
 
 func (a *Application) reconcileStartup(ctx context.Context) {
