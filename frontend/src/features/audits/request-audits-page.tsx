@@ -526,7 +526,8 @@ function UsageDetails({ audit, locale }: { audit: AuditDTO; locale: string }) {
     return (
       <div className="flex h-[52px] w-full items-center gap-2 rounded-md bg-muted/45 px-2.5 text-[11px]">
         <div className="min-w-0">
-          <p className="truncate font-medium">{t(`audits.operations.${audit.operation}`)}</p>
+          {/* Voice catalog lookups share the tts operation with synthesis; only they are GET requests. */}
+          <p className="truncate font-medium">{audit.operation === "tts" && audit.requestMethod === "GET" ? t("audits.voiceLookup") : t(`audits.operations.${audit.operation}`)}</p>
           <p className="truncate text-muted-foreground">{view.durationSeconds}s</p>
         </div>
       </div>

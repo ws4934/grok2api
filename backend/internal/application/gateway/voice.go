@@ -66,10 +66,14 @@ type STTInput struct {
 	Headers        map[string][]string
 }
 
+// VoiceListInput looks up a voice catalog; Method and Path go to the audit,
+// which tells these GET lookups apart from synthesis.
 type VoiceListInput struct {
 	RequestID   string
 	ClientKey   clientkey.Key
 	PublicModel string
+	Method      string
+	Path        string
 }
 
 type VoiceIDInput struct {
@@ -77,6 +81,8 @@ type VoiceIDInput struct {
 	ClientKey   clientkey.Key
 	PublicModel string
 	VoiceID     string
+	Method      string
+	Path        string
 }
 
 type voiceProviderSupport func(accountdomain.Provider) bool
@@ -138,7 +144,7 @@ func (s *Service) SynthesizeSpeech(ctx context.Context, input TTSInput) (*Result
 }
 
 func (s *Service) ListTTSVoices(ctx context.Context, input VoiceListInput) (*Result, error) {
-	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, nil, "", "", nil, func(providerValue accountdomain.Provider) bool {
+	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, nil, input.Method, input.Path, nil, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.TTS(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, _ string) (voiceExecutionResult, error) {
@@ -167,7 +173,7 @@ func (s *Service) ListTTSVoices(ctx context.Context, input VoiceListInput) (*Res
 }
 
 func (s *Service) GetTTSVoice(ctx context.Context, input VoiceIDInput) (*Result, error) {
-	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, nil, "", "", nil, func(providerValue accountdomain.Provider) bool {
+	return s.executeVoice(ctx, input.RequestID, input.ClientKey, input.PublicModel, audit.OperationTTS, modeldomain.CapabilityTTS, false, nil, input.Method, input.Path, nil, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.TTS(providerValue)
 		return ok
 	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, _ string) (voiceExecutionResult, error) {

@@ -101,7 +101,7 @@ func (h *Handler) listTTSVoices(c *gin.Context) {
 	if model == "" {
 		model = "grok-voice-latest"
 	}
-	result, err := h.gateway.ListTTSVoices(c.Request.Context(), gateway.VoiceListInput{RequestID: requestID, ClientKey: clientKey, PublicModel: model})
+	result, err := h.gateway.ListTTSVoices(c.Request.Context(), gateway.VoiceListInput{RequestID: requestID, ClientKey: clientKey, PublicModel: model, Method: c.Request.Method, Path: c.Request.URL.Path})
 	if err != nil {
 		writeGatewayError(c, err)
 		return
@@ -120,6 +120,7 @@ func (h *Handler) getTTSVoice(c *gin.Context) {
 	}
 	result, err := h.gateway.GetTTSVoice(c.Request.Context(), gateway.VoiceIDInput{
 		RequestID: requestID, ClientKey: clientKey, PublicModel: model, VoiceID: c.Param("voiceId"),
+		Method: c.Request.Method, Path: c.Request.URL.Path,
 	})
 	if err != nil {
 		writeGatewayError(c, err)
