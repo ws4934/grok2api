@@ -1445,6 +1445,9 @@ func TestShouldSkipXAIFallbackForSafetyAndBlocked(t *testing.T) {
 	if !shouldSkipXAIFallback([]byte(`{"code":"unauthorized:blocked-user","error":"User is blocked"}`)) {
 		t.Fatal("blocked body must skip XAI fallback")
 	}
+	if !shouldSkipXAIFallback([]byte(`{"code":7,"message":"User is blocked [WKE=unauthorized:blocked-user]"}`)) {
+		t.Fatal("gateway-recognized blocked body must skip XAI fallback")
+	}
 	if shouldSkipXAIFallback([]byte(`{"code":"permission-denied","error":"Access to the chat endpoint is denied"}`)) {
 		t.Fatal("ordinary permission denial may still probe XAI for Super Auto accounts")
 	}

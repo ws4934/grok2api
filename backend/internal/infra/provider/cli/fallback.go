@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -165,22 +164,6 @@ func isHTTPForbidden(status int) bool {
 	return status == http.StatusForbidden
 }
 
-func isDefinitiveAccountBlockBody(body []byte) bool {
-	var payload map[string]any
-	if json.Unmarshal(body, &payload) != nil {
-		return false
-	}
-	code := fallbackStringField(payload, "code")
-	message := firstNonEmpty(fallbackStringField(payload, "error"), fallbackStringField(payload, "message"))
-	if nested, ok := payload["error"].(map[string]any); ok {
-		code = firstNonEmpty(fallbackStringField(nested, "code"), code)
-		message = firstNonEmpty(fallbackStringField(nested, "message"), message)
-	}
-	code = strings.ToLower(strings.TrimSpace(code))
-	message = strings.ToLower(strings.Trim(strings.TrimSpace(message), " .!\t\r\n"))
-	return strings.Contains(code, "blocked-user") || message == "user is blocked"
-}
-
 // isSafetyRejectionBody detects request-level content safety denials that must not
 // trigger XAI plane fallback or account rotation.
 func isSafetyRejectionBody(body []byte) bool {
@@ -191,12 +174,7 @@ func isSafetyRejectionBody(body []byte) bool {
 
 // shouldSkipXAIFallback reports whether a primary 403 body is terminal for the request.
 func shouldSkipXAIFallback(body []byte) bool {
-	return isDefinitiveAccountBlockBody(body) || isSafetyRejectionBody(body)
-}
-
-func fallbackStringField(values map[string]any, key string) string {
-	value, _ := values[key].(string)
-	return value
+	return provider.IsDefinitiveAccountBlockBody(body) || isSafetyRejectionBody(body)
 }
 
 func bufferedFailureDiagnostic(response *http.Response, body []byte, truncated bool) *provider.DiagnosticResponse {
