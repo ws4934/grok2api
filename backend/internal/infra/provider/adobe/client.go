@@ -17,6 +17,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
 // doer 通过绑定的出口发起一次 HTTP 请求；egress 的 Lease 即实现了它。
@@ -38,9 +40,6 @@ const (
 	maxResponseBytes = 16 << 20
 	// maxDownloadBytes 容纳 4K PNG；超出时报错而不是静默截断成坏图。
 	maxDownloadBytes = 64 << 20
-	// pollTransientLimit 是轮询容忍的连续瞬时失败次数（传输错误、429、5xx）：
-	// 任务已经在 Adobe 上跑，网络抖一下不该让已扣的积分白花。
-	pollTransientLimit = 5
 )
 
 // pollInterval 是阻塞轮询两次 GET 之间的间隔（测试会调小）。
@@ -249,14 +248,14 @@ func (c *client) poll(ctx context.Context, pollURL, kind string) (pollResult, er
 }
 
 // pollUntilDone 阻塞轮询直到任务成功（返回全部输出 URL）、失败或上下文结束。
-// 连续的瞬时失败在 pollTransientLimit 次内只重试，不放弃已提交的任务。
+// 连续的瞬时失败在 provider.VideoPollTransientLimit 次内只重试，不放弃已提交的任务。
 func pollUntilDone(ctx context.Context, c *client, pollURL, kind string, progress func(int)) ([]string, error) {
 	failures := 0
 	for {
 		result, err := c.poll(ctx, pollURL, kind)
 		switch {
 		case err != nil:
-			if failures++; !transient(err) || failures >= pollTransientLimit || ctx.Err() != nil {
+			if failures++; !provider.IsTransientVideoPollError(err) || failures >= provider.VideoPollTransientLimit || ctx.Err() != nil {
 				return nil, err
 			}
 		case result.status == "SUCCEEDED":
@@ -275,13 +274,6 @@ func pollUntilDone(ctx context.Context, c *client, pollURL, kind string, progres
 		case <-time.After(pollInterval):
 		}
 	}
-}
-
-// transient 判断一次失败是否可能自行恢复（传输错误、429、5xx）。
-func transient(err error) bool {
-	var te *transportError
-	var ue *upstreamError
-	return errors.As(err, &te) || (errors.As(err, &ue) && (ue.status == http.StatusTooManyRequests || ue.status >= 500))
 }
 
 func (c *client) upload(ctx context.Context, uploadURL string, data []byte, mime, kind string) (string, error) {
