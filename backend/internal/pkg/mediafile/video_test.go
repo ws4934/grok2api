@@ -21,6 +21,35 @@ func TestVideoExtension(t *testing.T) {
 	}
 }
 
+func TestVideoType(t *testing.T) {
+	ftyp := func(brands string) []byte {
+		box := append([]byte{0, 0, 0, byte(8 + len(brands)), 'f', 't', 'y', 'p'}, brands...)
+		return append(box, make([]byte, 32)...)
+	}
+	// A forged box size must not let the scan reach a brand far past a real box.
+	forged := make([]byte, 1<<20)
+	copy(forged, "\xff\xff\xff\xffftypzzzz")
+	copy(forged[len(forged)-4:], "isom")
+	for _, testCase := range []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{name: "mp4", data: ftyp("isom\x00\x00\x02\x00isomiso2"), want: "video/mp4"},
+		{name: "compatible-mp4", data: ftyp("zzzz\x00\x00\x00\x00mp42"), want: "video/mp4"},
+		{name: "quicktime", data: ftyp("qt  \x00\x00\x02\x00qt  "), want: "video/quicktime"},
+		{name: "heic", data: ftyp("heic\x00\x00\x00\x00mif1heic")},
+		{name: "avif", data: ftyp("avif\x00\x00\x00\x00mif1miaf")},
+		{name: "webm", data: append([]byte{0x1a, 0x45, 0xdf, 0xa3}, make([]byte, 32)...), want: "video/webm"},
+		{name: "png", data: []byte("\x89PNG\r\n\x1a\n0000")},
+		{name: "forged-box-size", data: forged},
+	} {
+		if got := VideoType(testCase.data); got != testCase.want {
+			t.Errorf("VideoType(%s) = %q, want %q", testCase.name, got, testCase.want)
+		}
+	}
+}
+
 func TestVideoContentDispositionSanitizesName(t *testing.T) {
 	for _, testCase := range []struct {
 		name        string

@@ -17,6 +17,7 @@ import (
 
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
+	"github.com/chenyme/grok2api/backend/internal/pkg/mediafile"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
@@ -464,31 +465,10 @@ func sniffVideoFile(path string) (string, error) {
 	if n == 0 {
 		return "", fmt.Errorf("%w: 空内容", ErrInvalidVideoUpload)
 	}
-	detected := http.DetectContentType(header[:n])
-	// DetectContentType 对 mp4 通常返回 video/mp4；部分样本可能是 application/octet-stream。
-	if supportedVideoMIME(detected) {
+	if detected := mediafile.VideoType(header[:n]); detected != "" {
 		return detected, nil
 	}
-	if looksLikeMP4(header[:n]) {
-		return "video/mp4", nil
-	}
-	if looksLikeWebM(header[:n]) {
-		return "video/webm", nil
-	}
 	return "", fmt.Errorf("%w: 非视频内容", ErrInvalidVideoUpload)
-}
-
-func looksLikeMP4(header []byte) bool {
-	if len(header) < 12 {
-		return false
-	}
-	// ISO BMFF: bytes 4-8 often "ftyp"
-	return string(header[4:8]) == "ftyp"
-}
-
-func looksLikeWebM(header []byte) bool {
-	// EBML header 0x1A45DFA3
-	return len(header) >= 4 && header[0] == 0x1A && header[1] == 0x45 && header[2] == 0xDF && header[3] == 0xA3
 }
 
 func isBodyTooLargeError(err error) bool {

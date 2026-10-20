@@ -919,7 +919,9 @@ func mp4Header() []byte {
 	return append(box, make([]byte, 64)...)
 }
 
-func TestVideoMIME(t *testing.T) {
+// 输入视频只收官网接受的 MP4 与 QuickTime。
+func TestReadInputVideoTypes(t *testing.T) {
+	a := &Adapter{}
 	quicktime := append([]byte{0, 0, 0, 20, 'f', 't', 'y', 'p', 'q', 't', ' ', ' ', 0, 0, 0, 0, 'q', 't', ' ', ' '}, make([]byte, 32)...)
 	for name, tc := range map[string]struct {
 		data []byte
@@ -930,8 +932,9 @@ func TestVideoMIME(t *testing.T) {
 		"heic": {append([]byte{0, 0, 0, 24, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c', 0, 0, 0, 0, 'm', 'i', 'f', '1', 'h', 'e', 'i', 'c'}, make([]byte, 32)...), ""},
 		"webm": {append([]byte{0x1a, 0x45, 0xdf, 0xa3}, []byte("....webm............")...), ""},
 	} {
-		if got := videoMIME(tc.data); got != tc.want {
-			t.Errorf("%s: videoMIME = %q, want %q", name, got, tc.want)
+		_, got, err := a.readInput(context.Background(), "data:video/mp4;base64,"+base64.StdEncoding.EncodeToString(tc.data), "video")
+		if got != tc.want || (err == nil) != (tc.want != "") {
+			t.Errorf("%s: readInput = %q, %v; want %q", name, got, err, tc.want)
 		}
 	}
 }

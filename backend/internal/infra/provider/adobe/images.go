@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/pkg/mediafile"
 )
 
 // imageModel 查找图像模型并规划请求参数。
@@ -278,7 +278,9 @@ func (a *Adapter) readInput(ctx context.Context, ref, kind string) ([]byte, stri
 		return nil, "", &requestError{msg: label + "必须是 Base64 data URI 或 https URL"}
 	}
 	if kind == "video" {
-		if mime := videoMIME(data); mime != "" {
+		// 官网只收 MP4 与 QuickTime。
+		switch mime := mediafile.VideoType(data); mime {
+		case "video/mp4", "video/quicktime":
 			return data, mime, nil
 		}
 		return nil, "", &requestError{msg: "视频只支持 MP4 或 QuickTime（MOV）"}
@@ -288,31 +290,6 @@ func (a *Adapter) readInput(ctx context.Context, ref, kind string) ([]byte, stri
 		return data, mime, nil
 	}
 	return nil, "", &requestError{msg: "输入图片只支持 PNG、JPEG 或 WebP"}
-}
-
-// videoMIME 识别输入视频：只认官网接受的 MP4 与 QuickTime，看 ISO BMFF 的 ftyp 品牌，
-// 排除同样以 ftyp 开头的 HEIC/AVIF 图片。
-func videoMIME(data []byte) string {
-	if len(data) < 16 || string(data[4:8]) != "ftyp" {
-		return ""
-	}
-	end := min(int(binary.BigEndian.Uint32(data[:4])), len(data))
-	brands := []string{string(data[8:12])} // 主品牌；data[12:16] 是次版本号
-	for i := 16; i+4 <= end; i += 4 {
-		brands = append(brands, string(data[i:i+4]))
-	}
-	if brands[0] == "qt  " {
-		return "video/quicktime"
-	}
-	for _, brand := range brands {
-		switch brand {
-		case "isom", "iso2", "iso3", "iso4", "iso5", "iso6", "mp41", "mp42", "avc1", "M4V ", "dash":
-			return "video/mp4"
-		case "qt  ":
-			return "video/quicktime"
-		}
-	}
-	return ""
 }
 
 func jsonResponse(status int, body any) *provider.Response {

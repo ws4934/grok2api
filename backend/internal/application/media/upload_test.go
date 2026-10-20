@@ -126,6 +126,25 @@ func TestSaveInputVideoIsPrivateExpiringAsset(t *testing.T) {
 	}
 }
 
+// The content type follows the ftyp brand: an iPhone .mov is QuickTime, and a
+// HEIC image, which shares the ftyp box, is not a video.
+func TestSaveInputVideoSniffsTheFtypBrand(t *testing.T) {
+	database, objects, _, cleanup := openUploadTestDeps(t)
+	defer cleanup()
+	service := NewService(
+		relational.NewMediaAssetRepository(database), relational.NewMediaJobRepository(database), objects, nil,
+		Config{MaxImageBytes: mediadomain.MaxInputAssetBytes, MaxTotalBytes: 1 << 30, CleanupThresholdPercent: 80, CleanupInterval: time.Minute},
+	)
+	mov := append([]byte{0x00, 0x00, 0x00, 0x14, 'f', 't', 'y', 'p', 'q', 't', ' ', ' ', 0x00, 0x00, 0x02, 0x00, 'q', 't', ' ', ' '}, bytes.Repeat([]byte{0x00}, 64)...)
+	if asset, err := service.SaveInputVideo(context.Background(), "video/quicktime", bytes.NewReader(mov)); err != nil || asset.MIMEType != "video/quicktime" {
+		t.Fatalf("QuickTime upload: asset = %#v, err = %v", asset, err)
+	}
+	heic := append([]byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c', 0x00, 0x00, 0x00, 0x00, 'm', 'i', 'f', '1', 'h', 'e', 'i', 'c'}, bytes.Repeat([]byte{0x00}, 64)...)
+	if _, err := service.SaveInputVideo(context.Background(), "video/mp4", bytes.NewReader(heic)); !errors.Is(err, ErrInvalidVideoUpload) {
+		t.Fatalf("HEIC upload err = %v", err)
+	}
+}
+
 type bindingTicketRepository struct {
 	repository.MediaUploadTicketRepository
 	jobID   string
