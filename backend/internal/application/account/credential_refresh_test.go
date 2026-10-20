@@ -101,6 +101,42 @@ func TestEnsureCredentialPersistsRotatedTokenAfterRequestCancellation(t *testing
 	}
 }
 
+// A whole-account save that read the row before a renewal committed must not
+// roll the rotated tokens back: the upstream already consumed refresh-0.
+func TestMarkReauthRequiredKeepsTokensRotatedAfterItsRead(t *testing.T) {
+	ctx := context.Background()
+	service, credential, _ := newCredentialRefreshTestService(t, time.Now().UTC())
+	stored := service.accounts
+	service.accounts = &renewAfterFirstGet{AccountRepository: stored, renew: func() {
+		if _, err := service.EnsureCredential(ctx, credential, true); err != nil {
+			t.Error(err)
+		}
+	}}
+	if err := service.MarkReauthRequired(ctx, credential.ID, "account is blocked"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := stored.Get(ctx, credential.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EncryptedAccessToken != "access-1" || got.EncryptedRefreshToken != "refresh-1" || got.AuthStatus != accountdomain.AuthStatusReauthRequired {
+		t.Fatalf("stored access=%q refresh=%q status=%s, want access-1 refresh-1 reauthRequired", got.EncryptedAccessToken, got.EncryptedRefreshToken, got.AuthStatus)
+	}
+}
+
+// renewAfterFirstGet commits a token renewal right after the first account read.
+type renewAfterFirstGet struct {
+	repository.AccountRepository
+	once  sync.Once
+	renew func()
+}
+
+func (r *renewAfterFirstGet) Get(ctx context.Context, id uint64) (accountdomain.Credential, error) {
+	value, err := r.AccountRepository.Get(ctx, id)
+	r.once.Do(r.renew)
+	return value, err
+}
+
 func waitForStoredRefreshToken(t *testing.T, service *Service, id uint64, want string) accountdomain.Credential {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -224,10 +260,7 @@ func TestCredentialRefreshSchedulerRefreshesOnlyDueAccounts(t *testing.T) {
 	now := time.Now().UTC()
 	service, credential, adapter := newCredentialRefreshTestService(t, now)
 	service.now = func() time.Time { return time.Now().UTC() }
-	dueAt := now.Add(-time.Minute)
-	credential.RefreshDueAt = &dueAt
-	credential, err := service.accounts.Update(ctx, credential)
-	if err != nil {
+	if err := service.accounts.UpdateCredentialRefreshFailure(ctx, credential.ID, repository.CredentialRefreshFailure{RetryAt: now.Add(-time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	far, _, err := service.accounts.UpsertByIdentity(ctx, accountdomain.Credential{

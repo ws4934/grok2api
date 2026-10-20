@@ -235,7 +235,11 @@ func (r *AccountRepository) Update(ctx context.Context, value account.Credential
 		if _, err := deleteInvalidEgressLeaseBlocksForAccount(tx, row); err != nil {
 			return err
 		}
-		return saveAccountRelations(tx, value, row.ID)
+		// Tokens and renewal state belong to UpdateTokens and the refresh
+		// failure writes; a save from an earlier read must not roll them back.
+		return saveAccountRelations(tx, value, row.ID, "encrypted_primary", "encrypted_refresh", "encrypted_state", "expires_at",
+			"refresh_due_at", "last_refresh_at", "refresh_failures", "refresh_unclassified_auth_failures", "last_refresh_error_status",
+			"last_refresh_error", "last_refresh_error_message", "last_refresh_error_response", "refresh_permanent")
 	}); err != nil {
 		return account.Credential{}, mapError(err)
 	}
@@ -259,10 +263,10 @@ func applyReauthMarkedAtTransition(row *accountModel, existing accountModel) {
 	row.ReauthMarkedAt = nil
 }
 
-func saveAccountRelations(tx *gorm.DB, value account.Credential, accountID uint64) error {
+func saveAccountRelations(tx *gorm.DB, value account.Credential, accountID uint64, omit ...string) error {
 	value.ID = accountID
 	credential := fromAccountCredentialDomain(value)
-	if err := tx.Save(&credential).Error; err != nil {
+	if err := tx.Omit(omit...).Save(&credential).Error; err != nil {
 		return err
 	}
 	if profile := fromWebProfileDomain(value); profile != nil {
