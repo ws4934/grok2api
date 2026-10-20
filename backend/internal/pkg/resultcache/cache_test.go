@@ -68,6 +68,38 @@ func TestCacheCoalescesConcurrentLoads(t *testing.T) {
 	}
 }
 
+// The leader's cancellation must not fail a waiter whose own context is live.
+func TestCacheWaiterLoadsAgainWhenTheLeaderIsCanceled(t *testing.T) {
+	cache := New[string, int](4, time.Second)
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	loading := make(chan struct{})
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := cache.Load(leaderCtx, "k", time.Now(), func() (int, error) {
+			close(loading)
+			<-leaderCtx.Done()
+			return 0, leaderCtx.Err()
+		})
+		leaderDone <- err
+	}()
+	<-loading
+	waiterDone := make(chan error, 1)
+	var value int
+	go func() {
+		var err error
+		value, err = cache.Load(context.Background(), "k", time.Now(), func() (int, error) { return 42, nil })
+		waiterDone <- err
+	}()
+	time.Sleep(10 * time.Millisecond) // the waiter joins the in-flight load
+	cancelLeader()
+	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader err = %v", err)
+	}
+	if err := <-waiterDone; err != nil || value != 42 {
+		t.Fatalf("waiter = %d, %v", value, err)
+	}
+}
+
 func TestCacheWaiterHonorsCancellation(t *testing.T) {
 	cache := New[string, int](2, time.Minute)
 	loaderStarted := make(chan struct{})

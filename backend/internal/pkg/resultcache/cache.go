@@ -64,6 +64,11 @@ func (c *Cache[K, V]) Load(ctx context.Context, key K, now time.Time, loader fun
 		c.mu.Unlock()
 		select {
 		case <-pending.done:
+			// The loader runs with the leader's context. When the leader left,
+			// a waiter that is still live loads for itself instead of failing.
+			if pending.err != nil && ctx.Err() == nil && (errors.Is(pending.err, context.Canceled) || errors.Is(pending.err, context.DeadlineExceeded)) {
+				return c.Load(ctx, key, now, loader)
+			}
 			return pending.value, pending.err
 		case <-ctx.Done():
 			var zero V
