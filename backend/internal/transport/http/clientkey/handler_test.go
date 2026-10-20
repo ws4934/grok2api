@@ -159,14 +159,3 @@ func TestProviderScopeWireFormatAcceptsAllAndExplicitProviders(t *testing.T) {
 
 // IDs are signed BIGINTs: one with the top bit set is invalid input, not a
 // value database/sql rejects with a 500.
-func TestIDParsersRejectTopBitIDs(t *testing.T) {
-	const topBit = "9223372036854775808"
-	ginContext, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ginContext.Params = gin.Params{{Key: "id", Value: topBit}}
-	if _, ok := pathID(ginContext); ok {
-		t.Fatal("pathID accepted a top-bit ID")
-	}
-	if _, err := parseIDs([]string{"1", topBit}); err == nil {
-		t.Fatal("parseIDs accepted a top-bit ID")
-	}
-}

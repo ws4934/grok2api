@@ -11,6 +11,7 @@ import (
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -75,7 +76,7 @@ func (h *Handler) batchUpdate(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseIDs(request.IDs)
+	ids, err := params.IDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
@@ -94,7 +95,7 @@ func (h *Handler) batchDelete(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseIDs(request.IDs)
+	ids, err := params.IDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
@@ -121,7 +122,7 @@ func (h *Handler) previewDeletion(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseIDs(request.IDs)
+	ids, err := params.IDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
@@ -156,7 +157,7 @@ func (h *Handler) batchRefreshBilling(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseIDs(request.IDs)
+	ids, err := params.IDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
@@ -195,7 +196,7 @@ func (h *Handler) detectBuildAccounts(c *gin.Context) {
 	}
 	var ids []uint64
 	if hasIDs {
-		parsed, err := parseIDs(request.IDs)
+		parsed, err := params.IDs(request.IDs)
 		if err != nil {
 			response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 			return
@@ -231,7 +232,7 @@ func (h *Handler) batchResetQuota(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseIDs(request.IDs)
+	ids, err := params.IDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
@@ -325,7 +326,7 @@ func (h *Handler) batchRefreshQuotas(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseIDs(request.IDs)
+	ids, err := params.IDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
@@ -353,7 +354,7 @@ func (h *Handler) batchRefreshTokens(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseIDs(request.IDs)
+	ids, err := params.IDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return

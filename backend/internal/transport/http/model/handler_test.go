@@ -89,9 +89,6 @@ func TestParseOptionalBoolRejectsAmbiguousValues(t *testing.T) {
 // value database/sql rejects with a 500.
 func TestIDParsersRejectTopBitIDs(t *testing.T) {
 	const topBit = "9223372036854775808"
-	if _, err := parseIDs([]string{"1", topBit}); err == nil {
-		t.Fatal("parseIDs accepted a top-bit ID")
-	}
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(gin.Recovery())

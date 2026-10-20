@@ -2,7 +2,6 @@ package clientkey
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -85,7 +85,7 @@ type keyResponse struct {
 }
 
 func (h *Handler) list(c *gin.Context) {
-	page, pageSize := pagination(c)
+	page, pageSize := params.Page(c)
 	values, total, err := h.service.List(c.Request.Context(), page, pageSize, c.Query("search"), clientkeyapp.ListFilter{Status: c.Query("status"), ModelScope: c.Query("modelScope"), Sort: repository.SortQuery{Field: c.Query("sortBy"), Direction: repository.SortDirection(c.Query("sortOrder"))}})
 	if errors.Is(err, clientkeyapp.ErrInvalidFilter) {
 		response.Error(c, http.StatusBadRequest, "invalidFilter", err.Error())
@@ -108,7 +108,7 @@ func (h *Handler) batchUpdate(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseIDs(request.IDs)
+	ids, err := params.IDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
@@ -127,7 +127,7 @@ func (h *Handler) batchDelete(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseIDs(request.IDs)
+	ids, err := params.IDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return
@@ -151,7 +151,7 @@ func (h *Handler) create(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidExpiresAt", "expiresAt 必须是 RFC3339 时间")
 		return
 	}
-	modelIDs, err := parseIDs(request.AllowedModelIDs)
+	modelIDs, err := params.IDs(request.AllowedModelIDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidModelId", "allowedModelIds 包含无效 ID")
 		return
@@ -192,7 +192,7 @@ func (h *Handler) create(c *gin.Context) {
 }
 
 func (h *Handler) update(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -220,7 +220,7 @@ func (h *Handler) update(c *gin.Context) {
 		}
 	}
 	if request.AllowedModelIDs != nil {
-		ids, err := parseIDs(*request.AllowedModelIDs)
+		ids, err := params.IDs(*request.AllowedModelIDs)
 		if err != nil {
 			response.Error(c, http.StatusBadRequest, "invalidModelId", "allowedModelIds 包含无效 ID")
 			return
@@ -236,7 +236,7 @@ func (h *Handler) update(c *gin.Context) {
 }
 
 func (h *Handler) revealSecret(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -251,7 +251,7 @@ func (h *Handler) revealSecret(c *gin.Context) {
 }
 
 func (h *Handler) delete(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -346,31 +346,4 @@ func parseTime(value string) (*time.Time, error) {
 	}
 	parsed = parsed.UTC()
 	return &parsed, nil
-}
-
-func parseIDs(values []string) ([]uint64, error) {
-	result := make([]uint64, 0, len(values))
-	for _, value := range values {
-		id, err := strconv.ParseUint(value, 10, 63)
-		if err != nil || id == 0 {
-			return nil, fmt.Errorf("无效模型 ID: %s", value)
-		}
-		result = append(result, id)
-	}
-	return result, nil
-}
-
-func pathID(c *gin.Context) (uint64, bool) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 63)
-	if err != nil || id == 0 {
-		response.Error(c, http.StatusBadRequest, "invalidId", "ID 无效")
-		return 0, false
-	}
-	return id, true
-}
-
-func pagination(c *gin.Context) (int, int) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
-	return repository.NormalizePage(page, size, repository.DefaultPageSize)
 }

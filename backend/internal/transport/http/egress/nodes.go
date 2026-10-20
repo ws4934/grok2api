@@ -11,6 +11,7 @@ import (
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,7 +36,7 @@ func (h *Handler) cleanup(c *gin.Context) {
 }
 
 func (h *Handler) refreshClearance(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -123,7 +124,7 @@ type qualityProbeRequest struct {
 }
 
 func (h *Handler) testQuality(c *gin.Context) {
-	nodeID, ok := pathID(c)
+	nodeID, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -197,7 +198,7 @@ func (h *Handler) deleteMany(c *gin.Context) {
 }
 
 func (h *Handler) assignAccounts(c *gin.Context) {
-	nodeID, ok := pathID(c)
+	nodeID, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -206,7 +207,7 @@ func (h *Handler) assignAccounts(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseAccountIDs(request.IDs)
+	ids, err := parseUniqueIDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", "账号 ID 无效")
 		return
@@ -229,7 +230,7 @@ func (h *Handler) unassignAccounts(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效")
 		return
 	}
-	ids, err := parseAccountIDs(request.IDs)
+	ids, err := parseUniqueIDs(request.IDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", "账号 ID 无效")
 		return
@@ -271,7 +272,7 @@ func (h *Handler) list(c *gin.Context) {
 		response.Success(c, http.StatusOK, gin.H{"items": items, "page": 1, "pageSize": pageSize, "total": len(items), "defaultUserAgents": h.service.DefaultUserAgents()})
 		return
 	}
-	page, pageSize := nodePagination(c)
+	page, pageSize := params.Page(c)
 	values, total, err := h.service.List(c.Request.Context(), page, pageSize, c.Query("search"), egressapp.ListFilter{
 		Scope: scope, Enabled: c.Query("enabled"), ProbeStatus: c.Query("probe"), Assignment: c.Query("assignment"),
 		Sort: sort,
@@ -325,7 +326,7 @@ func (h *Handler) create(c *gin.Context) {
 }
 
 func (h *Handler) update(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -345,7 +346,7 @@ func (h *Handler) update(c *gin.Context) {
 func (h *Handler) proxyURL(c *gin.Context) {
 	c.Header("Cache-Control", "private, no-store")
 	c.Header("Pragma", "no-cache")
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -388,33 +389,14 @@ func newProbeFamilyResponse(value egressdomain.ProbeFamilyResult) probeFamilyRes
 	}
 }
 
-func parseAccountIDs(values []string) ([]uint64, error) {
+// parseUniqueIDs parses a non-empty ID list and drops repeats.
+func parseUniqueIDs(values []string) ([]uint64, error) {
 	result := make([]uint64, 0, len(values))
 	seen := make(map[uint64]struct{}, len(values))
 	for _, value := range values {
-		id, err := strconv.ParseUint(value, 10, 63)
-		if err != nil || id == 0 {
-			return nil, errors.New("invalid id")
-		}
-		if _, exists := seen[id]; exists {
-			continue
-		}
-		seen[id] = struct{}{}
-		result = append(result, id)
-	}
-	if len(result) == 0 {
-		return nil, errors.New("no ids")
-	}
-	return result, nil
-}
-
-func parseEgressNodeIDs(values []string) ([]uint64, error) {
-	result := make([]uint64, 0, len(values))
-	seen := make(map[uint64]struct{}, len(values))
-	for _, value := range values {
-		id, err := strconv.ParseUint(value, 10, 63)
-		if err != nil || id == 0 {
-			return nil, errors.New("invalid id")
+		id, err := params.ID(value)
+		if err != nil {
+			return nil, err
 		}
 		if _, exists := seen[id]; exists {
 			continue
@@ -432,11 +414,11 @@ func parseBoundedEgressNodeIDs(values []string, limit int) ([]uint64, error) {
 	if len(values) == 0 || limit < 1 || len(values) > limit {
 		return nil, errors.New("invalid id count")
 	}
-	return parseEgressNodeIDs(values)
+	return parseUniqueIDs(values)
 }
 
 func (h *Handler) delete(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -452,7 +434,7 @@ type probeBatchRequest struct {
 }
 
 func (h *Handler) testNode(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -491,5 +473,5 @@ func parseOptionalAccountIDs(values []string) ([]uint64, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
-	return parseAccountIDs(values)
+	return parseUniqueIDs(values)
 }

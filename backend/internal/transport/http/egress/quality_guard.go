@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -362,7 +363,7 @@ func (h *Handler) readQualityGuardState() (qualityGuardState, bool, error) {
 }
 
 func (h *Handler) testQualityGuardNode(c *gin.Context) {
-	nodeID, ok := pathID(c)
+	nodeID, ok := params.PathID(c)
 	if !ok {
 		return
 	}

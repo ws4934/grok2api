@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	accountsyncapp "github.com/chenyme/grok2api/backend/internal/application/accountsync"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	admindomain "github.com/chenyme/grok2api/backend/internal/domain/admin"
-	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
@@ -110,33 +108,6 @@ func (h *Handler) writeServiceError(c *gin.Context, code string, err error, fall
 	default:
 		response.Error(c, fallbackStatus, code, fallbackMessage)
 	}
-}
-
-func pagination(c *gin.Context) (int, int) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
-	return repository.NormalizePage(page, size, repository.DefaultPageSize)
-}
-
-func pathID(c *gin.Context) (uint64, bool) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 63)
-	if err != nil || id == 0 {
-		response.Error(c, http.StatusBadRequest, "invalidId", "ID 无效")
-		return 0, false
-	}
-	return id, true
-}
-
-func parseIDs(values []string) ([]uint64, error) {
-	ids := make([]uint64, 0, len(values))
-	for _, value := range values {
-		id, err := strconv.ParseUint(value, 10, 63)
-		if err != nil || id == 0 {
-			return nil, errors.New("ID 无效")
-		}
-		ids = append(ids, id)
-	}
-	return ids, nil
 }
 
 // pathProvider resolves the provider named in the route; providers missing from the registry are 404.

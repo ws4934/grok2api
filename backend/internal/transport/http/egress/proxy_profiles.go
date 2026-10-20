@@ -7,6 +7,7 @@ import (
 	egressapp "github.com/chenyme/grok2api/backend/internal/application/egress"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -26,7 +27,7 @@ type proxyProfileResponse struct {
 }
 
 func (h *Handler) listProxyProfiles(c *gin.Context) {
-	page, pageSize := nodePagination(c)
+	page, pageSize := params.Page(c)
 	values, total, err := h.service.ListProxyProfiles(c.Request.Context(), page, pageSize, c.Query("search"))
 	if err != nil {
 		h.writeError(c, err)
@@ -54,7 +55,7 @@ func (h *Handler) createProxyProfile(c *gin.Context) {
 }
 
 func (h *Handler) getProxyProfile(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -67,7 +68,7 @@ func (h *Handler) getProxyProfile(c *gin.Context) {
 }
 
 func (h *Handler) updateProxyProfile(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -85,7 +86,7 @@ func (h *Handler) updateProxyProfile(c *gin.Context) {
 }
 
 func (h *Handler) deleteProxyProfile(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -99,7 +100,7 @@ func (h *Handler) deleteProxyProfile(c *gin.Context) {
 func (h *Handler) proxyProfileURL(c *gin.Context) {
 	c.Header("Cache-Control", "private, no-store")
 	c.Header("Pragma", "no-cache")
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}

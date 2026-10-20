@@ -9,6 +9,7 @@ import (
 	accountsyncapp "github.com/chenyme/grok2api/backend/internal/application/accountsync"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -84,7 +85,7 @@ func (h *Handler) webAccountSelection(c *gin.Context, all bool, rawIDs []string,
 	if all {
 		return nil, true
 	}
-	ids, err := parseIDs(rawIDs)
+	ids, err := params.IDs(rawIDs)
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 		return nil, false

@@ -15,6 +15,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/pkg/mediafile"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -165,7 +166,7 @@ type assetListQuery struct {
 }
 
 func (h *Handler) listImages(c *gin.Context) {
-	page, pageSize := parsePagination(c)
+	page, pageSize := params.Page(c)
 	var query assetListQuery
 	if c.ShouldBindQuery(&query) != nil {
 		response.Error(c, http.StatusBadRequest, "invalidFilter", mediaapp.ErrInvalidFilter.Error())
@@ -250,7 +251,7 @@ func (h *Handler) deleteImages(c *gin.Context) {
 }
 
 func (h *Handler) listJobs(c *gin.Context) {
-	page, pageSize := parsePagination(c)
+	page, pageSize := params.Page(c)
 	filter := repository.MediaJobListFilter{Kind: c.Query("kind"), Status: c.Query("status"), Provider: c.Query("provider")}
 	jobs, total, err := h.service.AdminListJobs(c.Request.Context(), page, pageSize, c.Query("search"), filter, repository.SortQuery{Field: c.Query("sortBy"), Direction: repository.SortDirection(c.Query("sortOrder"))})
 	if errors.Is(err, mediaapp.ErrInvalidFilter) {
@@ -379,10 +380,4 @@ func writeJobActionError(c *gin.Context, err error) {
 	default:
 		response.Error(c, http.StatusBadGateway, "mediaJobActionFailed", err.Error())
 	}
-}
-
-func parsePagination(c *gin.Context) (int, int) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
-	return repository.NormalizePage(page, pageSize, repository.DefaultPageSize)
 }

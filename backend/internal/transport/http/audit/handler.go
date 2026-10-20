@@ -16,6 +16,7 @@ import (
 	pricingdomain "github.com/chenyme/grok2api/backend/internal/domain/pricing"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -266,9 +267,8 @@ func (h *Handler) listCursor(c *gin.Context) {
 }
 
 func (h *Handler) get(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 63)
-	if err != nil || id == 0 {
-		response.Error(c, http.StatusBadRequest, "invalidId", "审计 ID 无效")
+	id, ok := params.PathID(c)
+	if !ok {
 		return
 	}
 	value, err := h.service.Get(c.Request.Context(), id)

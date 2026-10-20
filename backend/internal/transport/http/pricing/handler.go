@@ -11,6 +11,7 @@ import (
 	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	pricingdomain "github.com/chenyme/grok2api/backend/internal/domain/pricing"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -166,9 +167,8 @@ func (h *Handler) put(c *gin.Context) {
 }
 
 func (h *Handler) delete(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 63)
-	if err != nil || id == 0 {
-		response.Error(c, http.StatusBadRequest, "invalidId", "价格 ID 无效")
+	id, ok := params.PathID(c)
+	if !ok {
 		return
 	}
 	if err := h.service.Delete(c.Request.Context(), id); err != nil {

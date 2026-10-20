@@ -8,6 +8,7 @@ import (
 	egressapp "github.com/chenyme/grok2api/backend/internal/application/egress"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -64,7 +65,7 @@ func newSourceResponse(value egressdomain.PublicSubscriptionSource) sourceRespon
 
 func (h *Handler) listSources(c *gin.Context) {
 	if !legacyEgressSourceListRequest(c) {
-		page, pageSize := nodePagination(c)
+		page, pageSize := params.Page(c)
 		values, total, err := h.service.ListSourcePage(c.Request.Context(), page, pageSize, c.Query("search"), egressapp.SourceListFilter{
 			Scope: egressdomain.Scope(c.Query("scope")),
 		})
@@ -127,7 +128,7 @@ func (h *Handler) createSource(c *gin.Context) {
 }
 
 func (h *Handler) updateSource(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -145,7 +146,7 @@ func (h *Handler) updateSource(c *gin.Context) {
 }
 
 func (h *Handler) deleteSource(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -157,7 +158,7 @@ func (h *Handler) deleteSource(c *gin.Context) {
 }
 
 func (h *Handler) syncSource(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}

@@ -14,6 +14,7 @@ import (
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -30,7 +31,7 @@ type updateRequest struct {
 }
 
 func (h *Handler) list(c *gin.Context) {
-	page, pageSize := pagination(c)
+	page, pageSize := params.Page(c)
 	values, total, err := h.service.List(c.Request.Context(), page, pageSize, c.Query("search"), accountapp.ListFilter{
 		Provider: c.Query("provider"), QuotaType: c.Query("type"), Status: c.Query("status"), Egress: c.Query("egress"),
 		Renewal: c.Query("renewal"), Risk: c.Query("risk"), Agreement: c.Query("agreement"), Association: c.Query("association"),
@@ -70,7 +71,7 @@ func (h *Handler) summary(c *gin.Context) {
 }
 
 func (h *Handler) get(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -83,7 +84,7 @@ func (h *Handler) get(c *gin.Context) {
 }
 
 func (h *Handler) refreshWebQuota(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -100,7 +101,7 @@ func (h *Handler) refreshWebQuota(c *gin.Context) {
 }
 
 func (h *Handler) update(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -132,7 +133,7 @@ func (h *Handler) update(c *gin.Context) {
 }
 
 func (h *Handler) clearCooldown(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -145,7 +146,7 @@ func (h *Handler) clearCooldown(c *gin.Context) {
 }
 
 func (h *Handler) delete(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -226,7 +227,7 @@ func newAccountDeleteResponse(result accountapp.AccountDeleteResult) gin.H {
 }
 
 func (h *Handler) refreshToken(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -239,7 +240,7 @@ func (h *Handler) refreshToken(c *gin.Context) {
 }
 
 func (h *Handler) acceptWebTerms(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -251,7 +252,7 @@ func (h *Handler) acceptWebTerms(c *gin.Context) {
 }
 
 func (h *Handler) setWebBirthDate(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -263,7 +264,7 @@ func (h *Handler) setWebBirthDate(c *gin.Context) {
 }
 
 func (h *Handler) enableWebNSFW(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
@@ -275,7 +276,7 @@ func (h *Handler) enableWebNSFW(c *gin.Context) {
 }
 
 func (h *Handler) refreshBilling(c *gin.Context) {
-	id, ok := pathID(c)
+	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}

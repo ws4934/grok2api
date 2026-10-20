@@ -3,7 +3,6 @@ package egress
 import (
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -96,12 +95,6 @@ func (h *Handler) RegisterQualityGuard(router *gin.RouterGroup) {
 	router.GET("/egress-operations", h.operationsConfig)
 }
 
-func nodePagination(c *gin.Context) (int, int) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
-	return repository.NormalizePage(page, pageSize, repository.DefaultPageSize)
-}
-
 func (h *Handler) writeError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, egressapp.ErrInvalidInput):
@@ -144,13 +137,4 @@ func (h *Handler) writeQualityProbeError(c *gin.Context, err error) {
 	default:
 		response.Error(c, http.StatusBadGateway, "egressQualityProbeFailed", "质量检测暂不可用，请稍后重试")
 	}
-}
-
-func pathID(c *gin.Context) (uint64, bool) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 63)
-	if err != nil || id == 0 {
-		response.Error(c, http.StatusBadRequest, "invalidId", "ID 无效")
-		return 0, false
-	}
-	return id, true
 }

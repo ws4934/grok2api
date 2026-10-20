@@ -6,6 +6,7 @@ import (
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
@@ -61,7 +62,7 @@ func (h *Handler) runWebAccountScripts(c *gin.Context) {
 	var ids []uint64
 	if !request.All {
 		var err error
-		ids, err = parseIDs(request.IDs)
+		ids, err = params.IDs(request.IDs)
 		if err != nil {
 			response.Error(c, http.StatusBadRequest, "invalidId", err.Error())
 			return
