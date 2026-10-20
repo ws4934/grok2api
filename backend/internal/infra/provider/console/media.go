@@ -28,7 +28,6 @@ const (
 	consoleImageBodyLimit       = 32 << 20
 	consoleImageDownloadTimeout = 45 * time.Second
 	consoleMediaOutputAttempts  = 3
-	consoleVideoPollEvery       = 2 * time.Second
 	consoleMaxEditImages        = 3
 	// Upstream enforces the two video image inputs separately (measured against
 	// console.x.ai on both grok-imagine-video and grok-imagine-video-1.5):
@@ -39,6 +38,9 @@ const (
 	// combined ceiling would accept payloads that upstream then rejects.
 	consoleMaxVideoFirstFrames = 1
 )
+
+// consoleVideoPollEvery is the wait between video status polls (tests shorten it).
+var consoleVideoPollEvery = 2 * time.Second
 
 type consoleMediaUpstreamError struct {
 	status        int
@@ -646,17 +648,22 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	}
 	ticker := time.NewTicker(consoleVideoPollEvery)
 	defer ticker.Stop()
+	failures := 0
 	for {
 		statusBody, pollErr := a.doConsoleVideoJSON(ctx, request.Credential, token, lease, http.MethodGet, consoleV1Endpoint(baseURL, "/videos/"+url.PathEscape(requestID)), nil)
 		if pollErr != nil {
-			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, pollErr)
-		}
-		result, done, parseErr := parseConsoleVideoStatus(statusBody, request.Progress)
-		if parseErr != nil {
-			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, parseErr)
-		}
-		if done {
-			return result, nil
+			if failures++; !provider.IsTransientVideoPollError(pollErr) || failures >= provider.VideoPollTransientLimit || ctx.Err() != nil {
+				return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, pollErr)
+			}
+		} else {
+			failures = 0
+			result, done, parseErr := parseConsoleVideoStatus(statusBody, request.Progress)
+			if parseErr != nil {
+				return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, parseErr)
+			}
+			if done {
+				return result, nil
+			}
 		}
 		select {
 		case <-ctx.Done():

@@ -360,6 +360,51 @@ func TestGenerateVideoPostsSingleImageAndPollsUntilReady(t *testing.T) {
 	}
 }
 
+// A submitted job survives a few transport, 429 or 5xx poll failures in a row.
+func TestBuildVideoPollToleratesTransientFailures(t *testing.T) {
+	previous := buildVideoPollEvery
+	buildVideoPollEvery = time.Millisecond
+	t.Cleanup(func() { buildVideoPollEvery = previous })
+	tests := []struct {
+		name      string
+		status    int // 0 fails the transport
+		failures  int32
+		wantPolls int32
+		wantErr   bool
+	}{
+		{name: "transport error", failures: 1, wantPolls: 2},
+		{name: "rate limited", status: http.StatusTooManyRequests, failures: 1, wantPolls: 2},
+		{name: "four unavailable", status: http.StatusServiceUnavailable, failures: 4, wantPolls: 5},
+		{name: "five unavailable", status: http.StatusServiceUnavailable, failures: 5, wantPolls: 5, wantErr: true},
+		{name: "not found is final", status: http.StatusNotFound, failures: 1, wantPolls: 1, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter, encrypted := newTestBuildVideoAdapter(t)
+			var polls atomic.Int32
+			adapter.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.Method == http.MethodPost {
+					return jsonResponse(http.StatusOK, `{"request_id":"vid_1"}`, request), nil
+				}
+				if polls.Add(1) > test.failures {
+					return jsonResponse(http.StatusOK, `{"status":"completed","video":{"url":"https://assets.grok.com/videos/v.mp4"}}`, request), nil
+				}
+				if test.status == 0 {
+					return nil, errors.New("read: connection reset by peer")
+				}
+				return jsonResponse(test.status, `{"error":"try again"}`, request), nil
+			})
+			_, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+				Credential: account.Credential{ID: 9, EncryptedAccessToken: encrypted}, Prompt: "animate",
+			})
+			stage, _ := provider.VideoErrorStage(err)
+			if polls.Load() != test.wantPolls || (err != nil) != test.wantErr || (err != nil && stage != provider.VideoStagePoll) {
+				t.Fatalf("polls = %d, stage = %q, err = %v", polls.Load(), stage, err)
+			}
+		})
+	}
+}
+
 func TestGenerateVideoMapsUnauthorizedAndUpstreamErrors(t *testing.T) {
 	adapter, encrypted := newTestBuildVideoAdapter(t)
 

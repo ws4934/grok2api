@@ -26,11 +26,13 @@ const (
 	// Align with the gateway ceiling and official xAI video inputs:
 	// image = first frame; reference_images = style/content references (may be length 1).
 	buildVideoMaxImages         = mediadomain.MaxInputImages
-	buildVideoPollEvery         = 2 * time.Second
 	buildVideoMaxBodySize       = 2 << 20
 	buildVideoErrorSummaryLimit = 256
 	buildVideoErrorMessageLimit = 160
 )
+
+// buildVideoPollEvery is the wait between video status polls (tests shorten it).
+var buildVideoPollEvery = 2 * time.Second
 
 type videoRequestProfile struct {
 	model            string
@@ -386,35 +388,40 @@ func videoCreatePayload(request provider.VideoRequest, uploadURL string, profile
 func (a *Adapter) pollVideoJob(ctx context.Context, credential account.Credential, accessToken, base, jobID, assetID string, profile videoRequestProfile, progress func(int)) (provider.VideoResult, error) {
 	ticker := time.NewTicker(buildVideoPollEvery)
 	defer ticker.Stop()
+	failures := 0
 	for {
 		statusBody, err := a.doVideoJSON(ctx, credential, accessToken, http.MethodGet, base, "/videos/"+url.PathEscape(jobID), nil, profile, false)
 		if err != nil {
-			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, err)
-		}
-		result, done, pollErr := parseVideoStatusResponse(statusBody, progress, assetID != "")
-		if pollErr != nil {
-			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, pollErr)
-		}
-		if done {
-			if assetID != "" {
-				issuer := a.uploadIssuerRef()
-				if issuer == nil {
-					return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, fmt.Errorf("XAI 视频需要媒体上传接收服务"))
-				}
-				contentType, waitErr := issuer.WaitVideoUpload(ctx, assetID)
-				if waitErr != nil {
-					// 上游 done 但本地未收到上传：若 status 带 CDN URL 仍可回退远程读取。
-					if result.URL != "" {
-						return result, nil
-					}
-					return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, waitErr)
-				}
-				if contentType == "" {
-					contentType = "video/mp4"
-				}
-				return provider.VideoResult{ContentType: contentType, AssetID: assetID}, nil
+			if failures++; !provider.IsTransientVideoPollError(err) || failures >= provider.VideoPollTransientLimit || ctx.Err() != nil {
+				return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, err)
 			}
-			return result, nil
+		} else {
+			failures = 0
+			result, done, pollErr := parseVideoStatusResponse(statusBody, progress, assetID != "")
+			if pollErr != nil {
+				return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, pollErr)
+			}
+			if done {
+				if assetID != "" {
+					issuer := a.uploadIssuerRef()
+					if issuer == nil {
+						return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, fmt.Errorf("XAI 视频需要媒体上传接收服务"))
+					}
+					contentType, waitErr := issuer.WaitVideoUpload(ctx, assetID)
+					if waitErr != nil {
+						// 上游 done 但本地未收到上传：若 status 带 CDN URL 仍可回退远程读取。
+						if result.URL != "" {
+							return result, nil
+						}
+						return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, waitErr)
+					}
+					if contentType == "" {
+						contentType = "video/mp4"
+					}
+					return provider.VideoResult{ContentType: contentType, AssetID: assetID}, nil
+				}
+				return result, nil
+			}
 		}
 		select {
 		case <-ctx.Done():

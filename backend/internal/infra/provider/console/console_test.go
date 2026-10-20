@@ -1848,6 +1848,55 @@ func TestConsoleVideoCreatesAndPollsStandardResources(t *testing.T) {
 	}
 }
 
+// A submitted job survives a few 429 or 5xx poll failures in a row.
+func TestConsoleVideoPollToleratesTransientFailures(t *testing.T) {
+	previous := consoleVideoPollEvery
+	consoleVideoPollEvery = time.Millisecond
+	t.Cleanup(func() { consoleVideoPollEvery = previous })
+	tests := []struct {
+		name      string
+		status    int
+		failures  int32
+		wantPolls int32
+		wantErr   bool
+	}{
+		{name: "bad gateway", status: http.StatusBadGateway, failures: 1, wantPolls: 2},
+		{name: "four rate limits", status: http.StatusTooManyRequests, failures: 4, wantPolls: 5},
+		{name: "five bad gateways", status: http.StatusBadGateway, failures: 5, wantPolls: 5, wantErr: true},
+		{name: "not found is final", status: http.StatusNotFound, failures: 1, wantPolls: 1, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var polls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if serveTestDPoPToken(t, writer, request) {
+					return
+				}
+				writer.Header().Set("Content-Type", "application/json")
+				if request.Method == http.MethodPost {
+					_, _ = io.WriteString(writer, `{"request_id":"upstream-video-1"}`)
+					return
+				}
+				if polls.Add(1) > test.failures {
+					_, _ = io.WriteString(writer, `{"status":"done","progress":100,"video":{"url":"https://vidgen.x.ai/result.mp4"}}`)
+					return
+				}
+				writer.WriteHeader(test.status)
+				_, _ = io.WriteString(writer, `{"error":"try again"}`)
+			}))
+			t.Cleanup(server.Close)
+			adapter, credential := newConsoleTestAdapter(t, server.URL)
+			_, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+				Credential: credential, Prompt: "animate", Duration: 6, AspectRatio: "16:9", Resolution: "720p",
+			})
+			stage, _ := provider.VideoErrorStage(err)
+			if polls.Load() != test.wantPolls || (err != nil) != test.wantErr || (err != nil && stage != provider.VideoStagePoll) {
+				t.Fatalf("polls = %d, stage = %q, err = %v", polls.Load(), stage, err)
+			}
+		})
+	}
+}
+
 func TestConsoleVideoCreateFailureStagesPreserveRetrySafety(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -95,6 +95,20 @@ func VideoCreateFailureStage(err error) VideoStage {
 	return VideoStageSubmitted
 }
 
+// VideoPollTransientLimit is the number of consecutive transient status poll
+// failures that ends a submitted job: it already runs upstream and has spent
+// quota, so one network blip must not lose it.
+const VideoPollTransientLimit = 5
+
+// IsTransientVideoPollError reports whether a failed status poll may succeed
+// on the next attempt: a transport error (no upstream status), 429 or 5xx.
+func IsTransientVideoPollError(err error) bool {
+	if status, ok := ErrorHTTPStatus(err); ok {
+		return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+	}
+	return !errors.Is(err, ErrUnauthorized)
+}
+
 // WrapVideoStage annotates err with the video phase and optional HTTP status.
 func WrapVideoStage(stage VideoStage, status int, err error) error {
 	if err == nil {
