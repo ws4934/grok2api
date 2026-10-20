@@ -51,6 +51,14 @@ return 1
 
 var releaseLeaseScript = redisclient.NewScript(`return redis.call('ZREM', KEYS[1], ARGV[1])`)
 
+// renewLeaseScript extends a lease that is still held; XX never re-adds a
+// lease that was released or has expired.
+var renewLeaseScript = redisclient.NewScript(`
+redis.call('ZADD', KEYS[1], 'XX', ARGV[1], ARGV[2])
+redis.call('PEXPIRE', KEYS[1], ARGV[3])
+return 1
+`)
+
 var releaseLockScript = redisclient.NewScript(`
 if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end
 return 0
@@ -318,7 +326,7 @@ func Open(ctx context.Context, cfg Config) (*Store, error) {
 	}
 	lease := cfg.ConcurrencyLease
 	if lease <= 0 {
-		lease = 3 * time.Hour
+		lease = 2 * time.Minute
 	}
 	store := &Store{
 		client: client, prefix: cfg.KeyPrefix, concurrencyLease: lease,
@@ -472,16 +480,40 @@ func (s *Store) acquireConcurrency(ctx context.Context, key string, limit int) (
 	if err != nil || result != 1 {
 		return nil, false, err
 	}
+	stop := make(chan struct{})
+	go s.renewConcurrencyLease(redisKey, token, stop)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
+			close(stop)
 			releaseCtx, cancel := context.WithTimeout(context.Background(), concurrencyReleaseRetryTimeout)
 			defer cancel()
 			if err := releaseLeaseScript.Run(releaseCtx, s.client, []string{redisKey}, token).Err(); err != nil {
-				s.enqueueConcurrencyReleaseRetry(concurrencyReleaseRetry{redisKey: redisKey, token: token, expiresAt: expiresAt})
+				s.enqueueConcurrencyReleaseRetry(concurrencyReleaseRetry{redisKey: redisKey, token: token, expiresAt: time.Now().UTC().Add(s.concurrencyLease)})
 			}
 		})
 	}, true, nil
+}
+
+// renewConcurrencyLease keeps a held lease alive until release, so the lease
+// itself can stay short: slots held by a crashed instance free within one lease.
+// ponytail: one goroutine per held lease; batch renewals in one loop if held
+// leases reach the tens of thousands.
+func (s *Store) renewConcurrencyLease(redisKey, token string, stop <-chan struct{}) {
+	ticker := time.NewTicker(s.concurrencyLease / 3)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-s.concurrencyReleaseStop:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), concurrencyReleaseRetryTimeout)
+			_ = renewLeaseScript.Run(ctx, s.client, []string{redisKey}, time.Now().UTC().Add(s.concurrencyLease).UnixMilli(), token, (s.concurrencyLease + concurrencyLeaseGrace).Milliseconds()).Err()
+			cancel()
+		}
+	}
 }
 
 func (s *Store) enqueueConcurrencyReleaseRetry(value concurrencyReleaseRetry) {

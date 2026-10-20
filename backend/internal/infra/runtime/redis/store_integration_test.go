@@ -396,6 +396,43 @@ func cleanupRedisTestPrefix(t *testing.T, ctx context.Context, client *redisclie
 	}
 }
 
+// A lease stays short but is renewed while held, so slots taken by an
+// instance that dies without releasing them free within one lease.
+func TestRedisConcurrencyLeaseRenewsUntilHolderStops(t *testing.T) {
+	address := os.Getenv("TEST_REDIS_ADDRESS")
+	if address == "" {
+		t.Skip("TEST_REDIS_ADDRESS is not configured")
+	}
+	database, _ := strconv.Atoi(os.Getenv("TEST_REDIS_DATABASE"))
+	ctx := context.Background()
+	keyPrefix := "grok2api:lease-test:" + time.Now().UTC().Format("150405.000000") + ":"
+	open := func() *Store {
+		store, err := Open(ctx, Config{
+			Address: address, Username: os.Getenv("TEST_REDIS_USERNAME"), Password: os.Getenv("TEST_REDIS_PASSWORD"), Database: database,
+			KeyPrefix: keyPrefix, ConcurrencyLease: 600 * time.Millisecond,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store
+	}
+	holder, survivor := open(), open()
+	defer survivor.Close()
+	defer cleanupRedisTestPrefix(t, ctx, survivor.client, keyPrefix)
+	if _, acquired, err := NewConcurrencyLimiter(holder).Acquire(ctx, "bulk", 1); err != nil || !acquired {
+		t.Fatalf("holder acquire = %v, err = %v", acquired, err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if _, acquired, err := NewConcurrencyLimiter(survivor).Acquire(ctx, "bulk", 1); err != nil || acquired {
+		t.Fatalf("held lease lapsed: acquired = %v, err = %v", acquired, err)
+	}
+	_ = holder.Close() // dies without releasing
+	time.Sleep(time.Second)
+	if _, acquired, err := NewConcurrencyLimiter(survivor).Acquire(ctx, "bulk", 1); err != nil || !acquired {
+		t.Fatalf("lease of a stopped holder still blocks: acquired = %v, err = %v", acquired, err)
+	}
+}
+
 func TestRedisInvalidationBusIntegration(t *testing.T) {
 	address := os.Getenv("TEST_REDIS_ADDRESS")
 	if address == "" {

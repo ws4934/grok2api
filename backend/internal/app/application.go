@@ -176,7 +176,6 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Applicat
 			Address: cfg.RuntimeStore.Redis.Address, Username: cfg.RuntimeStore.Redis.Username,
 			Password: cfg.RuntimeStore.Redis.Password, Database: cfg.RuntimeStore.Redis.Database,
 			KeyPrefix: cfg.RuntimeStore.Redis.KeyPrefix, TLS: cfg.RuntimeStore.Redis.TLS,
-			ConcurrencyLease: cfg.Server.RequestTimeout.Value() + time.Minute,
 		})
 		if openErr != nil {
 			database.Close()
