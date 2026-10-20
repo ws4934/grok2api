@@ -12,11 +12,11 @@ import (
 	settingsdomain "github.com/chenyme/grok2api/backend/internal/domain/settings"
 )
 
-func (m *Manager) clientFor(id uint64, scope domain.Scope, proxyURL, userAgent, cookies string, sticky bool, accountIdentity string) (cachedClient, error) {
-	return m.clientForWithOptions(id, scope, proxyURL, userAgent, cookies, sticky, accountIdentity, clientOptions{})
+func (m *Manager) clientFor(id uint64, scope domain.Scope, proxyURL, userAgent, accountIdentity string) (cachedClient, error) {
+	return m.clientForWithOptions(id, scope, proxyURL, userAgent, accountIdentity, clientOptions{})
 }
 
-func (m *Manager) clientForWithOptions(id uint64, scope domain.Scope, proxyURL, userAgent, cookies string, sticky bool, accountIdentity string, options clientOptions) (cachedClient, error) {
+func (m *Manager) clientForWithOptions(id uint64, scope domain.Scope, proxyURL, userAgent, accountIdentity string, options clientOptions) (cachedClient, error) {
 	clientKind := "browser"
 	buildHeaderTimeout := time.Duration(0)
 	if scope == domain.ScopeBuild {
@@ -30,7 +30,7 @@ func (m *Manager) clientForWithOptions(id uint64, scope domain.Scope, proxyURL, 
 			clientKind += "\x00environment-proxy"
 		}
 	}
-	fingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(clientKind+"\x00"+proxyURL+"\x00"+userAgent+"\x00"+cookies)))
+	fingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(clientKind+"\x00"+proxyURL+"\x00"+userAgent)))
 	cacheScope := scope
 	if cacheScope == domain.ScopeWebAsset {
 		cacheScope = domain.ScopeWeb
@@ -72,7 +72,7 @@ func (m *Manager) clientForWithOptions(id uint64, scope domain.Scope, proxyURL, 
 		closeRequestClients(stale)
 
 		loaded, err, _ := m.clientLoads.Do(loadKey, func() (any, error) {
-			return m.createAndCacheClient(key, id, scope, proxyURL, userAgent, sticky, buildHeaderTimeout, options)
+			return m.createAndCacheClient(key, id, scope, proxyURL, userAgent, buildHeaderTimeout, options)
 		})
 		if errors.Is(err, errClientCacheInvalidated) {
 			continue
@@ -85,7 +85,7 @@ func (m *Manager) clientForWithOptions(id uint64, scope domain.Scope, proxyURL, 
 	return cachedClient{}, errClientCacheInvalidated
 }
 
-func (m *Manager) createAndCacheClient(key clientCacheKey, id uint64, scope domain.Scope, proxyURL, userAgent string, sticky bool, buildHeaderTimeout time.Duration, options clientOptions) (cachedClient, error) {
+func (m *Manager) createAndCacheClient(key clientCacheKey, id uint64, scope domain.Scope, proxyURL, userAgent string, buildHeaderTimeout time.Duration, options clientOptions) (cachedClient, error) {
 	now := time.Now().UTC()
 	m.clientMu.Lock()
 	stale := m.cleanupClientCacheLocked(now)
@@ -129,18 +129,6 @@ func (m *Manager) createAndCacheClient(key clientCacheKey, id uint64, scope doma
 		m.clientMu.Unlock()
 		closeRequestClients(append(stale, value.client))
 		return cachedClient{}, errClientCacheInvalidated
-	}
-	if id != 0 && !sticky {
-		for previousKey, previous := range m.clients {
-			if previousKey.nodeID != id || previousKey.scope != key.scope {
-				continue
-			}
-			// Keep other accounts' pools when isolation is on.
-			if key.accountIdentity != "" && previousKey.accountIdentity != key.accountIdentity {
-				continue
-			}
-			stale = append(stale, m.evictClientLocked(previousKey, previous))
-		}
 	}
 	stale = append(stale, m.ensureClientCacheCapacityLocked()...)
 	m.clients[key] = value

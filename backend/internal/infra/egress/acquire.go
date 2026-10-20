@@ -288,10 +288,10 @@ func (m *Manager) leaseForNodeWithOptions(ctx context.Context, scope domain.Scop
 	var newClient func() (cachedClient, error)
 	if domain.IsExtensionScope(scope) {
 		newClient = func() (cachedClient, error) {
-			return m.clientForWithOptions(selected.ID, scope, proxyURL, userAgent, cookies, sticky, accountIdentity, options)
+			return m.clientForWithOptions(selected.ID, scope, proxyURL, userAgent, accountIdentity, options)
 		}
 	} else {
-		client, err = m.clientForWithOptions(selected.ID, scope, proxyURL, userAgent, cookies, sticky, accountIdentity, options)
+		client, err = m.clientForWithOptions(selected.ID, scope, proxyURL, userAgent, accountIdentity, options)
 		if err != nil {
 			return nil, false, err
 		}
