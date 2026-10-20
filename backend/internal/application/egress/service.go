@@ -179,10 +179,6 @@ func validListScope(scope domain.Scope) bool {
 	return scope == "" || scope == domain.ScopeBuild || scope == domain.ScopeWeb || scope == domain.ScopeConsole || scope == domain.ScopeWebAsset || scope == domain.ScopeConsoleAsset
 }
 
-func allServiceScopes() []domain.Scope {
-	return []domain.Scope{domain.ScopeBuild, domain.ScopeWeb, domain.ScopeConsole, domain.ScopeWebAsset, domain.ScopeConsoleAsset}
-}
-
 func validListValue(value string, allowed ...string) bool {
 	if value == "" {
 		return true
@@ -288,7 +284,7 @@ func (s *Service) validateFallbackNodeUpdate(ctx context.Context, node domain.No
 }
 
 func (s *Service) validateFallbackNodeUpdateWithConfig(node domain.Node, config domain.OperationsConfig) error {
-	for _, scope := range allServiceScopes() {
+	for _, scope := range domain.AllScopes() {
 		fallback := config.FallbackFor(scope)
 		if fallback.Mode != domain.FallbackModeFixed || fallback.NodeID != node.ID {
 			continue

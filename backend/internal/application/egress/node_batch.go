@@ -34,8 +34,8 @@ func (s *Service) UpdateManyEnabled(ctx context.Context, nodeIDs []uint64, enabl
 	}
 
 	// Disabling a fixed fallback would make the persisted routing policy
-	// invalid. At most five fallback nodes need point lookups, regardless of
-	// the batch size.
+	// invalid. At most one fallback node per scope needs a point lookup,
+	// regardless of the batch size.
 	if !enabled && s.operations != nil {
 		config, err := s.operations.GetEgressOperationsConfig(ctx)
 		if err != nil {
@@ -45,8 +45,9 @@ func (s *Service) UpdateManyEnabled(ctx context.Context, nodeIDs []uint64, enabl
 		for _, id := range ids {
 			selected[id] = struct{}{}
 		}
-		fallbackNodeIDs := make(map[uint64]struct{}, len(allServiceScopes()))
-		for _, scope := range allServiceScopes() {
+		scopes := domain.AllScopes()
+		fallbackNodeIDs := make(map[uint64]struct{}, len(scopes))
+		for _, scope := range scopes {
 			fallback := config.FallbackFor(scope)
 			if fallback.Mode == domain.FallbackModeFixed {
 				if _, exists := selected[fallback.NodeID]; exists {

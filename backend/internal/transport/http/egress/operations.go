@@ -69,7 +69,7 @@ func (value operationsConfigRequest) input() (egressapp.OperationsConfigInput, e
 
 func newOperationsConfigResponse(value egressdomain.OperationsConfig) operationsConfigResponse {
 	fallbacks := make(map[string]operationsFallbackResponse, 5)
-	for _, scope := range append([]egressdomain.Scope{egressdomain.ScopeBuild, egressdomain.ScopeWeb, egressdomain.ScopeConsole, egressdomain.ScopeWebAsset, egressdomain.ScopeConsoleAsset}, egressdomain.ExtensionScopes()...) {
+	for _, scope := range egressdomain.AllScopes() {
 		fallback := value.FallbackFor(scope)
 		item := operationsFallbackResponse{Mode: string(fallback.Mode)}
 		if fallback.NodeID != 0 {

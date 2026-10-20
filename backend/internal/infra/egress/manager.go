@@ -327,5 +327,5 @@ func isGrokWebScope(scope domain.Scope) bool {
 }
 
 func allEgressScopes() []domain.Scope {
-	return append([]domain.Scope{domain.ScopeBuild, domain.ScopeWeb, domain.ScopeConsole, domain.ScopeWebAsset, domain.ScopeConsoleAsset}, domain.ExtensionScopes()...)
+	return domain.AllScopes()
 }
