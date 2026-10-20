@@ -129,10 +129,8 @@ type RoutingConfig struct {
 	PreferFreeBuild  bool
 	// MarkBuildChatDeniedAsReauth 为 true 时，Build chat 权限拒绝标 reauthRequired，默认 false 保留模型级冷却。
 	MarkBuildChatDeniedAsReauth bool
-	// AccountIsolatedConnections is optional so persisted payloads written by
-	// older releases do not silently override a value supplied by config.yaml.
-	AccountIsolatedConnections *bool
-	SegmentedSelector          *SegmentedSelectorConfig
+	AccountIsolatedConnections  bool
+	SegmentedSelector           SegmentedSelectorConfig
 }
 
 type SegmentedSelectorConfig struct {
@@ -146,7 +144,7 @@ type AuditConfig struct {
 	BatchSize     int
 	FlushInterval time.Duration
 	CommitDelay   time.Duration
-	RetentionDays *int
+	RetentionDays int
 }
 
 // ClientKeyDefaultsConfig 定义新建客户端密钥的默认限制。
@@ -157,9 +155,8 @@ type ClientKeyDefaultsConfig struct {
 
 // AccountsConfig 定义账号池后台维护策略；默认全部关闭。
 type AccountsConfig struct {
-	// AutoDisableDegradedAccounts is optional so legacy persisted settings keep
-	// the qualityGuard.requestRetry.autoDisable value supplied by config.yaml.
-	AutoDisableDegradedAccounts *bool
+	// AutoDisableDegradedAccounts persists qualityGuard.requestRetry.autoDisable.
+	AutoDisableDegradedAccounts bool
 	// MarkBuildForbiddenReauth marks high-confidence Grok Build permission denials as requiring reauthorization.
 	MarkBuildForbiddenReauth bool
 	// BuildForbiddenReauthCodes contains exact upstream error codes that opt into account invalidation.

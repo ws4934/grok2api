@@ -3,7 +3,6 @@ package settings
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -58,7 +57,6 @@ func TestUpdatePersistsAppliesAndReportsRestart(t *testing.T) {
 	input.Frontend.PublicAPIBaseURL = "https://public.example.com"
 	input.ProviderConsole.BaseURL = "https://console.example.com"
 	input.ProviderConsole.ChatTimeout = "6m"
-	input.ProviderWeb.ClearanceProvided = true
 	input.ProviderWeb.ClearanceMode = config.ClearanceModeOnDemand
 	input.ProviderWeb.FlareSolverrURL = "http://flaresolverr:8191"
 	input.Batch = BatchConfig{ImportConcurrency: 26, ConversionConcurrency: 27, SyncConcurrency: 28, RefreshConcurrency: 29, RandomDelay: "750ms"}
@@ -194,120 +192,11 @@ func TestUpdateValidatesMaxAttemptsRange(t *testing.T) {
 	}
 }
 
-func TestUpdatePreservesBuildChatDeniedPolicyWhenFieldIsOmitted(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Routing.MarkBuildChatDeniedAsReauth = true
-	repository := &runtimeSettingsRepositoryStub{}
-	var applied config.Config
-	service := NewService(cfg, time.Time{}, 0, repository, nil, func(next config.Config) { applied = next })
-	input := service.Get().Config
-	input.Routing.MarkBuildChatDeniedAsReauth = false
-	input.Routing.MarkBuildChatDeniedAsReauthProvided = false
-
-	if _, err := service.Update(context.Background(), 0, input); err != nil {
-		t.Fatal(err)
-	}
-	if !applied.Routing.MarkBuildChatDeniedAsReauth || !repository.value.Routing.MarkBuildChatDeniedAsReauth {
-		t.Fatalf("omitted Build chat denied policy was overwritten: applied=%t persisted=%t", applied.Routing.MarkBuildChatDeniedAsReauth, repository.value.Routing.MarkBuildChatDeniedAsReauth)
-	}
-}
-
-func TestUpdatePreservesAccountIsolationWhenFieldIsOmitted(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Routing.AccountIsolatedConnections = true
-	repository := &runtimeSettingsRepositoryStub{}
-	var applied config.Config
-	service := NewService(cfg, time.Time{}, 0, repository, nil, func(next config.Config) { applied = next })
-	input := service.Get().Config
-	input.Routing.AccountIsolatedConnections = false
-	input.Routing.AccountIsolatedConnectionsProvided = false
-
-	snapshot, err := service.Update(context.Background(), 0, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !applied.Routing.AccountIsolatedConnections || repository.value.Routing.AccountIsolatedConnections == nil || !*repository.value.Routing.AccountIsolatedConnections {
-		t.Fatal("omitted account isolation setting was overwritten")
-	}
-
-	input = snapshot.Config
-	input.Routing.AccountIsolatedConnections = false
-	input.Routing.AccountIsolatedConnectionsProvided = true
-	if _, err := service.Update(context.Background(), snapshot.Revision, input); err != nil {
-		t.Fatal(err)
-	}
-	if applied.Routing.AccountIsolatedConnections || repository.value.Routing.AccountIsolatedConnections == nil || *repository.value.Routing.AccountIsolatedConnections {
-		t.Fatal("explicit account isolation update was ignored")
-	}
-}
-
-func TestUpdatePreservesFreeVideoDurationCapWhenFieldIsOmitted(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Provider.Web.FreeVideoDurationCap = 8
-	repository := &runtimeSettingsRepositoryStub{}
-	var applied config.Config
-	service := NewService(cfg, time.Time{}, 0, repository, nil, func(next config.Config) { applied = next })
-	input := service.Get().Config
-	input.ProviderWeb.FreeVideoDurationCap = 0
-	input.ProviderWeb.FreeVideoDurationCapProvided = false
-
-	snapshot, err := service.Update(context.Background(), 0, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if applied.Provider.Web.FreeVideoDurationCap != 8 || repository.value.ProviderWeb.FreeVideoDurationCap != 8 {
-		t.Fatalf("omitted free video duration cap was overwritten: applied=%d persisted=%d", applied.Provider.Web.FreeVideoDurationCap, repository.value.ProviderWeb.FreeVideoDurationCap)
-	}
-
-	input = snapshot.Config
-	input.ProviderWeb.FreeVideoDurationCap = 0
-	input.ProviderWeb.FreeVideoDurationCapProvided = true
-	if _, err := service.Update(context.Background(), snapshot.Revision, input); err != nil {
-		t.Fatal(err)
-	}
-	if applied.Provider.Web.FreeVideoDurationCap != settingsdomain.DefaultWebFreeVideoDurationCap {
-		t.Fatalf("explicit zero free video duration cap = %d, want default %d", applied.Provider.Web.FreeVideoDurationCap, settingsdomain.DefaultWebFreeVideoDurationCap)
-	}
-}
-
-func TestLoadPersistedKeepsFreeVideoDurationCapForOlderPayload(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Provider.Web.FreeVideoDurationCap = 8
-	persisted := toDomainConfig(cfg)
-	persisted.ProviderWeb.FreeVideoDurationCap = 0
-	repository := &runtimeSettingsRepositoryStub{value: persisted, found: true}
-
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Provider.Web.FreeVideoDurationCap != 8 {
-		t.Fatalf("legacy persisted free video duration cap = %d, want config value 8", loaded.Provider.Web.FreeVideoDurationCap)
-	}
-}
-
-func TestLoadPersistedKeepsAccountIsolationDefaultForOlderPayload(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Routing.AccountIsolatedConnections = true
-	value := toDomainConfig(cfg)
-	value.Routing.AccountIsolatedConnections = nil
-	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
-
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !loaded.Routing.AccountIsolatedConnections {
-		t.Fatal("older persisted payload disabled config.yaml account isolation")
-	}
-}
-
 func TestLoadPersistedPreservesExplicitlyDisabledAccountIsolation(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Routing.AccountIsolatedConnections = true
 	value := toDomainConfig(cfg)
-	disabled := false
-	value.Routing.AccountIsolatedConnections = &disabled
+	value.Routing.AccountIsolatedConnections = false
 	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
 
 	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
@@ -319,28 +208,11 @@ func TestLoadPersistedPreservesExplicitlyDisabledAccountIsolation(t *testing.T) 
 	}
 }
 
-func TestLoadPersistedKeepsSegmentedSelectorDefaultsForOlderPayload(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Routing.SegmentedSelectorEnabled = true
-	cfg.Routing.SegmentedMinCandidates = 4321
-	cfg.Routing.SegmentedWindowSize = 72
-	value := toDomainConfig(cfg)
-	value.Routing.SegmentedSelector = nil
-	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !loaded.Routing.SegmentedSelectorEnabled || loaded.Routing.SegmentedMinCandidates != 4321 || loaded.Routing.SegmentedWindowSize != 72 {
-		t.Fatalf("segmented selector defaults were not preserved: %#v", loaded.Routing)
-	}
-}
-
 func TestLoadPersistedPreservesExplicitlyDisabledSegmentedSelector(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.Routing.SegmentedSelectorEnabled = true
 	value := toDomainConfig(cfg)
-	value.Routing.SegmentedSelector = &settingsdomain.SegmentedSelectorConfig{
+	value.Routing.SegmentedSelector = settingsdomain.SegmentedSelectorConfig{
 		ActiveEnabled: false, MinCandidates: 6000, WindowSize: 128,
 	}
 	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
@@ -353,63 +225,16 @@ func TestLoadPersistedPreservesExplicitlyDisabledSegmentedSelector(t *testing.T)
 	}
 }
 
-func TestLegacyShadowSettingCannotEnableSegmentedSelector(t *testing.T) {
-	var persisted settingsdomain.Config
-	if err := json.Unmarshal([]byte(`{"Routing":{"SegmentedSelector":{"ActiveEnabled":false,"Enabled":true,"MinCandidates":3000,"WindowSize":64,"SamplePercent":100}}}`), &persisted); err != nil {
-		t.Fatal(err)
-	}
-	loaded := applyDomainConfig(testConfig(t), persisted)
-	if loaded.Routing.SegmentedSelectorEnabled {
-		t.Fatal("legacy shadow-only setting enabled the authoritative segmented selector")
-	}
-}
-
-func TestLoadPersistedKeepsConsoleDefaultsWhenFieldIsMissing(t *testing.T) {
+func TestLoadPersistedKeepsClearedFlareSolverrURL(t *testing.T) {
 	cfg := testConfig(t)
 	value := toDomainConfig(cfg)
-	value.ProviderConsole = settingsdomain.ProviderConsoleConfig{}
-	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Provider.Console != cfg.Provider.Console {
-		t.Fatalf("console config = %#v, want %#v", loaded.Provider.Console, cfg.Provider.Console)
-	}
-}
-
-func TestLoadPersistedBackfillsProviderStreamIdleTimeoutDefaults(t *testing.T) {
-	cfg := testConfig(t)
-	value := toDomainConfig(cfg)
-	value.ProviderWeb.StreamIdleTimeout = 0
-	value.ProviderConsole.StreamIdleTimeout = 0
-	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := loaded.Provider.Web.StreamIdleTimeout.Value(); got != settingsdomain.DefaultWebStreamIdleTimeout {
-		t.Fatalf("Web stream idle timeout = %s", got)
-	}
-	if got := loaded.Provider.Console.StreamIdleTimeout.Value(); got != settingsdomain.DefaultConsoleStreamIdleTimeout {
-		t.Fatalf("Console stream idle timeout = %s", got)
-	}
-}
-
-func TestLoadPersistedKeepsClearanceDefaultsForOlderPayload(t *testing.T) {
-	cfg := testConfig(t)
-	value := toDomainConfig(cfg)
-	value.ProviderWeb.ClearanceMode = ""
 	value.ProviderWeb.FlareSolverrURL = ""
-	value.ProviderWeb.ClearanceTimeout = 0
-	value.ProviderWeb.ClearanceRefresh = 0
-	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
+	loaded, _, _, err := LoadPersisted(context.Background(), cfg, &runtimeSettingsRepositoryStub{value: value, found: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Provider.Web.ClearanceMode != cfg.Provider.Web.ClearanceMode || loaded.Provider.Web.FlareSolverrURL != cfg.Provider.Web.FlareSolverrURL || loaded.Provider.Web.ClearanceTimeout != cfg.Provider.Web.ClearanceTimeout || loaded.Provider.Web.ClearanceRefresh != cfg.Provider.Web.ClearanceRefresh {
-		t.Fatalf("clearance config = %#v, want %#v", loaded.Provider.Web, cfg.Provider.Web)
+	if loaded.Provider.Web.FlareSolverrURL != "" {
+		t.Fatalf("FlareSolverr URL = %q, want the persisted empty value", loaded.Provider.Web.FlareSolverrURL)
 	}
 }
 
@@ -529,21 +354,6 @@ func TestLoadPersistedRejectsIncompleteBatchPayload(t *testing.T) {
 	}
 }
 
-func TestLoadPersistedBackfillsMissingServerConcurrency(t *testing.T) {
-	cfg := testConfig(t)
-	value := toDomainConfig(cfg)
-	value.Server = settingsdomain.ServerConfig{}
-	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
-
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Server.MaxConcurrentRequests != cfg.Server.MaxConcurrentRequests {
-		t.Fatalf("maxConcurrentRequests = %d, want %d", loaded.Server.MaxConcurrentRequests, cfg.Server.MaxConcurrentRequests)
-	}
-}
-
 func TestApplyDomainConfigPreservesExplicitCapacitySettings(t *testing.T) {
 	base := testConfig(t)
 	value := toDomainConfig(base)
@@ -565,21 +375,6 @@ func TestApplyDomainConfigPreservesExplicitCapacitySettings(t *testing.T) {
 	}
 	if applied.ClientKeyDefaults.RPMLimit != 120 || applied.ClientKeyDefaults.MaxConcurrent != 8 {
 		t.Fatalf("client key defaults = %+v, want 120/8", applied.ClientKeyDefaults)
-	}
-}
-
-func TestLoadPersistedBackfillsMissingConsoleSection(t *testing.T) {
-	cfg := testConfig(t)
-	value := toDomainConfig(cfg)
-	value.ProviderConsole = settingsdomain.ProviderConsoleConfig{}
-	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
-
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Provider.Console != cfg.Provider.Console {
-		t.Fatalf("console = %#v, want %#v", loaded.Provider.Console, cfg.Provider.Console)
 	}
 }
 
@@ -683,58 +478,6 @@ func TestUpdateEmptyFrontendOverrideFallsBackToYAML(t *testing.T) {
 	}
 }
 
-func TestApplyDomainConfigAccountsDefaults(t *testing.T) {
-	base := testConfig(t)
-	// 旧持久化 JSON 无 Accounts 段时，应保持代码默认：关闭 + 10m + 1h。
-	loaded := applyDomainConfig(base, settingsdomain.Config{
-		Server: settingsdomain.ServerConfig{MaxConcurrentRequests: base.Server.MaxConcurrentRequests},
-		ProviderBuild: settingsdomain.ProviderBuildConfig{
-			BaseURL: base.Provider.Build.BaseURL, FallbackBaseURL: base.Provider.Build.FallbackBaseURL,
-			ClientVersion: base.Provider.Build.ClientVersion, ClientIdentifier: base.Provider.Build.ClientIdentifier,
-			TokenAuth: base.Provider.Build.TokenAuth, UserAgent: base.Provider.Build.UserAgent,
-		},
-		ProviderWeb: settingsdomain.ProviderWebConfig{
-			BaseURL: base.Provider.Web.BaseURL, QuotaTimeout: base.Provider.Web.QuotaTimeout.Value(),
-			StatsigMode: base.Provider.Web.StatsigMode, StatsigManualValue: base.Provider.Web.StatsigManualValue,
-			StatsigSignerURL: base.Provider.Web.StatsigSignerURL,
-			ChatTimeout:      base.Provider.Web.ChatTimeout.Value(), ImageTimeout: base.Provider.Web.ImageTimeout.Value(),
-			VideoTimeout: base.Provider.Web.VideoTimeout.Value(), MediaConcurrency: base.Provider.Web.MediaConcurrency,
-			AllowNSFW:           base.Provider.Web.AllowNSFW,
-			RecoveryBackoffBase: base.Provider.Web.RecoveryBackoffBase.Value(), RecoveryBackoffMax: base.Provider.Web.RecoveryBackoffMax.Value(),
-		},
-		Batch: settingsdomain.BatchConfig{
-			ImportConcurrency: base.Batch.ImportConcurrency, ConversionConcurrency: base.Batch.ConversionConcurrency,
-			SyncConcurrency: base.Batch.SyncConcurrency, RefreshConcurrency: base.Batch.RefreshConcurrency,
-			RandomDelay: func() *time.Duration { d := base.Batch.RandomDelay.Value(); return &d }(),
-		},
-		Media: settingsdomain.MediaConfig{
-			MaxImageBytes: base.Media.MaxImageBytes, MaxTotalBytes: base.Media.MaxTotalBytes,
-			CleanupThresholdPercent: base.Media.CleanupThresholdPercent, CleanupInterval: base.Media.CleanupInterval.Value(),
-		},
-		Routing: settingsdomain.RoutingConfig{
-			StickyTTL: base.Routing.StickyTTL.Value(), CooldownBase: base.Routing.CooldownBase.Value(),
-			CooldownMax: base.Routing.CooldownMax.Value(), CapacityWait: base.Routing.CapacityWait.Value(),
-			MaxAttempts: base.Routing.MaxAttempts, PreferFreeBuild: base.Routing.PreferFreeBuild,
-			MarkBuildChatDeniedAsReauth: base.Routing.MarkBuildChatDeniedAsReauth,
-		},
-		Audit: settingsdomain.AuditConfig{
-			BufferSize: base.Audit.BufferSize, BatchSize: base.Audit.BatchSize, FlushInterval: base.Audit.FlushInterval.Value(),
-		},
-		ClientKeyDefaults: settingsdomain.ClientKeyDefaultsConfig{
-			RPMLimit: base.ClientKeyDefaults.RPMLimit, MaxConcurrent: base.ClientKeyDefaults.MaxConcurrent,
-		},
-	})
-	if loaded.Accounts.AutoCleanReauthEnabled || loaded.Accounts.AutoCleanIncludeDisabled {
-		t.Fatalf("accounts flags should stay false: %#v", loaded.Accounts)
-	}
-	if loaded.Accounts.AutoCleanReauthInterval.Value() != 10*time.Minute || loaded.Accounts.AutoCleanReauthMinAge.Value() != time.Hour {
-		t.Fatalf("accounts defaults = %#v", loaded.Accounts)
-	}
-	if loaded.Audit.CommitDelay.Value() != base.Audit.CommitDelay.Value() {
-		t.Fatalf("audit commit delay = %s", loaded.Audit.CommitDelay.Value())
-	}
-}
-
 func TestUpdateAuditCommitDelayRoundTrip(t *testing.T) {
 	cfg := testConfig(t)
 	repo := &runtimeSettingsRepositoryStub{}
@@ -759,7 +502,6 @@ func TestUpdateAuditRetentionPreservesExplicitZero(t *testing.T) {
 	service := NewService(cfg, time.Time{}, 0, repo, nil, func(next config.Config) { applied = next })
 	input := service.Get().Config
 	input.Audit.RetentionDays = 0
-	input.Audit.RetentionDaysProvided = true
 
 	if _, err := service.Update(context.Background(), service.Get().Revision, input); err != nil {
 		t.Fatal(err)
@@ -767,7 +509,7 @@ func TestUpdateAuditRetentionPreservesExplicitZero(t *testing.T) {
 	if applied.Audit.RetentionDays != 0 {
 		t.Fatalf("applied audit policy = %#v", applied.Audit)
 	}
-	if repo.value.Audit.RetentionDays == nil || *repo.value.Audit.RetentionDays != 0 {
+	if repo.value.Audit.RetentionDays != 0 {
 		t.Fatalf("persisted audit policy = %#v", repo.value.Audit)
 	}
 	reloaded, _, _, err := LoadPersisted(context.Background(), cfg, repo)
@@ -776,22 +518,6 @@ func TestUpdateAuditRetentionPreservesExplicitZero(t *testing.T) {
 	}
 	if reloaded.Audit.RetentionDays != 0 {
 		t.Fatalf("reloaded audit policy = %#v", reloaded.Audit)
-	}
-}
-
-func TestLoadPersistedKeepsAuditDefaultsForOlderPayload(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Audit.RetentionDays = 30
-	value := toDomainConfig(cfg)
-	value.Audit.RetentionDays = nil
-	repo := &runtimeSettingsRepositoryStub{value: value, found: true}
-
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Audit.RetentionDays != 30 {
-		t.Fatalf("legacy audit defaults = %#v", loaded.Audit)
 	}
 }
 
@@ -812,9 +538,9 @@ func TestUpdateAccountsAutoCleanRoundTrip(t *testing.T) {
 	service := NewService(cfg, time.Time{}, 0, repo, nil, func(next config.Config) { applied = next })
 	input := service.Get().Config
 	input.Accounts = AccountsConfig{
-		MarkBuildForbiddenReauth: true, MarkBuildForbiddenReauthProvided: true,
-		BuildForbiddenReauthCodes: []string{" Permission-Denied ", "permission-denied", "team-access-denied"}, BuildForbiddenReauthCodesProvided: true,
-		AutoCleanReauthEnabled: true, AutoCleanReauthInterval: "5m",
+		MarkBuildForbiddenReauth:  true,
+		BuildForbiddenReauthCodes: []string{" Permission-Denied ", "permission-denied", "team-access-denied"},
+		AutoCleanReauthEnabled:    true, AutoCleanReauthInterval: "5m",
 		AutoCleanReauthMinAge: "2h", AutoCleanIncludeDisabled: true,
 	}
 	snapshot, err := service.Update(context.Background(), service.Get().Revision, input)
@@ -843,7 +569,6 @@ func TestUpdateAutoDisableDegradedAccountsRoundTrip(t *testing.T) {
 	service := NewService(cfg, time.Time{}, 0, repo, nil, func(next config.Config) { applied = next })
 	input := service.Get().Config
 	input.Accounts.AutoDisableDegradedAccounts = true
-	input.Accounts.AutoDisableDegradedAccountsProvided = true
 
 	snapshot, err := service.Update(context.Background(), 0, input)
 	if err != nil {
@@ -852,7 +577,7 @@ func TestUpdateAutoDisableDegradedAccountsRoundTrip(t *testing.T) {
 	if !applied.QualityGuard.RequestRetry.AutoDisable || !snapshot.Config.Accounts.AutoDisableDegradedAccounts {
 		t.Fatalf("auto-disable switch was not applied: applied=%v snapshot=%#v", applied.QualityGuard.RequestRetry.AutoDisable, snapshot.Config.Accounts)
 	}
-	if repo.value.Accounts.AutoDisableDegradedAccounts == nil || !*repo.value.Accounts.AutoDisableDegradedAccounts {
+	if !repo.value.Accounts.AutoDisableDegradedAccounts {
 		t.Fatalf("auto-disable switch was not persisted: %#v", repo.value.Accounts)
 	}
 	reloaded, _, _, err := LoadPersisted(context.Background(), cfg, repo)
@@ -861,78 +586,6 @@ func TestUpdateAutoDisableDegradedAccountsRoundTrip(t *testing.T) {
 	}
 	if !reloaded.QualityGuard.RequestRetry.AutoDisable {
 		t.Fatal("persisted auto-disable switch was not restored")
-	}
-}
-
-func TestLoadPersistedKeepsYAMLAutoDisableForOlderPayload(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.QualityGuard.RequestRetry.AutoDisable = true
-	value := toDomainConfig(cfg)
-	value.Accounts.AutoDisableDegradedAccounts = nil
-
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, &runtimeSettingsRepositoryStub{value: value, found: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !loaded.QualityGuard.RequestRetry.AutoDisable {
-		t.Fatal("legacy runtime settings overrode config.yaml autoDisable")
-	}
-}
-
-func TestUpdateWithoutAccountsPreservesCurrentAutoCleanConfig(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Accounts.AutoCleanReauthEnabled = true
-	cfg.Accounts.MarkBuildForbiddenReauth = true
-	cfg.Accounts.BuildForbiddenReauthCodes = []string{"custom-denial"}
-	cfg.Accounts.AutoCleanReauthInterval = config.Duration(7 * time.Minute)
-	cfg.Accounts.AutoCleanReauthMinAge = config.Duration(3 * time.Hour)
-	cfg.Accounts.AutoCleanIncludeDisabled = true
-	repo := &runtimeSettingsRepositoryStub{}
-	var applied config.Config
-	service := NewService(cfg, time.Time{}, 0, repo, nil, func(next config.Config) { applied = next })
-	input := service.Get().Config
-	input.Accounts = AccountsConfig{}
-	input.AccountsProvided = false
-	input.Server.MaxConcurrentRequests++
-	if _, err := service.Update(context.Background(), 0, input); err != nil {
-		t.Fatal(err)
-	}
-	if !applied.Accounts.MarkBuildForbiddenReauth || !applied.Accounts.AutoCleanReauthEnabled || !applied.Accounts.AutoCleanIncludeDisabled || applied.Accounts.AutoCleanReauthInterval.Value() != 7*time.Minute || applied.Accounts.AutoCleanReauthMinAge.Value() != 3*time.Hour {
-		t.Fatalf("accounts changed by legacy update: %#v", applied.Accounts)
-	}
-}
-
-func TestUpdateWithoutBuildForbiddenFieldPreservesCurrentPolicy(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Accounts.MarkBuildForbiddenReauth = true
-	cfg.Accounts.BuildForbiddenReauthCodes = []string{"custom-denial"}
-	var applied config.Config
-	service := NewService(cfg, time.Time{}, 0, &runtimeSettingsRepositoryStub{}, nil, func(next config.Config) { applied = next })
-	input := service.Get().Config
-	input.Accounts.MarkBuildForbiddenReauth = false
-	input.Accounts.MarkBuildForbiddenReauthProvided = false
-	input.Accounts.BuildForbiddenReauthCodes = nil
-	input.Accounts.BuildForbiddenReauthCodesProvided = false
-	input.Server.MaxConcurrentRequests++
-	if _, err := service.Update(context.Background(), 0, input); err != nil {
-		t.Fatal(err)
-	}
-	if !applied.Accounts.MarkBuildForbiddenReauth || len(applied.Accounts.BuildForbiddenReauthCodes) != 1 || applied.Accounts.BuildForbiddenReauthCodes[0] != "custom-denial" {
-		t.Fatalf("legacy update changed the Build forbidden-account policy: %#v", applied.Accounts)
-	}
-}
-
-func TestLoadPersistedKeepsDefaultBuildForbiddenCodesForOlderPayload(t *testing.T) {
-	cfg := testConfig(t)
-	value := toDomainConfig(cfg)
-	value.Accounts.BuildForbiddenReauthCodes = nil
-	repository := &runtimeSettingsRepositoryStub{value: value, found: true}
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.Accounts.BuildForbiddenReauthCodes) != 1 || loaded.Accounts.BuildForbiddenReauthCodes[0] != "permission-denied" {
-		t.Fatalf("Build forbidden code defaults were not preserved: %#v", loaded.Accounts.BuildForbiddenReauthCodes)
 	}
 }
 
@@ -949,7 +602,6 @@ func TestUpdateRejectsInvalidBuildForbiddenCodes(t *testing.T) {
 		service := NewService(cfg, time.Time{}, 0, repository, nil, nil)
 		input := service.Get().Config
 		input.Accounts.BuildForbiddenReauthCodes = codes
-		input.Accounts.BuildForbiddenReauthCodesProvided = true
 		if _, err := service.Update(context.Background(), 0, input); !errors.Is(err, ErrInvalidInput) {
 			t.Fatalf("codes %#v: error = %v", codes, err)
 		}
@@ -965,7 +617,7 @@ func TestProviderChatGPTSettingsRoundTripAndDefaults(t *testing.T) {
 	var applied config.Config
 	service := NewService(cfg, time.Time{}, 0, repository, nil, func(next config.Config) { applied = next })
 	input := service.Get().Config
-	if !input.ProviderChatGPTProvided || input.ProviderChatGPT != (ProviderChatGPTConfig{OutputTokenLimit: 16384, VisionTokens: 256}) {
+	if input.ProviderChatGPT != (ProviderChatGPTConfig{OutputTokenLimit: 16384, VisionTokens: 256}) {
 		t.Fatalf("default providerChatGPT = %#v", input.ProviderChatGPT)
 	}
 	input.ProviderChatGPT = ProviderChatGPTConfig{
@@ -983,17 +635,6 @@ func TestProviderChatGPTSettingsRoundTripAndDefaults(t *testing.T) {
 	reloaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
 	if err != nil || reloaded.Provider.ChatGPT != want {
 		t.Fatalf("reloaded = %#v, err = %v", reloaded.Provider.ChatGPT, err)
-	}
-
-	// An older management client that omits the section keeps the stored values.
-	input = snapshot.Config
-	input.ProviderChatGPT = ProviderChatGPTConfig{}
-	input.ProviderChatGPTProvided = false
-	if _, err := service.Update(context.Background(), snapshot.Revision, input); err != nil {
-		t.Fatal(err)
-	}
-	if applied.Provider.ChatGPT != want {
-		t.Fatalf("omitted section overwrote providerChatGPT: %#v", applied.Provider.ChatGPT)
 	}
 }
 
@@ -1014,30 +655,5 @@ func TestUpdateRejectsProviderChatGPTOutOfRange(t *testing.T) {
 		if repository.found {
 			t.Fatalf("%#v was persisted", value)
 		}
-	}
-}
-
-func TestLoadPersistedKeepsChatGPTDefaultsForOlderPayload(t *testing.T) {
-	cfg := testConfig(t)
-	data, err := json.Marshal(toDomainConfig(cfg))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(data, &payload); err != nil {
-		t.Fatal(err)
-	}
-	delete(payload, "ProviderChatGPT")
-	data, _ = json.Marshal(payload)
-	var legacy settingsdomain.Config
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		t.Fatal(err)
-	}
-	loaded, _, _, err := LoadPersisted(context.Background(), cfg, &runtimeSettingsRepositoryStub{value: legacy, found: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Provider.ChatGPT != cfg.Provider.ChatGPT || loaded.Provider.ChatGPT.OutputTokenLimit != config.DefaultChatGPTOutputTokenLimit {
-		t.Fatalf("legacy providerChatGPT = %#v, want %#v", loaded.Provider.ChatGPT, cfg.Provider.ChatGPT)
 	}
 }

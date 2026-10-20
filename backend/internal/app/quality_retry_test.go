@@ -55,7 +55,6 @@ func TestDegradedAccountSwitchAppliesAndRestoresRequestRetryPolicy(t *testing.T)
 				snapshot := service.Get()
 				input := snapshot.Config
 				input.Accounts.AutoDisableDegradedAccounts = autoDisable
-				input.Accounts.AutoDisableDegradedAccountsProvided = true
 				if _, err := service.Update(ctx, snapshot.Revision, input); err != nil {
 					t.Fatal(err)
 				}

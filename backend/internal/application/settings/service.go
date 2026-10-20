@@ -37,29 +37,25 @@ type ProviderBuildRecommendation struct {
 }
 
 type ProviderWebConfig struct {
-	BaseURL                      string
-	StatsigMode                  string
-	StatsigManualValue           string
-	StatsigManualConfigured      bool
-	StatsigSignerURL             string
-	ClearanceMode                string
-	FlareSolverrURL              string
-	ClearanceTimeout             string
-	ClearanceRefresh             string
-	QuotaTimeout                 string
-	ChatTimeout                  string
-	StreamIdleTimeout            string
-	ImageTimeout                 string
-	VideoTimeout                 string
-	MediaConcurrency             int
-	AllowNSFW                    bool
-	FreeVideoDurationCap         int
-	FreeVideoDurationCapProvided bool
-	RecoveryBackoffBase          string
-	RecoveryBackoffMax           string
-	// ClearanceProvided distinguishes older admin clients that predate the
-	// managed-clearance fields from an explicit update to those fields.
-	ClearanceProvided bool
+	BaseURL                 string
+	StatsigMode             string
+	StatsigManualValue      string
+	StatsigManualConfigured bool
+	StatsigSignerURL        string
+	ClearanceMode           string
+	FlareSolverrURL         string
+	ClearanceTimeout        string
+	ClearanceRefresh        string
+	QuotaTimeout            string
+	ChatTimeout             string
+	StreamIdleTimeout       string
+	ImageTimeout            string
+	VideoTimeout            string
+	MediaConcurrency        int
+	AllowNSFW               bool
+	FreeVideoDurationCap    int
+	RecoveryBackoffBase     string
+	RecoveryBackoffMax      string
 }
 
 type ProviderConsoleConfig struct {
@@ -105,21 +101,16 @@ type FrontendConfig struct {
 
 // RoutingConfig 是管理接口使用的路由可编辑输入。
 type RoutingConfig struct {
-	StickyTTL                           string
-	CooldownBase                        string
-	CooldownMax                         string
-	CapacityWait                        string
-	MaxAttempts                         int
-	VideoMaxAttempts                    int
-	PreferFreeBuild                     bool
-	MarkBuildChatDeniedAsReauth         bool
-	MarkBuildChatDeniedAsReauthProvided bool
-	AccountIsolatedConnections          bool
-	// AccountIsolatedConnectionsProvided preserves the current value when an
-	// older management client omits the newly added field.
-	AccountIsolatedConnectionsProvided bool
-	SegmentedSelector                  SegmentedSelectorConfig
-	SegmentedSelectorProvided          bool
+	StickyTTL                   string
+	CooldownBase                string
+	CooldownMax                 string
+	CapacityWait                string
+	MaxAttempts                 int
+	VideoMaxAttempts            int
+	PreferFreeBuild             bool
+	MarkBuildChatDeniedAsReauth bool
+	AccountIsolatedConnections  bool
+	SegmentedSelector           SegmentedSelectorConfig
 }
 
 type SegmentedSelectorConfig struct {
@@ -130,12 +121,11 @@ type SegmentedSelectorConfig struct {
 
 // AuditConfig 是管理接口使用的审计可编辑输入。
 type AuditConfig struct {
-	BufferSize            int
-	BatchSize             int
-	FlushInterval         string
-	CommitDelayMS         int
-	RetentionDays         int
-	RetentionDaysProvided bool
+	BufferSize    int
+	BatchSize     int
+	FlushInterval string
+	CommitDelayMS int
+	RetentionDays int
 }
 
 // ClientKeyDefaultsConfig 是管理接口使用的密钥默认限制输入。
@@ -155,14 +145,6 @@ type AccountsConfig struct {
 	AutoCleanReauthInterval              string
 	AutoCleanReauthMinAge                string
 	AutoCleanIncludeDisabled             bool
-	// MarkBuildForbiddenReauthProvided preserves the value when an older management client omits the field.
-	MarkBuildForbiddenReauthProvided bool
-	// BuildForbiddenReauthCodesProvided preserves the configured codes when an older management client omits the field.
-	BuildForbiddenReauthCodesProvided bool
-	// ExcludeBuildBotFlaggedFromSchedulingProvided preserves the value when an older management client omits the field.
-	ExcludeBuildBotFlaggedFromSchedulingProvided bool
-	// AutoDisableDegradedAccountsProvided preserves config.yaml when an older management client omits the field.
-	AutoDisableDegradedAccountsProvided bool
 }
 
 // EditableConfig 聚合管理端允许修改的运行参数。
@@ -179,10 +161,6 @@ type EditableConfig struct {
 	Audit             AuditConfig
 	ClientKeyDefaults ClientKeyDefaultsConfig
 	Accounts          AccountsConfig
-	// ProviderChatGPTProvided 区分旧管理端未发送 providerChatGPT 与显式提交。
-	ProviderChatGPTProvided bool
-	// AccountsProvided 区分旧管理端未发送 accounts 与显式提交默认值。
-	AccountsProvided bool
 }
 
 // Snapshot 表示当前运行设置和需要重启才能生效的字段。
@@ -319,14 +297,7 @@ func (s *Service) ReloadPersisted(ctx context.Context) error {
 }
 
 func applyDomainConfig(base config.Config, value settingsdomain.Config) config.Config {
-	// 旧版运行设置没有 Server 字段，反序列化后为零；升级时沿用当前配置默认值。
-	if value.Server.MaxConcurrentRequests > 0 {
-		base.Server.MaxConcurrentRequests = value.Server.MaxConcurrentRequests
-	}
-	capacityWait := value.Routing.CapacityWait
-	if capacityWait <= 0 {
-		capacityWait = base.Routing.CapacityWait.Value()
-	}
+	base.Server.MaxConcurrentRequests = value.Server.MaxConcurrentRequests
 	base.Provider.Build = config.BuildProviderConfig{
 		BaseURL: value.ProviderBuild.BaseURL, FallbackBaseURL: config.NormalizeBuildFallbackBaseURL(value.ProviderBuild.FallbackBaseURL),
 		ClientVersion: value.ProviderBuild.ClientVersion, ClientIdentifier: value.ProviderBuild.ClientIdentifier,
@@ -334,61 +305,23 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 		ResponseHeaderTimeout: config.Duration(value.ProviderBuild.ResponseHeaderTimeout),
 		StreamIdleTimeout:     config.Duration(value.ProviderBuild.StreamIdleTimeout),
 	}
-	if value.ProviderBuild.ResponseHeaderTimeout <= 0 {
-		base.Provider.Build.ResponseHeaderTimeout = config.Duration(settingsdomain.DefaultBuildResponseHeaderTimeout)
-	}
-	if value.ProviderBuild.StreamIdleTimeout <= 0 {
-		base.Provider.Build.StreamIdleTimeout = config.Duration(settingsdomain.DefaultBuildStreamIdleTimeout)
-	}
-	clearanceMode := strings.TrimSpace(value.ProviderWeb.ClearanceMode)
-	if clearanceMode == "" {
-		clearanceMode = base.Provider.Web.ClearanceMode
-	}
-	flareSolverrURL := strings.TrimSpace(value.ProviderWeb.FlareSolverrURL)
-	if flareSolverrURL == "" {
-		flareSolverrURL = base.Provider.Web.FlareSolverrURL
-	}
-	clearanceTimeout := value.ProviderWeb.ClearanceTimeout
-	if clearanceTimeout <= 0 {
-		clearanceTimeout = base.Provider.Web.ClearanceTimeout.Value()
-	}
-	clearanceRefresh := value.ProviderWeb.ClearanceRefresh
-	if clearanceRefresh <= 0 {
-		clearanceRefresh = base.Provider.Web.ClearanceRefresh.Value()
-	}
-	freeVideoDurationCap := value.ProviderWeb.FreeVideoDurationCap
-	if freeVideoDurationCap == 0 {
-		freeVideoDurationCap = base.Provider.Web.FreeVideoDurationCap
-	}
 	base.Provider.Web = config.WebProviderConfig{
 		BaseURL: value.ProviderWeb.BaseURL, QuotaTimeout: config.Duration(value.ProviderWeb.QuotaTimeout),
 		StatsigMode: value.ProviderWeb.StatsigMode, StatsigManualValue: value.ProviderWeb.StatsigManualValue, StatsigSignerURL: value.ProviderWeb.StatsigSignerURL,
-		ClearanceMode: clearanceMode, FlareSolverrURL: flareSolverrURL,
-		ClearanceTimeout: config.Duration(clearanceTimeout), ClearanceRefresh: config.Duration(clearanceRefresh),
+		ClearanceMode: value.ProviderWeb.ClearanceMode, FlareSolverrURL: value.ProviderWeb.FlareSolverrURL,
+		ClearanceTimeout: config.Duration(value.ProviderWeb.ClearanceTimeout), ClearanceRefresh: config.Duration(value.ProviderWeb.ClearanceRefresh),
 		ChatTimeout: config.Duration(value.ProviderWeb.ChatTimeout), StreamIdleTimeout: config.Duration(value.ProviderWeb.StreamIdleTimeout),
 		ImageTimeout:     config.Duration(value.ProviderWeb.ImageTimeout),
 		VideoTimeout:     config.Duration(value.ProviderWeb.VideoTimeout),
 		MediaConcurrency: value.ProviderWeb.MediaConcurrency, AllowNSFW: value.ProviderWeb.AllowNSFW,
-		FreeVideoDurationCap: settingsdomain.NormalizeWebFreeVideoDurationCap(freeVideoDurationCap),
+		FreeVideoDurationCap: settingsdomain.NormalizeWebFreeVideoDurationCap(value.ProviderWeb.FreeVideoDurationCap),
 		RecoveryBackoffBase:  config.Duration(value.ProviderWeb.RecoveryBackoffBase), RecoveryBackoffMax: config.Duration(value.ProviderWeb.RecoveryBackoffMax),
 	}
-	if value.ProviderWeb.StreamIdleTimeout <= 0 {
-		base.Provider.Web.StreamIdleTimeout = config.Duration(settingsdomain.DefaultWebStreamIdleTimeout)
+	base.Provider.Console = config.ConsoleProviderConfig{
+		BaseURL: value.ProviderConsole.BaseURL, ChatTimeout: config.Duration(value.ProviderConsole.ChatTimeout),
+		StreamIdleTimeout: config.Duration(value.ProviderConsole.StreamIdleTimeout),
 	}
-	// Console 是后续版本新增的完整配置段；旧 JSON 整段缺失时沿用代码默认值。
-	if value.ProviderConsole != (settingsdomain.ProviderConsoleConfig{}) {
-		base.Provider.Console = config.ConsoleProviderConfig{
-			BaseURL: value.ProviderConsole.BaseURL, ChatTimeout: config.Duration(value.ProviderConsole.ChatTimeout),
-			StreamIdleTimeout: config.Duration(value.ProviderConsole.StreamIdleTimeout),
-		}
-		if value.ProviderConsole.StreamIdleTimeout <= 0 {
-			base.Provider.Console.StreamIdleTimeout = config.Duration(settingsdomain.DefaultConsoleStreamIdleTimeout)
-		}
-	}
-	// ChatGPT 段同样是后续新增；保存过的段 outputTokenLimit 至少为 1，整段为零即旧 JSON。
-	if value.ProviderChatGPT != (settingsdomain.ProviderChatGPTConfig{}) {
-		base.Provider.ChatGPT = config.ChatGPTProviderConfig(value.ProviderChatGPT)
-	}
+	base.Provider.ChatGPT = config.ChatGPTProviderConfig(value.ProviderChatGPT)
 	randomDelay := time.Duration(-1)
 	if value.Batch.RandomDelay != nil {
 		randomDelay = *value.Batch.RandomDelay
@@ -403,71 +336,40 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	base.Media.CleanupThresholdPercent = value.Media.CleanupThresholdPercent
 	base.Media.CleanupInterval = config.Duration(value.Media.CleanupInterval)
 	base.Frontend.PublicAPIBaseURLOverride = strings.TrimSpace(value.Frontend.PublicAPIBaseURL)
-	segmentedEnabled := base.Routing.SegmentedSelectorEnabled
-	segmentedMinCandidates := base.Routing.SegmentedMinCandidates
-	segmentedWindowSize := base.Routing.SegmentedWindowSize
-	accountIsolatedConnections := base.Routing.AccountIsolatedConnections
-	if value.Routing.AccountIsolatedConnections != nil {
-		accountIsolatedConnections = *value.Routing.AccountIsolatedConnections
-	}
-	if value.Routing.SegmentedSelector != nil {
-		segmentedEnabled = value.Routing.SegmentedSelector.ActiveEnabled
-		segmentedMinCandidates = value.Routing.SegmentedSelector.MinCandidates
-		segmentedWindowSize = value.Routing.SegmentedSelector.WindowSize
-	}
 	base.Routing = config.RoutingConfig{
 		StickyTTL: config.Duration(value.Routing.StickyTTL), CooldownBase: config.Duration(value.Routing.CooldownBase),
-		CooldownMax: config.Duration(value.Routing.CooldownMax), CapacityWait: config.Duration(capacityWait), MaxAttempts: value.Routing.MaxAttempts, VideoMaxAttempts: value.Routing.VideoMaxAttempts,
+		CooldownMax: config.Duration(value.Routing.CooldownMax), CapacityWait: config.Duration(value.Routing.CapacityWait), MaxAttempts: value.Routing.MaxAttempts, VideoMaxAttempts: value.Routing.VideoMaxAttempts,
 		MarkBuildChatDeniedAsReauth: value.Routing.MarkBuildChatDeniedAsReauth,
 		PreferFreeBuild:             value.Routing.PreferFreeBuild,
-		AccountIsolatedConnections:  accountIsolatedConnections,
-		SegmentedSelectorEnabled:    segmentedEnabled,
-		SegmentedMinCandidates:      segmentedMinCandidates,
-		SegmentedWindowSize:         segmentedWindowSize,
+		AccountIsolatedConnections:  value.Routing.AccountIsolatedConnections,
+		SegmentedSelectorEnabled:    value.Routing.SegmentedSelector.ActiveEnabled,
+		SegmentedMinCandidates:      value.Routing.SegmentedSelector.MinCandidates,
+		SegmentedWindowSize:         value.Routing.SegmentedSelector.WindowSize,
 		ReasoningReplayEnabled:      base.Routing.ReasoningReplayEnabled, ReasoningReplayTTL: base.Routing.ReasoningReplayTTL,
 		ReasoningReplayMaxEntries: base.Routing.ReasoningReplayMaxEntries,
 	}
-	commitDelay := base.Audit.CommitDelay.Value()
-	if value.Audit.CommitDelay > 0 {
-		commitDelay = value.Audit.CommitDelay
-	}
-	retentionDays := base.Audit.RetentionDays
-	if value.Audit.RetentionDays != nil {
-		retentionDays = *value.Audit.RetentionDays
-	}
 	base.Audit = config.AuditConfig{
 		BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: config.Duration(value.Audit.FlushInterval),
-		CommitDelay: config.Duration(commitDelay), RetentionDays: retentionDays,
+		CommitDelay: config.Duration(value.Audit.CommitDelay), RetentionDays: value.Audit.RetentionDays,
 		LedgerMode: base.Audit.LedgerMode, LedgerFailureThreshold: base.Audit.LedgerFailureThreshold,
 		LedgerUnhealthyGrace: base.Audit.LedgerUnhealthyGrace, LedgerQueueHighWatermarkPct: base.Audit.LedgerQueueHighWatermarkPct,
 	}
 	base.ClientKeyDefaults = config.ClientKeyDefaultsConfig{
 		RPMLimit: value.ClientKeyDefaults.RPMLimit, MaxConcurrent: value.ClientKeyDefaults.MaxConcurrent,
 	}
-	// Accounts 为后续新增段；旧持久化缺字段时沿用代码默认（全部关闭）。
-	if value.Accounts.AutoCleanReauthInterval > 0 {
-		base.Accounts.AutoCleanReauthInterval = config.Duration(value.Accounts.AutoCleanReauthInterval)
-	}
-	if value.Accounts.AutoCleanReauthMinAge > 0 {
-		base.Accounts.AutoCleanReauthMinAge = config.Duration(value.Accounts.AutoCleanReauthMinAge)
-	}
+	base.Accounts.AutoCleanReauthInterval = config.Duration(value.Accounts.AutoCleanReauthInterval)
+	base.Accounts.AutoCleanReauthMinAge = config.Duration(value.Accounts.AutoCleanReauthMinAge)
 	base.Accounts.AutoCleanReauthEnabled = value.Accounts.AutoCleanReauthEnabled
 	base.Accounts.AutoCleanIncludeDisabled = value.Accounts.AutoCleanIncludeDisabled
 	base.Accounts.MarkBuildForbiddenReauth = value.Accounts.MarkBuildForbiddenReauth
-	if value.Accounts.BuildForbiddenReauthCodes != nil {
-		base.Accounts.BuildForbiddenReauthCodes = append([]string(nil), value.Accounts.BuildForbiddenReauthCodes...)
-	}
+	base.Accounts.BuildForbiddenReauthCodes = append([]string(nil), value.Accounts.BuildForbiddenReauthCodes...)
 	base.Accounts.ExcludeBuildBotFlaggedFromScheduling = value.Accounts.ExcludeBuildBotFlaggedFromScheduling
-	if value.Accounts.AutoDisableDegradedAccounts != nil {
-		base.QualityGuard.RequestRetry.AutoDisable = *value.Accounts.AutoDisableDegradedAccounts
-	}
+	base.QualityGuard.RequestRetry.AutoDisable = value.Accounts.AutoDisableDegradedAccounts
 	return base
 }
 
 func toDomainConfig(value config.Config) settingsdomain.Config {
 	randomDelay := value.Batch.RandomDelay.Value()
-	accountIsolatedConnections := value.Routing.AccountIsolatedConnections
-	autoDisableDegradedAccounts := value.QualityGuard.RequestRetry.AutoDisable
 	return settingsdomain.Config{
 		Server: settingsdomain.ServerConfig{MaxConcurrentRequests: value.Server.MaxConcurrentRequests},
 		ProviderBuild: settingsdomain.ProviderBuildConfig{
@@ -512,21 +414,21 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 			CooldownMax: value.Routing.CooldownMax.Value(), CapacityWait: value.Routing.CapacityWait.Value(), MaxAttempts: value.Routing.MaxAttempts, VideoMaxAttempts: value.Routing.VideoMaxAttempts,
 			MarkBuildChatDeniedAsReauth: value.Routing.MarkBuildChatDeniedAsReauth,
 			PreferFreeBuild:             value.Routing.PreferFreeBuild,
-			AccountIsolatedConnections:  &accountIsolatedConnections,
-			SegmentedSelector: &settingsdomain.SegmentedSelectorConfig{
+			AccountIsolatedConnections:  value.Routing.AccountIsolatedConnections,
+			SegmentedSelector: settingsdomain.SegmentedSelectorConfig{
 				ActiveEnabled: value.Routing.SegmentedSelectorEnabled,
 				MinCandidates: value.Routing.SegmentedMinCandidates, WindowSize: value.Routing.SegmentedWindowSize,
 			},
 		},
 		Audit: settingsdomain.AuditConfig{
 			BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: value.Audit.FlushInterval.Value(), CommitDelay: value.Audit.CommitDelay.Value(),
-			RetentionDays: intPointer(value.Audit.RetentionDays),
+			RetentionDays: value.Audit.RetentionDays,
 		},
 		ClientKeyDefaults: settingsdomain.ClientKeyDefaultsConfig{
 			RPMLimit: value.ClientKeyDefaults.RPMLimit, MaxConcurrent: value.ClientKeyDefaults.MaxConcurrent,
 		},
 		Accounts: settingsdomain.AccountsConfig{
-			AutoDisableDegradedAccounts:          &autoDisableDegradedAccounts,
+			AutoDisableDegradedAccounts:          value.QualityGuard.RequestRetry.AutoDisable,
 			MarkBuildForbiddenReauth:             value.Accounts.MarkBuildForbiddenReauth,
 			BuildForbiddenReauthCodes:            append([]string(nil), value.Accounts.BuildForbiddenReauthCodes...),
 			ExcludeBuildBotFlaggedFromScheduling: value.Accounts.ExcludeBuildBotFlaggedFromScheduling,
@@ -537,8 +439,6 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 		},
 	}
 }
-
-func intPointer(value int) *int { return &value }
 
 func (s *Service) snapshotLocked() Snapshot {
 	restartRequired := []string{}
@@ -575,10 +475,8 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	next.Provider.Web.BaseURL = strings.TrimSpace(input.ProviderWeb.BaseURL)
 	next.Provider.Web.StatsigMode = strings.TrimSpace(input.ProviderWeb.StatsigMode)
 	next.Provider.Web.StatsigSignerURL = strings.TrimSpace(input.ProviderWeb.StatsigSignerURL)
-	if input.ProviderWeb.ClearanceProvided {
-		next.Provider.Web.ClearanceMode = strings.TrimSpace(input.ProviderWeb.ClearanceMode)
-		next.Provider.Web.FlareSolverrURL = strings.TrimSpace(input.ProviderWeb.FlareSolverrURL)
-	}
+	next.Provider.Web.ClearanceMode = strings.TrimSpace(input.ProviderWeb.ClearanceMode)
+	next.Provider.Web.FlareSolverrURL = strings.TrimSpace(input.ProviderWeb.FlareSolverrURL)
 	if next.Provider.Web.StatsigMode == config.StatsigModeManual {
 		if value := strings.TrimSpace(input.ProviderWeb.StatsigManualValue); value != "" {
 			next.Provider.Web.StatsigManualValue = value
@@ -588,16 +486,12 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	}
 	next.Provider.Web.MediaConcurrency = input.ProviderWeb.MediaConcurrency
 	next.Provider.Web.AllowNSFW = input.ProviderWeb.AllowNSFW
-	if input.ProviderWeb.FreeVideoDurationCapProvided {
-		next.Provider.Web.FreeVideoDurationCap = settingsdomain.NormalizeWebFreeVideoDurationCap(input.ProviderWeb.FreeVideoDurationCap)
-	}
+	next.Provider.Web.FreeVideoDurationCap = settingsdomain.NormalizeWebFreeVideoDurationCap(input.ProviderWeb.FreeVideoDurationCap)
 	next.Provider.Console.BaseURL = strings.TrimSpace(input.ProviderConsole.BaseURL)
-	if input.ProviderChatGPTProvided {
-		chatGPT := input.ProviderChatGPT
-		chatGPT.ImageConversationModel = strings.TrimSpace(chatGPT.ImageConversationModel)
-		chatGPT.DefaultImageModel = strings.TrimSpace(chatGPT.DefaultImageModel)
-		next.Provider.ChatGPT = config.ChatGPTProviderConfig(chatGPT)
-	}
+	chatGPT := input.ProviderChatGPT
+	chatGPT.ImageConversationModel = strings.TrimSpace(chatGPT.ImageConversationModel)
+	chatGPT.DefaultImageModel = strings.TrimSpace(chatGPT.DefaultImageModel)
+	next.Provider.ChatGPT = config.ChatGPTProviderConfig(chatGPT)
 	next.Batch = config.BatchConfig{
 		ImportConcurrency: input.Batch.ImportConcurrency, ConversionConcurrency: input.Batch.ConversionConcurrency,
 		SyncConcurrency: input.Batch.SyncConcurrency, RefreshConcurrency: input.Batch.RefreshConcurrency,
@@ -609,43 +503,23 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	next.Routing.MaxAttempts = input.Routing.MaxAttempts
 	next.Routing.VideoMaxAttempts = input.Routing.VideoMaxAttempts
 	next.Routing.PreferFreeBuild = input.Routing.PreferFreeBuild
-	if input.Routing.AccountIsolatedConnectionsProvided {
-		next.Routing.AccountIsolatedConnections = input.Routing.AccountIsolatedConnections
-	}
-	if input.Routing.SegmentedSelectorProvided {
-		next.Routing.SegmentedSelectorEnabled = input.Routing.SegmentedSelector.Enabled
-		next.Routing.SegmentedMinCandidates = input.Routing.SegmentedSelector.MinCandidates
-		next.Routing.SegmentedWindowSize = input.Routing.SegmentedSelector.WindowSize
-	}
-	if input.Routing.MarkBuildChatDeniedAsReauthProvided {
-		next.Routing.MarkBuildChatDeniedAsReauth = input.Routing.MarkBuildChatDeniedAsReauth
-	}
+	next.Routing.AccountIsolatedConnections = input.Routing.AccountIsolatedConnections
+	next.Routing.SegmentedSelectorEnabled = input.Routing.SegmentedSelector.Enabled
+	next.Routing.SegmentedMinCandidates = input.Routing.SegmentedSelector.MinCandidates
+	next.Routing.SegmentedWindowSize = input.Routing.SegmentedSelector.WindowSize
+	next.Routing.MarkBuildChatDeniedAsReauth = input.Routing.MarkBuildChatDeniedAsReauth
 	next.Audit.BufferSize = input.Audit.BufferSize
 	next.Audit.BatchSize = input.Audit.BatchSize
-	if input.Audit.CommitDelayMS > 0 {
-		next.Audit.CommitDelay = config.Duration(time.Duration(input.Audit.CommitDelayMS) * time.Millisecond)
-	}
-	if input.Audit.RetentionDaysProvided {
-		next.Audit.RetentionDays = input.Audit.RetentionDays
-	}
+	next.Audit.CommitDelay = config.Duration(time.Duration(input.Audit.CommitDelayMS) * time.Millisecond)
+	next.Audit.RetentionDays = input.Audit.RetentionDays
 	next.ClientKeyDefaults.RPMLimit = input.ClientKeyDefaults.RPMLimit
 	next.ClientKeyDefaults.MaxConcurrent = input.ClientKeyDefaults.MaxConcurrent
-	if input.AccountsProvided {
-		if input.Accounts.AutoDisableDegradedAccountsProvided {
-			next.QualityGuard.RequestRetry.AutoDisable = input.Accounts.AutoDisableDegradedAccounts
-		}
-		if input.Accounts.MarkBuildForbiddenReauthProvided {
-			next.Accounts.MarkBuildForbiddenReauth = input.Accounts.MarkBuildForbiddenReauth
-		}
-		if input.Accounts.BuildForbiddenReauthCodesProvided {
-			next.Accounts.BuildForbiddenReauthCodes = normalizeForbiddenCodes(input.Accounts.BuildForbiddenReauthCodes)
-		}
-		if input.Accounts.ExcludeBuildBotFlaggedFromSchedulingProvided {
-			next.Accounts.ExcludeBuildBotFlaggedFromScheduling = input.Accounts.ExcludeBuildBotFlaggedFromScheduling
-		}
-		next.Accounts.AutoCleanReauthEnabled = input.Accounts.AutoCleanReauthEnabled
-		next.Accounts.AutoCleanIncludeDisabled = input.Accounts.AutoCleanIncludeDisabled
-	}
+	next.QualityGuard.RequestRetry.AutoDisable = input.Accounts.AutoDisableDegradedAccounts
+	next.Accounts.MarkBuildForbiddenReauth = input.Accounts.MarkBuildForbiddenReauth
+	next.Accounts.BuildForbiddenReauthCodes = normalizeForbiddenCodes(input.Accounts.BuildForbiddenReauthCodes)
+	next.Accounts.ExcludeBuildBotFlaggedFromScheduling = input.Accounts.ExcludeBuildBotFlaggedFromScheduling
+	next.Accounts.AutoCleanReauthEnabled = input.Accounts.AutoCleanReauthEnabled
+	next.Accounts.AutoCleanIncludeDisabled = input.Accounts.AutoCleanIncludeDisabled
 
 	type durationInput struct {
 		path  string
@@ -667,30 +541,14 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 		{"providerConsole.chatTimeout", input.ProviderConsole.ChatTimeout, func(value config.Duration) { next.Provider.Console.ChatTimeout = value }},
 		{"media.cleanupInterval", input.Media.CleanupInterval, func(value config.Duration) { next.Media.CleanupInterval = value }},
 		{"batch.randomDelay", input.Batch.RandomDelay, func(value config.Duration) { next.Batch.RandomDelay = value }},
-	}
-	if strings.TrimSpace(input.ProviderBuild.ResponseHeaderTimeout) != "" {
-		durations = append(durations, durationInput{"providerBuild.responseHeaderTimeout", input.ProviderBuild.ResponseHeaderTimeout, func(value config.Duration) { next.Provider.Build.ResponseHeaderTimeout = value }})
-	}
-	if strings.TrimSpace(input.ProviderBuild.StreamIdleTimeout) != "" {
-		durations = append(durations, durationInput{"providerBuild.streamIdleTimeout", input.ProviderBuild.StreamIdleTimeout, func(value config.Duration) { next.Provider.Build.StreamIdleTimeout = value }})
-	}
-	if strings.TrimSpace(input.ProviderWeb.StreamIdleTimeout) != "" {
-		durations = append(durations, durationInput{"providerWeb.streamIdleTimeout", input.ProviderWeb.StreamIdleTimeout, func(value config.Duration) { next.Provider.Web.StreamIdleTimeout = value }})
-	}
-	if strings.TrimSpace(input.ProviderConsole.StreamIdleTimeout) != "" {
-		durations = append(durations, durationInput{"providerConsole.streamIdleTimeout", input.ProviderConsole.StreamIdleTimeout, func(value config.Duration) { next.Provider.Console.StreamIdleTimeout = value }})
-	}
-	if input.ProviderWeb.ClearanceProvided {
-		durations = append(durations,
-			durationInput{"providerWeb.clearanceTimeout", input.ProviderWeb.ClearanceTimeout, func(value config.Duration) { next.Provider.Web.ClearanceTimeout = value }},
-			durationInput{"providerWeb.clearanceRefresh", input.ProviderWeb.ClearanceRefresh, func(value config.Duration) { next.Provider.Web.ClearanceRefresh = value }},
-		)
-	}
-	if input.AccountsProvided {
-		durations = append(durations,
-			durationInput{"accounts.autoCleanReauthInterval", input.Accounts.AutoCleanReauthInterval, func(value config.Duration) { next.Accounts.AutoCleanReauthInterval = value }},
-			durationInput{"accounts.autoCleanReauthMinAge", input.Accounts.AutoCleanReauthMinAge, func(value config.Duration) { next.Accounts.AutoCleanReauthMinAge = value }},
-		)
+		{"providerBuild.responseHeaderTimeout", input.ProviderBuild.ResponseHeaderTimeout, func(value config.Duration) { next.Provider.Build.ResponseHeaderTimeout = value }},
+		{"providerBuild.streamIdleTimeout", input.ProviderBuild.StreamIdleTimeout, func(value config.Duration) { next.Provider.Build.StreamIdleTimeout = value }},
+		{"providerWeb.streamIdleTimeout", input.ProviderWeb.StreamIdleTimeout, func(value config.Duration) { next.Provider.Web.StreamIdleTimeout = value }},
+		{"providerConsole.streamIdleTimeout", input.ProviderConsole.StreamIdleTimeout, func(value config.Duration) { next.Provider.Console.StreamIdleTimeout = value }},
+		{"providerWeb.clearanceTimeout", input.ProviderWeb.ClearanceTimeout, func(value config.Duration) { next.Provider.Web.ClearanceTimeout = value }},
+		{"providerWeb.clearanceRefresh", input.ProviderWeb.ClearanceRefresh, func(value config.Duration) { next.Provider.Web.ClearanceRefresh = value }},
+		{"accounts.autoCleanReauthInterval", input.Accounts.AutoCleanReauthInterval, func(value config.Duration) { next.Accounts.AutoCleanReauthInterval = value }},
+		{"accounts.autoCleanReauthMinAge", input.Accounts.AutoCleanReauthMinAge, func(value config.Duration) { next.Accounts.AutoCleanReauthMinAge = value }},
 	}
 	for _, item := range durations {
 		value, err := time.ParseDuration(strings.TrimSpace(item.value))
@@ -734,16 +592,14 @@ func toEditable(cfg config.Config) EditableConfig {
 			ImageTimeout:     cfg.Provider.Web.ImageTimeout.String(),
 			VideoTimeout:     cfg.Provider.Web.VideoTimeout.String(),
 			MediaConcurrency: cfg.Provider.Web.MediaConcurrency, AllowNSFW: cfg.Provider.Web.AllowNSFW,
-			FreeVideoDurationCap:         settingsdomain.NormalizeWebFreeVideoDurationCap(cfg.Provider.Web.FreeVideoDurationCap),
-			FreeVideoDurationCapProvided: true,
-			RecoveryBackoffBase:          cfg.Provider.Web.RecoveryBackoffBase.String(), RecoveryBackoffMax: cfg.Provider.Web.RecoveryBackoffMax.String(),
+			FreeVideoDurationCap: settingsdomain.NormalizeWebFreeVideoDurationCap(cfg.Provider.Web.FreeVideoDurationCap),
+			RecoveryBackoffBase:  cfg.Provider.Web.RecoveryBackoffBase.String(), RecoveryBackoffMax: cfg.Provider.Web.RecoveryBackoffMax.String(),
 		},
 		ProviderConsole: ProviderConsoleConfig{
 			BaseURL: cfg.Provider.Console.BaseURL, ChatTimeout: cfg.Provider.Console.ChatTimeout.String(),
 			StreamIdleTimeout: cfg.Provider.Console.StreamIdleTimeout.String(),
 		},
-		ProviderChatGPT:         ProviderChatGPTConfig(cfg.Provider.ChatGPT),
-		ProviderChatGPTProvided: true,
+		ProviderChatGPT: ProviderChatGPTConfig(cfg.Provider.ChatGPT),
 		Batch: BatchConfig{
 			ImportConcurrency: cfg.Batch.ImportConcurrency, ConversionConcurrency: cfg.Batch.ConversionConcurrency,
 			SyncConcurrency: cfg.Batch.SyncConcurrency, RefreshConcurrency: cfg.Batch.RefreshConcurrency,
@@ -759,37 +615,29 @@ func toEditable(cfg config.Config) EditableConfig {
 		Routing: RoutingConfig{
 			StickyTTL: cfg.Routing.StickyTTL.String(), CooldownBase: cfg.Routing.CooldownBase.String(),
 			CooldownMax: cfg.Routing.CooldownMax.String(), CapacityWait: cfg.Routing.CapacityWait.String(), MaxAttempts: cfg.Routing.MaxAttempts, VideoMaxAttempts: cfg.Routing.VideoMaxAttempts,
-			MarkBuildChatDeniedAsReauth:         cfg.Routing.MarkBuildChatDeniedAsReauth,
-			MarkBuildChatDeniedAsReauthProvided: true,
-			PreferFreeBuild:                     cfg.Routing.PreferFreeBuild,
-			AccountIsolatedConnections:          cfg.Routing.AccountIsolatedConnections,
-			AccountIsolatedConnectionsProvided:  true,
+			MarkBuildChatDeniedAsReauth: cfg.Routing.MarkBuildChatDeniedAsReauth,
+			PreferFreeBuild:             cfg.Routing.PreferFreeBuild,
+			AccountIsolatedConnections:  cfg.Routing.AccountIsolatedConnections,
 			SegmentedSelector: SegmentedSelectorConfig{
 				Enabled: cfg.Routing.SegmentedSelectorEnabled, MinCandidates: cfg.Routing.SegmentedMinCandidates,
 				WindowSize: cfg.Routing.SegmentedWindowSize,
 			},
-			SegmentedSelectorProvided: true,
 		},
 		Audit: AuditConfig{
 			BufferSize: cfg.Audit.BufferSize, BatchSize: cfg.Audit.BatchSize, FlushInterval: cfg.Audit.FlushInterval.String(), CommitDelayMS: int(cfg.Audit.CommitDelay.Value() / time.Millisecond),
-			RetentionDays: cfg.Audit.RetentionDays, RetentionDaysProvided: true,
+			RetentionDays: cfg.Audit.RetentionDays,
 		},
 		ClientKeyDefaults: ClientKeyDefaultsConfig{RPMLimit: cfg.ClientKeyDefaults.RPMLimit, MaxConcurrent: cfg.ClientKeyDefaults.MaxConcurrent},
 		Accounts: AccountsConfig{
-			AutoDisableDegradedAccounts:                  cfg.QualityGuard.RequestRetry.AutoDisable,
-			AutoDisableDegradedAccountsProvided:          true,
-			MarkBuildForbiddenReauth:                     cfg.Accounts.MarkBuildForbiddenReauth,
-			BuildForbiddenReauthCodes:                    append([]string(nil), cfg.Accounts.BuildForbiddenReauthCodes...),
-			ExcludeBuildBotFlaggedFromScheduling:         cfg.Accounts.ExcludeBuildBotFlaggedFromScheduling,
-			MarkBuildForbiddenReauthProvided:             true,
-			BuildForbiddenReauthCodesProvided:            true,
-			ExcludeBuildBotFlaggedFromSchedulingProvided: true,
-			AutoCleanReauthEnabled:                       cfg.Accounts.AutoCleanReauthEnabled,
-			AutoCleanReauthInterval:                      cfg.Accounts.AutoCleanReauthInterval.String(),
-			AutoCleanReauthMinAge:                        cfg.Accounts.AutoCleanReauthMinAge.String(),
-			AutoCleanIncludeDisabled:                     cfg.Accounts.AutoCleanIncludeDisabled,
+			AutoDisableDegradedAccounts:          cfg.QualityGuard.RequestRetry.AutoDisable,
+			MarkBuildForbiddenReauth:             cfg.Accounts.MarkBuildForbiddenReauth,
+			BuildForbiddenReauthCodes:            append([]string(nil), cfg.Accounts.BuildForbiddenReauthCodes...),
+			ExcludeBuildBotFlaggedFromScheduling: cfg.Accounts.ExcludeBuildBotFlaggedFromScheduling,
+			AutoCleanReauthEnabled:               cfg.Accounts.AutoCleanReauthEnabled,
+			AutoCleanReauthInterval:              cfg.Accounts.AutoCleanReauthInterval.String(),
+			AutoCleanReauthMinAge:                cfg.Accounts.AutoCleanReauthMinAge.String(),
+			AutoCleanIncludeDisabled:             cfg.Accounts.AutoCleanIncludeDisabled,
 		},
-		AccountsProvided: true,
 	}
 }
 

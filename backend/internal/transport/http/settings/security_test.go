@@ -67,93 +67,8 @@ func TestSettingsResponseIncludesMarkBuildChatDeniedAsReauth(t *testing.T) {
 	response := newSettingsResponse(settingsapp.Snapshot{Config: settingsapp.EditableConfig{
 		Routing: settingsapp.RoutingConfig{MarkBuildChatDeniedAsReauth: true},
 	}})
-	if response.Config.Routing.MarkBuildChatDeniedAsReauth == nil || !*response.Config.Routing.MarkBuildChatDeniedAsReauth {
+	if !response.Config.Routing.MarkBuildChatDeniedAsReauth {
 		t.Fatal("markBuildChatDeniedAsReauth was lost from settings response")
-	}
-}
-
-func TestLegacySettingsRequestMayOmitMarkBuildChatDeniedAsReauth(t *testing.T) {
-	var dto settingsConfigDTO
-	if err := json.Unmarshal([]byte(`{"routing":{"stickyTTL":"1h"}}`), &dto); err != nil {
-		t.Fatal(err)
-	}
-	input := dto.toApplication()
-	if input.Routing.MarkBuildChatDeniedAsReauthProvided {
-		t.Fatal("missing markBuildChatDeniedAsReauth was treated as an explicit update")
-	}
-}
-
-func TestAccountIsolationSettingsPresenceIsPreserved(t *testing.T) {
-	response := newSettingsResponse(settingsapp.Snapshot{Config: settingsapp.EditableConfig{
-		Routing: settingsapp.RoutingConfig{AccountIsolatedConnections: true},
-	}})
-	if response.Config.Routing.AccountIsolatedConnections == nil || !*response.Config.Routing.AccountIsolatedConnections {
-		t.Fatal("accountIsolatedConnections was lost from settings response")
-	}
-
-	var legacy settingsConfigDTO
-	if err := json.Unmarshal([]byte(`{"routing":{"stickyTTL":"1h"}}`), &legacy); err != nil {
-		t.Fatal(err)
-	}
-	if legacy.toApplication().Routing.AccountIsolatedConnectionsProvided {
-		t.Fatal("missing accountIsolatedConnections was treated as an explicit update")
-	}
-
-	var explicit settingsConfigDTO
-	if err := json.Unmarshal([]byte(`{"routing":{"accountIsolatedConnections":false}}`), &explicit); err != nil {
-		t.Fatal(err)
-	}
-	input := explicit.toApplication()
-	if !input.Routing.AccountIsolatedConnectionsProvided || input.Routing.AccountIsolatedConnections {
-		t.Fatalf("explicit false account isolation setting was lost: %#v", input.Routing)
-	}
-}
-
-func TestFreeVideoDurationCapPresenceIsPreserved(t *testing.T) {
-	response := newSettingsResponse(settingsapp.Snapshot{Config: settingsapp.EditableConfig{
-		ProviderWeb: settingsapp.ProviderWebConfig{FreeVideoDurationCap: 8},
-	}})
-	if response.Config.ProviderWeb.FreeVideoDurationCap == nil || *response.Config.ProviderWeb.FreeVideoDurationCap != 8 {
-		t.Fatal("freeVideoDurationCap was lost from settings response")
-	}
-
-	var legacy settingsConfigDTO
-	if err := json.Unmarshal([]byte(`{"providerWeb":{"baseURL":"https://grok.com"}}`), &legacy); err != nil {
-		t.Fatal(err)
-	}
-	if legacy.toApplication().ProviderWeb.FreeVideoDurationCapProvided {
-		t.Fatal("missing freeVideoDurationCap was treated as an explicit update")
-	}
-
-	var explicit settingsConfigDTO
-	if err := json.Unmarshal([]byte(`{"providerWeb":{"freeVideoDurationCap":8}}`), &explicit); err != nil {
-		t.Fatal(err)
-	}
-	input := explicit.toApplication()
-	if !input.ProviderWeb.FreeVideoDurationCapProvided || input.ProviderWeb.FreeVideoDurationCap != 8 {
-		t.Fatalf("explicit freeVideoDurationCap was lost: %#v", input.ProviderWeb)
-	}
-}
-
-func TestLegacySettingsRequestMayOmitAccounts(t *testing.T) {
-	var dto settingsConfigDTO
-	if err := json.Unmarshal([]byte(`{"server":{"maxConcurrentRequests":64}}`), &dto); err != nil {
-		t.Fatal(err)
-	}
-	input := dto.toApplication()
-	if input.AccountsProvided {
-		t.Fatal("missing accounts field was treated as an explicit update")
-	}
-}
-
-func TestLegacySettingsRequestPreservesBuildForbiddenCodesWhenOmitted(t *testing.T) {
-	var dto settingsConfigDTO
-	if err := json.Unmarshal([]byte(`{"accounts":{"markBuildForbiddenReauth":true,"autoCleanReauthEnabled":false,"autoCleanReauthInterval":"10m","autoCleanReauthMinAge":"1h","autoCleanIncludeDisabled":false}}`), &dto); err != nil {
-		t.Fatal(err)
-	}
-	input := dto.toApplication()
-	if !input.AccountsProvided || !input.Accounts.MarkBuildForbiddenReauthProvided || input.Accounts.BuildForbiddenReauthCodesProvided || input.Accounts.AutoDisableDegradedAccountsProvided {
-		t.Fatalf("legacy field presence was not preserved: %#v", input.Accounts)
 	}
 }
 
@@ -164,23 +79,9 @@ func TestSettingsResponseIncludesBuildForbiddenCodes(t *testing.T) {
 			BuildForbiddenReauthCodes: []string{"permission-denied", "team-access-denied"},
 		},
 	}})
-	if response.Config.Accounts == nil || response.Config.Accounts.BuildForbiddenReauthCodes == nil {
-		t.Fatal("Build forbidden codes were omitted from the settings response")
-	}
-	codes := *response.Config.Accounts.BuildForbiddenReauthCodes
+	codes := response.Config.Accounts.BuildForbiddenReauthCodes
 	if len(codes) != 2 || codes[0] != "permission-denied" || codes[1] != "team-access-denied" {
 		t.Fatalf("Build forbidden codes = %#v", codes)
-	}
-}
-
-func TestLegacySettingsRequestMayOmitSegmentedSelector(t *testing.T) {
-	var dto settingsConfigDTO
-	if err := json.Unmarshal([]byte(`{"routing":{"stickyTTL":"1h"}}`), &dto); err != nil {
-		t.Fatal(err)
-	}
-	input := dto.toApplication()
-	if input.Routing.SegmentedSelectorProvided {
-		t.Fatal("missing segmented selector was treated as an explicit update")
 	}
 }
 
@@ -191,37 +92,20 @@ func TestSettingsResponseIncludesSegmentedSelector(t *testing.T) {
 		}},
 	}})
 	selector := response.Config.Routing.SegmentedSelector
-	if selector == nil || !selector.Enabled || selector.MinCandidates != 3000 || selector.WindowSize != 64 {
+	if !selector.Enabled || selector.MinCandidates != 3000 || selector.WindowSize != 64 {
 		t.Fatalf("segmented selector = %#v", selector)
-	}
-}
-
-func TestLegacySettingsRequestMayOmitManagedClearance(t *testing.T) {
-	var dto settingsConfigDTO
-	if err := json.Unmarshal([]byte(`{"providerWeb":{"baseURL":"https://grok.com"}}`), &dto); err != nil {
-		t.Fatal(err)
-	}
-	input := dto.toApplication()
-	if input.ProviderWeb.ClearanceProvided {
-		t.Fatal("missing managed-clearance fields were treated as an explicit update")
 	}
 }
 
 func TestProviderChatGPTSettingsWireShape(t *testing.T) {
 	var dto settingsConfigDTO
-	if err := json.Unmarshal([]byte(`{"server":{"maxConcurrentRequests":64}}`), &dto); err != nil {
-		t.Fatal(err)
-	}
-	if dto.toApplication().ProviderChatGPTProvided {
-		t.Fatal("missing providerChatGPT was treated as an explicit update")
-	}
 	body := `{"providerChatGPT":{"imageConversationModel":"gpt-5","outputTokenLimit":4096,"visionTokens":0,"defaultImageModel":"gpt-image-2","cloudflareClearance":true}}`
 	if err := json.Unmarshal([]byte(body), &dto); err != nil {
 		t.Fatal(err)
 	}
 	input := dto.toApplication()
 	want := settingsapp.ProviderChatGPTConfig{ImageConversationModel: "gpt-5", OutputTokenLimit: 4096, DefaultImageModel: "gpt-image-2", CloudflareClearance: true}
-	if !input.ProviderChatGPTProvided || input.ProviderChatGPT != want {
+	if input.ProviderChatGPT != want {
 		t.Fatalf("providerChatGPT input = %#v", input.ProviderChatGPT)
 	}
 	data, err := json.Marshal(newSettingsResponse(settingsapp.Snapshot{Config: settingsapp.EditableConfig{ProviderChatGPT: want}}))
