@@ -279,39 +279,6 @@ func (a *Adapter) forwardConsoleVoice(ctx context.Context, credential account.Cr
 }
 
 func (a *Adapter) forwardConsoleVoiceBytes(ctx context.Context, credential account.Credential, method, pathValue string, body []byte, contentType, accept string) (*http.Response, error) {
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "multipart/") {
-		return a.forwardConsoleVoiceMultipart(ctx, credential, method, pathValue, body, contentType, accept)
-	}
-	token, err := a.cipher.Decrypt(credential.EncryptedAccessToken)
-	if err != nil {
-		return nil, err
-	}
-	cfg := a.config()
-	requestCtx, cancel := context.WithTimeout(ctx, time.Duration(cfg.TimeoutSeconds)*time.Second)
-	lease, err := a.egress.AcquireCredential(requestCtx, egressdomain.ScopeConsole, credential)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	if accept == "" {
-		accept = "*/*"
-	}
-	response, err := a.doDPoPRequestWithContentType(requestCtx, credential, token, lease, method, consoleV1Endpoint(cfg.BaseURL, pathValue), body, contentType, accept)
-	if err != nil {
-		a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, 0, err)
-		lease.Release()
-		cancel()
-		return nil, err
-	}
-	response.Body = &releaseBody{ReadCloser: response.Body, release: func() {
-		a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsole, lease.NodeID, response.StatusCode, nil)
-		lease.Release()
-		cancel()
-	}}
-	return response, nil
-}
-
-func (a *Adapter) forwardConsoleVoiceMultipart(ctx context.Context, credential account.Credential, method, pathValue string, body []byte, contentType, accept string) (*http.Response, error) {
 	token, err := a.cipher.Decrypt(credential.EncryptedAccessToken)
 	if err != nil {
 		return nil, err
