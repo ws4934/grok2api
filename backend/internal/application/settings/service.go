@@ -336,24 +336,22 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	base.Media.CleanupThresholdPercent = value.Media.CleanupThresholdPercent
 	base.Media.CleanupInterval = config.Duration(value.Media.CleanupInterval)
 	base.Frontend.PublicAPIBaseURLOverride = strings.TrimSpace(value.Frontend.PublicAPIBaseURL)
-	base.Routing = config.RoutingConfig{
-		StickyTTL: config.Duration(value.Routing.StickyTTL), CooldownBase: config.Duration(value.Routing.CooldownBase),
-		CooldownMax: config.Duration(value.Routing.CooldownMax), CapacityWait: config.Duration(value.Routing.CapacityWait), MaxAttempts: value.Routing.MaxAttempts, VideoMaxAttempts: value.Routing.VideoMaxAttempts,
-		MarkBuildChatDeniedAsReauth: value.Routing.MarkBuildChatDeniedAsReauth,
-		PreferFreeBuild:             value.Routing.PreferFreeBuild,
-		AccountIsolatedConnections:  value.Routing.AccountIsolatedConnections,
-		SegmentedSelectorEnabled:    value.Routing.SegmentedSelector.ActiveEnabled,
-		SegmentedMinCandidates:      value.Routing.SegmentedSelector.MinCandidates,
-		SegmentedWindowSize:         value.Routing.SegmentedSelector.WindowSize,
-		ReasoningReplayEnabled:      base.Routing.ReasoningReplayEnabled, ReasoningReplayTTL: base.Routing.ReasoningReplayTTL,
-		ReasoningReplayMaxEntries: base.Routing.ReasoningReplayMaxEntries,
-	}
-	base.Audit = config.AuditConfig{
-		BufferSize: value.Audit.BufferSize, BatchSize: value.Audit.BatchSize, FlushInterval: config.Duration(value.Audit.FlushInterval),
-		CommitDelay: config.Duration(value.Audit.CommitDelay), RetentionDays: value.Audit.RetentionDays,
-		LedgerMode: base.Audit.LedgerMode, LedgerFailureThreshold: base.Audit.LedgerFailureThreshold,
-		LedgerUnhealthyGrace: base.Audit.LedgerUnhealthyGrace, LedgerQueueHighWatermarkPct: base.Audit.LedgerQueueHighWatermarkPct,
-	}
+	// Routing and audit also hold settings only the YAML file sets; assign the
+	// editable fields so those keep their values.
+	routing := &base.Routing
+	routing.StickyTTL, routing.CooldownBase = config.Duration(value.Routing.StickyTTL), config.Duration(value.Routing.CooldownBase)
+	routing.CooldownMax, routing.CapacityWait = config.Duration(value.Routing.CooldownMax), config.Duration(value.Routing.CapacityWait)
+	routing.MaxAttempts, routing.VideoMaxAttempts = value.Routing.MaxAttempts, value.Routing.VideoMaxAttempts
+	routing.MarkBuildChatDeniedAsReauth = value.Routing.MarkBuildChatDeniedAsReauth
+	routing.PreferFreeBuild = value.Routing.PreferFreeBuild
+	routing.AccountIsolatedConnections = value.Routing.AccountIsolatedConnections
+	routing.SegmentedSelectorEnabled = value.Routing.SegmentedSelector.ActiveEnabled
+	routing.SegmentedMinCandidates = value.Routing.SegmentedSelector.MinCandidates
+	routing.SegmentedWindowSize = value.Routing.SegmentedSelector.WindowSize
+	audit := &base.Audit
+	audit.BufferSize, audit.BatchSize = value.Audit.BufferSize, value.Audit.BatchSize
+	audit.FlushInterval, audit.CommitDelay = config.Duration(value.Audit.FlushInterval), config.Duration(value.Audit.CommitDelay)
+	audit.RetentionDays = value.Audit.RetentionDays
 	base.ClientKeyDefaults = config.ClientKeyDefaultsConfig{
 		RPMLimit: value.ClientKeyDefaults.RPMLimit, MaxConcurrent: value.ClientKeyDefaults.MaxConcurrent,
 	}

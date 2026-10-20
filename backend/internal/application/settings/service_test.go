@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -655,5 +656,15 @@ func TestUpdateRejectsProviderChatGPTOutOfRange(t *testing.T) {
 		if repository.found {
 			t.Fatalf("%#v was persisted", value)
 		}
+	}
+}
+
+// Fields only the YAML file sets must survive applying persisted settings.
+func TestApplyingSettingsKeepsFileOnlyFields(t *testing.T) {
+	base := testConfig(t)
+	base.Routing.AutoAssignMaxNodeShare = 0.4
+	base.Routing.AutoAssignMaxMigrationShare = 0.2
+	if got := applyDomainConfig(base, toDomainConfig(base)); !reflect.DeepEqual(got, base) {
+		t.Fatalf("round trip changed the config:\n got %+v\nwant %+v", got, base)
 	}
 }
