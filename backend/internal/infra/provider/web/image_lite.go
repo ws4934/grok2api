@@ -125,7 +125,7 @@ func (a *Adapter) generateLiteImageURL(ctx context.Context, credential account.C
 					continue
 				}
 			}
-			a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, status, consumeErr)
+			a.feedbackStreamError(ctx, lease, consumeErr)
 			lease.Release()
 			if status == http.StatusForbidden {
 				response := antiBotProviderResponse()

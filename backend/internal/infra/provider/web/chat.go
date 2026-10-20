@@ -313,11 +313,10 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	_ = upstream.Body.Close()
 	lease.Release()
 	if consumeErr != nil {
+		a.feedbackStreamError(ctx, lease, consumeErr)
 		if errors.Is(consumeErr, errWebAntiBot) {
-			a.feedbackAntiBot(ctx, lease)
 			return antiBotProviderResponse(), nil
 		}
-		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, consumeErr)
 		return nil, consumeErr
 	}
 	a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusOK, nil)
@@ -342,6 +341,21 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 
 func (a *Adapter) feedbackAntiBot(ctx context.Context, lease *infraegress.Lease) {
 	a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusForbidden, nil)
+}
+
+// feedbackStreamError reports a stream that failed after the upstream accepted
+// it. Only a failed read is an egress transport failure and anti-bot keeps its
+// 403; any other error the upstream sent arrived over a working egress.
+func (a *Adapter) feedbackStreamError(ctx context.Context, lease *infraegress.Lease, err error) {
+	var readErr webStreamReadError
+	switch {
+	case errors.As(err, &readErr):
+		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, err)
+	case errors.Is(err, errWebAntiBot):
+		a.feedbackAntiBot(ctx, lease)
+	default:
+		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusOK, nil)
+	}
 }
 
 func preflightUpstream(source io.ReadCloser) (io.ReadCloser, error) {

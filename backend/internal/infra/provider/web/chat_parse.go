@@ -40,6 +40,12 @@ func consumeUpstreamInto(source io.Reader, parsed *parsedChat, emit func(string,
 	})
 }
 
+// webStreamReadError marks a failure to read the upstream stream itself, the
+// only stream failure that says anything about the egress node.
+type webStreamReadError struct{ error }
+
+func (e webStreamReadError) Unwrap() error { return e.error }
+
 func consumeJSONObjects(source io.Reader, maxObjectBytes int, consume func([]byte) error) error {
 	reader := bufio.NewReaderSize(source, 64<<10)
 	frame := make([]byte, 0, 64<<10)
@@ -51,11 +57,11 @@ func consumeJSONObjects(source io.Reader, maxObjectBytes int, consume func([]byt
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if depth != 0 {
-					return io.ErrUnexpectedEOF
+					return webStreamReadError{io.ErrUnexpectedEOF}
 				}
 				return nil
 			}
-			return err
+			return webStreamReadError{err}
 		}
 		if depth == 0 {
 			if value != '{' {

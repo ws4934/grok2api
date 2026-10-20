@@ -152,7 +152,7 @@ func (a *Adapter) streamOpenAIResponse(ctx context.Context, source io.ReadCloser
 			return flushSideChannel()
 		})
 		if err != nil {
-			a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, err)
+			a.feedbackStreamError(ctx, lease, err)
 			_ = writer.CloseWithError(err)
 			return
 		}

@@ -1856,3 +1856,88 @@ func TestImagineCollectorFiltersMismatchedRequestIDs(t *testing.T) {
 		t.Fatalf("expected target-image-1, got %s", collector.Images()[0].ID)
 	}
 }
+
+// An error the upstream reports inside a stream arrived over a working egress;
+// only a broken read may cool the shared node.
+func TestWebStreamErrorsPenalizeEgressOnlyOnReadFailure(t *testing.T) {
+	cases := []struct {
+		name      string
+		final     map[string]any // nil drops the connection
+		wantFails int
+	}{
+		{name: "error event", final: map[string]any{"type": "error", "error": map[string]any{"message": "model overloaded"}}},
+		{name: "failed response", final: map[string]any{"type": "response.done", "response": map[string]any{"id": "parent_1", "status": "failed"}}},
+		{name: "dropped connection", wantFails: 1},
+	}
+	for _, test := range cases {
+		for _, mode := range []string{"chat", "chat_stream", "lite_image", "imagine", "imagine_stream"} {
+			t.Run(test.name+"/"+mode, func(t *testing.T) {
+				server := fhttptest.NewServer(fhttp.HandlerFunc(func(writer fhttp.ResponseWriter, request *fhttp.Request) {
+					connection, err := (&websocket.Upgrader{CheckOrigin: func(*fhttp.Request) bool { return true }}).Upgrade(writer, request, nil)
+					if err != nil {
+						return
+					}
+					defer connection.Close()
+					var initial, turn map[string]any
+					if connection.ReadJSON(&initial) != nil {
+						return
+					}
+					if request.URL.Path == "/ws/imagine/listen" {
+						_ = connection.ReadJSON(&turn)
+						if test.final != nil {
+							_ = connection.WriteJSON(map[string]any{"type": "error", "err_msg": "rejected"})
+						}
+						return
+					}
+					initialID := initial["event"].(map[string]any)["event_id"].(string)
+					_ = connection.WriteJSON(map[string]any{"session_id": "conv_1", "event": map[string]any{"type": "session.created", "client_event_id": initialID}})
+					_ = connection.WriteJSON(map[string]any{"session_id": "conv_1", "event": map[string]any{"type": "conversation.attached", "conversation": map[string]any{"id": "conv_1"}}})
+					_ = connection.ReadJSON(&turn)
+					_ = connection.ReadJSON(&turn)
+					if test.final != nil {
+						_ = connection.WriteJSON(map[string]any{"session_id": "conv_1", "event": test.final})
+					}
+				}))
+				defer server.Close()
+				cipher, err := security.NewCipher(base64.StdEncoding.EncodeToString(make([]byte, 32)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				encrypted, err := cipher.Encrypt("test-sso")
+				if err != nil {
+					t.Fatal(err)
+				}
+				nodes := &recordingWebEgressRepository{node: egressdomain.Node{ID: 1, Name: "web", Scope: egressdomain.ScopeWeb, Enabled: true, Health: 1}}
+				adapter := NewAdapter(Config{BaseURL: server.URL, StatsigMode: "manual"}, infraegress.NewManager(nodes, cipher), cipher, nil, nil)
+				credential := account.Credential{ID: 1, UserID: "497f19f8-49d4-458a-bee4-43ec3dcaf8ca", EncryptedAccessToken: encrypted}
+				var response *provider.Response
+				switch mode {
+				case "lite_image":
+					spec, _ := Resolve("grok-imagine-image")
+					_, _ = adapter.generateLiteImageURL(context.Background(), credential, spec, "draw a teapot")
+				case "imagine", "imagine_stream":
+					response, _ = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{
+						Credential: credential, Model: "grok-imagine-image-quality", Prompt: "draw a teapot", Count: 1,
+						Resolution: "2k", Quality: "medium", ResponseFormat: "b64_json", Streaming: mode == "imagine_stream",
+					})
+				default:
+					body, _ := json.Marshal(map[string]any{"model": "grok-chat-fast", "messages": []any{map[string]any{"role": "user", "content": "hi"}}})
+					response, _ = adapter.ForwardResponse(context.Background(), provider.ResponseResourceRequest{
+						Credential: credential, Method: http.MethodPost, Path: "/chat/completions", Body: body,
+						Model: "grok-chat-fast", Operation: conversation.OperationChat, Streaming: mode == "chat_stream",
+					})
+				}
+				if response != nil {
+					_, _ = io.ReadAll(response.Body)
+					_ = response.Body.Close()
+				}
+				nodes.mu.Lock()
+				fails := nodes.node.FailureCount
+				nodes.mu.Unlock()
+				if fails != test.wantFails {
+					t.Fatalf("egress node failure count = %d, want %d", fails, test.wantFails)
+				}
+			})
+		}
+	}
+}

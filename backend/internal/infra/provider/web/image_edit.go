@@ -250,15 +250,14 @@ func (a *Adapter) streamImageEdit(
 		return nil
 	})
 	if consumeErr != nil {
-		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, consumeErr)
+		a.feedbackStreamError(ctx, lease, consumeErr)
 		_ = writer.CloseWithError(consumeErr)
 		return
 	}
 	urls := imageEditResultURLs(&parsed, capture.Bytes())
 	if len(urls) == 0 {
-		err := fmt.Errorf("上游未返回可用的编辑图片")
-		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, err)
-		_ = writer.CloseWithError(err)
+		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusOK, nil)
+		_ = writer.CloseWithError(fmt.Errorf("上游未返回可用的编辑图片"))
 		return
 	}
 	raw, err := a.imageBytes(ctx, credential, imagineImageValue{URL: urls[0]})
