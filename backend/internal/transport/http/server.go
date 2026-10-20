@@ -52,9 +52,8 @@ type Dependencies struct {
 	SwaggerEnabled     bool
 	PublicAPIBaseURL   string
 	FrontendStaticPath string
-	// Readiness 返回可观测的分层就绪状态。Ready 仅为旧调用方保留。
+	// Readiness 返回可观测的分层就绪状态。
 	Readiness              func(context.Context) ReadinessSnapshot
-	Ready                  func(context.Context) bool
 	TrafficReady           func() bool
 	AdminAuth              *adminauthapp.Service
 	Accounts               *accountapp.Service
@@ -136,10 +135,6 @@ func New(deps Dependencies) *gin.Engine {
 				status = http.StatusOK
 			}
 			c.JSON(status, snapshot)
-			return
-		}
-		if deps.Ready != nil && deps.Ready(c.Request.Context()) {
-			c.JSON(http.StatusOK, gin.H{"ready": true, "state": "ready"})
 			return
 		}
 		c.JSON(http.StatusServiceUnavailable, gin.H{"ready": false, "state": "not_ready"})
