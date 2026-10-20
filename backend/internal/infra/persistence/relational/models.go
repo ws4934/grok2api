@@ -278,6 +278,8 @@ type clientKeyModel struct {
 	ReservedUsageUSDTicks int64 `gorm:"not null;default:0;check:chk_client_keys_reserved_usage,reserved_usage_usd_ticks >= 0"`
 	// AllowModelAliases defaults false so existing keys keep a clean base-model list.
 	AllowModelAliases bool `gorm:"not null;default:false"`
+	// ModelScopeMode 'list' limits the key to client_key_models, even after route deletes empty it.
+	ModelScopeMode string `gorm:"size:8;not null;default:'all';check:chk_client_keys_model_scope_mode,model_scope_mode IN ('all','list')"`
 	// ProviderScopeMode 'all' follows the provider registry; 'list' reads client_key_provider_scopes.
 	ProviderScopeMode string `gorm:"size:8;not null;default:'all';check:chk_client_keys_provider_scope_mode,provider_scope_mode IN ('all','list')"`
 	TierScopeMask     uint8  `gorm:"not null;default:7;check:chk_client_keys_tier_scope,tier_scope_mask IN (1,2,3,7)"`

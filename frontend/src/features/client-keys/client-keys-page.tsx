@@ -224,7 +224,7 @@ export function ClientKeysPage() {
       billingUnlimited: key.billingLimitUsdTicks === 0,
       billingLimitUsd: key.billingLimitUsdTicks > 0 ? key.billingLimitUsdTicks / USD_TICKS_PER_DOLLAR : 10,
       allowModelAliases: key.allowModelAliases,
-      modelScopeMode: key.allowedModelIds.length > 0 ? "restricted" : "all",
+      modelScopeMode: key.modelScope,
       allowedModelIds: key.allowedModelIds,
       providerScope: key.providerScope ?? ["all"],
       tierScope: key.tierScope ?? ["all"],
@@ -345,7 +345,7 @@ export function ClientKeysPage() {
                   <TableCell className="min-w-0">
                     <span className="block truncate font-medium" title={key.name}>{key.name}</span>
                     <span className="mt-0.5 block truncate text-[10px] text-muted-foreground">
-                      {key.allowedModelIds.length === 0 ? t("keys.allModels") : t("keys.selectedModels", { count: key.allowedModelIds.length })}
+                      {key.modelScope === "all" ? t("keys.allModels") : t("keys.selectedModels", { count: key.allowedModelIds.length })}
                       {key.allowModelAliases ? ` · ${t("keys.modelAliases")}` : ""}
                     </span>
                   </TableCell>

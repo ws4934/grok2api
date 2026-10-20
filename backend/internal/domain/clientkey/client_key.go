@@ -232,6 +232,9 @@ type Key struct {
 	// Registered compatibility aliases remain available to avoid breaking existing clients.
 	AllowModelAliases bool
 	AllowedModels     []uint64
+	// ModelsRestricted keeps a key limited to AllowedModels after deleted routes
+	// empty the list; otherwise an empty list allows every model.
+	ModelsRestricted bool
 	// ProviderScope and TierScope narrow routing without adding request-time storage lookups.
 	ProviderScope ProviderScope
 	TierScope     TierScope
@@ -248,8 +251,11 @@ func (k Key) IsAvailable(now time.Time) bool {
 	return k.ExpiresAt == nil || now.Before(*k.ExpiresAt)
 }
 
+// RestrictsModels reports whether the key may use only AllowedModels.
+func (k Key) RestrictsModels() bool { return k.ModelsRestricted || len(k.AllowedModels) > 0 }
+
 func (k Key) AllowsModel(modelID uint64) bool {
-	if len(k.AllowedModels) == 0 {
+	if !k.RestrictsModels() {
 		return true
 	}
 	for _, allowed := range k.AllowedModels {

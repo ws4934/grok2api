@@ -237,7 +237,7 @@ func toModelDomain(value modelRouteModel) model.Route {
 
 func toClientKeyDomain(value clientKeyModel, allowedModels []uint64, providers []account.Provider) clientkey.Key {
 	providerScope := clientkey.AllProviders()
-	if value.ProviderScopeMode == providerScopeModeList {
+	if value.ProviderScopeMode == scopeModeList {
 		providerScope = clientkey.ProviderScopeOf(providers...)
 	}
 	tierScope, _ := clientkey.NormalizeTierScope(clientkey.TierScope(value.TierScopeMask))
@@ -250,7 +250,7 @@ func toClientKeyDomain(value clientKeyModel, allowedModels []uint64, providers [
 		InternalKind: internalKind,
 		Enabled:      value.Enabled, ExpiresAt: value.ExpiresAt, RPMLimit: value.RPMLimit, MaxConcurrent: value.MaxConcurrent,
 		BillingLimitUSDTicks: value.BillingLimitUSDTicks, BilledUsageUSDTicks: value.BilledUsageUSDTicks, ReservedUsageUSDTicks: value.ReservedUsageUSDTicks,
-		AllowModelAliases: value.AllowModelAliases, AllowedModels: allowedModels,
+		AllowModelAliases: value.AllowModelAliases, AllowedModels: allowedModels, ModelsRestricted: value.ModelScopeMode == scopeModeList,
 		ProviderScope: providerScope, TierScope: tierScope,
 		LastUsedAt: value.LastUsedAt, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
 	}

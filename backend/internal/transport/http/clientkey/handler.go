@@ -78,6 +78,7 @@ type keyResponse struct {
 	BilledUsageUSDTicks  int64      `json:"billedUsageUsdTicks"`
 	AllowModelAliases    bool       `json:"allowModelAliases"`
 	AllowedModelIDs      []string   `json:"allowedModelIds"`
+	ModelScope           string     `json:"modelScope"`
 	ProviderScope        []string   `json:"providerScope"`
 	TierScope            []string   `json:"tierScope"`
 	LastUsedAt           *time.Time `json:"lastUsedAt,omitempty"`
@@ -284,10 +285,15 @@ func newKeyResponse(value clientkeydomain.Key) keyResponse {
 	for _, id := range value.AllowedModels {
 		ids = append(ids, strconv.FormatUint(id, 10))
 	}
+	// "restricted" stays set after deleted routes empty allowedModelIds.
+	modelScope := "all"
+	if value.RestrictsModels() {
+		modelScope = "restricted"
+	}
 	return keyResponse{
 		ID: value.ID, Name: value.Name, Prefix: value.Prefix, Enabled: value.Enabled, ExpiresAt: value.ExpiresAt,
 		RPMLimit: value.RPMLimit, MaxConcurrent: value.MaxConcurrent, BillingLimitUSDTicks: value.BillingLimitUSDTicks,
-		BilledUsageUSDTicks: value.BilledUsageUSDTicks, AllowModelAliases: value.AllowModelAliases, AllowedModelIDs: ids,
+		BilledUsageUSDTicks: value.BilledUsageUSDTicks, AllowModelAliases: value.AllowModelAliases, AllowedModelIDs: ids, ModelScope: modelScope,
 		ProviderScope: value.ProviderScope.Values(), TierScope: value.TierScope.Values(), LastUsedAt: value.LastUsedAt,
 	}
 }

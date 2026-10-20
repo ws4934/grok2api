@@ -14,6 +14,8 @@ export type ClientKeyDTO = {
   billedUsageUsdTicks: number;
   allowModelAliases: boolean;
   allowedModelIds: string[];
+  // "restricted" stays set when deleted models empty allowedModelIds.
+  modelScope: "all" | "restricted";
   providerScope?: ProviderScopeValue[];
   tierScope?: TierScopeValue[];
   lastUsedAt?: string;
@@ -41,7 +43,7 @@ export type CreateKeyResponseDTO = { key: ClientKeyDTO; secret: string };
 const clientKeyValidator = hasShape({
   id: isString, name: isString, prefix: isString, enabled: isBoolean, expiresAt: isOptional(isString),
   rpmLimit: isNumber, maxConcurrent: isNumber, billingLimitUsdTicks: isNumber, billedUsageUsdTicks: isNumber,
-  allowModelAliases: isBoolean, allowedModelIds: isArrayOf(isString), providerScope: isOptional(isArrayOf(isString)), tierScope: isOptional(isArrayOf(isOneOf("all", "free", "super"))), lastUsedAt: isOptional(isString),
+  allowModelAliases: isBoolean, allowedModelIds: isArrayOf(isString), modelScope: isOneOf("all", "restricted"), providerScope: isOptional(isArrayOf(isString)), tierScope: isOptional(isArrayOf(isOneOf("all", "free", "super"))), lastUsedAt: isOptional(isString),
 });
 const decodeClientKey = createValidatedDecoder<ClientKeyDTO>("client key", clientKeyValidator);
 const decodeClientKeyPage = createPaginatedDecoder<ClientKeyDTO>(clientKeyValidator);

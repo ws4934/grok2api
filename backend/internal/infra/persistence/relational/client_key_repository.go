@@ -54,9 +54,9 @@ func (r *ClientKeyRepository) List(ctx context.Context, input repository.ClientK
 	}
 	switch input.Filter.ModelScope {
 	case "all":
-		query = query.Where("NOT EXISTS (SELECT 1 FROM client_key_models permission WHERE permission.client_key_id = client_keys.id)")
+		query = query.Where("model_scope_mode = ?", scopeModeAll)
 	case "restricted":
-		query = query.Where("EXISTS (SELECT 1 FROM client_key_models permission WHERE permission.client_key_id = client_keys.id)")
+		query = query.Where("model_scope_mode = ?", scopeModeList)
 	}
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -73,7 +73,7 @@ func (r *ClientKeyRepository) List(ctx context.Context, input repository.ClientK
 		"expiresAt":     {expression: "client_keys.expires_at", nullsLast: true, defaultDirection: repository.SortDescending},
 		"lastUsedAt":    {expression: "client_keys.last_used_at", nullsLast: true, defaultDirection: repository.SortDescending},
 	}, sortSpec{expression: "client_keys.created_at", defaultDirection: repository.SortDescending}, "client_keys.id")
-	if err := query.Select("id", "name", "prefix", "enabled", "expires_at", "rpm_limit", "max_concurrent", "billing_limit_usd_ticks", "billed_usage_usd_ticks", "reserved_usage_usd_ticks", "allow_model_aliases", "provider_scope_mode", "tier_scope_mask", "last_used_at", "created_at", "updated_at").Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
+	if err := query.Select("id", "name", "prefix", "enabled", "expires_at", "rpm_limit", "max_concurrent", "billing_limit_usd_ticks", "billed_usage_usd_ticks", "reserved_usage_usd_ticks", "allow_model_aliases", "provider_scope_mode", "model_scope_mode", "tier_scope_mask", "last_used_at", "created_at", "updated_at").Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	ids := make([]uint64, 0, len(rows))
@@ -116,7 +116,7 @@ func (r *ClientKeyRepository) Create(ctx context.Context, value clientkey.Key) (
 		kind := value.InternalKind
 		internalKind = &kind
 	}
-	row := clientKeyModel{Name: value.Name, Prefix: value.Prefix, SecretHash: value.SecretHash, EncryptedSecret: value.EncryptedSecret, InternalKind: internalKind, Enabled: value.Enabled, ExpiresAt: value.ExpiresAt, RPMLimit: value.RPMLimit, MaxConcurrent: value.MaxConcurrent, BillingLimitUSDTicks: value.BillingLimitUSDTicks, BilledUsageUSDTicks: value.BilledUsageUSDTicks, ReservedUsageUSDTicks: value.ReservedUsageUSDTicks, AllowModelAliases: value.AllowModelAliases, ProviderScopeMode: providerScopeMode(scope.Providers), TierScopeMask: uint8(scope.Tiers)}
+	row := clientKeyModel{Name: value.Name, Prefix: value.Prefix, SecretHash: value.SecretHash, EncryptedSecret: value.EncryptedSecret, InternalKind: internalKind, Enabled: value.Enabled, ExpiresAt: value.ExpiresAt, RPMLimit: value.RPMLimit, MaxConcurrent: value.MaxConcurrent, BillingLimitUSDTicks: value.BillingLimitUSDTicks, BilledUsageUSDTicks: value.BilledUsageUSDTicks, ReservedUsageUSDTicks: value.ReservedUsageUSDTicks, AllowModelAliases: value.AllowModelAliases, ProviderScopeMode: providerScopeMode(scope.Providers), ModelScopeMode: modelScopeMode(value), TierScopeMask: uint8(scope.Tiers)}
 	err := r.db.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&row).Error; err != nil {
 			return err
@@ -188,7 +188,7 @@ func (r *ClientKeyRepository) Update(ctx context.Context, value clientkey.Key) (
 			"name": value.Name, "enabled": value.Enabled, "expires_at": value.ExpiresAt,
 			"rpm_limit": value.RPMLimit, "max_concurrent": value.MaxConcurrent,
 			"billing_limit_usd_ticks": value.BillingLimitUSDTicks, "allow_model_aliases": value.AllowModelAliases,
-			"provider_scope_mode": providerScopeMode(scope.Providers), "tier_scope_mask": uint8(scope.Tiers),
+			"provider_scope_mode": providerScopeMode(scope.Providers), "model_scope_mode": modelScopeMode(value), "tier_scope_mask": uint8(scope.Tiers),
 			"updated_at": time.Now().UTC(),
 		})
 		if result.Error != nil {
@@ -510,22 +510,29 @@ func (r *ClientKeyRepository) allowedModelsForKeys(ctx context.Context, keyIDs [
 }
 
 const (
-	providerScopeModeAll  = "all"
-	providerScopeModeList = "list"
+	scopeModeAll  = "all"
+	scopeModeList = "list"
 )
 
 func providerScopeMode(scope clientkey.ProviderScope) string {
 	if scope.All {
-		return providerScopeModeAll
+		return scopeModeAll
 	}
-	return providerScopeModeList
+	return scopeModeList
+}
+
+func modelScopeMode(value clientkey.Key) string {
+	if value.RestrictsModels() {
+		return scopeModeList
+	}
+	return scopeModeAll
 }
 
 // providerScopes batch-loads explicit provider sets; all-mode keys need no rows.
 func (r *ClientKeyRepository) providerScopes(ctx context.Context, rows ...clientKeyModel) (map[uint64][]account.Provider, error) {
 	ids := make([]uint64, 0, len(rows))
 	for _, row := range rows {
-		if row.ProviderScopeMode == providerScopeModeList {
+		if row.ProviderScopeMode == scopeModeList {
 			ids = append(ids, row.ID)
 		}
 	}

@@ -164,7 +164,7 @@ export function CreativeConsolePage() {
   });
   const availableModels = useMemo(() => (modelsQuery.data ?? []).filter((model) => model.enabled && model.available), [modelsQuery.data]);
   const permittedModels = useMemo(() => {
-    if (!selectedKey || selectedKey.allowedModelIds.length === 0) return availableModels;
+    if (!selectedKey || selectedKey.modelScope === "all") return availableModels;
     const allowedModelIds = new Set(selectedKey.allowedModelIds);
     return availableModels.filter((model) => allowedModelIds.has(model.id));
   }, [availableModels, selectedKey]);

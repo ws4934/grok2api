@@ -10,9 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	auditdomain "github.com/chenyme/grok2api/backend/internal/domain/audit"
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
+	"github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/repository"
+	"github.com/google/uuid"
 )
 
 func TestClientKeyBillingReservationsEnforceLimitAndExpire(t *testing.T) {
@@ -363,4 +366,37 @@ func TestClientKeyUpdateDoesNotOverwriteConcurrentBillingState(t *testing.T) {
 	if updated.Name != "after" || updated.ReservedUsageUSDTicks != 40 {
 		t.Fatalf("updated = %#v", updated)
 	}
+}
+
+// Deleting the only route of a restricted key must not open it to every model,
+// including after an unrelated edit saves the emptied list back.
+func TestClientKeyStaysRestrictedAfterItsRoutesAreDeleted(t *testing.T) {
+	dialectDatabases(t, func(t *testing.T, database *Database) {
+		ctx := context.Background()
+		models := NewModelRepository(database)
+		keys := NewClientKeyRepository(database)
+		suffix := uuid.NewString()[:8]
+		route, err := models.Create(ctx, model.Route{PublicID: "scoped-" + suffix, Provider: account.ProviderBuild, UpstreamModel: "grok-scoped-" + suffix, Capability: model.CapabilityResponses, Enabled: true}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, err := keys.Create(ctx, clientkeydomain.Key{Name: "restricted", Prefix: "scoped-" + suffix, SecretHash: testSecretHash, EncryptedSecret: testEncryptedToken, Enabled: true, AllowedModels: []uint64{route.ID}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := models.Delete(ctx, route.ID); err != nil {
+			t.Fatal(err)
+		}
+		stored, err := keys.Get(ctx, key.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored.Name = "renamed"
+		if stored, err = keys.Update(ctx, stored); err != nil {
+			t.Fatal(err)
+		}
+		if len(stored.AllowedModels) != 0 || stored.AllowsModel(route.ID+1) {
+			t.Fatalf("key after its only route was deleted = %+v", stored)
+		}
+	})
 }

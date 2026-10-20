@@ -359,6 +359,7 @@ func (s *Service) Update(ctx context.Context, id uint64, input UpdateInput) (cli
 	}
 	if input.AllowedModels != nil {
 		value.AllowedModels = *input.AllowedModels
+		value.ModelsRestricted = len(value.AllowedModels) > 0
 	}
 	if input.ProviderScope != nil {
 		providerScope, valid := s.normalizeProviderScope(*input.ProviderScope)
