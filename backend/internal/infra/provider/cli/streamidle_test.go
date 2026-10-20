@@ -75,7 +75,7 @@ func TestIdleTimeoutReadCloserNormalRead(t *testing.T) {
 }
 
 // TestIdleTimeoutReadCloserIdleAbort verifies that a silent body is aborted
-// with ErrBuildStreamIdleTimeout once the idle window elapses, and that the
+// with ErrUpstreamStreamIdleTimeout once the idle window elapses, and that the
 // request context is cancelled with the same cause.
 func TestIdleTimeoutReadCloserIdleAbort(t *testing.T) {
 	release := make(chan struct{})
@@ -92,8 +92,8 @@ func TestIdleTimeoutReadCloserIdleAbort(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("idle timer did not fire within 1s")
 	}
-	if cause := context.Cause(ctx); !errors.Is(cause, neterror.ErrBuildStreamIdleTimeout) {
-		t.Fatalf("context cause = %v, want ErrBuildStreamIdleTimeout", cause)
+	if cause := context.Cause(ctx); !errors.Is(cause, neterror.ErrUpstreamStreamIdleTimeout) {
+		t.Fatalf("context cause = %v, want ErrUpstreamStreamIdleTimeout", cause)
 	}
 	if !wrapper.TimedOut() {
 		t.Fatal("timedOut should be true after idle window")
@@ -107,8 +107,8 @@ func TestIdleTimeoutReadCloserIdleAbort(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("Read() n = %d, want 0", n)
 	}
-	if !errors.Is(err, neterror.ErrBuildStreamIdleTimeout) {
-		t.Fatalf("Read() error = %v, want ErrBuildStreamIdleTimeout", err)
+	if !errors.Is(err, neterror.ErrUpstreamStreamIdleTimeout) {
+		t.Fatalf("Read() error = %v, want ErrUpstreamStreamIdleTimeout", err)
 	}
 }
 
@@ -235,8 +235,8 @@ func TestEgressTransportIdleTimeoutCancelsHTTP2BodyRead(t *testing.T) {
 
 	select {
 	case readErr := <-readDone:
-		if !errors.Is(readErr, neterror.ErrBuildStreamIdleTimeout) {
-			t.Fatalf("body read error = %v, want ErrBuildStreamIdleTimeout", readErr)
+		if !errors.Is(readErr, neterror.ErrUpstreamStreamIdleTimeout) {
+			t.Fatalf("body read error = %v, want ErrUpstreamStreamIdleTimeout", readErr)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("idle timeout did not unblock the HTTP/2 body read")

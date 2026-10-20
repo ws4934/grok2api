@@ -25,10 +25,6 @@ var ErrUpstreamResponseEmpty = errors.New("upstream response body is empty")
 // guard. It is distinct from a transport cut (upstream_stream_interrupted).
 var ErrUpstreamOutputLoop = errors.New("model output loop detected")
 
-// ErrBuildStreamIdleTimeout is retained as a compatibility alias for callers
-// introduced before stream-idle protection became provider-neutral.
-var ErrBuildStreamIdleTimeout = ErrUpstreamStreamIdleTimeout
-
 // IsResponseHeaderTimeout identifies the HTTP/1.1 and HTTP/2 timeout values
 // returned by the Go transport while waiting for the first response headers.
 func IsResponseHeaderTimeout(err error) bool {
@@ -40,12 +36,6 @@ func IsResponseHeaderTimeout(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(err.Error()), responseHeaderTimeoutMarker)
-}
-
-// IsBuildStreamIdleTimeout reports whether err is (or wraps) the sentinel
-// raised when a Grok Build streaming response is aborted for going idle.
-func IsBuildStreamIdleTimeout(err error) bool {
-	return errors.Is(err, ErrUpstreamStreamIdleTimeout)
 }
 
 // IsUpstreamStreamIdleTimeout reports whether err is (or wraps) the shared
