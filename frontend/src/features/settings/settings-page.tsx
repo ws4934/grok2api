@@ -17,7 +17,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { EgressNodes } from "@/features/settings/egress-nodes";
-import { testAdobeMint } from "@/features/settings/settings-api";
+import { testAdobeMint, testMuseBrowser } from "@/features/settings/settings-api";
 import { VersionUpdateSection } from "@/features/system/version-update";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isByteSizeUnit, isDurationUnit, MAX_ROUTING_ATTEMPTS, type ByteSizeValue, type DurationValue, UNLIMITED_ROUTING_ATTEMPTS } from "@/features/settings/settings-model";
@@ -93,6 +93,7 @@ export function SettingsPage() {
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="console">{t("console.name")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="chatgpt">{t("settingsChatGPT.title")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="adobe">{t("settingsAdobe.title")}</TabsTrigger>
+            <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="muse">{t("settingsMuse.title")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="delivery">{t("settings.groups.delivery")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="policies">{t("settings.groups.policies")}</TabsTrigger>
             <TabsTrigger className="h-9 w-auto shrink-0 justify-start rounded-md px-3 text-xs data-[state=active]:font-medium lg:w-full" value="audit">{t("settings.audit.tabTitle")}</TabsTrigger>
@@ -189,8 +190,17 @@ export function SettingsPage() {
           <SettingsPane value="adobe">
           <SettingsSection title={t("settingsAdobe.title")}>
             <div className="space-y-0">
-              <SettingsField controlId="adobe-sherlock-mint-api" label={t("settingsAdobe.sherlockMintAPI")} description={t("settingsAdobe.sherlockMintAPIHelp")} error={form.formState.errors.providerAdobe?.sherlockMintAPI?.message}><div className="flex min-w-0 gap-2"><Input id="adobe-sherlock-mint-api" type="url" className="min-w-0" placeholder="http://mint:8777" {...form.register("providerAdobe.sherlockMintAPI")} /><MintTestButton address={form.watch("providerAdobe.sherlockMintAPI")} /></div></SettingsField>
+              <SettingsField controlId="adobe-sherlock-mint-api" label={t("settingsAdobe.sherlockMintAPI")} description={t("settingsAdobe.sherlockMintAPIHelp")} error={form.formState.errors.providerAdobe?.sherlockMintAPI?.message}><div className="flex min-w-0 gap-2"><Input id="adobe-sherlock-mint-api" type="url" className="min-w-0" placeholder="http://mint:8777" {...form.register("providerAdobe.sherlockMintAPI")} /><ServiceTestButton address={form.watch("providerAdobe.sherlockMintAPI")} test={testAdobeMint} label={t("settingsAdobe.testMint")} passedKey="settingsAdobe.mintTestPassed" /></div></SettingsField>
               <SettingsField controlId="adobe-timeout" label={t("settingsAdobe.timeout")} description={t("settingsAdobe.timeoutHelp")} error={form.formState.errors.providerAdobe?.timeout?.message}><Controller control={form.control} name="providerAdobe.timeout" render={({ field }) => <DurationInput id="adobe-timeout" value={field.value} onChange={field.onChange} />} /></SettingsField>
+            </div>
+          </SettingsSection>
+          </SettingsPane>
+
+          <SettingsPane value="muse">
+          <SettingsSection title={t("settingsMuse.title")}>
+            <div className="space-y-0">
+              <SettingsField controlId="muse-browser-url" label={t("settingsMuse.browserURL")} description={t("settingsMuse.browserURLHelp")} error={form.formState.errors.providerMuse?.browserURL?.message}><div className="flex min-w-0 gap-2"><Input id="muse-browser-url" type="url" className="min-w-0" placeholder="http://muse-browser:9222" {...form.register("providerMuse.browserURL")} /><ServiceTestButton address={form.watch("providerMuse.browserURL")} test={testMuseBrowser} label={t("settingsMuse.testBrowser")} passedKey="settingsMuse.browserTestPassed" /></div></SettingsField>
+              <SettingsField controlId="muse-max-pages" label={t("settingsMuse.maxPages")} description={t("settingsMuse.maxPagesHelp")} error={form.formState.errors.providerMuse?.maxPages?.message}><Input id="muse-max-pages" type="number" min={1} max={16} {...form.register("providerMuse.maxPages", { valueAsNumber: true })} /></SettingsField>
             </div>
           </SettingsSection>
           </SettingsPane>
@@ -649,18 +659,18 @@ function ByteSizeInput({ id, value, onChange }: { id: string; value?: ByteSizeVa
   );
 }
 
-// MintTestButton tests the address in the box, saved or not, through the gateway.
-function MintTestButton({ address }: { address?: string }) {
+// ServiceTestButton tests the sidecar address in the box, saved or not, through the gateway.
+function ServiceTestButton({ address, test: run, label, passedKey }: { address?: string; test: (address: string) => Promise<{ latencyMs: number }>; label: string; passedKey: string }) {
   const { t } = useTranslation();
   const test = useMutation({
-    mutationFn: testAdobeMint,
-    onSuccess: (result) => toast.success(t("settingsAdobe.mintTestPassed", { duration: formatDuration(result.latencyMs) })),
+    mutationFn: run,
+    onSuccess: (result) => toast.success(t(passedKey, { duration: formatDuration(result.latencyMs) })),
     onError: (error) => toast.error(error instanceof Error ? error.message : t("errors.generic")),
   });
   const value = (address ?? "").trim();
   return (
     <Button type="button" variant="secondary" size="sm" className="shrink-0" disabled={value === "" || test.isPending} onClick={() => test.mutate(value)}>
-      {test.isPending ? <Spinner /> : null}{t("settingsAdobe.testMint")}
+      {test.isPending ? <Spinner /> : null}{label}
     </Button>
   );
 }

@@ -990,37 +990,49 @@ func verifyCapabilityModelIndex(t *testing.T, database *Database) {
 	}
 }
 
-// Adobe 的目录由全局 discovery 驱动、所有账号通用：账号没有能力快照时，目录路由
-// 也必须能被解析、列出，回退选择器也要把账号当作支持。
-func TestAdobeCatalogRoutesNeedNoAccountSnapshot(t *testing.T) {
-	ctx := context.Background()
-	db := openTestDatabase(t)
-	models := NewModelRepository(db)
-	accounts := NewAccountRepository(db)
-	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
-		Provider: account.ProviderAdobe, AuthType: account.AuthTypeOAuth, Name: "adobe", SourceKey: "adobe",
-		EncryptedAccessToken: testEncryptedToken, AuthStatus: account.AuthStatusActive, Enabled: true, MaxConcurrent: 1,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	route := model.Route{PublicID: "adobe/veo-3.1", Provider: account.ProviderAdobe, UpstreamModel: "veo-3.1", Capability: model.CapabilityVideo, Origin: model.OriginCatalog, Enabled: true}
-	if err := models.ReplaceProviderRoutes(ctx, account.ProviderAdobe, []model.Route{route}); err != nil {
-		t.Fatal(err)
-	}
-	if routes, err := models.GetByPublicIDCandidates(ctx, "adobe/veo-3.1"); err != nil || len(routes) != 1 {
-		t.Fatalf("GetByPublicIDCandidates = %d routes, %v", len(routes), err)
-	}
-	if enabled, err := models.ListEnabled(ctx); err != nil || len(enabled) != 1 {
-		t.Fatalf("ListEnabled = %d routes, %v", len(enabled), err)
-	}
-	stored, err := models.GetByPublicIDCandidates(ctx, "adobe/veo-3.1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidates, err := accounts.ListRoutingCandidates(ctx, account.ProviderAdobe, stored[0].ID, "veo-3.1", "credits")
-	if err != nil || len(candidates) != 1 || candidates[0].Credential.ID != credential.ID || !candidates[0].SupportsModel {
-		t.Fatalf("fallback candidates = %+v, %v", candidates, err)
+// Adobe and Muse catalogs are static and every account serves them: without
+// an account snapshot the catalog routes must still resolve and list, and the
+// fallback selector must treat the account as supporting the model.
+func TestStaticCatalogRoutesNeedNoAccountSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		provider               account.Provider
+		publicID, model, quota string
+		capability             model.Capability
+	}{
+		{account.ProviderAdobe, "adobe/veo-3.1", "veo-3.1", "credits", model.CapabilityVideo},
+		{account.ProviderMuse, "muse/muse-spark", "muse-spark", "weekly_usage", model.CapabilityChat},
+	} {
+		t.Run(string(tc.provider), func(t *testing.T) {
+			ctx := context.Background()
+			db := openTestDatabase(t)
+			models := NewModelRepository(db)
+			accounts := NewAccountRepository(db)
+			credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
+				Provider: tc.provider, AuthType: account.AuthTypeOAuth, Name: string(tc.provider), SourceKey: string(tc.provider),
+				EncryptedAccessToken: testEncryptedToken, AuthStatus: account.AuthStatusActive, Enabled: true, MaxConcurrent: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			route := model.Route{PublicID: tc.publicID, Provider: tc.provider, UpstreamModel: tc.model, Capability: tc.capability, Origin: model.OriginCatalog, Enabled: true}
+			if err := models.ReplaceProviderRoutes(ctx, tc.provider, []model.Route{route}); err != nil {
+				t.Fatal(err)
+			}
+			if routes, err := models.GetByPublicIDCandidates(ctx, tc.publicID); err != nil || len(routes) != 1 {
+				t.Fatalf("GetByPublicIDCandidates = %d routes, %v", len(routes), err)
+			}
+			if enabled, err := models.ListEnabled(ctx); err != nil || len(enabled) != 1 {
+				t.Fatalf("ListEnabled = %d routes, %v", len(enabled), err)
+			}
+			stored, err := models.GetByPublicIDCandidates(ctx, tc.publicID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidates, err := accounts.ListRoutingCandidates(ctx, tc.provider, stored[0].ID, tc.model, tc.quota)
+			if err != nil || len(candidates) != 1 || candidates[0].Credential.ID != credential.ID || !candidates[0].SupportsModel {
+				t.Fatalf("fallback candidates = %+v, %v", candidates, err)
+			}
+		})
 	}
 }
 

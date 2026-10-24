@@ -116,6 +116,25 @@ func TestProviderAdobeSettingsWireShape(t *testing.T) {
 	}
 }
 
+func TestProviderMuseSettingsWireShape(t *testing.T) {
+	var dto settingsConfigDTO
+	body := `{"providerMuse":{"browserURL":"http://muse-browser:9222","maxPages":3}}`
+	if err := json.Unmarshal([]byte(body), &dto); err != nil {
+		t.Fatal(err)
+	}
+	want := settingsapp.ProviderMuseConfig{BrowserURL: "http://muse-browser:9222", MaxPages: 3}
+	if input := dto.toApplication(); input.ProviderMuse != want {
+		t.Fatalf("providerMuse input = %#v", input.ProviderMuse)
+	}
+	data, err := json.Marshal(newSettingsResponse(settingsapp.Snapshot{Config: settingsapp.EditableConfig{ProviderMuse: want}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), body[1:len(body)-1]) {
+		t.Fatalf("settings response providerMuse = %s", data)
+	}
+}
+
 func TestProviderChatGPTSettingsWireShape(t *testing.T) {
 	var dto settingsConfigDTO
 	body := `{"providerChatGPT":{"imageConversationModel":"gpt-5","outputTokenLimit":4096,"visionTokens":0,"defaultImageModel":"gpt-image-2","cloudflareClearance":true}}`

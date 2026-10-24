@@ -70,6 +70,12 @@ type ProviderAdobeConfig struct {
 	Timeout         string
 }
 
+// ProviderMuseConfig 是管理接口使用的 Muse Provider 可编辑输入。
+type ProviderMuseConfig struct {
+	BrowserURL string
+	MaxPages   int
+}
+
 // ProviderChatGPTConfig 是管理接口使用的 ChatGPT Provider 可编辑输入。
 type ProviderChatGPTConfig struct {
 	ImageConversationModel string
@@ -161,6 +167,7 @@ type EditableConfig struct {
 	ProviderConsole   ProviderConsoleConfig
 	ProviderChatGPT   ProviderChatGPTConfig
 	ProviderAdobe     ProviderAdobeConfig
+	ProviderMuse      ProviderMuseConfig
 	Batch             BatchConfig
 	Media             MediaConfig
 	Frontend          FrontendConfig
@@ -192,6 +199,7 @@ type Service struct {
 	notify                 func(context.Context)
 	apply                  func(config.Config)
 	testAdobeMint          func(context.Context, string) error
+	testMuseBrowser        func(context.Context, string) error
 }
 
 func NewService(cfg config.Config, updatedAt time.Time, revision uint64, repository repository.RuntimeSettingsRepository, notify func(context.Context), apply func(config.Config)) *Service {
@@ -217,6 +225,27 @@ func (s *Service) TestAdobeMint(ctx context.Context, base string) (time.Duration
 	}
 	started := time.Now()
 	if err := s.testAdobeMint(ctx, base); err != nil {
+		return 0, err
+	}
+	return time.Since(started), nil
+}
+
+// SetMuseBrowserTester 注入 Muse 浏览器测试：连接给定的 DevTools 地址。
+func (s *Service) SetMuseBrowserTester(test func(context.Context, string) error) {
+	s.testMuseBrowser = test
+}
+
+// TestMuseBrowser 按保存时的规则校验一个尚未保存的浏览器地址，再实际连接它，返回耗时。
+func (s *Service) TestMuseBrowser(ctx context.Context, base string) (time.Duration, error) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return 0, fmt.Errorf("%w: 浏览器地址不能为空", ErrInvalidInput)
+	}
+	if err := config.ValidateServiceURL(base); err != nil {
+		return 0, fmt.Errorf("%w: 浏览器地址无效: %v", ErrInvalidInput, err)
+	}
+	started := time.Now()
+	if err := s.testMuseBrowser(ctx, base); err != nil {
 		return 0, err
 	}
 	return time.Since(started), nil
@@ -352,6 +381,7 @@ func applyDomainConfig(base config.Config, value settingsdomain.Config) config.C
 	}
 	base.Provider.ChatGPT = config.ChatGPTProviderConfig(value.ProviderChatGPT)
 	base.Provider.Adobe = config.AdobeProviderConfig{SherlockMintAPI: value.ProviderAdobe.SherlockMintAPI, Timeout: config.Duration(value.ProviderAdobe.Timeout)}
+	base.Provider.Muse = config.MuseProviderConfig(value.ProviderMuse)
 	randomDelay := time.Duration(-1)
 	if value.Batch.RandomDelay != nil {
 		randomDelay = *value.Batch.RandomDelay
@@ -427,6 +457,7 @@ func toDomainConfig(value config.Config) settingsdomain.Config {
 		},
 		ProviderChatGPT: settingsdomain.ProviderChatGPTConfig(value.Provider.ChatGPT),
 		ProviderAdobe:   settingsdomain.ProviderAdobeConfig{SherlockMintAPI: value.Provider.Adobe.SherlockMintAPI, Timeout: value.Provider.Adobe.Timeout.Value()},
+		ProviderMuse:    settingsdomain.ProviderMuseConfig(value.Provider.Muse),
 		Batch: settingsdomain.BatchConfig{
 			ImportConcurrency: value.Batch.ImportConcurrency, ConversionConcurrency: value.Batch.ConversionConcurrency,
 			SyncConcurrency: value.Batch.SyncConcurrency, RefreshConcurrency: value.Batch.RefreshConcurrency,
@@ -524,6 +555,7 @@ func mergeEditable(current config.Config, input EditableConfig) (config.Config, 
 	chatGPT.DefaultImageModel = strings.TrimSpace(chatGPT.DefaultImageModel)
 	next.Provider.ChatGPT = config.ChatGPTProviderConfig(chatGPT)
 	next.Provider.Adobe.SherlockMintAPI = strings.TrimSpace(input.ProviderAdobe.SherlockMintAPI)
+	next.Provider.Muse = config.MuseProviderConfig{BrowserURL: strings.TrimSpace(input.ProviderMuse.BrowserURL), MaxPages: input.ProviderMuse.MaxPages}
 	next.Batch = config.BatchConfig{
 		ImportConcurrency: input.Batch.ImportConcurrency, ConversionConcurrency: input.Batch.ConversionConcurrency,
 		SyncConcurrency: input.Batch.SyncConcurrency, RefreshConcurrency: input.Batch.RefreshConcurrency,
@@ -634,6 +666,7 @@ func toEditable(cfg config.Config) EditableConfig {
 		},
 		ProviderChatGPT: ProviderChatGPTConfig(cfg.Provider.ChatGPT),
 		ProviderAdobe:   ProviderAdobeConfig{SherlockMintAPI: cfg.Provider.Adobe.SherlockMintAPI, Timeout: cfg.Provider.Adobe.Timeout.String()},
+		ProviderMuse:    ProviderMuseConfig(cfg.Provider.Muse),
 		Batch: BatchConfig{
 			ImportConcurrency: cfg.Batch.ImportConcurrency, ConversionConcurrency: cfg.Batch.ConversionConcurrency,
 			SyncConcurrency: cfg.Batch.SyncConcurrency, RefreshConcurrency: cfg.Batch.RefreshConcurrency,

@@ -1049,6 +1049,7 @@ const resources = {
       },
       settingsBuildTransport: { responseHeaderTimeout: "响应头超时", responseHeaderTimeoutHelp: "请求体发送完成后，等待 Grok Build 返回首个响应头的最长时间。", streamIdleTimeout: "流式空闲超时", streamIdleTimeoutHelp: "流式响应中连续无有效生成内容或工具进度的最长等待时间；心跳与内部控制事件不会延长等待，超时后主动中断。" },
       settingsAdobe: { title: "Adobe Firefly", sherlockMintAPI: "Mint 服务地址", sherlockMintAPIHelp: "签发 x-arp-session-id 的 mint 服务基址，网关调用它的 GET /mint；Docker Compose 部署默认 http://mint:8777。公网地址只能用 HTTPS（443 端口）。留空则无法提交 Adobe 任务。点「测试」会由网关用输入框里的地址实际请求一次 /mint，没有缓存时可能要几十秒。", testMint: "测试", mintTestPassed: "Mint 服务可用，耗时 {{duration}}", timeout: "上游请求超时", timeoutHelp: "单次 Adobe 上游请求（提交、轮询、上传、下载）的超时，不限制整个任务的时长。范围 5 秒–30 分钟，默认 60 秒。" },
+      settingsMuse: { title: "Muse", browserURL: "浏览器地址", browserURLHelp: "无头 Chrome 的 DevTools HTTP 端点，网关通过它驱动 muse.ai 网页。Docker Compose 部署默认 http://muse-browser:9222，留空时也使用该地址。公网地址只能用 HTTPS（443 端口）。DevTools 端口可完全控制浏览器，切勿暴露到公网。点「测试」会由网关连接输入框里的地址。", testBrowser: "测试", browserTestPassed: "浏览器可用，耗时 {{duration}}", maxPages: "并发页面数", maxPagesHelp: "浏览器同时打开的 Muse 页面上限，每个请求占一个页面，超出的请求排队等待。范围 1–16，默认 2。" },
       settingsChatGPT: { title: "ChatGPT", imageConversationModel: "图片会话模型", imageConversationModelHelp: "覆盖所有图片模型使用的 ChatGPT 会话模型，需存在于账号的模型目录并开启了生图工具。留空时按账号自动选择：gpt-image-2 用 gpt-5-3，gpt-image-2.5 系列优先 gpt-6、不可用时用 auto。", defaultImageModel: "默认图片模型", defaultImageModelHelp: "Responses 的 image_generation 工具未指定模型时使用的公开图片模型名称；留空时使用 gpt-image-2.5。", outputTokenLimit: "输出 Token 上限", outputTokenLimitHelp: "聊天回复的本地输出上限，范围 1–131072，默认 16384。", visionTokens: "单图估算 Token", visionTokensHelp: "每张输入图片计入用量估算的 Token 数，范围 0–100000，默认 256。", cloudflareClearance: "Cloudflare Clearance", cloudflareClearanceHelp: "开启后，遇到 Cloudflare 质询时通过账号出口调用已配置的 FlareSolverr 按需求解；地址与超时沿用「媒体与网络 → Clearance」的配置。默认关闭。" },
       egressProxyProfiles: {
         libraryTitle: "代理地址库",
@@ -1755,6 +1756,7 @@ const resources = {
       egressProxyProfiles: { libraryTitle: "Proxy address library", libraryDescription: "Manage reusable proxy addresses in one place. Changes sync to every node using the address.", add: "Add proxy address", addTitle: "Add proxy address", editTitle: "Edit proxy address", dialogDescription: "Changing the proxy address updates every bound node. Capacity and operational state remain isolated per node.", name: "Address name", endpoint: "Proxy address", nodes: "Used by", search: "Search address names", emptyLibrary: "The library is empty. Add an address to reuse it across nodes.", noMatches: "No matching proxy addresses", loadingSelection: "Loading selected address…", selectionUnavailable: "Proxy address #{{id}} is unavailable", saved: "Proxy address saved", deleted: "Proxy address deleted", deleteTitle: "Delete proxy address?", deleteDescription: "This deletes {{name}}. Addresses currently used by nodes cannot be deleted.", deleteBlocked: "Used by {{count}} nodes", assignment: "Proxy address source", assignmentHelp: "Select an address from the library to reuse it across Provider nodes. Health, capacity, User-Agent, and Clearance remain isolated per node.", independent: "Configure this node separately", managedByProfile: "Managed by the proxy address library", nodeCount: "{{count}} nodes", backToLibrary: "Back to address library", createFromPicker: "Add and use a proxy address", refreshNodes: "Refresh proxy nodes", reveal: "Reveal full proxy URL", hide: "Hide full proxy URL", revealUnavailable: "Only a saved proxy address can reveal its URL" },
       settingsBuildTransport: { responseHeaderTimeout: "Response header timeout", responseHeaderTimeoutHelp: "Maximum time to wait for the first Grok Build response headers after the request body is sent.", streamIdleTimeout: "Stream idle timeout", streamIdleTimeoutHelp: "Maximum wait for useful generated content or tool progress. Keepalives and private control events do not extend the deadline." },
       settingsAdobe: { title: "Adobe Firefly", sherlockMintAPI: "Mint service URL", sherlockMintAPIHelp: "Base URL of the mint service that issues x-arp-session-id; the gateway calls its GET /mint. Docker Compose deployments default to http://mint:8777. Public addresses must use HTTPS on port 443. Leave empty and Adobe jobs cannot be submitted. Test makes the gateway send one real /mint request to the address in the box; without a cached token it can take tens of seconds.", testMint: "Test", mintTestPassed: "Mint service OK in {{duration}}", timeout: "Upstream request timeout", timeoutHelp: "Timeout for each Adobe upstream request (submit, poll, upload, download); it does not cap the whole job. From 5 seconds to 30 minutes. Default 60 seconds." },
+      settingsMuse: { title: "Muse", browserURL: "Browser URL", browserURLHelp: "DevTools HTTP endpoint of the headless Chrome the gateway drives muse.ai through. Docker Compose deployments default to http://muse-browser:9222, which is also used when left empty. Public addresses must use HTTPS on port 443. The DevTools port gives full control of the browser; never expose it publicly. Test makes the gateway connect to the address in the box.", testBrowser: "Test", browserTestPassed: "Browser OK in {{duration}}", maxPages: "Concurrent pages", maxPagesHelp: "Maximum Muse pages open in the browser at once; each request uses one page and the rest wait. From 1 to 16. Default 2." },
       settingsChatGPT: { title: "ChatGPT", imageConversationModel: "Image conversation model", imageConversationModelHelp: "Overrides the ChatGPT conversation model used by every image model; it must exist in the account model catalog with the image tool enabled. Leave empty to choose per account: gpt-5-3 for gpt-image-2; gpt-6, else auto, for the gpt-image-2.5 series.", defaultImageModel: "Default image model", defaultImageModelHelp: "Public image model used when a Responses image_generation tool names no model; leave empty to use gpt-image-2.5.", outputTokenLimit: "Output token limit", outputTokenLimitHelp: "Local output cap for chat replies, from 1 to 131072. Default 16384.", visionTokens: "Tokens per input image", visionTokensHelp: "Tokens counted per input image in usage estimates, from 0 to 100000. Default 256.", cloudflareClearance: "Cloudflare clearance", cloudflareClearanceHelp: "When enabled, Cloudflare challenges are solved on demand through the configured FlareSolverr on the account egress; URL and timeout come from Media & network → Clearance. Off by default." },
       settingsBuildForbidden: { markInvalid: "Invalidate matching error codes", markInvalidHelp: "When enabled, a Grok Build 403 with a matching error code marks the account invalid and removes it from scheduling.", codes: "Invalidation error codes", codesHelp: "Enter one code per line. Codes match the complete code or error.code value case-insensitively, up to 32 entries.", codesInvalid: "Enter 1–32 valid codes using letters, numbers, dots, underscores, colons, or hyphens.", codesPlaceholder: "permission-denied" },
       settingsRoutingSegmented: { enabled: "Enable segmented selection", enabledHelp: "Applies above the threshold, supports session affinity, and falls back to full-pool selection after four saturated windows.", minCandidates: "Account threshold", minCandidatesHelp: "Enables segmented selection when the eligible account pool reaches this size.", windowSize: "Selection window", windowSizeHelp: "Number of candidate accounts inspected in each segmented window." },
@@ -2364,7 +2366,7 @@ Object.assign(resources["zh-CN"].translation.accounts as unknown as Record<strin
   credentials: "凭据（每行一个）",
   credentialsPlaceholder: "credential_1\ncredential_2",
   syncAllProviderDescription: "将同步所有已启用 {{provider}} 账号的额度状态。",
-  quotaModes: { reason: "推理", image_gen: "生图", file_upload: "文件上传", codex: "Codex", codex_5h: "5 小时", codex_weekly: "每周", credits: "积分" },
+  quotaModes: { reason: "推理", image_gen: "生图", file_upload: "文件上传", codex: "Codex", codex_5h: "5 小时", codex_weekly: "每周", credits: "积分", weekly_usage: "每周用量" },
   quotaRemainingPercent: "剩余 {{remaining}}%",
   codexQuotaPart: "{{name}}：剩余 {{remaining}}%，{{time}} 重置",
   chatgpt: {
@@ -2382,6 +2384,12 @@ Object.assign(resources["zh-CN"].translation.accounts as unknown as Record<strin
     tokens: "Firefly Cookie",
     tokenPlaceholder: "name=value; name2=value2…\n{\"cookie\":\"name=value; …\",\"email\":\"a@b.com\"}",
   },
+  muse: {
+    quickImport: "快速导入 Cookie",
+    quickImportDescription: "登录 https://muse.ai 后，用 Cookie-Editor 等扩展把该站 Cookie 导出为 JSON 粘贴（一个数组为一个账号）；也可每行一个 Cookie 字符串（可加「名称 | 」前缀），或本服务导出的 JSON / JSONL。必须包含 hatch_sess，导入时会向 muse.ai 验证会话。",
+    tokens: "Muse Cookie",
+    tokenPlaceholder: "[{\"name\":\"hatch_sess\",\"value\":\"…\",\"domain\":\".muse.ai\"}, …]\n名称 | hatch_sess=…; hatch_vml=…; hatch_native_auth_device=…",
+  },
 });
 Object.assign(resources.en.translation.accounts as unknown as Record<string, unknown>, {
   redirectLogin: "Browser OAuth",
@@ -2397,7 +2405,7 @@ Object.assign(resources.en.translation.accounts as unknown as Record<string, unk
   credentials: "Credentials (one per line)",
   credentialsPlaceholder: "credential_1\ncredential_2",
   syncAllProviderDescription: "Sync quota status for every enabled {{provider}} account.",
-  quotaModes: { reason: "Reasoning", image_gen: "Images", file_upload: "File uploads", codex: "Codex", codex_5h: "5-hour", codex_weekly: "Weekly", credits: "Credits" },
+  quotaModes: { reason: "Reasoning", image_gen: "Images", file_upload: "File uploads", codex: "Codex", codex_5h: "5-hour", codex_weekly: "Weekly", credits: "Credits", weekly_usage: "Weekly usage" },
   quotaRemainingPercent: "{{remaining}}% remaining",
   codexQuotaPart: "{{name}}: {{remaining}}% remaining, resets {{time}}",
   chatgpt: {
@@ -2414,6 +2422,12 @@ Object.assign(resources.en.translation.accounts as unknown as Record<string, unk
     quickImportDescription: "Sign in at https://firefly.adobe.com, then copy the site's full browser cookie, one per line; JSON / JSONL also works. Import exchanges the cookie for an access token to verify it, then refreshes it automatically.",
     tokens: "Firefly cookie",
     tokenPlaceholder: "name=value; name2=value2…\n{\"cookie\":\"name=value; …\",\"email\":\"a@b.com\"}",
+  },
+  muse: {
+    quickImport: "Quick import cookies",
+    quickImportDescription: "Sign in at https://muse.ai, export the site's cookies as JSON with an extension such as Cookie-Editor and paste them (one array per account). One cookie string per line (optionally prefixed with \"label | \") or JSON / JSONL exported by this service also works. hatch_sess is required; import checks the session with muse.ai.",
+    tokens: "Muse cookies",
+    tokenPlaceholder: "[{\"name\":\"hatch_sess\",\"value\":\"…\",\"domain\":\".muse.ai\"}, …]\nlabel | hatch_sess=…; hatch_vml=…; hatch_native_auth_device=…",
   },
 });
 function readStoredLanguage(): string | null {

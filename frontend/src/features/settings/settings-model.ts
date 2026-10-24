@@ -127,6 +127,10 @@ export const settingsSchema = z.object({
     sherlockMintAPI: z.string().trim().max(2048).refine((value) => value === "" || validHTTPURL(value)),
     timeout: upstreamTimeoutDuration,
   }),
+  providerMuse: z.object({
+    browserURL: z.string().trim().max(2048).refine((value) => value === "" || validHTTPURL(value)),
+    maxPages: z.number().int().min(1).max(16),
+  }),
   batch: z.object({
     importConcurrency: positiveInteger.max(50),
     conversionConcurrency: positiveInteger.max(50),
@@ -210,6 +214,8 @@ export function toSettingsForm(config: SettingsConfigDTO): SettingsForm {
     providerConsole: { ...config.providerConsole, chatTimeout: parseDuration(config.providerConsole.chatTimeout), streamIdleTimeout: parseDuration(config.providerConsole.streamIdleTimeout) },
     providerChatGPT: config.providerChatGPT,
     providerAdobe: { ...config.providerAdobe, timeout: parseDuration(config.providerAdobe.timeout) },
+    // The backend stores 0 for the default of 2 pages.
+    providerMuse: { ...config.providerMuse, maxPages: config.providerMuse.maxPages || 2 },
     batch: { ...config.batch, randomDelay: parseDurationMilliseconds(config.batch.randomDelay) },
     media: {
       maxImageSize: parseByteSize(config.media.maxImageBytes), maxTotalSize: parseByteSize(config.media.maxTotalBytes),
@@ -262,6 +268,7 @@ export function toSettingsDTO(config: SettingsForm): SettingsConfigDTO {
     providerConsole: { ...config.providerConsole, chatTimeout: formatDuration(config.providerConsole.chatTimeout), streamIdleTimeout: formatDuration(config.providerConsole.streamIdleTimeout) },
     providerChatGPT: config.providerChatGPT,
     providerAdobe: { ...config.providerAdobe, timeout: formatDuration(config.providerAdobe.timeout) },
+    providerMuse: config.providerMuse,
     batch: { ...config.batch, randomDelay: `${config.batch.randomDelay}ms` },
     media: {
       maxImageBytes: byteSizeBytes(config.media.maxImageSize), maxTotalBytes: byteSizeBytes(config.media.maxTotalSize),

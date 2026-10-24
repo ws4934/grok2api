@@ -13,6 +13,7 @@ import (
 	chatgptprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt"
 	cliprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/cli"
 	consoleprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/console"
+	museprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/muse"
 	webprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/web"
 )
 
@@ -31,6 +32,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 		consoleprovider.NewAdapter(consoleprovider.Config{}, nil, nil, nil),
 		chatgptprovider.NewAdapter(chatgptprovider.Config{}, nil, nil, nil),
 		adobeprovider.NewAdapter(adobeprovider.Config{}, nil, nil, nil, nil),
+		museprovider.NewAdapter(museprovider.Config{}, nil, nil, nil, nil),
 	)
 	if err := registry.Validate(); err != nil {
 		t.Fatalf("production registry validation failed: %v", err)
@@ -93,6 +95,14 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			credential:   provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true},
 			conversation: provider.ConversationSurface{},
 			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true, VideoLastFrame: true, VideoReferenceVideos: true},
+			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated},
+		},
+		{
+			provider: account.ProviderMuse, catalog: provider.ModelCatalogStatic, quota: provider.QuotaRemoteWindow,
+			capabilities: []modeldomain.Capability{modeldomain.CapabilityChat, modeldomain.CapabilityImage, modeldomain.CapabilityImageEdit, modeldomain.CapabilityVideo},
+			credential:   provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true},
+			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true, StatelessPreviousResponse: true},
+			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true, SingleImagePerRequest: true},
 			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated},
 		},
 	}

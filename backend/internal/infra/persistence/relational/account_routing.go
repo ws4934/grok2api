@@ -109,7 +109,7 @@ func (r *AccountRepository) ListRoutingCandidates(ctx context.Context, provider 
 	result := make([]account.RoutingCandidate, 0, len(values))
 	staticProviderModel := (provider == account.ProviderConsole && strings.TrimSpace(quotaMode) != "") ||
 		(provider == account.ProviderWeb && account.IsWebImagineQuotaMode(quotaMode)) ||
-		provider == account.ProviderAdobe
+		provider == account.ProviderAdobe || provider == account.ProviderMuse
 	for _, value := range values {
 		capabilityKnown, supportsModel := known[value.ID], supported[value.ID]
 		if staticProviderModel {

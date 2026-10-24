@@ -44,6 +44,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt"
 	cliprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/cli"
 	consoleprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/console"
+	museprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/muse"
 	webprovider "github.com/chenyme/grok2api/backend/internal/infra/provider/web"
 	infraqualityguard "github.com/chenyme/grok2api/backend/internal/infra/qualityguard"
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
@@ -248,7 +249,9 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 	egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(cfg))
 	adobeAdapter := adobe.NewAdapter(adobeProviderConfig(cfg), egressManager, cipher, mediaService, mediatransport.FetchRemoteMedia)
 	adobeAdapter.SetLogger(logger)
-	providers := provider.NewRegistry(cliAdapter, webAdapter, consoleAdapter, chatgptAdapter, adobeAdapter)
+	museAdapter := museprovider.NewAdapter(museProviderConfig(cfg), egressManager, cipher, mediaService, mediatransport.FetchRemoteMedia)
+	museAdapter.SetLogger(logger)
+	providers := provider.NewRegistry(cliAdapter, webAdapter, consoleAdapter, chatgptAdapter, adobeAdapter, museAdapter)
 	if err := providers.Validate(); err != nil {
 		return nil, fmt.Errorf("校验 Provider 注册表: %w", err)
 	}
@@ -307,6 +310,9 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 	// 管理员占用了某个模型名）不影响启动，只记日志。
 	if err := modelRepo.ReplaceProviderRoutes(ctx, account.ProviderAdobe, adobe.Routes()); err != nil {
 		logger.Warn("adobe_model_catalog_sync_failed", "error", err)
+	}
+	if err := modelRepo.ReplaceProviderRoutes(ctx, account.ProviderMuse, museprovider.Routes()); err != nil {
+		logger.Warn("muse_model_catalog_sync_failed", "error", err)
 	}
 	accountSyncService := accountsyncapp.NewService(logger, accountService, accountService, accountService, modelService)
 	accountSyncService.SetBulkPool(importPool)
@@ -409,6 +415,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 		consoleAdapter.UpdateConfig(consoleProviderConfig(next))
 		chatgptAdapter.UpdateConfig(chatgptProviderConfig(next))
 		adobeAdapter.UpdateConfig(adobeProviderConfig(next))
+		museAdapter.UpdateConfig(museProviderConfig(next))
 		gatewayService.UpdateDefaultImageModel(cmp.Or(next.Provider.ChatGPT.DefaultImageModel, chatgpt.DefaultImageModel))
 		egressManager.SetExtensionClearance(egressdomain.Scope(account.ProviderChatGPT), chatgptClearanceTarget(next))
 		mediaService.UpdateConfig(mediaConfig(next))
@@ -434,6 +441,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 		accountService.UpdateAutoCleanConfig(accountAutoCleanConfig(next.Accounts))
 	})
 	settingsService.SetAdobeMintTester(adobeAdapter.TestMint)
+	settingsService.SetMuseBrowserTester(museAdapter.TestBrowser)
 	updateService := updatecheckapp.NewService(buildinfo.CurrentVersion(), cfg.Frontend.StaticPath, nil)
 
 	startup := newStartupState(len(windows))
@@ -517,6 +525,10 @@ func mediaQuotaSources(providers *provider.Registry) []dashboarddomain.MediaQuot
 		}
 	}
 	return sources
+}
+
+func museProviderConfig(cfg config.Config) museprovider.Config {
+	return museprovider.Config{BrowserURL: cfg.Provider.Muse.BrowserURL, MaxPages: cfg.Provider.Muse.MaxPages}
 }
 
 func adobeProviderConfig(cfg config.Config) adobe.Config {

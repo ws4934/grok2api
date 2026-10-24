@@ -15,6 +15,7 @@ export type SettingsConfigDTO = {
   providerConsole: { baseURL: string; chatTimeout: string; streamIdleTimeout: string };
   providerChatGPT: { imageConversationModel: string; outputTokenLimit: number; visionTokens: number; defaultImageModel: string; cloudflareClearance: boolean };
   providerAdobe: { sherlockMintAPI: string; timeout: string };
+  providerMuse: { browserURL: string; maxPages: number };
   batch: { importConcurrency: number; conversionConcurrency: number; syncConcurrency: number; refreshConcurrency: number; randomDelay: string };
   media: {
     maxImageBytes: number; maxTotalBytes: number; cleanupThresholdPercent: number;
@@ -131,6 +132,7 @@ const settingsConfigValidator = hasShape({
   providerConsole: hasShape({ baseURL: isString, chatTimeout: isString, streamIdleTimeout: isString }),
   providerChatGPT: hasShape({ imageConversationModel: isString, outputTokenLimit: isNumber, visionTokens: isNumber, defaultImageModel: isString, cloudflareClearance: isBoolean }),
   providerAdobe: hasShape({ sherlockMintAPI: isString, timeout: isString }),
+  providerMuse: hasShape({ browserURL: isString, maxPages: isNumber }),
   batch: hasShape({ importConcurrency: isNumber, conversionConcurrency: isNumber, syncConcurrency: isNumber, refreshConcurrency: isNumber, randomDelay: isString }),
   media: hasShape({ maxImageBytes: isNumber, maxTotalBytes: isNumber, cleanupThresholdPercent: isNumber, cleanupInterval: isString }),
   frontend: hasShape({ publicApiBaseURL: isString }),
@@ -240,6 +242,13 @@ const decodeAdobeMintTest = createObjectDecoder<{ latencyMs: number }>("adobe mi
 /** Requests one token from an unsaved mint address the way Adobe submits do. */
 export function testAdobeMint(sherlockMintAPI: string): Promise<{ latencyMs: number }> {
   return apiRequest("/api/admin/v1/settings/adobe/mint-test", { method: "POST", body: { sherlockMintAPI } }, decodeAdobeMintTest);
+}
+
+const decodeMuseBrowserTest = createObjectDecoder<{ latencyMs: number }>("muse browser test", { latencyMs: isNumber });
+
+/** Connects to an unsaved DevTools address the way Muse requests do. */
+export function testMuseBrowser(browserURL: string): Promise<{ latencyMs: number }> {
+  return apiRequest("/api/admin/v1/settings/muse/browser-test", { method: "POST", body: { browserURL } }, decodeMuseBrowserTest);
 }
 
 type ListEgressNodesInput = {

@@ -8,6 +8,7 @@ import { chatgptAccountUI } from "@/features/accounts/providers/chatgpt";
 import { grokBuildAccountUI } from "@/features/accounts/providers/grok-build";
 import { grokConsoleAccountUI } from "@/features/accounts/providers/grok-console";
 import { grokWebAccountUI } from "@/features/accounts/providers/grok-web";
+import { museAccountUI } from "@/features/accounts/providers/muse";
 
 function PlanType({ account }: { account: AccountDTO }) {
   const plan = account.plan?.trim() ?? "";
@@ -20,7 +21,8 @@ function WindowQuota({ account, locale, quotaModes }: { account: AccountDTO; loc
   const windows = orderQuotaWindows(quotaModes, account.quotaWindows ?? []);
   // A synced account may report no limited windows at all; only a missing sync time means "not synced".
   if (windows.length === 0) return account.quotaSyncedAt ? <span className="text-xs text-muted-foreground">{t("accounts.quotaSyncedNoLimits")}</span> : <QuotaNotSynced />;
-  return <QuotaWindowRow locale={locale} items={windows.map((window) => ({ label: t(`accounts.quotaModes.${window.mode}`, { defaultValue: window.mode }), window }))} />;
+  // Muse's weekly_usage window is a percentage (total 100).
+  return <QuotaWindowRow locale={locale} items={windows.map((window) => ({ label: t(`accounts.quotaModes.${window.mode}`, { defaultValue: window.mode }), window, percent: window.mode === "weekly_usage" }))} />;
 }
 
 // Providers without a module get the plan, per-mode quota windows and the generic import texts.
@@ -40,6 +42,7 @@ const providerModules: Readonly<Record<string, Partial<ProviderAccountUI>>> = {
   grok_console: grokConsoleAccountUI,
   chatgpt: chatgptAccountUI,
   adobe: adobeAccountUI,
+  muse: museAccountUI,
 };
 
 export function accountUI(provider: string): ProviderAccountUI {

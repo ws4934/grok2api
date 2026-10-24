@@ -19,6 +19,7 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.GET("/settings", h.get)
 	router.PUT("/settings", h.update)
 	router.POST("/settings/adobe/mint-test", h.testAdobeMint)
+	router.POST("/settings/muse/browser-test", h.testMuseBrowser)
 }
 
 type adobeMintTestRequest struct {
@@ -48,6 +49,29 @@ func (h *Handler) testAdobeMint(c *gin.Context) {
 	response.Success(c, http.StatusOK, adobeMintTestResponse{LatencyMS: latency.Milliseconds()})
 }
 
+type museBrowserTestRequest struct {
+	BrowserURL string `json:"browserURL"`
+}
+
+// testMuseBrowser 测试一个尚未保存的浏览器地址：地址不合规返回 400，浏览器连不上返回 502。
+func (h *Handler) testMuseBrowser(c *gin.Context) {
+	var request museBrowserTestRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", "请求参数无效: "+err.Error())
+		return
+	}
+	latency, err := h.service.TestMuseBrowser(c.Request.Context(), request.BrowserURL)
+	if errors.Is(err, settingsapp.ErrInvalidInput) {
+		response.Error(c, http.StatusBadRequest, "invalidRequest", err.Error())
+		return
+	}
+	if err != nil {
+		response.Error(c, http.StatusBadGateway, "museBrowserTestFailed", "浏览器测试失败: "+err.Error())
+		return
+	}
+	response.Success(c, http.StatusOK, adobeMintTestResponse{LatencyMS: latency.Milliseconds()})
+}
+
 type settingsConfigDTO struct {
 	Server            serverConfigDTO            `json:"server"`
 	ProviderBuild     providerBuildConfigDTO     `json:"providerBuild"`
@@ -55,6 +79,7 @@ type settingsConfigDTO struct {
 	ProviderConsole   providerConsoleConfigDTO   `json:"providerConsole"`
 	ProviderChatGPT   providerChatGPTConfigDTO   `json:"providerChatGPT"`
 	ProviderAdobe     providerAdobeConfigDTO     `json:"providerAdobe"`
+	ProviderMuse      providerMuseConfigDTO      `json:"providerMuse"`
 	Batch             batchConfigDTO             `json:"batch"`
 	Media             mediaConfigDTO             `json:"media"`
 	Frontend          frontendConfigDTO          `json:"frontend"`
@@ -85,6 +110,11 @@ type providerChatGPTConfigDTO struct {
 type providerAdobeConfigDTO struct {
 	SherlockMintAPI string `json:"sherlockMintAPI"`
 	Timeout         string `json:"timeout"`
+}
+
+type providerMuseConfigDTO struct {
+	BrowserURL string `json:"browserURL"`
+	MaxPages   int    `json:"maxPages"`
 }
 
 type mediaConfigDTO struct {
@@ -256,6 +286,7 @@ func (value settingsConfigDTO) toApplication() settingsapp.EditableConfig {
 		},
 		ProviderChatGPT: settingsapp.ProviderChatGPTConfig(value.ProviderChatGPT),
 		ProviderAdobe:   settingsapp.ProviderAdobeConfig(value.ProviderAdobe),
+		ProviderMuse:    settingsapp.ProviderMuseConfig(value.ProviderMuse),
 		Batch: settingsapp.BatchConfig{
 			ImportConcurrency: value.Batch.ImportConcurrency, ConversionConcurrency: value.Batch.ConversionConcurrency,
 			SyncConcurrency: value.Batch.SyncConcurrency, RefreshConcurrency: value.Batch.RefreshConcurrency,
@@ -336,6 +367,7 @@ func newSettingsResponse(value settingsapp.Snapshot) settingsResponse {
 				CloudflareClearance: config.ProviderChatGPT.CloudflareClearance,
 			},
 			ProviderAdobe: providerAdobeConfigDTO(config.ProviderAdobe),
+			ProviderMuse:  providerMuseConfigDTO(config.ProviderMuse),
 			Batch: batchConfigDTO{
 				ImportConcurrency: config.Batch.ImportConcurrency, ConversionConcurrency: config.Batch.ConversionConcurrency,
 				SyncConcurrency: config.Batch.SyncConcurrency, RefreshConcurrency: config.Batch.RefreshConcurrency,

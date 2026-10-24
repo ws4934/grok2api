@@ -689,6 +689,55 @@ func TestProviderAdobeSettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestProviderMuseSettingsRoundTrip(t *testing.T) {
+	cfg := testConfig(t)
+	repository := &runtimeSettingsRepositoryStub{}
+	var applied config.Config
+	service := NewService(cfg, time.Time{}, 0, repository, nil, func(next config.Config) { applied = next })
+	input := service.Get().Config
+	if input.ProviderMuse != (ProviderMuseConfig{BrowserURL: "http://muse-browser:9222", MaxPages: 2}) {
+		t.Fatalf("default providerMuse = %#v", input.ProviderMuse)
+	}
+	input.ProviderMuse = ProviderMuseConfig{BrowserURL: " http://127.0.0.1:9222 ", MaxPages: 4}
+	want := config.MuseProviderConfig{BrowserURL: "http://127.0.0.1:9222", MaxPages: 4}
+	if _, err := service.Update(context.Background(), 0, input); err != nil {
+		t.Fatal(err)
+	}
+	if applied.Provider.Muse != want {
+		t.Fatalf("applied = %#v", applied.Provider.Muse)
+	}
+	reloaded, _, _, err := LoadPersisted(context.Background(), cfg, repository)
+	if err != nil || reloaded.Provider.Muse != want {
+		t.Fatalf("reloaded = %#v, err = %v", reloaded.Provider.Muse, err)
+	}
+	// Settings saved before Muse existed hold a zero section; it must load
+	// (empty address and 0 pages mean the defaults).
+	repository.value.ProviderMuse = settingsdomain.ProviderMuseConfig{}
+	if reloaded, _, _, err = LoadPersisted(context.Background(), cfg, repository); err != nil || reloaded.Provider.Muse != (config.MuseProviderConfig{}) {
+		t.Fatalf("zero section: reloaded = %#v, err = %v", reloaded.Provider.Muse, err)
+	}
+}
+
+func TestUpdateRejectsInvalidProviderMuse(t *testing.T) {
+	for _, value := range []ProviderMuseConfig{
+		{BrowserURL: "http://muse-browser:9222/?token=x", MaxPages: 2},
+		{BrowserURL: "ftp://muse-browser:9222", MaxPages: 2},
+		{BrowserURL: "http://muse-browser:9222", MaxPages: 17},
+		{BrowserURL: "http://muse-browser:9222", MaxPages: -1},
+	} {
+		repository := &runtimeSettingsRepositoryStub{}
+		service := NewService(testConfig(t), time.Time{}, 0, repository, nil, nil)
+		input := service.Get().Config
+		input.ProviderMuse = value
+		if _, err := service.Update(context.Background(), 0, input); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("%#v: error = %v, want ErrInvalidInput", value, err)
+		}
+		if repository.found {
+			t.Fatalf("%#v was persisted", value)
+		}
+	}
+}
+
 func TestUpdateRejectsInvalidProviderAdobe(t *testing.T) {
 	for _, value := range []ProviderAdobeConfig{
 		{SherlockMintAPI: "http://mint.example.com:8777", Timeout: "1m"},

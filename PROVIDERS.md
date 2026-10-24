@@ -1,6 +1,6 @@
 # Provider 架构与 ChatGPT 接入
 
-网关里的每个上游（Grok Build、Grok Web、Grok Console、ChatGPT）都是一个 Provider。它们共用同一套账号管理、客户端密钥、模型路由与价格、请求审计、媒体任务和图库。新增 Provider 时不需要另建一套。
+网关里的每个上游（Grok Build、Grok Web、Grok Console、ChatGPT、Adobe、Muse）都是一个 Provider。它们共用同一套账号管理、客户端密钥、模型路由与价格、请求审计、媒体任务和图库。新增 Provider 时不需要另建一套。
 
 > **状态**：ChatGPT 的协议代码只用模拟上游测过。OAuth、聊天、生图、蒙版、透明背景都要先用真实账号逐项验收，再对外开放。
 
@@ -9,7 +9,7 @@
 ```
 infra/provider.Registry
   ├─ Definition（能力、额度方式、凭据方式、展示名、出口作用域、默认并发、额度模式、是否走 xAI 官方价）
-  └─ 适配器：cli(grok_build) web(grok_web) console(grok_console) chatgpt
+  └─ 适配器：cli(grok_build) web(grok_web) console(grok_console) chatgpt adobe muse
         │
         ├─ GET /api/admin/v1/providers ── 前端 Provider 目录（账号页、密钥、模型、审计、仪表盘、出口设置）
         ├─ 网关：选路由 → 密钥范围 → 选账号 → 预留费用 → 转发 → 分类 → 结算 → 审计
@@ -244,3 +244,57 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 ### 出口
 
 使用作用域 `adobe` 的出口节点（HTTP/SOCKS/Trojan）。提交、上传下载、IMS 续期都走账号绑定的节点，连接用出口的浏览器 TLS 客户端（tls-client）；节点上配置的 UA 对 Adobe 不生效，用账号自己的浏览器身份。传输失败时按出口问题反馈健康度。
+
+## Muse（muse.ai）接入
+
+Muse 是 Meta 的 agent 应用（`https://muse.ai`）。它没有公开 API：网页与账号自己的云端 VM 之间走加密 WebSocket，所以网关不调接口，而是通过 Chrome DevTools 协议驱动一个独立的无头 Chrome，在网页里发送提示词、读取回复和生成的文件。
+
+每个请求的流程：为账号新建一个独立的浏览器上下文（Cookie 互相隔离，代理取账号的出口）→ 写入账号 Cookie → 打开 `https://muse.ai/thread/new` → 发送提示词 → 等回复或文件 → 关闭上下文。
+
+比 API 类 Provider 慢得多（实测）：页面加载 2–7 秒；对话首字 7–15 秒（agent 先思考），之后很快流完；生图约 30 秒；视频要几分钟。
+
+### 部署与设置
+
+1. **启动浏览器容器**（`chromedp/headless-shell`，固定版本）：
+
+   ```bash
+   docker compose --profile muse up -d
+   ```
+
+   grok2api 默认指向 compose 的 `muse-browser` 服务（`provider.muse.browserURL=http://muse-browser:9222`）。DevTools 端口没有认证，能完全控制浏览器和其中的账号 Cookie；compose 里没有发布这个端口，**不要把它暴露到宿主机或公网**。非 compose 部署需自行运行无头 Chrome，并让网关能访问它的 DevTools 端口。
+2. **运行设置 → Muse**（立即生效，保存后以数据库中的值为准）：
+   - **浏览器地址**：DevTools HTTP 端点，留空即用默认地址；公网地址只能用 HTTPS（443 端口）。地址框旁的「测试」由网关连接输入的地址（不必先保存）。
+   - **并发页面数**：浏览器同时打开的页面上限，1–16，默认 2。每个请求占一个页面，超出的排队。
+3. **导入账号**（账号页 → Muse 标签）：登录 `https://muse.ai`，用 Cookie-Editor（或 EditThisCookie）扩展把该站 Cookie 导出为 JSON，粘贴或上传，一个 JSON 数组为一个账号。也支持：
+   - 本服务导出的 JSON / JSONL（`{"cookies":[…],"name":"…"}`）；
+   - 每行一个 Cookie 字符串 `hatch_sess=…; hatch_vml=…; hatch_native_auth_device=…`，可加 `名称 | ` 前缀。
+
+   必须包含 `hatch_sess`。导入时向 `https://muse.ai/api/session` 验证会话。
+
+### 凭据与续期
+
+- `hatch_sess` 有效期约 30 天，`hatch_vml` 约 48 小时。网关在 `hatch_vml` 过期前约 1 天用 `/api/session` 换新（走账号出口，不需要浏览器），并合并返回的 Cookie。
+- 会话被拒（401）→ 账号转入需重新导入。打开网页不会轮换登录 Cookie，浏览器里的操作不写回凭据。
+
+### 额度
+
+- 只有一个窗口 `weekly_usage`（每周用量），按百分比显示：总量 100，剩余 = 100 − 已用。数值读自网页设置里的用量面板（如 `2% used`），重置时间也取自面板（`Weekly limit resets on Oct 31`）。读取用量要打开一次网页。
+- 所有 Muse 模型共用这一个限额，用满后账号等到重置时间再接请求。
+
+### 模型
+
+| 模型 | 类型 | 说明 |
+|---|---|---|
+| `muse-spark` | 对话 | 回复按网页渲染结果转回 Markdown（代码块、粗体、表格、列表） |
+| `muse-image` | 图像生成 + 编辑 | 编辑时输入图作为附件上传到输入框；实测输出约 1600 像素宽的 WebP |
+| `muse-video` | 视频 | 发送提示词后记下对话路径，重启后重新打开该对话等结果，不重复发送 |
+
+定价：Muse 没有官方价，未设价按 0 计费、模型页标"未定价"。
+
+### 限制
+
+- **出口**：使用作用域 `muse` 的出口节点，节点的代理设为该账号浏览器上下文的代理。Chrome 不支持带用户名密码的代理，也不支持 Trojan/VLESS/SS/VMess 隧道（与 FlareSolverr 相同），这类节点会被拒绝并提示原因；只能用无认证的 HTTP(S) / SOCKS 代理或直连。
+- **对话**：每个请求在网页里新开一个对话，历史消息由客户端每次带上；请求里的 `tools` 会被忽略（网页端的 agent 不会返回函数调用），历史里的工具调用和结果按文字转述。最后一条用户消息里的图片作为附件上传，更早的图片只标注为 `[image]`。
+- **图片**：每次只出一张图，`n` 大于 1 时网关把请求分摊到多个账号。不支持蒙版、流式出图；比例取自 `aspect_ratio` 或 `size`，写进提示词。agent 只回文字（多为拒绝）时返回 422，不扣账号健康度。
+- **视频**：只支持文生视频和首帧图片（`image`），比例 16:9、9:16、1:1、4:3、3:4，`duration` 1–15 秒（默认 5），按 720p 计价。时长和比例写进提示词，最终由 agent 决定：实测要求 5 秒，得到 10 秒的 1280×720 H.264。
+- **视频无法在浏览器里播放**：headless-shell 不带 H.264 解码器，网关拿不到视频宽高，但下载不受影响。

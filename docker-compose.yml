@@ -98,6 +98,22 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # ================================ MUSE BROWSER ================================
+  # Muse（muse.ai）渠道驱动网页用的无头 Chrome。仅在使用 Muse 渠道时启用：
+  #   docker compose --profile muse up -d
+  # grok2api 默认指向本服务（provider.muse.browserURL=http://muse-browser:9222）。
+  # DevTools 端口（9222）没有认证，能完全控制浏览器（含账号 Cookie），切勿发布到宿主机或公网。
+
+  muse-browser:
+    container_name: grok2api-muse-browser
+    profiles: ["muse"]
+    image: chromedp/headless-shell:155.0.8059.40
+    shm_size: 1gb
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   grok2api-data:
   quality_guard_state:

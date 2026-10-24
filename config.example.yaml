@@ -192,3 +192,10 @@ provider:
     sherlockMintAPI: "http://mint:8777"
     # 单次上游调用超时，5s–30m；0 表示 60 秒。
     timeout: 60s
+  # Muse（muse.ai）渠道：网关通过无头 Chrome 驱动网页，账号靠导入 muse.ai 的 Cookie 添加。
+  # 使用 Muse 时需启动浏览器容器：docker compose --profile muse up -d
+  muse:
+    # 无头 Chrome 的 DevTools HTTP 端点；compose 默认即此地址，留空也用它。
+    browserURL: "http://muse-browser:9222"
+    # 同时打开的浏览器页面数，1–16；0 表示 2。
+    maxPages: 2

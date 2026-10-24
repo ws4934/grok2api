@@ -17,6 +17,7 @@ const (
 	ProviderConsole Provider = "grok_console"
 	ProviderChatGPT Provider = "chatgpt"
 	ProviderAdobe   Provider = "adobe"
+	ProviderMuse    Provider = "muse"
 )
 
 // LinkedAccount 表示同一上游用户在另一 Provider 下的弱关联账号。
@@ -29,7 +30,7 @@ type LinkedAccount struct {
 	UserID   string
 }
 
-var providers = [...]Provider{ProviderBuild, ProviderWeb, ProviderConsole, ProviderChatGPT, ProviderAdobe}
+var providers = [...]Provider{ProviderBuild, ProviderWeb, ProviderConsole, ProviderChatGPT, ProviderAdobe, ProviderMuse}
 
 // Providers 返回按产品展示和后台维护顺序排列的稳定 Provider 集合。
 // The order is also the routing priority when providers share a public model name.
@@ -324,11 +325,12 @@ func (m CredentialMaterial) ApplyTo(value Credential) (Credential, bool) {
 }
 
 // CredentialRefreshLead is how long before expiry a provider renews its
-// access token. ChatGPT tokens live about a week, so a day of lead leaves room
-// to retry a failed renewal; other providers renew minutes ahead, which keeps
-// refresh-token rotation to one per token lifetime.
+// access token. ChatGPT tokens live about a week and Muse sessions two days,
+// so a day of lead leaves room to retry a failed renewal; other providers
+// renew minutes ahead, which keeps refresh-token rotation to one per token
+// lifetime.
 func (p Provider) CredentialRefreshLead() time.Duration {
-	if p == ProviderChatGPT {
+	if p == ProviderChatGPT || p == ProviderMuse {
 		return 24 * time.Hour
 	}
 	return 5 * time.Minute

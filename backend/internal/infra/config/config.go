@@ -147,6 +147,17 @@ type ProviderConfig struct {
 	Console ConsoleProviderConfig `yaml:"console"`
 	ChatGPT ChatGPTProviderConfig `yaml:"chatgpt"`
 	Adobe   AdobeProviderConfig   `yaml:"adobe"`
+	Muse    MuseProviderConfig    `yaml:"muse"`
+}
+
+// MuseProviderConfig holds the Muse (muse.ai) provider runtime settings.
+type MuseProviderConfig struct {
+	// BrowserURL is the DevTools HTTP endpoint of the headless Chrome that
+	// drives muse.ai; empty uses http://muse-browser:9222, the service name in
+	// the bundled docker-compose.
+	BrowserURL string `yaml:"browserURL"`
+	// MaxPages caps concurrent browser pages (one per Muse request); 0 means 2.
+	MaxPages int `yaml:"maxPages"`
 }
 
 // AdobeProviderConfig holds the Adobe Firefly provider runtime settings.
@@ -689,6 +700,15 @@ func (c Config) Validate() error {
 			return fmt.Errorf("provider.adobe mint 服务地址无效: %w", err)
 		}
 	}
+	if strings.TrimSpace(c.Provider.Muse.BrowserURL) != "" {
+		if err := ValidateServiceURL(c.Provider.Muse.BrowserURL); err != nil {
+			return fmt.Errorf("provider.muse 浏览器地址无效: %w", err)
+		}
+	}
+	// 0 表示默认 2 个页面；早于 Muse 的持久化设置里就是 0。
+	if c.Provider.Muse.MaxPages < 0 || c.Provider.Muse.MaxPages > 16 {
+		return errors.New("provider.muse.maxPages 必须为 0（默认 2）或在 1 到 16 之间")
+	}
 	// 0 表示默认 60 秒。
 	if timeout := c.Provider.Adobe.Timeout.Value(); timeout != 0 && (timeout < 5*time.Second || timeout > 30*time.Minute) {
 		return errors.New("provider.adobe.timeout 必须为 0（默认 60 秒）或在 5 秒到 30 分钟之间")
@@ -957,6 +977,7 @@ func defaultConfig() Config {
 			Console: ConsoleProviderConfig{BaseURL: "https://console.x.ai", ChatTimeout: Duration(5 * time.Minute), StreamIdleTimeout: Duration(settingsdomain.DefaultConsoleStreamIdleTimeout)},
 			ChatGPT: ChatGPTProviderConfig{OutputTokenLimit: DefaultChatGPTOutputTokenLimit, VisionTokens: DefaultChatGPTVisionTokens},
 			Adobe:   AdobeProviderConfig{SherlockMintAPI: "http://mint:8777", Timeout: Duration(60 * time.Second)},
+			Muse:    MuseProviderConfig{BrowserURL: "http://muse-browser:9222", MaxPages: 2},
 		},
 		Batch: BatchConfig{
 			ImportConcurrency: 25, ConversionConcurrency: 25, SyncConcurrency: 25,

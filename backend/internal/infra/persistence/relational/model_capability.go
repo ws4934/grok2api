@@ -15,11 +15,11 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// Console and Adobe static support is anchored to the reconciled catalog routes
+// Console, Adobe and Muse static support is anchored to the reconciled catalog routes
 // instead of the provider name alone: every account serves the whole catalog. Manual aliases remain supported while an
 // equivalent catalog route exists, and stale aliases stop advertising support
 // as soon as that catalog entry is removed.
-const modelConsoleStaticSupportExpression = `(model_routes.provider IN ('grok_console', 'adobe') AND (
+const modelConsoleStaticSupportExpression = `(model_routes.provider IN ('grok_console', 'adobe', 'muse') AND (
 	model_routes.origin = 'catalog'
 	OR EXISTS (
 		SELECT 1 FROM model_routes console_catalog_route
@@ -30,7 +30,7 @@ const modelConsoleStaticSupportExpression = `(model_routes.provider IN ('grok_co
 	)
 ))`
 
-const modelConsoleStaticSupportAvailabilityExpression = `(route.provider IN ('grok_console', 'adobe') AND (
+const modelConsoleStaticSupportAvailabilityExpression = `(route.provider IN ('grok_console', 'adobe', 'muse') AND (
 	route.origin = 'catalog'
 	OR EXISTS (
 		SELECT 1 FROM model_routes console_catalog_route

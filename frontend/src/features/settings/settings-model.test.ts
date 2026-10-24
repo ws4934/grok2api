@@ -38,3 +38,21 @@ describe("Adobe provider settings", () => {
     }
   });
 });
+
+const muse = settingsSchema.shape.providerMuse;
+
+describe("Muse provider settings", () => {
+  it("accepts an empty, internal or public HTTPS browser URL", () => {
+    for (const browserURL of ["", "http://muse-browser:9222", "http://127.0.0.1:9222", "https://browser.example.com"]) {
+      assert.equal(muse.safeParse({ browserURL, maxPages: 2 }).success, true, browserURL);
+    }
+  });
+
+  it("matches the backend URL policy and page range", () => {
+    for (const browserURL of ["http://browser.example.com:9222", "muse-browser:9222"]) {
+      assert.equal(muse.safeParse({ browserURL, maxPages: 2 }).success, false, browserURL);
+    }
+    for (const maxPages of [0, 17, 1.5]) assert.equal(muse.safeParse({ browserURL: "", maxPages }).success, false);
+    assert.equal(muse.safeParse({ browserURL: "", maxPages: 16 }).success, true);
+  });
+});
