@@ -330,6 +330,15 @@ func (s *Service) credentialFromSeed(seed provider.CredentialSeed) (accountdomai
 	}
 	value := accountdomain.Credential{Provider: providerValue, AuthType: authType, WebTier: seed.WebTier, Name: seed.Name, Email: seed.Email, UserID: seed.UserID, TeamID: seed.TeamID, SourceKey: sourceKey, OIDCClientID: seed.OIDCClientID, EncryptedAccessToken: accessEncrypted, EncryptedRefreshToken: refreshEncrypted, EncryptedCloudflareCookie: cloudflareEncrypted, EncryptedState: stateEncrypted, Plan: seed.Plan, ExpiresAt: seed.ExpiresAt, Enabled: true, AuthStatus: accountdomain.AuthStatusActive, Priority: accountdomain.DefaultPriority, MaxConcurrent: maxConcurrent, MinimumRemaining: accountdomain.DefaultMinimumRemaining, WebNSFWEnabledAt: seed.WebNSFWEnabledAt, WebTermsAcceptedAt: seed.WebTermsAcceptedAt, WebTermsAcceptedVersion: seed.WebTermsAcceptedVersion, WebBirthDateSetAt: seed.WebBirthDateSetAt}
 	value.BuildBotFlagSource = s.credentialMetadata(value).BuildBotFlagSource
+	if providerValue == accountdomain.ProviderConsole {
+		value.ConsoleAPIKeyID = strings.TrimSpace(seed.ConsoleAPIKeyID)
+		if session := strings.TrimSpace(seed.ConsoleWorkOSSession); session != "" {
+			var err error
+			if value.EncryptedConsoleWorkOSSession, err = s.cipher.Encrypt(session); err != nil {
+				return accountdomain.Credential{}, err
+			}
+		}
+	}
 	if providerValue == accountdomain.ProviderWeb && strings.TrimSpace(seed.AccessToken) != "" {
 		value.EgressIdentity = "sso_" + security.HashToken(seed.AccessToken)[:32]
 	}

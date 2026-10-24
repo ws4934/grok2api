@@ -13,7 +13,13 @@ var (
 	ErrAuthorizationDenied  = errors.New("authorization denied")
 	ErrCredentialLimit      = errors.New("credential count exceeds limit")
 	ErrUnauthorized         = errors.New("upstream credential unauthorized")
-	ErrBirthDateAlreadySet  = errors.New("upstream birth date is already set")
+	// ErrConsoleUnlinked accompanies ErrUnauthorized for Grok Console accounts
+	// never linked to Cursor; they have no Console credit pool at all.
+	ErrConsoleUnlinked = errors.New("grok console account not linked to cursor")
+	// ErrEgressBlocked marks a request skipped locally because its egress is
+	// in a Cloudflare block cool-down; no upstream call was made.
+	ErrEgressBlocked       = errors.New("egress blocked by cloudflare, waiting for cool-down")
+	ErrBirthDateAlreadySet = errors.New("upstream birth date is already set")
 	// ErrVideoParameterInvalid and ErrVideoOperationUnsupported are wrapped by
 	// VideoRequestValidator rejections.
 	ErrVideoParameterInvalid     = errors.New("视频请求参数无效")

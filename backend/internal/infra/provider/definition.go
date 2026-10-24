@@ -139,6 +139,10 @@ type FailurePolicy struct {
 	// SoftRateLimit: a 429 that quota reconciliation does not explain isolates
 	// the account for Retry-After without growing its failure count.
 	SoftRateLimit bool
+	// PaymentRequiredQuota: a 402 means the quota window's spending limit is
+	// reached. It is reconciled like a 429 and, even when the lagging usage
+	// still shows budget, pauses the account until the next quota probe.
+	PaymentRequiredQuota bool
 }
 
 // MediaQuotaGroup is one dashboard media quota of a provider and the quota

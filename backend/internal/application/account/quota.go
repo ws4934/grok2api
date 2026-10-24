@@ -129,7 +129,7 @@ func (s *Service) refreshQuota(ctx context.Context, id uint64) (quotaRefreshResu
 	snapshot, err := adapter.SyncQuota(ctx, value)
 	if err != nil {
 		if errors.Is(err, provider.ErrUnauthorized) {
-			err = errors.Join(err, s.markSSOCredentialRejected(ctx, value, fmt.Sprintf("%s SSO credential rejected", value.Provider)))
+			err = errors.Join(err, s.markSSOCredentialRejected(ctx, value, ssoRejectedReason(value, err)))
 		}
 		return quotaRefreshResult{}, err
 	}
@@ -321,7 +321,7 @@ func (s *Service) refreshQuotaGroup(ctx context.Context, id uint64, group string
 	snapshot, err := adapter.SyncQuotaGroup(ctx, value, group)
 	if err != nil {
 		if errors.Is(err, provider.ErrUnauthorized) {
-			err = errors.Join(err, s.markSSOCredentialRejected(ctx, value, fmt.Sprintf("%s SSO credential rejected", value.Provider)))
+			err = errors.Join(err, s.markSSOCredentialRejected(ctx, value, ssoRejectedReason(value, err)))
 		}
 		return quotaRefreshResult{}, err
 	}
@@ -378,7 +378,7 @@ func (s *Service) refreshQuotaMode(ctx context.Context, id uint64, mode string) 
 	}
 	if err != nil {
 		if errors.Is(err, provider.ErrUnauthorized) {
-			err = errors.Join(err, s.markSSOCredentialRejected(ctx, value, fmt.Sprintf("%s SSO credential rejected", value.Provider)))
+			err = errors.Join(err, s.markSSOCredentialRejected(ctx, value, ssoRejectedReason(value, err)))
 		}
 		return quotaRefreshResult{}, err
 	}

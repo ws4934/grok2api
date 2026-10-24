@@ -481,6 +481,11 @@ func (s *Service) MarkReauthRequired(ctx context.Context, id uint64, reason stri
 	if s.sticky != nil {
 		_ = s.sticky.DeleteByAccount(ctx, id)
 	}
+	if s.autoDeleteConsoleUnlinked.Load() {
+		if value, err := s.accounts.Get(ctx, id); err == nil && isConsoleUnlinkedAccount(value) {
+			s.deleteConsoleUnlinkedAccount(ctx, id)
+		}
+	}
 	return nil
 }
 

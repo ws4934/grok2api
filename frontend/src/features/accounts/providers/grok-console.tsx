@@ -1,35 +1,48 @@
 import { useTranslation } from "react-i18next";
 
-import { AccountTypeText, QuotaModeBar, QuotaNotSynced } from "@/features/accounts/account-cells";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AccountTypeText, QuotaNotSynced } from "@/features/accounts/account-cells";
 import type { ProviderAccountUI } from "@/features/accounts/account-ui";
 import type { AccountDTO } from "@/features/accounts/accounts-api";
 import { CloudflareCookieFields, cloudflareCookieInput, webAssociationFilter } from "@/features/accounts/providers/grok-web";
-
-const consoleQuotaModes = [
-  { mode: "console", label: "Chat" },
-  { mode: "console_image", label: "Image" },
-  { mode: "console_video", label: "Video" },
-] as const;
+import { cn } from "@/shared/lib/cn";
+import { formatDateTime, formatNumber } from "@/shared/lib/format";
 
 function ConsoleType() {
   const { t } = useTranslation();
   return <AccountTypeText label={t("accountType.console")} variant="free" />;
 }
 
+// Console chat, image and video all draw on one weekly included-usage pool
+// measured in cents. The backend mirrors that pool into the three Console
+// modes, so it is rendered once as dollars.
 function ConsoleQuota({ account, locale }: { account: AccountDTO; locale: string }) {
+  const { t } = useTranslation();
   const windows = account.quotaWindows ?? [];
-  if (windows.length === 0) return <QuotaNotSynced />;
-  const windowsByMode = new Map(windows.map((window) => [window.mode, window]));
+  const window = ["console", "console_image", "console_video"]
+    .map((mode) => windows.find((item) => item.mode === mode))
+    .find((item) => item !== undefined);
+  if (!window) return <QuotaNotSynced />;
+  const usedCents = Math.max(0, window.total - window.remaining);
+  const percent = Math.max(0, Math.min(100, window.usagePercent));
+  const exhausted = window.remaining <= 0;
+  const dollars = (cents: number) => `$${formatNumber(cents / 100, locale, 2)}`;
   return (
-    <div className="grid w-full min-w-0 grid-cols-[2fr_1fr_1fr] divide-x divide-border/70">
-      {consoleQuotaModes.map(({ mode, label }) => {
-        const window = windowsByMode.get(mode);
-        if (!window) {
-          return <div key={mode} className="min-w-0 px-2 first:pl-0 last:pr-0"><div className="flex items-center justify-between gap-1 text-[11px]"><span className="truncate text-muted-foreground">{label}</span><span className="text-muted-foreground">-</span></div><div className="mt-1.5 h-1.5 rounded-full bg-muted" /></div>;
-        }
-        return <QuotaModeBar key={mode} mode={label} window={window} locale={locale} compact recoveryProbe={mode === "console" && window.remaining === 0} />;
-      })}
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" className="block w-full min-w-0 text-left font-normal">
+          <div className="flex items-center justify-between gap-2 text-[11px]">
+            <span className={cn("truncate", exhausted ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>{t("accounts.weeklyQuota")}</span>
+            <span className="shrink-0 tabular-nums">{dollars(usedCents)}/{dollars(window.total)}</span>
+          </div>
+          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted"><div className={cn("h-full", exhausted ? "bg-amber-500" : "bg-primary")} style={{ width: `${percent}%` }} /></div>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>
+        <div>{t("accounts.consoleWeeklyUsage", { remaining: dollars(window.remaining), percent: formatNumber(percent, locale, 1) })}</div>
+        <div className="text-muted-foreground">{window.resetAt ? t("accounts.quotaResetAt", { time: formatDateTime(window.resetAt, locale) }) : t("accounts.quotaResetUnknown")}</div>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

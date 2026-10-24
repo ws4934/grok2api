@@ -45,7 +45,7 @@ func (a *Adapter) Definition() provider.Definition {
 		Inference: provider.InferencePolicy{Usage: provider.UsageUpstream, RetryForbiddenAsEgress: true, QualityHold: true},
 		// A 429 with quota left is transient on Console; the DPoP rollout 403
 		// cannot be fixed by another account or egress.
-		Failure: provider.FailurePolicy{TerminalAuthSchemeForbidden: true, SoftRateLimit: true},
+		Failure: provider.FailurePolicy{TerminalAuthSchemeForbidden: true, SoftRateLimit: true, PaymentRequiredQuota: true},
 	}
 }
 

@@ -207,6 +207,27 @@ func (r *AccountRepository) CountAvailableAmong(ctx context.Context, providerVal
 	return total, nil
 }
 
+// UpdateConsoleAPIKeyID stores the Console team apiKeyId cache. Routing
+// re-reads credential material per request, so no invalidation is needed.
+func (r *AccountRepository) UpdateConsoleAPIKeyID(ctx context.Context, accountID uint64, apiKeyID string) error {
+	return r.updateConsoleCredentialCache(ctx, accountID, "console_api_key_id", strings.TrimSpace(apiKeyID), 64)
+}
+
+// UpdateConsoleWorkOSSession stores the encrypted WorkOS cookie triple.
+func (r *AccountRepository) UpdateConsoleWorkOSSession(ctx context.Context, accountID uint64, encryptedSession string) error {
+	return r.updateConsoleCredentialCache(ctx, accountID, "encrypted_console_workos_session", encryptedSession, 65536)
+}
+
+func (r *AccountRepository) updateConsoleCredentialCache(ctx context.Context, accountID uint64, column, value string, limit int) error {
+	if accountID == 0 || len(value) > limit {
+		return repository.ErrInvalidRecord
+	}
+	return mapError(r.db.db.WithContext(ctx).Model(&accountCredentialModel{}).
+		Where("account_id = ? AND account_id IN (?)", accountID,
+			r.db.db.Model(&accountModel{}).Select("id").Where("provider = ?", account.ProviderConsole)).
+		Update(column, value).Error)
+}
+
 func (r *AccountRepository) Summarize(ctx context.Context, now time.Time) ([]repository.AccountSummary, error) {
 	var rows []repository.AccountSummary
 	selectFields := `

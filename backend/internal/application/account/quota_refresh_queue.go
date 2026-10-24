@@ -11,6 +11,7 @@ import (
 	"time"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/pkg/batch"
 	"github.com/chenyme/grok2api/backend/internal/pkg/perfmetrics"
 	"github.com/chenyme/grok2api/backend/internal/repository"
@@ -364,10 +365,14 @@ func (q *quotaRefreshQueue) refresh(parent context.Context, request quotaRefresh
 		}
 		cancel()
 		if refreshErr != nil || !acquired {
-			if refreshErr != nil && !errors.Is(refreshErr, context.Canceled) {
+			if errors.Is(refreshErr, provider.ErrEgressBlocked) {
+				// The adapter already logged the egress block once; every
+				// account behind it waits for the shared cool-down.
+				q.logger.Debug("quota_refresh_egress_blocked", "account_id", request.accountID, "mode", refreshMode, "retry_after", provider.ErrorRetryAfter(refreshErr))
+			} else if refreshErr != nil && !errors.Is(refreshErr, context.Canceled) {
 				q.logger.Warn("quota_refresh_failed", "account_id", request.accountID, "mode", refreshMode, "error", refreshErr)
 			}
-			q.deferRetry(request.key)
+			q.deferRetryAfter(request.key, provider.ErrorRetryAfter(refreshErr))
 			perfmetrics.Default.Add("quota_refresh_events", perfmetrics.Labels{Subsystem: "quota", Stage: "refresh", Outcome: "retry"}, 1)
 			return
 		}
@@ -440,12 +445,18 @@ func (q *quotaRefreshQueue) refresh(parent context.Context, request quotaRefresh
 }
 
 func (q *quotaRefreshQueue) deferRetry(key string) {
+	q.deferRetryAfter(key, 0)
+}
+
+// deferRetryAfter backs off like deferRetry but never retries before an
+// upstream- or adapter-provided minimum delay.
+func (q *quotaRefreshQueue) deferRetryAfter(key string, minimum time.Duration) {
 	q.mu.Lock()
 	if state := q.states[key]; state != nil {
 		state.running = false
 		state.pending = true
 		state.failures++
-		state.nextAttemptAt = q.now().UTC().Add(quotaRefreshRetryDelay(state.failures))
+		state.nextAttemptAt = q.now().UTC().Add(max(quotaRefreshRetryDelay(state.failures), minimum))
 	}
 	q.mu.Unlock()
 	q.wakeRecovery()

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -55,8 +56,9 @@ const (
 	quotaRefreshBackoffBase                       = time.Second
 	// A refresh that keeps failing backs off to 15 minutes; the 30-minute stale
 	// catch-up still resyncs the account later.
-	quotaRefreshBackoffMax         = 15 * time.Minute
-	consoleQuotaRefreshMinInterval = 30 * time.Second
+	quotaRefreshBackoffMax = 15 * time.Minute
+	// usage-status lags execution by ~45s; sampling faster only re-reads stale values.
+	consoleQuotaRefreshMinInterval = 60 * time.Second
 	// snapshotQuotaRefreshMinInterval spaces the request-driven syncs of a
 	// snapshot provider (ChatGPT: conversation/init plus Codex usage).
 	snapshotQuotaRefreshMinInterval               = 2 * time.Minute
@@ -118,9 +120,12 @@ type Service struct {
 	autoCleanRevision      uint64
 	autoCleanWake          chan struct{}
 	excludeBuildBotFlagged bool
-	buildBotFlagCache      *resultcache.Cache[string, []uint64]
-	logger                 *slog.Logger
-	now                    func() time.Time
+	// autoDeleteConsoleUnlinked deletes Console accounts once they are marked
+	// with LastErrorConsoleUnlinked instead of keeping them as reauthRequired.
+	autoDeleteConsoleUnlinked atomic.Bool
+	buildBotFlagCache         *resultcache.Cache[string, []uint64]
+	logger                    *slog.Logger
+	now                       func() time.Time
 }
 
 func (s *Service) SetQuotaRecoveryQueue(queue repository.QuotaRecoveryQueue) {

@@ -1,9 +1,11 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -140,8 +142,42 @@ func (s *Service) markCredentialRejectedAfterPermanentRefresh(ctx context.Contex
 	_ = s.accounts.MarkReauthRequired(ctx, credential.ID, fmt.Sprintf("%s OAuth access token rejected after permanent refresh failure", credential.Provider))
 }
 
+// consoleNoCreditsReason is recorded on Console accounts the upstream reports
+// as never provisioned. Retrying, cooling down or rotating egress cannot help.
+const consoleNoCreditsReason = accountdomain.LastErrorConsoleUnlinked
+
+func isConsoleNoCreditsFailure(upstreamProvider accountdomain.Provider, failure *UpstreamFailure) bool {
+	return upstreamProvider == accountdomain.ProviderConsole && failure != nil && failure.NoCreditsOrLicenses
+}
+
+// retireConsoleNoCreditsAccount inspects a Console 403 and, when it is the
+// permanent no-credits denial, marks the account reauthRequired. The body is
+// restored on the response either way.
+func (s *Service) retireConsoleNoCreditsAccount(ctx context.Context, requestID string, credential accountdomain.Credential, response *provider.Response) bool {
+	if credential.Provider != accountdomain.ProviderConsole || response == nil || response.StatusCode != http.StatusForbidden {
+		return false
+	}
+	body, _ := readRetryableBody(response.Body)
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	if !provider.IsConsoleNoCreditsText(string(body)) {
+		return false
+	}
+	s.markReauthRequired(ctx, requestID, credential, consoleNoCreditsReason)
+	s.logger.Warn("console_account_no_credits", "request_id", requestID, "account_id", credential.ID)
+	return true
+}
+
 func (s *Service) applyRateLimitReconciliation(ctx context.Context, credential accountdomain.Credential, status int, retryAfter time.Duration, state accountapp.RateLimitReconcileState, reconcileErr error) {
 	if reconcileErr == nil && state == accountapp.RateLimitReconcileExhausted {
+		return
+	}
+	if status == http.StatusPaymentRequired && s.providers.Failure(credential.Provider).PaymentRequiredQuota {
+		// 402 spending-limit is authoritative even when the usage still shows
+		// budget: it is recorded ~45s after execution. Pause until the next
+		// probe instead of applying an exponential failure cooldown.
+		if err := s.selector.MarkPaymentQuotaExhausted(ctx, credential, quotaRecoveryHints{}); err != nil {
+			s.logger.Warn("spending_limit_pause_failed", "provider", credential.Provider, "account_id", credential.ID, "state", state, "error", err)
+		}
 		return
 	}
 	if status == http.StatusTooManyRequests && s.providers.Failure(credential.Provider).SoftRateLimit {

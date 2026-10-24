@@ -33,6 +33,7 @@ export type SettingsConfigDTO = {
     markBuildForbiddenReauth: boolean;
     buildForbiddenReauthCodes: string[];
     excludeBuildBotFlaggedFromScheduling: boolean;
+    autoDeleteConsoleUnlinked: boolean;
     autoCleanReauthEnabled: boolean;
     autoCleanReauthInterval: string;
     autoCleanReauthMinAge: string;
@@ -148,6 +149,7 @@ const settingsConfigValidator = hasShape({
     markBuildForbiddenReauth: isBoolean,
     buildForbiddenReauthCodes: isArrayOf(isString),
     excludeBuildBotFlaggedFromScheduling: isBoolean,
+    autoDeleteConsoleUnlinked: isBoolean,
     autoCleanReauthEnabled: isBoolean,
     autoCleanReauthInterval: isString,
     autoCleanReauthMinAge: isString,

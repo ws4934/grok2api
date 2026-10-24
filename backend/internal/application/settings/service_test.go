@@ -746,3 +746,31 @@ func TestApplyingSettingsKeepsFileOnlyFields(t *testing.T) {
 		t.Fatalf("round trip changed the config:\n got %+v\nwant %+v", got, base)
 	}
 }
+
+func TestUpdateAutoDeleteConsoleUnlinkedDefaultsOffAndRoundTrips(t *testing.T) {
+	cfg := testConfig(t)
+	repo := &runtimeSettingsRepositoryStub{}
+	var applied config.Config
+	service := NewService(cfg, time.Time{}, 0, repo, nil, func(next config.Config) { applied = next })
+	if service.Get().Config.Accounts.AutoDeleteConsoleUnlinked {
+		t.Fatal("auto-delete of unlinked Console accounts must default to off")
+	}
+	input := service.Get().Config
+	input.Accounts.AutoDeleteConsoleUnlinked = true
+	snapshot, err := service.Update(context.Background(), service.Get().Revision, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied.Accounts.AutoDeleteConsoleUnlinked || !snapshot.Config.Accounts.AutoDeleteConsoleUnlinked {
+		t.Fatalf("applied = %#v snapshot = %#v", applied.Accounts, snapshot.Config.Accounts)
+	}
+	input = snapshot.Config
+	input.Accounts.AutoDeleteConsoleUnlinked = false
+	snapshot, err = service.Update(context.Background(), snapshot.Revision, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.Accounts.AutoDeleteConsoleUnlinked || snapshot.Config.Accounts.AutoDeleteConsoleUnlinked {
+		t.Fatal("the switch did not turn off")
+	}
+}

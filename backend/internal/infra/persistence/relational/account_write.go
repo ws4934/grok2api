@@ -139,7 +139,7 @@ func providerSourceLookupKey(providerValue, sourceKey string) string {
 func upsertKnownAccountByIdentity(tx *gorm.DB, value account.Credential, existing *accountModel) (repository.AccountUpsertResult, accountModel, error) {
 	row := fromAccountDomain(value)
 	if existing != nil {
-		if value.EncryptedCloudflareCookie == "" || value.EncryptedState == "" {
+		if value.EncryptedCloudflareCookie == "" || value.EncryptedState == "" || value.ConsoleAPIKeyID == "" || value.EncryptedConsoleWorkOSSession == "" {
 			var storedCredential accountCredentialModel
 			if err := tx.Where("account_id = ?", existing.ID).First(&storedCredential).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 				return repository.AccountUpsertResult{}, accountModel{}, err
@@ -150,6 +150,14 @@ func upsertKnownAccountByIdentity(tx *gorm.DB, value account.Credential, existin
 			// Re-imports without provider state keep the stored state.
 			if value.EncryptedState == "" {
 				value.EncryptedState = storedCredential.EncryptedState
+			}
+			// Imports never carry the Console caches; keep the derived values
+			// so a re-import does not force another key read and WorkOS login.
+			if value.ConsoleAPIKeyID == "" {
+				value.ConsoleAPIKeyID = storedCredential.ConsoleAPIKeyID
+			}
+			if value.EncryptedConsoleWorkOSSession == "" {
+				value.EncryptedConsoleWorkOSSession = storedCredential.EncryptedConsoleWorkOSSession
 			}
 		}
 		if row.Plan == "" {

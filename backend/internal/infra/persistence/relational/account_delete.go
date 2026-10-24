@@ -61,6 +61,14 @@ func (r *AccountRepository) DeleteMany(ctx context.Context, ids []uint64) (int64
 	return deleted, err
 }
 
+func (r *AccountRepository) ListReauthAccountIDsByLastError(ctx context.Context, provider account.Provider, lastError string) ([]uint64, error) {
+	var ids []uint64
+	err := r.db.db.WithContext(ctx).Model(&accountModel{}).
+		Where("provider = ? AND auth_status = ? AND last_error = ?", provider, account.AuthStatusReauthRequired, lastError).
+		Order("id ASC").Pluck("id", &ids).Error
+	return ids, mapError(err)
+}
+
 func (r *AccountRepository) ListAutoCleanReauthCandidates(ctx context.Context, markedBefore time.Time, includeDisabled bool, afterID uint64, limit int) ([]uint64, error) {
 	if limit < 1 {
 		limit = 100

@@ -627,9 +627,9 @@ func TestNormalizeRequestForwardsXSearchTimeRangeAndImageSearch(t *testing.T) {
 }
 
 func TestNormalizeRequestAvoidsClientViewImageToolCollision(t *testing.T) {
-	spec, ok := Resolve("grok-4.5")
+	spec, ok := Resolve("grok-4.3")
 	if !ok {
-		t.Fatal("grok-4.5 missing")
+		t.Fatal("grok-4.3 missing")
 	}
 	tests := []struct {
 		name      string
@@ -639,21 +639,21 @@ func TestNormalizeRequestAvoidsClientViewImageToolCollision(t *testing.T) {
 		{
 			name:      "responses",
 			operation: conversation.OperationResponses,
-			body: `{"model":"grok-4.5","input":"Reply only OK. Do not call tools.","tools":[
+			body: `{"model":"grok-4.3","input":"Reply only OK. Do not call tools.","tools":[
 				{"type":"function","name":"view_image","description":"View a local image","strict":false,"parameters":{"type":"object"}},
 				{"type":"web_search","enable_image_understanding":true}],"tool_choice":"auto"}`,
 		},
 		{
 			name:      "chat completions",
 			operation: conversation.OperationChat,
-			body: `{"model":"grok-4.5","messages":[{"role":"user","content":"Reply only OK."}],"tools":[
+			body: `{"model":"grok-4.3","messages":[{"role":"user","content":"Reply only OK."}],"tools":[
 				{"type":"function","function":{"name":"view_image","description":"View a local image","strict":false,"parameters":{"type":"object"}}},
 				{"type":"web_search"}],"tool_choice":"auto"}`,
 		},
 		{
 			name:      "anthropic messages",
 			operation: conversation.OperationMessages,
-			body: `{"model":"grok-4.5","max_tokens":64,"messages":[{"role":"user","content":"Reply only OK."}],"tools":[
+			body: `{"model":"grok-4.3","max_tokens":64,"messages":[{"role":"user","content":"Reply only OK."}],"tools":[
 				{"name":"view_image","description":"View a local image","input_schema":{"type":"object"}},
 				{"type":"web_search_20250305","name":"web_search"}],"tool_choice":{"type":"auto"}}`,
 		},
@@ -1281,9 +1281,23 @@ func TestConsoleForbiddenKeepsClearanceUnlessEgressRejected(t *testing.T) {
 						Mode: "flaresolverr", FlareSolverrURL: server.URL, TargetURL: server.URL, Timeout: time.Second, RefreshInterval: time.Hour,
 					})
 					call.call(adapter, credential)
+					if call.name == "quota" && body.name == "cloudflare" {
+						// The quota path pauses the blocked egress; the next sync
+						// after the cool-down must solve a fresh Clearance.
+						if _, err := adapter.SyncQuota(context.Background(), credential); !errors.Is(err, provider.ErrEgressBlocked) {
+							t.Fatalf("sync during cool-down error = %v, want ErrEgressBlocked", err)
+						}
+						adapter.breaker = newEgressBreaker()
+					}
 					call.call(adapter, credential)
-					if got := solves.Load(); got != body.wantSolves {
-						t.Fatalf("clearance solves = %d, want %d", got, body.wantSolves)
+					want := body.wantSolves
+					if call.name == "quota" && body.name == "dpop proof" {
+						// Quota reads the grok.com dashboard, which has no DPoP:
+						// any 403 short of a ban counts against the egress.
+						want = 2
+					}
+					if got := solves.Load(); got != want {
+						t.Fatalf("clearance solves = %d, want %d", got, want)
 					}
 				})
 			}
@@ -1521,119 +1535,6 @@ func TestAdapterPreservesConversationRateLimitStatusAndProtocol(t *testing.T) {
 				t.Fatalf("compatible error = %#v", payload)
 			}
 		})
-	}
-}
-
-func TestSyncQuotaUsesDPoPUsageQuotas(t *testing.T) {
-	var tokenRequests atomic.Int32
-	var usageRequests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/v1/dpop/token" {
-			tokenRequests.Add(1)
-			serveTestDPoPToken(t, writer, request)
-			return
-		}
-		if request.URL.Path != "/v1/usage" || request.Method != http.MethodGet {
-			http.NotFound(writer, request)
-			return
-		}
-		usageRequests.Add(1)
-		verifyTestDPoPProof(t, request)
-		if request.Header.Get("x-cluster") != "" {
-			t.Errorf("usage x-cluster = %q", request.Header.Get("x-cluster"))
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"quotas":[{"kind":"chat","limit":10,"used":1,"remaining":9,"last_consumed_at":1785895737},{"kind":"image","limit":5,"used":0,"remaining":5},{"kind":"video","limit":2,"used":0,"remaining":2}]}`)
-	}))
-	defer server.Close()
-	adapter, credential := newConsoleTestAdapter(t, server.URL)
-	for range 2 {
-		snapshot, err := adapter.SyncQuota(context.Background(), credential)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(snapshot.Windows) != 3 {
-			t.Fatalf("quota windows = %#v", snapshot.Windows)
-		}
-		want := []struct {
-			mode                         string
-			remaining, total, windowSecs int
-		}{
-			{mode: QuotaMode, remaining: 9, total: 10, windowSecs: 24 * 60 * 60},
-			{mode: QuotaModeImage, remaining: 5, total: 5},
-			{mode: QuotaModeVideo, remaining: 2, total: 2},
-		}
-		for index, expected := range want {
-			window := snapshot.Windows[index]
-			if window.Mode != expected.mode || window.Remaining != expected.remaining || window.Total != expected.total || window.Source != account.QuotaSourceUpstream || window.ResetAt != nil || window.WindowSeconds != expected.windowSecs {
-				t.Fatalf("quota[%d] = %#v", index, window)
-			}
-		}
-	}
-	if tokenRequests.Load() != 1 || usageRequests.Load() != 2 {
-		t.Fatalf("requests token=%d usage=%d", tokenRequests.Load(), usageRequests.Load())
-	}
-}
-
-func TestSyncQuotaPredictsChatRecoveryAfter24Hours(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/v1/dpop/token" {
-			serveTestDPoPToken(t, writer, request)
-			return
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"quotas":[{"kind":"chat","limit":10,"used":10,"remaining":0},{"kind":"image","limit":5,"used":0,"remaining":5},{"kind":"video","limit":2,"used":0,"remaining":2}]}`)
-	}))
-	defer server.Close()
-	adapter, credential := newConsoleTestAdapter(t, server.URL)
-	startedAt := time.Now().UTC()
-	snapshot, err := adapter.SyncQuota(context.Background(), credential)
-	if err != nil {
-		t.Fatal(err)
-	}
-	chat := snapshot.Windows[0]
-	if chat.ResetAt == nil || chat.WindowSeconds != 24*60*60 {
-		t.Fatalf("chat recovery = %#v", chat)
-	}
-	want := startedAt.Add(24 * time.Hour)
-	if chat.ResetAt.Before(want) || chat.ResetAt.After(time.Now().UTC().Add(24*time.Hour)) {
-		t.Fatalf("predicted recovery = %s, want around %s", chat.ResetAt, want)
-	}
-}
-
-func TestSyncQuotaModeSelectsConsoleMediaWindow(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/v1/dpop/token" {
-			serveTestDPoPToken(t, writer, request)
-			return
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"quotas":[{"kind":"chat","limit":10,"used":1,"remaining":9},{"kind":"image","limit":5,"used":2,"remaining":3},{"kind":"video","limit":2,"used":0,"remaining":2}]}`)
-	}))
-	defer server.Close()
-	adapter, credential := newConsoleTestAdapter(t, server.URL)
-	window, err := adapter.SyncQuotaMode(context.Background(), credential, QuotaModeImage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if window.Mode != QuotaModeImage || window.Remaining != 3 || window.Total != 5 || window.UsagePercent != 40 {
-		t.Fatalf("image quota = %#v", window)
-	}
-}
-
-func TestSyncQuotaRejectsPartialUsageSnapshot(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path == "/v1/dpop/token" {
-			serveTestDPoPToken(t, writer, request)
-			return
-		}
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(writer, `{"quotas":[{"kind":"chat","limit":10,"used":1,"remaining":9}]}`)
-	}))
-	defer server.Close()
-	adapter, credential := newConsoleTestAdapter(t, server.URL)
-	if _, err := adapter.SyncQuota(context.Background(), credential); err == nil || !strings.Contains(err.Error(), "image") {
-		t.Fatalf("partial usage err = %v", err)
 	}
 }
 
@@ -2534,10 +2435,12 @@ func newConsoleTestAdapterWithAssets(t *testing.T, baseURL string, assets provid
 	if err != nil {
 		t.Fatal(err)
 	}
-	adapter := NewAdapter(Config{BaseURL: baseURL, TimeoutSeconds: 5}, infraegress.NewManager(consoleEgressRepositoryStub{}, cipher), cipher, assets)
-	credential := account.Credential{ID: 1, Provider: account.ProviderConsole, AuthType: account.AuthTypeSSO, EncryptedAccessToken: encrypted}
+	adapter := NewAdapter(Config{BaseURL: baseURL, SessionBaseURL: baseURL, TimeoutSeconds: 5}, infraegress.NewManager(consoleEgressRepositoryStub{}, cipher), cipher, assets)
+	credential := account.Credential{ID: 1, Provider: account.ProviderConsole, AuthType: account.AuthTypeSSO, EncryptedAccessToken: encrypted, ConsoleAPIKeyID: testConsoleAPIKeyID}
 	return adapter, credential
 }
+
+const testConsoleAPIKeyID = "11111111-2222-4333-8444-555555555555"
 
 type consoleImageAssetStoreStub struct {
 	mu    sync.Mutex

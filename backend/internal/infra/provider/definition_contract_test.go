@@ -77,7 +77,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true, StatelessPreviousResponse: true},
 			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, TTS: true, STT: true, Realtime: true},
 			inference:    provider.InferencePolicy{Usage: provider.UsageUpstream, RetryForbiddenAsEgress: true, QualityHold: true},
-			failure:      provider.FailurePolicy{TerminalAuthSchemeForbidden: true, SoftRateLimit: true},
+			failure:      provider.FailurePolicy{TerminalAuthSchemeForbidden: true, SoftRateLimit: true, PaymentRequiredQuota: true},
 		},
 		{
 			provider: account.ProviderChatGPT, catalog: provider.ModelCatalogRemote, quota: provider.QuotaRemoteWindow,

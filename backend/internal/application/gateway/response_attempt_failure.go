@@ -167,8 +167,12 @@ func (a *responseAttempt) classifyForbidden(t *responseTry, egressForbidden, fin
 		// Fall through to the common success/error response path so the client receives the original 403.
 		return attemptProceed
 	}
-	if a.lastFailure.AccountBlocked {
-		failureHandled := s.markReauthRequired(ctx, requestID, credential, fmt.Sprintf("%s account is blocked", credential.Provider))
+	if a.lastFailure.AccountBlocked || isConsoleNoCreditsFailure(credential.Provider, a.lastFailure) {
+		reason := fmt.Sprintf("%s account is blocked", credential.Provider)
+		if !a.lastFailure.AccountBlocked {
+			reason = consoleNoCreditsReason
+		}
+		failureHandled := s.markReauthRequired(ctx, requestID, credential, reason)
 		if a.lastFailure.AccountScoped && !failureHandled {
 			s.selector.MarkFailure(ctx, credential, response.StatusCode, retryAfter)
 		}
@@ -301,7 +305,8 @@ func (a *responseAttempt) refreshRejectedCredential(t *responseTry) attemptStep 
 // names and reports whether that handled the account failure.
 func (a *responseAttempt) markQuotaFailure(t *responseTry, body []byte, retryAfter time.Duration) bool {
 	s, ctx, lease, credential := a.s, a.ctx, t.lease, t.credential
-	if lease.QuotaMode != "" && t.response.StatusCode == http.StatusTooManyRequests {
+	if lease.QuotaMode != "" && (t.response.StatusCode == http.StatusTooManyRequests ||
+		t.response.StatusCode == http.StatusPaymentRequired && s.providers.Failure(credential.Provider).PaymentRequiredQuota) {
 		state, reconcileErr := s.accounts.ReconcileRateLimit(ctx, credential.ID, lease.QuotaMode, retryAfter)
 		s.applyRateLimitReconciliation(ctx, credential, t.response.StatusCode, retryAfter, state, reconcileErr)
 		return true

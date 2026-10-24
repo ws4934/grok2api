@@ -116,18 +116,22 @@ func normalizeCredentialRefreshErrorCode(code string) string {
 
 // CredentialSeed represents an OAuth credential not yet persisted after login or import.
 type CredentialSeed struct {
-	Provider                account.Provider
-	AuthType                account.AuthType
-	WebTier                 account.WebTier
-	Name                    string
-	Email                   string
-	UserID                  string
-	TeamID                  string
-	SourceKey               string
-	OIDCClientID            string
-	AccessToken             string
-	RefreshToken            string
-	CloudflareCookies       string
+	Provider          account.Provider
+	AuthType          account.AuthType
+	WebTier           account.WebTier
+	Name              string
+	Email             string
+	UserID            string
+	TeamID            string
+	SourceKey         string
+	OIDCClientID      string
+	AccessToken       string
+	RefreshToken      string
+	CloudflareCookies string
+	// ConsoleAPIKeyID and ConsoleWorkOSSession (plaintext JSON of the WorkOS
+	// cookie triple) are optional grok_console caches supplied by imports.
+	ConsoleAPIKeyID         string
+	ConsoleWorkOSSession    string
 	ExpiresAt               time.Time
 	WebNSFWEnabledAt        *time.Time
 	WebTermsAcceptedAt      *time.Time
