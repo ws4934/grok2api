@@ -239,6 +239,42 @@ func TestImagesFanOutReusesABusyAccount(t *testing.T) {
 	checkFannedAudits(t, fixture, "req-one", 3, 0)
 }
 
+// A plain draw fails when a sibling draw holds the only free account, which
+// returned fewer images with a false 503. Draws that run side by side are
+// therefore all extra; only a round that found no free account is followed
+// by one plain draw, failing as the request would without fan-out.
+func TestImagesFanOutDrawsPlainOnlyAfterABusyRound(t *testing.T) {
+	for _, free := range []bool{true, false} {
+		var mu sync.Mutex
+		extras, plains := 0, 0
+		// An extra draw takes a free account; a plain draw always finds it
+		// taken by a sibling, the race's losing interleaving.
+		draw := func(_ context.Context, extra bool) (*Result, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if !extra {
+				plains++
+				return nil, ErrNoAvailableAccount
+			}
+			extras++
+			if !free {
+				return nil, errImageAccountsBusy
+			}
+			return &Result{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[{}]}`)), Finalize: func(Usage, string, string) {}}, nil
+		}
+		result, err := new(Service).fanOutImages(context.Background(), 3, draw)
+		if free {
+			if err != nil || len(readFanned(t, result).Data) != 3 || plains != 0 {
+				t.Fatalf("free account: err = %v, plain draws = %d", err, plains)
+			}
+			continue
+		}
+		if !errors.Is(err, ErrNoAvailableAccount) || result != nil || extras != 3 || plains != 1 {
+			t.Fatalf("no account: result = %v, err = %v, extra draws = %d, plain draws = %d", result, err, extras, plains)
+		}
+	}
+}
+
 func TestImagesFanOutReturnsTheImagesDrawnBeforeAFailure(t *testing.T) {
 	adapter := &singleImageAdapter{delay: 50 * time.Millisecond}
 	fixture := newFanOutFixture(t, 2, adapter)

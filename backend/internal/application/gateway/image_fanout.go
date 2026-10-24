@@ -9,8 +9,8 @@ import (
 	"sync"
 )
 
-// errImageAccountsBusy reports that an extra image of a fanned-out request
-// found no free account; a later round draws it.
+// errImageAccountsBusy reports that an image of a fanned-out request found no
+// free account; a later round draws it.
 var errImageAccountsBusy = errors.New("no free account for an extra image")
 
 // maxFannedImageBody bounds one single-image response held in memory.
@@ -42,20 +42,26 @@ type fannedImage struct {
 }
 
 // fanOutImages draws count images as single-image requests, in rounds. A
-// round starts one request per missing image at once: the first behaves like
-// a plain request, the others give up quietly when no account is free and
-// are drawn in the next round, once this round's accounts are released.
-// Drawing stops at the first failure; the delivered images are returned as
-// one response, each audited and billed on its own account when drawn.
+// round starts one request per missing image at once; a request that finds
+// no free account gives up quietly and is drawn in the next round, once this
+// round's accounts are released, so a sibling holding the only free account
+// never makes it fail. When a whole round finds no free account, the next
+// round is one plain request: it fails as the request would without fan-out
+// (same error and audit), or delivers an image and drawing goes on. Drawing
+// stops at the first failure; the delivered images are returned as one
+// response, each audited and billed on its own account when drawn.
 func (s *Service) fanOutImages(ctx context.Context, count int, draw func(ctx context.Context, extra bool) (*Result, error)) (*Result, error) {
 	var delivered, failed []fannedImage
-	for missing := count; missing > 0 && len(failed) == 0; {
-		outcomes := make([]fannedImage, missing)
+	for extra := true; len(delivered) < count && len(failed) == 0; {
+		outcomes := make([]fannedImage, count-len(delivered))
+		if !extra {
+			outcomes = outcomes[:1]
+		}
 		var wait sync.WaitGroup
 		for index := range outcomes {
 			wait.Go(func() {
 				outcome := &outcomes[index]
-				outcome.result, outcome.err = draw(ctx, index > 0)
+				outcome.result, outcome.err = draw(ctx, extra)
 				if outcome.err == nil && auditRequestSucceeded(outcome.result.StatusCode, "") {
 					outcome.body, outcome.err = io.ReadAll(io.LimitReader(outcome.result.Body, maxFannedImageBody))
 					if outcome.err == nil && !json.Valid(outcome.body) {
@@ -70,13 +76,13 @@ func (s *Service) fanOutImages(ctx context.Context, count int, draw func(ctx con
 			})
 		}
 		wait.Wait()
-		missing = 0
+		extra = false
 		for _, outcome := range outcomes {
 			switch {
 			case errors.Is(outcome.err, errImageAccountsBusy):
-				missing++
 			case outcome.err == nil && outcome.body != nil:
 				delivered = append(delivered, outcome)
+				extra = true
 			default:
 				failed = append(failed, outcome)
 			}

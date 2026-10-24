@@ -161,8 +161,9 @@ func (s *Service) executeImage(
 	method string,
 	path string,
 	headers map[string][]string,
-	// extra marks an additional image of a fanned-out request: it gives up
-	// without an audit when no account is free (errImageAccountsBusy).
+	// extra marks an image drawn by fanOutImages next to its siblings: it
+	// gives up without an audit when no account is free
+	// (errImageAccountsBusy), so fanOutImages can draw it again later.
 	extra bool,
 ) (*Result, error) {
 	ctx, egressTrace := infraegress.WithTrace(ctx)
