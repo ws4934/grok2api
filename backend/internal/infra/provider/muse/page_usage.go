@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
-// readUsage opens Settings from the dock menu and reads the Usage section,
-// which the dialog loads lazily. Clicks right after load can be ignored, so
-// each step is retried until the next element shows.
+// readUsage opens Settings from the dock menu, then asks the app's
+// subscription action for the weekly usage; the dialog's Usage text is the
+// fallback. Clicks right after load can be ignored, so each step is retried
+// until the next element shows.
 func (p *page) readUsage(ctx context.Context, location *time.Location) (usage, error) {
 	type point struct{ X, Y int }
 	deadline := time.Now().Add(20 * time.Second)
@@ -49,6 +50,23 @@ func (p *page) readUsage(ctx context.Context, location *time.Location) (usage, e
 	}
 	deadline = time.Now().Add(15 * time.Second)
 	for {
+		// Some sessions never render the Usage row (seen from a datacenter
+		// IP); the action behind it still answers.
+		var sub struct {
+			Used     *float64 `json:"used"`
+			ResetsAt int64    `json:"resetsAt"`
+			Plan     string   `json:"plan"`
+			Error    string   `json:"error"`
+		}
+		if err := p.js(ctx, "subscription", &sub); err == nil && sub.Used != nil && *sub.Used >= 0 && *sub.Used <= 100 {
+			u := usage{Plan: sub.Plan, UsedPercent: *sub.Used}
+			if sub.ResetsAt > 0 {
+				u.ResetAt = time.Unix(sub.ResetsAt, 0).UTC()
+			}
+			return u, nil
+		} else if err == nil && sub.Error != "" {
+			p.log.Debug("muse subscription action unavailable", "error", sub.Error)
+		}
 		var text string
 		if err := p.js(ctx, "dialogText", &text); err != nil {
 			return usage{}, err

@@ -291,4 +291,37 @@
     const d = [...document.querySelectorAll('[role=dialog],[aria-modal=true]')].find((e) => this.visible(e));
     return d ? d.innerText || '' : '';
   },
+  // subscription calls the app's fetchSubscriptionAction server action, which
+  // the Settings dialog uses for its Usage row. The dialog does not always
+  // render that row, but the action still answers. Its ID changes with every
+  // muse.ai deploy, so it is read from the loaded chunks; the one holding it
+  // loads with the dialog.
+  async subscription() {
+    const urls = [...new Set(performance.getEntriesByType('resource').map((e) => e.name)
+      .filter((u) => /\/_next\/static\/chunks\/[^?]+\.js/.test(u)))];
+    let id = null;
+    for (const u of urls) {
+      try {
+        const m = (await (await fetch(u)).text()).match(/createServerReference\)\("([0-9a-f]{40,})",[^)]*?"fetchSubscriptionAction"\)/);
+        if (m) { id = m[1]; break; }
+      } catch (e) { /* skip unreadable chunks */ }
+    }
+    if (!id) return { error: 'fetchSubscriptionAction not loaded' };
+    const r = await fetch(location.pathname, {
+      method: 'POST',
+      headers: { 'Next-Action': id, Accept: 'text/x-component', 'Content-Type': 'text/plain;charset=UTF-8' },
+      body: JSON.stringify([{ includeAgreement: true }]),
+    });
+    if (!r.ok) return { error: 'HTTP ' + r.status };
+    // The RSC reply is one JSON value per line: "1:{...}" holds the result.
+    for (const line of (await r.text()).split('\n')) {
+      const m = line.match(/^1:(.*)$/);
+      if (!m) continue;
+      const v = JSON.parse(m[1]);
+      const u = v && v.subscription && v.subscription.usage;
+      if (!v.success || !u || typeof u.percentUsed !== 'number') return { error: 'no usage in the reply' };
+      return { used: u.percentUsed, resetsAt: u.resetsAt || 0, plan: v.subscription.usageRowLabel || (v.subscription.tier && v.subscription.tier.name) || '' };
+    }
+    return { error: 'unexpected reply' };
+  },
 })
