@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>面向 Grok Build、Grok Web、Grok Console 与 ChatGPT 的多账号 API 网关</strong>
+  <strong>面向 Grok Build、Grok Web、Grok Console、ChatGPT、Adobe Firefly 与 Muse 的多账号 API 网关</strong>
 </p>
 
 <p align="center">
@@ -17,11 +17,11 @@
 </p>
 
 > [!NOTE]
-> 本项目仅供技术研究与学习交流。使用时请务必遵循 Grok、OpenAI 官方的使用条款及当地法律法规，否则一切后果自负！
+> 本项目仅供技术研究与学习交流。使用时请务必遵循 Grok、OpenAI、Adobe 与 Meta（Muse）官方的使用条款及当地法律法规，否则一切后果自负！
 
 ## 项目简介
 
-Grok2API 是一个内置 React 管理端的 Go 网关。它分别管理 Grok Build、Grok Web、Grok Console 和 ChatGPT 账号池，并对外提供统一的 OpenAI 与 Anthropic 兼容接口。
+Grok2API 是一个内置 React 管理端的 Go 网关。它分别管理 Grok Build、Grok Web、Grok Console、ChatGPT、Adobe Firefly 和 Muse 账号池，并对外提供统一的 OpenAI 与 Anthropic 兼容接口。
 
 ### 项目架构
 
@@ -57,10 +57,14 @@ flowchart LR
         Web["Grok Web<br/>SSO · 远端额度 · 媒体"]
         Console["Grok Console<br/>SSO · 本地窗口 · 无状态"]
         ChatGPT["ChatGPT<br/>OAuth · 远端额度 · 图片 · 语音"]
+        Adobe["Adobe Firefly<br/>Cookie · 积分 · 图片 · 视频"]
+        Muse["Muse<br/>Cookie · 无头 Chrome · 对话 · 媒体"]
         Registry --> Build
         Registry --> Web
         Registry --> Console
         Registry --> ChatGPT
+        Registry --> Adobe
+        Registry --> Muse
     end
 
     subgraph Infra["共享基础设施域"]
@@ -68,9 +72,10 @@ flowchart LR
         Egress["出口管理器<br/>作用域 · 代理池 · 回退 · Clearance"]
         Database[("SQLite / PostgreSQL")]
         Runtime[("Memory / Redis")]
+        Browser["无头 Chrome<br/>muse-browser sidecar"]
     end
 
-    Upstream["🌐 Grok / ChatGPT 上游"]
+    Upstream["🌐 Grok / ChatGPT / Adobe / Muse 上游"]
 
     %% 跨域调用
     Clients --> Gateway
@@ -81,6 +86,10 @@ flowchart LR
     Web -->|grok_web / asset| Egress
     Console -->|grok_console| Egress
     ChatGPT -->|chatgpt| Egress
+    Adobe -->|adobe| Egress
+    Muse -->|muse| Egress
+    Muse --> Browser
+    Browser --> Upstream
     Egress --> Upstream
     Management --> Database
     Audit --> Database
@@ -89,7 +98,7 @@ flowchart LR
     %% 应用样式
     class Clients,Admin access
     class Management,Sync,Gateway,Audit core
-    class Registry,Build,Web,Console,ChatGPT providers
+    class Registry,Build,Web,Console,ChatGPT,Adobe,Muse providers
     class Egress,Database,Runtime infra
     class Upstream upstream
 ```
@@ -117,6 +126,8 @@ flowchart LR
 | Grok Web | SSO | 内置并按等级过滤 | Responses、Chat、Messages、stored response、图片、图片编辑、视频 |
 | Grok Console | SSO | 内置 | 无状态 Responses、Chat、Messages、图片、图片编辑、视频、TTS、STT、Realtime |
 | ChatGPT | 浏览器 OAuth、导入 AT/RT | 对话模型按账号同步，图片和语音内置 | Responses、Chat、Messages（函数调用模拟、联网搜索）、图片、图片编辑、异步图片任务、TTS、STT |
+| Adobe Firefly | 网站 Cookie（经 IMS 自动续期） | 内置 | 图片、图片编辑、异步图片任务、视频（首尾帧、参考视频）、视频编辑与延长 |
+| Muse | 网站 Cookie（经 `/api/session` 自动续期） | 内置 | 无状态 Responses、Chat、Messages、图片、图片编辑、视频；通过无头 Chrome sidecar 驱动网页 |
 
 四个 Provider 独立维护凭据、额度、健康、冷却、并发与模型能力。单条路由的账号重试始终留在当前 Provider；当同一对外模型名主动聚合了多条路由时，网关可选择另一条可调度路由，但不会跨 Provider 混用账号状态。
 
@@ -197,7 +208,7 @@ pnpm dev
 ## 初始化网关
 
 1. 使用初始管理员登录。
-2. 接入 Build、Web、Console 或 ChatGPT 账号。
+2. 接入 Build、Web、Console、ChatGPT、Adobe 或 Muse 账号。
 3. 等待额度和模型能力同步完成。
 4. 在“模型路由”中确认公开模型。
 5. 在“客户端密钥”中创建密钥。
@@ -213,6 +224,8 @@ pnpm dev
 | Web | 粘贴/TXT SSO、JSON/JSONL | 可重新导入的账号文件 |
 | Console | 粘贴/TXT SSO、JSON/JSONL | 可重新导入的账号文件 |
 | ChatGPT | 浏览器 OAuth、JSON/JSONL、每行一个 access token | 可重新导入的账号文件 |
+| Adobe | 每行一个 firefly.adobe.com 的 Cookie、JSON/JSONL | 可重新导入的账号文件 |
+| Muse | Cookie-Editor 导出的 JSON（一个文件一个账号）、每行一个 Cookie、JSON/JSONL | 可重新导入的账号文件 |
 
 导入兼容 UTF-8 BOM。批量额度同步、Build 凭据续期、Web→Build/Console 转换、账号工具和账号清理均显示实时进度。
 
@@ -227,7 +240,7 @@ Web 账号工具支持接受协议、设置对应 20–40 岁的随机生日和�
 
 ## 模型与路由
 
-Build 模型根据每个账号的实际能力动态发现；Web、Console 使用内置目录；ChatGPT 的对话模型按账号同步，图片和语音模型使用内置目录。管理端“模型路由”展示 Provider 前缀、接口能力和支持账号数；客户端应以 `GET /v1/models` 返回的当前可服务模型为准。
+Build 模型根据每个账号的实际能力动态发现；Web、Console、Adobe、Muse 使用内置目录；ChatGPT 的对话模型按账号同步，图片和语音模型使用内置目录。管理端“模型路由”展示 Provider 前缀、接口能力和支持账号数；客户端应以 `GET /v1/models` 返回的当前可服务模型为准。
 
 ### Grok Build
 
@@ -290,7 +303,23 @@ ChatGPT 通过网页端协议接入，用量为本地估算。接入步骤、设
 | `chatgpt-tts` | 语音 | 所有账号 | TTS：`mp3`、`aac`、`opus`，账号音色，支持中文 |
 | `chatgpt-transcribe` | 语音 | 所有账号 | STT：只返回文字，不占对话额度 |
 
-公开模型名通常不带 Provider。内部路由使用 `Build/`、`Web/`、`Console/` 或 `chatgpt/` 前缀；带前缀名称可显式限定来源。
+### Adobe Firefly
+
+Adobe 是纯媒体 Provider：图片生成与编辑（Nano Banana、GPT Image）和视频（Veo 3.1、Seedance、Kling），以 Firefly 异步任务提交。提交依赖自带的 mint sidecar（`docker compose --profile adobe up -d --build`），所有路由消费同一个 `credits` 积分窗口。模型表、参数和失败处理见 [PROVIDERS.md](./PROVIDERS.md)。
+
+### Muse
+
+[Muse](https://muse.ai)（Meta）没有公开 API：网页与每个账号的云端 VM 之间走加密 WebSocket。网关通过无头 Chrome sidecar（`docker compose --profile muse up -d`）驱动网页，每个请求使用独立的浏览器上下文。比 API 类 Provider 慢：页面加载 2–7 秒，对话首字 7–15 秒，生图约 30 秒，视频约 1–2 分钟。
+
+| 模型 | 类型 | 网关接口能力 |
+| :-- | :-- | :-- |
+| `muse-spark` | 对话 | Chat Completions、Responses、Messages；回复转回 Markdown；最后一条用户消息里的图片作为附件上传；忽略客户端工具 |
+| `muse-image` | 图片、图片编辑 | Images Generations 与 Edits，每次一张，输出 WebP；比例取自 `aspect_ratio` 或 `size` |
+| `muse-video` | 视频 | 文生视频或首帧图片，720p；支持 9:16 与 16:9；时长由 agent 决定，为 5 或 10 秒 |
+
+所有 Muse 路由消费同一个每周用量窗口，数值读自账号的用量面板。每个账号固定一个桌面 Chrome 身份和一个美国时区；登录 Cookie 在过期前约一天自动续期，续期时顺带唤醒挂起的云端 VM。部署和限制见 [PROVIDERS.md](./PROVIDERS.md)。
+
+公开模型名通常不带 Provider。内部路由使用 `Build/`、`Web/`、`Console/`、`chatgpt/`、`adobe/` 或 `muse/` 前缀；带前缀名称可显式限定来源。
 
 Web 可与对应的 Build、Console 建立一对一弱关联。关联只共享匿名出口身份和来源展示，不合并凭据、额度、健康、冷却、并发、模型能力或计费。
 
@@ -344,7 +373,7 @@ curl http://127.0.0.1:8000/v1/responses \
 
 ## 出口与 Cloudflare
 
-出口节点按 Build、Web、Console、ChatGPT 或 Web 资源隔离。管理端支持：
+出口节点按 Build、Web、Console、ChatGPT、Adobe、Muse 或 Web 资源隔离。管理端支持：
 
 - HTTP、HTTPS、SOCKS4/4A、SOCKS5/5H、Resin、Trojan、VLESS、Shadowsocks 与 VMess
 - 隧道协议支持 TCP、WebSocket 和 TLS，未实现的传输形态会在导入时拒绝
@@ -356,7 +385,7 @@ curl http://127.0.0.1:8000/v1/responses \
 - 可选的[出口质量守护程序](./tools/egress-quality-guard/README.zh-CN.md)，支持逐节点模型探测、防误杀隔离和自动恢复；通过内置的 `quality-guard` Compose profile 按需启用
 - 代理用户名包含 `{account}` 的节点会被识别为租约级节点：被动审计异常只会临时移出对应的账号租约，冷却后固定使用同一账号和节点复测，复测异常会续期；若 sidecar 不可用，已到期的隔离不会继续阻断路由，避免孤儿状态永久卡住账号。共享节点始终不会因此停用，也不会暴露渲染后的代理身份。普通固定 sticky 会话仍可按独立节点管理
 
-Hysteria 与 TUIC 暂未支持。FlareSolverr 仅接受 HTTP/SOCKS 代理地址，因此自动刷新 Clearance 暂不能直接使用隧道分享链接。
+Hysteria 与 TUIC 暂未支持。FlareSolverr 仅接受 HTTP/SOCKS 代理地址，因此自动刷新 Clearance 暂不能直接使用隧道分享链接。Muse 的浏览器同样不支持隧道，也不接受代理账号密码：Muse 节点只能用无认证的 HTTP(S)、SOCKS 代理或直连。
 
 首次启用时只需在 `config.yaml` 中增加 `qualityGuard` 并启动 profile。主程序会自动创建并稳定复用不可导出的系统探测身份：
 
@@ -422,6 +451,14 @@ docker compose --profile flaresolverr up -d
 | :-- | :-- | :-- | :-- |
 | 单实例 | SQLite | Memory | 本地目录 |
 | 多实例 | PostgreSQL | Redis | 共享且可读写的目录 |
+
+`docker-compose.yml` 里的可选 sidecar 只在启用对应 profile 时启动：
+
+| Profile | 服务 | 用途 |
+| :-- | :-- | :-- |
+| `adobe` | `mint` | Adobe Firefly 提交（`provider.adobe.sherlockMintAPI`） |
+| `muse` | `muse-browser`（固定版本的 `chromedp/headless-shell`） | Muse（`provider.muse.browserURL`，并发页面数 `provider.muse.maxPages`）；DevTools 端口没有认证，切勿发布到宿主机或公网 |
+| `quality-guard` | `egress-quality-guard` | Build 出口主动探测 |
 
 多实例需要为每个副本设置唯一的 `deployment.instanceID`，统一使用同一个 `clusterID`；只有媒体目录已正确共享时才设置 `sharedMedia: true`。
 

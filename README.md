@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>A multi-account API gateway for Grok Build, Grok Web, Grok Console, and ChatGPT</strong>
+  <strong>A multi-account API gateway for Grok Build, Grok Web, Grok Console, ChatGPT, Adobe Firefly, and Muse</strong>
 </p>
 
 <p align="center">
@@ -17,11 +17,11 @@
 </p>
 
 > [!NOTE]
-> This project is for technical research and learning purposes only. Please comply with the official terms of use of Grok and OpenAI and local laws when using it; otherwise, you will be solely responsible for all consequences!
+> This project is for technical research and learning purposes only. Please comply with the official terms of use of Grok, OpenAI, Adobe, and Meta (Muse) and local laws when using it; otherwise, you will be solely responsible for all consequences!
 
 ## Overview
 
-Grok2API is a Go gateway with a built-in React admin console. It manages independent Grok Build, Grok Web, Grok Console, and ChatGPT account pools and exposes unified OpenAI- and Anthropic-compatible APIs.
+Grok2API is a Go gateway with a built-in React admin console. It manages independent Grok Build, Grok Web, Grok Console, ChatGPT, Adobe Firefly, and Muse account pools and exposes unified OpenAI- and Anthropic-compatible APIs.
 
 ### Architecture
 
@@ -57,10 +57,14 @@ flowchart LR
         Web["Grok Web<br/>SSO · Remote Quota · Media"]
         Console["Grok Console<br/>SSO · Local Window · Stateless"]
         ChatGPT["ChatGPT<br/>OAuth · Remote Quota · Images · Voice"]
+        Adobe["Adobe Firefly<br/>Cookie · Credits · Images · Video"]
+        Muse["Muse<br/>Cookie · Headless Chrome · Chat · Media"]
         Registry --> Build
         Registry --> Web
         Registry --> Console
         Registry --> ChatGPT
+        Registry --> Adobe
+        Registry --> Muse
     end
 
     subgraph Infra["Shared Infrastructure Domain"]
@@ -68,9 +72,10 @@ flowchart LR
         Egress["Egress Manager<br/>Scopes · Proxy Pool · Fallback · Clearance"]
         Database[("SQLite / PostgreSQL")]
         Runtime[("Memory / Redis")]
+        Browser["Headless Chrome<br/>muse-browser sidecar"]
     end
 
-    Upstream["🌐 Grok / ChatGPT Upstream"]
+    Upstream["🌐 Grok / ChatGPT / Adobe / Muse Upstream"]
 
     %% Cross-domain calls
     Clients --> Gateway
@@ -81,6 +86,10 @@ flowchart LR
     Web -->|grok_web / asset| Egress
     Console -->|grok_console| Egress
     ChatGPT -->|chatgpt| Egress
+    Adobe -->|adobe| Egress
+    Muse -->|muse| Egress
+    Muse --> Browser
+    Browser --> Upstream
     Egress --> Upstream
     Management --> Database
     Audit --> Database
@@ -89,8 +98,8 @@ flowchart LR
     %% Application styles
     class Clients,Admin access
     class Management,Sync,Gateway,Audit core
-    class Registry,Build,Web,Console,ChatGPT providers
-    class Egress,Database,Runtime infra
+    class Registry,Build,Web,Console,ChatGPT,Adobe,Muse providers
+    class Egress,Database,Runtime,Browser infra
     class Upstream upstream
 ```
 
@@ -124,6 +133,8 @@ The Gateway routes requests through the Provider Registry. Account Sync refreshe
 | Grok Web     | SSO                  | Built-in, filtered by tier | Responses, Chat, Messages, stored responses, images, image editing, video             |
 | Grok Console | SSO                  | Built-in                   | Stateless Responses, Chat, Messages, images, image editing, video, TTS, STT, Realtime |
 | ChatGPT      | Browser OAuth, AT/RT import | Chat synced per account; images and voice built-in | Responses, Chat, Messages (emulated function tools, web search), images, image editing, async image jobs, TTS, STT |
+| Adobe Firefly | Site cookie (renewed through IMS) | Built-in | Images, image editing, async image jobs, video (first/last frame, reference videos), video edit and extension |
+| Muse         | Site cookie (renewed through `/api/session`) | Built-in | Stateless Responses, Chat, Messages, images, image editing, video; driven through a headless Chrome sidecar |
 
 
 Each Provider keeps its own credentials, quota, health, cooldown, concurrency, and model capabilities. Account retries stay within one route; when one public model ID intentionally aggregates multiple routes, the gateway may select another schedulable route without mixing Provider state.
@@ -207,7 +218,7 @@ pnpm dev
 ## Set up the gateway
 
 1. Sign in with the bootstrap administrator.
-2. Connect a Build, Web, Console, or ChatGPT account.
+2. Connect a Build, Web, Console, ChatGPT, Adobe, or Muse account.
 3. Wait for its quota and model capabilities to sync.
 4. Review the public routes under **Model Routes**.
 5. Create a client key under **Client Keys**.
@@ -224,6 +235,8 @@ After first sign-in, change the administrator password and remove `bootstrapAdmi
 | Web      | Pasted/TXT SSO, JSON/JSONL | Re-importable account file |
 | Console  | Pasted/TXT SSO, JSON/JSONL | Re-importable account file |
 | ChatGPT  | Browser OAuth, JSON/JSONL, one access token per line | Re-importable account file |
+| Adobe    | One firefly.adobe.com cookie string per line, JSON/JSONL | Re-importable account file |
+| Muse     | Cookie-Editor JSON export (one account per file), one cookie string per line, JSON/JSONL | Re-importable account file |
 
 
 Imports accept UTF-8 BOM. Bulk quota sync, Build credential renewal, Web→Build/Console conversion, account tools, and cleanup report live progress.
@@ -241,7 +254,7 @@ Automatic deletion of old `reauthRequired` accounts is available but disabled by
 
 ## Models and routing
 
-Build models are discovered from each account's actual capabilities. Web and Console use built-in catalogs. ChatGPT chat models are synced per account; its image and voice models come from a built-in catalog. The **Model Routes** page shows Provider-qualified routes, endpoint capabilities, and supporting-account counts; clients should treat the currently serviceable results from `GET /v1/models` as authoritative.
+Build models are discovered from each account's actual capabilities. Web, Console, Adobe, and Muse use built-in catalogs. ChatGPT chat models are synced per account; its image and voice models come from a built-in catalog. The **Model Routes** page shows Provider-qualified routes, endpoint capabilities, and supporting-account counts; clients should treat the currently serviceable results from `GET /v1/models` as authoritative.
 
 ### Grok Build
 
@@ -313,7 +326,23 @@ ChatGPT is reached through the ChatGPT Web protocol, and its usage is estimated 
 | `chatgpt-tts` | Voice | Every account | TTS: `mp3`, `aac`, `opus`, the account's voices, Chinese supported |
 | `chatgpt-transcribe` | Voice | Every account | STT: text only, no conversation quota |
 
-Public names normally omit the Provider. Internally, routes use `Build/`, `Web/`, `Console/`, or `chatgpt/`; qualified names can pin a request to one source.
+### Adobe Firefly
+
+Adobe is a media-only Provider: image generation and editing (Nano Banana, GPT Image) and video (Veo 3.1, Seedance, Kling), submitted as Firefly async jobs. Submissions need the bundled mint sidecar (`docker compose --profile adobe up -d --build`). Accounts spend one `credits` window. The model table, parameters, and failure handling are described in [PROVIDERS.md](./PROVIDERS.md) (Chinese).
+
+### Muse
+
+[Muse](https://muse.ai) (Meta) has no public API: the web app talks to each account's cloud VM over an encrypted WebSocket. The gateway drives the page through a headless Chrome sidecar (`docker compose --profile muse up -d`), one isolated browser context per request. It is slower than API Providers: page load 2–7 s, first chat text 7–15 s, images about 30 s, video about 1–2 min.
+
+| Model | Type | Gateway endpoint capabilities |
+| :-- | :-- | :-- |
+| `muse-spark` | Chat | Chat Completions, Responses, Messages; replies are converted back to Markdown; images in the last user message are attached; client tools are ignored |
+| `muse-image` | Image, image edit | Images Generations and Edits, one image per request, WebP output; the aspect ratio follows `aspect_ratio` or `size` |
+| `muse-video` | Video | Text or first frame, 720p; 9:16 and 16:9 are honored; the agent renders 5 or 10 seconds |
+
+All Muse routes spend one weekly usage window read from the account's usage panel. Each account keeps a fixed desktop Chrome identity and a US timezone; the login cookie is renewed a day before it lapses, and a suspended cloud VM is woken at renewal. Setup and limits are described in [PROVIDERS.md](./PROVIDERS.md) (Chinese).
+
+Public names normally omit the Provider. Internally, routes use `Build/`, `Web/`, `Console/`, `chatgpt/`, `adobe/`, or `muse/`; qualified names can pin a request to one source.
 
 Web can be weakly linked one-to-one with matching Build and Console accounts. Links share only an anonymous egress identity and provenance display. They never merge credentials, quota, health, cooldown, concurrency, capabilities, or billing.
 
@@ -371,7 +400,7 @@ curl http://127.0.0.1:8000/v1/responses \
 
 ## Egress and Cloudflare
 
-Egress nodes are scoped to Build, Web, Console, ChatGPT, or Web assets. The admin console supports:
+Egress nodes are scoped to Build, Web, Console, ChatGPT, Adobe, Muse, or Web assets. The admin console supports:
 
 - HTTP, HTTPS, SOCKS4/4A, SOCKS5/5H, Resin, Trojan, VLESS, Shadowsocks, and VMess
 - TCP, WebSocket, and TLS tunnel transports; unsupported variants are rejected during import
@@ -383,7 +412,7 @@ Egress nodes are scoped to Build, Web, Console, ChatGPT, or Web assets. The admi
 - Optional [Egress Quality Guard](./tools/egress-quality-guard/README.md) for active per-node model probes, guarded quarantine, and recovery; enable it with the built-in `quality-guard` Compose profile
 - Nodes whose proxy username contains `{account}` are treated as lease-scoped: a passive anomaly temporarily removes only the audited account lease, then recovery pins the probe to that same account and node. An unhealthy probe renews the hold; an expired hold no longer blocks routing if the sidecar is unavailable, so stale guard state cannot strand an account indefinitely. The shared node is never disabled and the rendered proxy identity is never exposed. Ordinary fixed sticky sessions can still be managed as separate nodes
 
-Hysteria and TUIC are not supported yet. FlareSolverr accepts only HTTP/SOCKS proxy URLs, so automatic clearance refresh cannot use a tunnel share URL directly.
+Hysteria and TUIC are not supported yet. FlareSolverr accepts only HTTP/SOCKS proxy URLs, so automatic clearance refresh cannot use a tunnel share URL directly. The Muse browser has the same limit and also takes no proxy credentials: Muse nodes must be unauthenticated HTTP(S) or SOCKS proxies, or direct.
 
 To enable the guard, add a `qualityGuard` section to `config.yaml`, then start
 the profile. The main service creates and reuses a non-exportable system probe
@@ -457,6 +486,14 @@ When a fixed proxy enters cooldown after a transport failure, grok2api starts an
 | Single instance    | SQLite     | Memory        | Local directory             |
 | Multiple instances | PostgreSQL | Redis         | Shared read/write directory |
 
+
+Optional sidecars in `docker-compose.yml` start only with their profile:
+
+| Profile | Service | Needed for |
+| :-- | :-- | :-- |
+| `adobe` | `mint` | Adobe Firefly submissions (`provider.adobe.sherlockMintAPI`) |
+| `muse` | `muse-browser` (pinned `chromedp/headless-shell`) | Muse (`provider.muse.browserURL`, concurrent pages `provider.muse.maxPages`); its DevTools port has no authentication and must never be published |
+| `quality-guard` | `egress-quality-guard` | Active Build egress probes |
 
 Multi-instance deployments require a unique `deployment.instanceID` per replica, one shared `clusterID`, and `sharedMedia: true` only after the media directory is shared correctly.
 
