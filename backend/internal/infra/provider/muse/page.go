@@ -169,8 +169,10 @@ func (p *page) send(ctx context.Context, prompt string) (time.Time, error) {
 	}
 	sentAt := time.Now()
 	for time.Since(sentAt) < 10*time.Second {
+		// Send was clicked: a script error while the app re-renders is retried,
+		// since failing here could send the prompt again on another account.
 		var sent bool
-		if err := p.js(ctx, "sent", &sent, users); err != nil {
+		if err := p.js(ctx, "sent", &sent, users); err != nil && fatal(ctx, err) {
 			return time.Time{}, err
 		}
 		if sent {

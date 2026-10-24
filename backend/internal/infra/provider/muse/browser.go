@@ -17,6 +17,9 @@ const (
 	videoTimeout = 10 * time.Minute
 	usageTimeout = time.Minute
 	readyTimeout = time.Minute
+	// pageWait bounds the wait for a free page; the request's own timeout
+	// starts after it.
+	pageWait = 2 * time.Minute
 )
 
 // browserEngine drives muse.ai in the shared headless Chrome. Every call gets
@@ -38,11 +41,8 @@ func newBrowserEngine(cfg func() Config, logger func() *slog.Logger) *browserEng
 }
 
 func (e *browserEngine) Chat(ctx context.Context, s session, turn chatTurn, onText func(string) error) (string, error) {
-	parent := ctx
-	ctx, cancel := context.WithTimeout(ctx, chatTimeout)
-	defer cancel()
 	var reply string
-	err := e.withPage(ctx, s, "/thread/new", func(p *page) error {
+	err := e.withPage(ctx, chatTimeout, s, "/thread/new", func(ctx context.Context, p *page) error {
 		if err := p.attach(ctx, turn.Images); err != nil {
 			return err
 		}
@@ -53,17 +53,14 @@ func (e *browserEngine) Chat(ctx context.Context, s session, turn chatTurn, onTe
 		reply, err = p.waitReply(ctx, sentAt, onText)
 		return err
 	})
-	return reply, timedOut(parent, err)
+	return reply, err
 }
 
 func (e *browserEngine) Generate(ctx context.Context, s session, job mediaJob) (mediaFile, error) {
-	parent := ctx
 	timeout := imageTimeout
 	if job.Kind == mediaVideo {
 		timeout = videoTimeout
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	path := job.Thread
 	switch {
 	case path == "":
@@ -72,7 +69,7 @@ func (e *browserEngine) Generate(ctx context.Context, s session, job mediaJob) (
 		return mediaFile{}, fmt.Errorf("invalid muse thread path %q", path)
 	}
 	var file mediaFile
-	err := e.withPage(ctx, s, path, func(p *page) error {
+	err := e.withPage(ctx, timeout, s, path, func(ctx context.Context, p *page) error {
 		var baseline []string
 		var sentAt time.Time
 		if job.Thread == "" {
@@ -86,6 +83,9 @@ func (e *browserEngine) Generate(ctx context.Context, s session, job mediaJob) (
 			if sentAt, err = p.send(ctx, job.Prompt); err != nil {
 				return err
 			}
+			if job.OnSent != nil {
+				job.OnSent()
+			}
 		}
 		found, err := p.waitMedia(ctx, job, baseline, sentAt)
 		if err != nil {
@@ -95,20 +95,22 @@ func (e *browserEngine) Generate(ctx context.Context, s session, job mediaJob) (
 		file.Width, file.Height = found.W, found.H
 		return err
 	})
-	return file, timedOut(parent, err)
+	return file, err
 }
 
 func (e *browserEngine) Usage(ctx context.Context, s session) (usage, error) {
-	parent := ctx
-	ctx, cancel := context.WithTimeout(ctx, usageTimeout)
-	defer cancel()
+	// The panel shows the reset date in the page's timezone.
+	location := time.UTC
+	if loaded, err := time.LoadLocation(s.Timezone); s.Timezone != "" && err == nil {
+		location = loaded
+	}
 	var u usage
-	err := e.withPage(ctx, s, "/thread/new", func(p *page) error {
+	err := e.withPage(ctx, usageTimeout, s, "/thread/new", func(ctx context.Context, p *page) error {
 		var err error
-		u, err = p.readUsage(ctx)
+		u, err = p.readUsage(ctx, location)
 		return err
 	})
-	return u, timedOut(parent, err)
+	return u, err
 }
 
 // timedOut reports the engine's own deadline as errTimeout; the caller's
@@ -120,13 +122,20 @@ func timedOut(parent context.Context, err error) error {
 	return err
 }
 
-// withPage opens a logged-in muse.ai page at path, runs work and always
-// disposes the page's browser context.
-func (e *browserEngine) withPage(ctx context.Context, s session, path string, work func(*page) error) error {
-	if err := e.acquire(ctx); err != nil {
+// withPage waits for a free page slot, opens a logged-in muse.ai page at path
+// and runs work within timeout, which starts once the slot is taken; the page's
+// browser context is always disposed.
+func (e *browserEngine) withPage(parent context.Context, timeout time.Duration, s session, path string, work func(context.Context, *page) error) error {
+	if err := e.acquire(parent); err != nil {
 		return err
 	}
 	defer e.release()
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	return timedOut(parent, e.openAndRun(ctx, s, path, work))
+}
+
+func (e *browserEngine) openAndRun(ctx context.Context, s session, path string, work func(context.Context, *page) error) error {
 	conn, err := e.connect(ctx)
 	if err != nil {
 		return err
@@ -204,12 +213,14 @@ func (e *browserEngine) withPage(ctx context.Context, s session, path string, wo
 		return err
 	}
 	e.logger().Debug("muse page ready", "path", path, "elapsed", time.Since(started))
-	return work(p)
+	return work(ctx, p)
 }
 
-// acquire takes one of cfg().maxPages() page slots; a changed limit applies
-// from the next acquire or release.
+// acquire takes one of cfg().maxPages() page slots, waiting at most
+// pageWait; a changed limit applies from the next acquire or release.
 func (e *browserEngine) acquire(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, pageWait)
+	defer cancel()
 	for {
 		e.slotMu.Lock()
 		if e.active < e.cfg().maxPages() {
@@ -222,6 +233,9 @@ func (e *browserEngine) acquire(ctx context.Context) error {
 		select {
 		case <-freed:
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("%w: all %d pages in use", errBrowserBusy, e.cfg().maxPages())
+			}
 			return fmt.Errorf("waiting for a free muse page: %w", ctx.Err())
 		}
 	}

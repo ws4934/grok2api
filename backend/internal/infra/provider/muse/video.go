@@ -57,6 +57,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, fmt.Errorf("Muse 视频提示已发送但未记录会话，无法安全恢复"))
 	}
 	job := mediaJob{Kind: mediaVideo, Prompt: videoPrompt(request), Thread: checkpoint.Thread}
+	sent := false
 	if job.Thread == "" {
 		if request.ImageURL != "" {
 			input, err := a.readInput(ctx, request.ImageURL)
@@ -68,6 +69,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		if err := provider.SaveVideoCheckpoint(request, videoCheckpoint{Submitting: true}); err != nil {
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 		}
+		job.OnSent = func() { sent = true }
 		job.OnThread = func(path string) error {
 			job.Thread = path
 			return provider.SaveVideoCheckpoint(request, videoCheckpoint{Thread: path})
@@ -81,13 +83,18 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	})
 	if err != nil {
 		err = classify(err)
-		if job.Thread == "" {
-			// No side chat was opened, so nothing was spent: the job can
-			// start over, on another account if the gateway picks one.
+		switch {
+		case job.Thread == "" && !sent:
+			// The prompt never left the composer, so nothing was spent: the
+			// job can start over, on another account if the gateway picks one.
 			if request.SaveCheckpoint != nil {
 				_ = request.SaveCheckpoint("")
 			}
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageCreate, 0, err)
+		case job.Thread == "":
+			// Sent but the thread is unknown: it cannot be resumed and must
+			// not be sent again. The checkpoint stays "submitting".
+			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, err)
 		}
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, err)
 	}

@@ -5,6 +5,19 @@ import (
 	"time"
 )
 
+// The panel shows the reset date in the page's timezone: Oct 31 in Los
+// Angeles starts at 07:00 UTC, not 00:00.
+func TestParseUsageResetInPageTimezone(t *testing.T) {
+	la, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Skip("no tzdata")
+	}
+	got, err := parseUsage("Usage\nWeekly limit resets on Oct 31\n2% used", time.Date(2026, 10, 24, 8, 0, 0, 0, la))
+	if err != nil || !got.ResetAt.Equal(time.Date(2026, 10, 31, 7, 0, 0, 0, time.UTC)) {
+		t.Fatalf("reset = %v, err = %v", got.ResetAt.UTC(), err)
+	}
+}
+
 func TestParseUsage(t *testing.T) {
 	now := time.Date(2026, 10, 24, 15, 0, 0, 0, time.UTC)
 	date := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, time.UTC) }

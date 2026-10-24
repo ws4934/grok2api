@@ -71,6 +71,9 @@ type mediaJob struct {
 	// Thread resumes a job whose prompt was already sent: the engine opens
 	// this thread path (/thread/<id>) and only waits for its result.
 	Thread string
+	// OnSent is called once the prompt left the composer: from then on the
+	// job has spent usage, even if no thread path is known yet.
+	OnSent func()
 	// OnThread receives the thread path once the prompt is sent, so a restart
 	// can resume the job instead of sending it again.
 	OnThread func(path string) error
@@ -93,6 +96,7 @@ type usage struct {
 // Engine errors. The adapter maps them to gateway statuses.
 var (
 	errBrowserUnavailable = errors.New("muse browser unavailable")  // CDP endpoint unreachable: request-scoped 503
+	errBrowserBusy        = errors.New("muse browser pages busy")   // every page slot taken for too long: request-scoped 503
 	errLoggedOut          = errors.New("muse session logged out")   // cookies rejected: 401, account needs re-import
 	errQuotaExhausted     = errors.New("muse usage limit reached")  // 429 until the weekly reset
 	errNotDelivered       = errors.New("muse prompt not delivered") // composer never accepted or sent the prompt: 502

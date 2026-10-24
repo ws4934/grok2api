@@ -173,8 +173,11 @@ func TestAcquireHonorsMaxPages(t *testing.T) {
 	}
 	short, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	if err := e.acquire(short); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("second acquire = %v, want deadline exceeded", err)
+	// No page in time is local capacity, not an upstream timeout: request-scoped 503.
+	err := e.acquire(short)
+	var known *museError
+	if !errors.Is(err, errBrowserBusy) || !errors.As(classify(err), &known) || known.status != 503 || !known.requestScoped {
+		t.Fatalf("second acquire = %v, want a request-scoped busy error", err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- e.acquire(context.Background()) }()

@@ -58,6 +58,8 @@ func classify(err error) error {
 		return &museError{status: http.StatusUnauthorized, code: "invalid_credential", message: "Muse 会话已失效，请重新导入 Cookie", cause: err}
 	case errors.Is(err, errQuotaExhausted):
 		return &museError{status: http.StatusTooManyRequests, code: "usage_limit_reached", message: "Muse 账号本周额度已用完", cause: err}
+	case errors.Is(err, errBrowserBusy):
+		return &museError{status: http.StatusServiceUnavailable, code: "browser_busy", message: "Muse 浏览器页面已满，请稍后重试或调大并发页面数", requestScoped: true, cause: err}
 	case errors.Is(err, errBrowserUnavailable):
 		return &museError{status: http.StatusServiceUnavailable, code: "browser_unavailable", message: "Muse 浏览器服务不可用，请检查 provider.muse.browserURL", requestScoped: true, cause: err}
 	case errors.Is(err, errNotDelivered):

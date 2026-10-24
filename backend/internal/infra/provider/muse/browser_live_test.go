@@ -187,7 +187,7 @@ func TestLiveAttach(t *testing.T) {
 		{Name: "red.png", MIME: "image/png", Data: testPNG(color.RGBA{R: 255, A: 255})},
 		{MIME: "image/png", Data: testPNG(color.RGBA{B: 255, A: 255})},
 	}
-	err := e.withPage(context.Background(), s, "/thread/new", func(p *page) error {
+	err := e.withPage(context.Background(), time.Minute, s, "/thread/new", func(ctx context.Context, p *page) error {
 		start := time.Now()
 		if err := p.attach(context.Background(), files); err != nil {
 			return err
@@ -385,7 +385,7 @@ func TestLiveIdentity(t *testing.T) {
 			Webdriver                                                   bool
 			Brands                                                      []map[string]string
 		}
-		err := e.withPage(context.Background(), s, "/thread/new", func(p *page) error {
+		err := e.withPage(context.Background(), time.Minute, s, "/thread/new", func(ctx context.Context, p *page) error {
 			var r struct {
 				Result struct {
 					Value json.RawMessage `json:"value"`

@@ -12,7 +12,7 @@ import (
 // readUsage opens Settings from the dock menu and reads the Usage section,
 // which the dialog loads lazily. Clicks right after load can be ignored, so
 // each step is retried until the next element shows.
-func (p *page) readUsage(ctx context.Context) (usage, error) {
+func (p *page) readUsage(ctx context.Context, location *time.Location) (usage, error) {
 	type point struct{ X, Y int }
 	deadline := time.Now().Add(20 * time.Second)
 	for {
@@ -53,7 +53,7 @@ func (p *page) readUsage(ctx context.Context) (usage, error) {
 		if err := p.js(ctx, "dialogText", &text); err != nil {
 			return usage{}, err
 		}
-		if u, err := parseUsage(text, time.Now()); err == nil {
+		if u, err := parseUsage(text, time.Now().In(location)); err == nil {
 			return u, nil
 		}
 		if time.Now().After(deadline) {
@@ -170,9 +170,10 @@ func resetDate(s string, now time.Time) time.Time {
 	}
 	explicit := year != 0
 	if !explicit {
-		year = now.UTC().Year()
+		year = now.Year()
 	}
-	t := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+	// The date is local to the page's timezone, which now carries.
+	t := time.Date(year, month, day, 0, 0, 0, 0, now.Location())
 	if t.Month() != month || t.Day() != day {
 		return time.Time{} // Feb 30 and friends
 	}

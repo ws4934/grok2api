@@ -60,7 +60,7 @@ func (a *Adapter) drawImage(ctx context.Context, credential account.Credential, 
 	var file mediaFile
 	err := a.withSession(ctx, credential, func(ctx context.Context, s session) error {
 		var err error
-		file, err = a.engine.Generate(ctx, s, mediaJob{Kind: mediaImage, Prompt: prompt, Inputs: inputs, OnThread: func(string) error { sent = true; return nil }})
+		file, err = a.engine.Generate(ctx, s, mediaJob{Kind: mediaImage, Prompt: prompt, Inputs: inputs, OnSent: func() { sent = true }})
 		return err
 	})
 	if err != nil {

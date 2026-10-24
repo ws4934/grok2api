@@ -423,7 +423,7 @@ func TestDrawImage(t *testing.T) {
 		if job.Kind != mediaImage || !strings.Contains(job.Prompt, "Aspect ratio: 16:9 (landscape).") || !strings.HasSuffix(job.Prompt, "a boat") {
 			return mediaFile{}, errors.New("unexpected job " + job.Prompt)
 		}
-		_ = job.OnThread("/thread/1")
+		job.OnSent()
 		return mediaFile{Data: []byte("RIFF....WEBP"), MIME: "image/webp"}, nil
 	}}
 	adapter, credential, _ := newTestAdapter(t, fake)
@@ -442,12 +442,12 @@ func TestDrawImage(t *testing.T) {
 	if response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Prompt: "x"}); err != nil || response.StatusCode != http.StatusGatewayTimeout {
 		t.Fatalf("unsent timeout = %#v, %v", response, err)
 	}
-	fake.generate = func(job mediaJob) (mediaFile, error) { _ = job.OnThread("/thread/2"); return mediaFile{}, errTimeout }
+	fake.generate = func(job mediaJob) (mediaFile, error) { job.OnSent(); return mediaFile{}, errTimeout }
 	if response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Prompt: "x"}); err == nil {
 		t.Fatalf("sent timeout became a response: %#v", response)
 	}
 	fake.generate = func(job mediaJob) (mediaFile, error) {
-		_ = job.OnThread("/thread/3")
+		job.OnSent()
 		return mediaFile{}, &textOnlyError{Text: "I can't draw that"}
 	}
 	if response, err = adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Prompt: "x"}); err != nil || response.StatusCode != http.StatusUnprocessableEntity {
@@ -460,6 +460,7 @@ func TestGenerateVideoCheckpoints(t *testing.T) {
 	fake := &fakeEngine{generate: func(job mediaJob) (mediaFile, error) {
 		jobs = append(jobs, job)
 		if job.Thread == "" {
+			job.OnSent()
 			if err := job.OnThread("/thread/v1"); err != nil {
 				return mediaFile{}, err
 			}
@@ -491,6 +492,27 @@ func TestGenerateVideoCheckpoints(t *testing.T) {
 		t.Fatal("a sent prompt without a thread was sent again")
 	} else if stage, _ := provider.VideoErrorStage(err); stage != provider.VideoStageSubmitted {
 		t.Fatalf("stage = %s", stage)
+	}
+
+	// A failure before the prompt left the composer clears the checkpoint so
+	// the job can start over; one after it keeps "submitting" and never resends.
+	request.Checkpoint = ""
+	for _, tc := range []struct {
+		send      bool
+		stage     provider.VideoStage
+		lastSaved string
+	}{{false, provider.VideoStageCreate, ""}, {true, provider.VideoStageSubmitted, `{"submitting":true}`}} {
+		fake.generate = func(job mediaJob) (mediaFile, error) {
+			if tc.send {
+				job.OnSent()
+			}
+			return mediaFile{}, errNotDelivered
+		}
+		saved = nil
+		_, err := adapter.GenerateVideo(context.Background(), request)
+		if stage, _ := provider.VideoErrorStage(err); stage != tc.stage || saved[len(saved)-1] != tc.lastSaved {
+			t.Fatalf("sent=%v: stage = %s, checkpoints = %v", tc.send, stage, saved)
+		}
 	}
 }
 
