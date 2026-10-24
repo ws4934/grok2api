@@ -2,7 +2,9 @@ package account
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -377,6 +379,49 @@ func TestStartAuthorizationRejectsProvidersWithoutInteractiveLogin(t *testing.T)
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// Imports whose source carries no account name (bare cookies, browser
+// exports) still store one: the email, else the provider and a short id.
+func TestImportedSeedWithoutNameGetsOne(t *testing.T) {
+	ctx := context.Background()
+	fixture := newLifecycleFixture(t, &acmeAdapter{})
+	for _, tc := range []struct {
+		seed provider.CredentialSeed
+		want string
+	}{
+		{provider.CredentialSeed{Email: " a@b.test ", SourceKey: "acme:email"}, "a@b.test"},
+		{provider.CredentialSeed{UserID: "b7ead84e-212f-4ee6", SourceKey: "acme:user"}, string(acmeProvider) + "-b7ead84e"},
+		{provider.CredentialSeed{SourceKey: "acme:bare"}, string(acmeProvider) + "-" + bareID},
+	} {
+		tc.seed.Provider, tc.seed.AccessToken = acmeProvider, "a-"+tc.seed.SourceKey
+		created, _, err := fixture.service.persistSeed(ctx, tc.seed)
+		if err != nil || created.Name != tc.want {
+			t.Fatalf("%s: name = %q, err = %v, want %q", tc.seed.SourceKey, created.Name, err, tc.want)
+		}
+	}
+	// A re-import without a name keeps the name the administrator gave.
+	renamed, err := fixture.service.Update(ctx, mustAccountID(t, fixture, "acme:bare"), UpdateInput{Name: ptrString("custom")})
+	if err != nil || renamed.Credential.Name != "custom" {
+		t.Fatalf("rename = %#v, err = %v", renamed, err)
+	}
+	again, _, err := fixture.service.persistSeed(ctx, provider.CredentialSeed{Provider: acmeProvider, SourceKey: "acme:bare", AccessToken: "a-again"})
+	if err != nil || again.Name != "custom" {
+		t.Fatalf("re-import name = %q, err = %v", again.Name, err)
+	}
+}
+
+var bareID = func() string { sum := sha256.Sum256([]byte("acme:bare")); return hex.EncodeToString(sum[:])[:8] }()
+
+func mustAccountID(t *testing.T, fixture lifecycleFixture, sourceKey string) uint64 {
+	t.Helper()
+	value, err := fixture.accounts.FindBySourceKey(context.Background(), acmeProvider, sourceKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value.ID
+}
+
+func ptrString(value string) *string { return &value }
 
 func TestCredentialRefreshPersistsProviderState(t *testing.T) {
 	ctx := context.Background()

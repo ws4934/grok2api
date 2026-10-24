@@ -3,6 +3,7 @@ package account
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -267,6 +268,20 @@ type Credential struct {
 	BuildBotFlagSource int
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+// DefaultName names an account whose import carried no name (bare cookies,
+// browser exports): its email, else the provider and a short stable id.
+func (c Credential) DefaultName() string {
+	if email := strings.TrimSpace(c.Email); email != "" {
+		return email
+	}
+	id := strings.TrimSpace(c.UserID)
+	if id == "" {
+		sum := sha256.Sum256([]byte(c.SourceKey))
+		id = hex.EncodeToString(sum[:])
+	}
+	return string(c.Provider) + "-" + id[:min(8, len(id))]
 }
 
 // CredentialMaterial contains the encrypted provider secrets and refresh

@@ -138,6 +138,13 @@ func providerSourceLookupKey(providerValue, sourceKey string) string {
 
 func upsertKnownAccountByIdentity(tx *gorm.DB, value account.Credential, existing *accountModel) (repository.AccountUpsertResult, accountModel, error) {
 	row := fromAccountDomain(value)
+	// An import without a name keeps the stored one, or names a new account.
+	if strings.TrimSpace(row.Name) == "" {
+		row.Name = value.DefaultName()
+		if existing != nil {
+			row.Name = existing.Name
+		}
+	}
 	if existing != nil {
 		if value.EncryptedCloudflareCookie == "" || value.EncryptedState == "" || value.ConsoleAPIKeyID == "" || value.EncryptedConsoleWorkOSSession == "" {
 			var storedCredential accountCredentialModel

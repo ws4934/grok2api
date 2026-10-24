@@ -1,7 +1,6 @@
 package muse
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -207,11 +206,6 @@ func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.C
 	seed.AccessToken, seed.RefreshToken, seed.ExpiresAt = encoded, encoded, expiresAt
 	if info.VMID != "" {
 		seed.UserID = info.VMID
-	}
-	// Accounts need a name and muse.ai reports no email: name it after the VM.
-	if strings.TrimSpace(seed.Name) == "" {
-		id := cmp.Or(info.VMID, strings.TrimPrefix(seed.SourceKey, "muse:"))
-		seed.Name = "muse-" + id[:min(8, len(id))]
 	}
 	return seed, nil
 }

@@ -177,7 +177,7 @@ func TestSessionRenewalMergesSetCookie(t *testing.T) {
 	}
 
 	seed, err := adapter.PrepareImportedCredential(context.Background(), provider.CredentialSeed{SourceKey: "muse:x", RefreshToken: jarJSON(testJar)})
-	if err != nil || seed.UserID != "vm-42" || seed.Name != "muse-vm-42" || !strings.Contains(seed.AccessToken, "vml-new") || seed.ExpiresAt.IsZero() {
+	if err != nil || seed.UserID != "vm-42" || !strings.Contains(seed.AccessToken, "vml-new") || seed.ExpiresAt.IsZero() {
 		t.Fatalf("prepared seed = %#v, err = %v", seed, err)
 	}
 
