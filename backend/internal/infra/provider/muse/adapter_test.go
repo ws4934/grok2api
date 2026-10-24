@@ -239,8 +239,8 @@ func TestAccountKeepsItsBrowserIdentity(t *testing.T) {
 	if _, err := adapter.ForwardResponse(ctx, provider.ResponseResourceRequest{Credential: credential, Method: http.MethodPost, Path: "/responses", Model: modelChat, Operation: conversation.OperationResponses, Body: []byte(`{"input":"hi"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if got := fake.sessions[len(fake.sessions)-1].Identity; got.Key != other.Key {
-		t.Fatalf("browser session identity = %q, want %q", got.Key, other.Key)
+	if got := fake.sessions[len(fake.sessions)-1]; got.Identity.Key != other.Key || got.Timezone != usTimezones[credential.ID%uint64(len(usTimezones))] {
+		t.Fatalf("browser session identity = %q, timezone = %q", got.Identity.Key, got.Timezone)
 	}
 	// An account stored without an identity still keeps a stable one.
 	credential.EncryptedState = ""

@@ -372,15 +372,18 @@ func TestLiveMediaFixture(t *testing.T) {
 }
 
 // The override must reach the logged-in muse.ai page as one consistent
-// desktop Chrome: user agent, navigator.platform and client hints agree.
+// desktop Chrome: user agent, navigator.platform, client hints and timezone
+// agree, and navigator.webdriver is false.
 func TestLiveIdentity(t *testing.T) {
 	e := liveEngine(t)
 	s := liveSession(t, false)
+	s.Timezone = "America/Denver"
 	for _, key := range []string{"windows-11", "macos-arm"} {
 		s.Identity, _ = identityByKey(key)
 		var got struct {
-			UA, Platform, HintPlatform, Arch, PlatformVersion, Full string
-			Brands                                                  []map[string]string
+			UA, Platform, HintPlatform, Arch, PlatformVersion, Full, TZ string
+			Webdriver                                                   bool
+			Brands                                                      []map[string]string
 		}
 		err := e.withPage(context.Background(), s, "/thread/new", func(p *page) error {
 			var r struct {
@@ -390,7 +393,8 @@ func TestLiveIdentity(t *testing.T) {
 			}
 			expr := `(async () => { const h = await navigator.userAgentData.getHighEntropyValues(["architecture","platformVersion","uaFullVersion"]);
 				return {UA: navigator.userAgent, Platform: navigator.platform, HintPlatform: navigator.userAgentData.platform, Arch: h.architecture,
-					PlatformVersion: h.platformVersion, Full: h.uaFullVersion, Brands: navigator.userAgentData.brands}; })()`
+					PlatformVersion: h.platformVersion, Full: h.uaFullVersion, Brands: navigator.userAgentData.brands,
+					TZ: Intl.DateTimeFormat().resolvedOptions().timeZone, Webdriver: navigator.webdriver}; })()`
 			if err := p.cmd(context.Background(), "Runtime.evaluate", map[string]any{"expression": expr, "returnByValue": true, "awaitPromise": true}, &r); err != nil {
 				return err
 			}
@@ -403,8 +407,12 @@ func TestLiveIdentity(t *testing.T) {
 		if got.UA != s.Identity.userAgent(got.Full) || got.Platform != s.Identity.platform || got.HintPlatform != s.Identity.uaPlatform || got.Arch != s.Identity.architecture || got.PlatformVersion != s.Identity.platformVersion {
 			t.Fatalf("%s: page reports %+v", key, got)
 		}
-		if len(got.Brands) != 3 || got.Brands[0]["brand"] != "Google Chrome" {
-			t.Fatalf("%s: brands = %v", key, got.Brands)
+		if len(got.Brands) != 3 || got.Brands[0]["brand"] != "Google Chrome" || got.TZ != s.Timezone {
+			t.Fatalf("%s: brands = %v, timezone = %s", key, got.Brands, got.TZ)
+		}
+		// Needs the browser started with --disable-blink-features=AutomationControlled.
+		if got.Webdriver {
+			t.Errorf("%s: navigator.webdriver is true", key)
 		}
 	}
 }

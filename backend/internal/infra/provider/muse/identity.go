@@ -31,6 +31,10 @@ var browserIdentities = []browserIdentity{
 	{Key: "linux", token: "X11; Linux x86_64", platform: "Linux x86_64", uaPlatform: "Linux", platformVersion: "6.8.0", architecture: "x86"},
 }
 
+// usTimezones are the zones accounts run in; each account keeps one, picked
+// by its ID.
+var usTimezones = []string{"America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles"}
+
 // defaultChromeVersion is the bundled browser image's version
 // (docker-compose muse-browser); session renewals over HTTP, which never see
 // the browser, present it.

@@ -108,6 +108,8 @@ services:
     container_name: grok2api-muse-browser
     profiles: ["muse"]
     image: chromedp/headless-shell:155.0.8059.40
+    # 关闭自动化标记，网页里的 navigator.webdriver 才是 false（与正常 Chrome 一致）。
+    command: ["--disable-blink-features=AutomationControlled"]
     shm_size: 1gb
     restart: unless-stopped
     init: true

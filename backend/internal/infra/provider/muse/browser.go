@@ -179,6 +179,11 @@ func (e *browserEngine) withPage(ctx context.Context, s session, path string, wo
 			return err
 		}
 	}
+	if s.Timezone != "" {
+		if err := p.cmd(ctx, "Emulation.setTimezoneOverride", map[string]any{"timezoneId": s.Timezone}, nil); err != nil {
+			return err
+		}
+	}
 	if err := p.cmd(ctx, "Emulation.setDeviceMetricsOverride", map[string]any{"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": false}, nil); err != nil {
 		return err
 	}

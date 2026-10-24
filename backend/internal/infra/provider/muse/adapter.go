@@ -96,7 +96,7 @@ func (a *Adapter) withSession(ctx context.Context, credential account.Credential
 	if err != nil {
 		return err
 	}
-	return fn(ctx, session{Cookies: jar, ProxyServer: proxy, Identity: a.identityOf(credential)})
+	return fn(ctx, session{Cookies: jar, ProxyServer: proxy, Identity: a.identityOf(credential), Timezone: usTimezones[credential.ID%uint64(len(usTimezones))]})
 }
 
 // identityOf is the browser identity stored with the account. An account

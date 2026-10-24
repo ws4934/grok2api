@@ -27,6 +27,8 @@ type session struct {
 	// Identity is the desktop browser the account presents; zero keeps the
 	// browser's own.
 	Identity browserIdentity
+	// Timezone is the IANA zone the page runs in; empty keeps the browser's.
+	Timezone string
 }
 
 // cookie uses the Cookie-Editor export field names, so an exported file is a
