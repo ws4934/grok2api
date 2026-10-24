@@ -370,3 +370,41 @@ func TestLiveMediaFixture(t *testing.T) {
 		}
 	}
 }
+
+// The override must reach the logged-in muse.ai page as one consistent
+// desktop Chrome: user agent, navigator.platform and client hints agree.
+func TestLiveIdentity(t *testing.T) {
+	e := liveEngine(t)
+	s := liveSession(t, false)
+	for _, key := range []string{"windows-11", "macos-arm"} {
+		s.Identity, _ = identityByKey(key)
+		var got struct {
+			UA, Platform, HintPlatform, Arch, PlatformVersion, Full string
+			Brands                                                  []map[string]string
+		}
+		err := e.withPage(context.Background(), s, "/thread/new", func(p *page) error {
+			var r struct {
+				Result struct {
+					Value json.RawMessage `json:"value"`
+				} `json:"result"`
+			}
+			expr := `(async () => { const h = await navigator.userAgentData.getHighEntropyValues(["architecture","platformVersion","uaFullVersion"]);
+				return {UA: navigator.userAgent, Platform: navigator.platform, HintPlatform: navigator.userAgentData.platform, Arch: h.architecture,
+					PlatformVersion: h.platformVersion, Full: h.uaFullVersion, Brands: navigator.userAgentData.brands}; })()`
+			if err := p.cmd(context.Background(), "Runtime.evaluate", map[string]any{"expression": expr, "returnByValue": true, "awaitPromise": true}, &r); err != nil {
+				return err
+			}
+			return json.Unmarshal(r.Result.Value, &got)
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+		t.Logf("%s: %+v", key, got)
+		if got.UA != s.Identity.userAgent(got.Full) || got.Platform != s.Identity.platform || got.HintPlatform != s.Identity.uaPlatform || got.Arch != s.Identity.architecture || got.PlatformVersion != s.Identity.platformVersion {
+			t.Fatalf("%s: page reports %+v", key, got)
+		}
+		if len(got.Brands) != 3 || got.Brands[0]["brand"] != "Google Chrome" {
+			t.Fatalf("%s: brands = %v", key, got.Brands)
+		}
+	}
+}

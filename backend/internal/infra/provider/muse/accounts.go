@@ -1,12 +1,14 @@
 package muse
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -23,8 +25,6 @@ const (
 	cookieVML     = "hatch_vml"
 )
 
-const sessionUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
-
 // --- credential import / export (CredentialCodecAdapter) ---
 
 // importRecord is this service's export line; Cookie also accepts a header string.
@@ -33,6 +33,9 @@ type importRecord struct {
 	Cookie  string   `json:"cookie,omitempty"`
 	Name    string   `json:"name,omitempty"`
 	Email   string   `json:"email,omitempty"`
+	// Browser is the account's browser identity, exported so it survives a
+	// move to another instance.
+	Browser string `json:"browser,omitempty"`
 }
 
 // ParseImportedCredentials accepts a Cookie-Editor JSON export (one account),
@@ -86,12 +89,16 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 		if err != nil {
 			return nil, err
 		}
-		seeds = append(seeds, provider.CredentialSeed{
+		seed := provider.CredentialSeed{
 			Provider: account.ProviderMuse, AuthType: account.AuthTypeOAuth,
 			Name: strings.TrimSpace(record.Name), Email: strings.TrimSpace(record.Email),
 			SourceKey:   "muse:" + security.HashToken(sess)[:24],
 			AccessToken: encoded, RefreshToken: encoded,
-		})
+		}
+		if _, ok := identityByKey(record.Browser); ok {
+			seed.State = map[string]string{stateBrowser: record.Browser}
+		}
+		seeds = append(seeds, seed)
 	}
 	if len(seeds) == 0 {
 		return nil, errors.New("没有找到有效的 Muse Cookie（需要包含 hatch_sess）")
@@ -178,7 +185,7 @@ func (a *Adapter) MarshalCredentials(values []provider.CredentialSeed) ([]byte, 
 		if err := json.Unmarshal([]byte(seed.RefreshToken), &jar); err != nil {
 			return nil, fmt.Errorf("decode muse cookie jar: %w", err)
 		}
-		encoded, err := json.Marshal(importRecord{Cookies: jar, Name: seed.Name, Email: seed.Email})
+		encoded, err := json.Marshal(importRecord{Cookies: jar, Name: seed.Name, Email: seed.Email, Browser: seed.State[stateBrowser]})
 		if err != nil {
 			return nil, err
 		}
@@ -189,13 +196,25 @@ func (a *Adapter) MarshalCredentials(values []provider.CredentialSeed) ([]byte, 
 }
 
 // PrepareImportedCredential checks the session with muse.ai before the
-// account is stored and keeps the freshly minted hatch_vml.
+// account is stored, keeps the freshly minted hatch_vml and fixes the
+// account's browser identity: the imported one, else the existing account's,
+// else a random one.
 func (a *Adapter) PrepareImportedCredential(ctx context.Context, seed provider.CredentialSeed) (provider.CredentialSeed, error) {
 	var jar []cookie
 	if err := json.Unmarshal([]byte(seed.RefreshToken), &jar); err != nil || cookieValue(jar, cookieSession) == "" {
 		return seed, &provider.CredentialRefreshError{Status: http.StatusBadRequest, Code: "muse_cookie_invalid", Message: "缺少 Muse 登录 Cookie（hatch_sess）"}
 	}
-	info, jar, expiresAt, err := a.renewSession(ctx, a.pendingCredential(ctx, seed.SourceKey), jar)
+	pending := a.pendingCredential(ctx, seed.SourceKey)
+	identity, ok := identityByKey(seed.State[stateBrowser])
+	switch {
+	case ok:
+	case pending.ID != 0:
+		identity = a.identityOf(pending)
+	default:
+		identity = browserIdentities[rand.IntN(len(browserIdentities))]
+	}
+	seed.State = map[string]string{stateBrowser: identity.Key}
+	info, jar, expiresAt, err := a.renewSession(ctx, pending, identity, jar)
 	if err != nil {
 		return seed, err
 	}
@@ -231,7 +250,7 @@ func (a *Adapter) RefreshCredential(ctx context.Context, credential account.Cred
 	if err != nil {
 		return provider.RefreshedCredential{}, err
 	}
-	_, jar, expiresAt, err := a.renewSession(ctx, credential, jar)
+	_, jar, expiresAt, err := a.renewSession(ctx, credential, a.identityOf(credential), jar)
 	if err != nil {
 		return provider.RefreshedCredential{}, err
 	}
@@ -255,7 +274,7 @@ func (a *Adapter) SyncAccountIdentity(ctx context.Context, credential account.Cr
 	if err != nil {
 		return provider.AccountIdentity{}, err
 	}
-	info, _, _, err := a.renewSession(ctx, credential, jar)
+	info, _, _, err := a.renewSession(ctx, credential, a.identityOf(credential), jar)
 	if err != nil {
 		return provider.AccountIdentity{}, err
 	}
@@ -322,12 +341,13 @@ type sessionInfo struct {
 	VMState string `json:"vm_state"`
 }
 
-// renewSession calls /api/session through the account's egress. muse.ai
-// answers with a new 48-hour hatch_vml, merged into the jar; expiresAt is
-// when it lapses. A 401 means hatch_sess is gone: the cookies must be
-// imported again.
-func (a *Adapter) renewSession(ctx context.Context, credential account.Credential, jar []cookie) (sessionInfo, []cookie, time.Time, error) {
-	lease, err := a.egress.AcquireCredential(infraegress.WithUserAgent(ctx, sessionUserAgent), scope, credential)
+// renewSession calls /api/session through the account's egress as the
+// account's browser identity. muse.ai answers with a new 48-hour hatch_vml,
+// merged into the jar; expiresAt is when it lapses. A 401 means hatch_sess is
+// gone: the cookies must be imported again.
+func (a *Adapter) renewSession(ctx context.Context, credential account.Credential, identity browserIdentity, jar []cookie) (sessionInfo, []cookie, time.Time, error) {
+	userAgent := identity.userAgent(defaultChromeVersion)
+	lease, err := a.egress.AcquireCredential(infraegress.WithUserAgent(ctx, userAgent), scope, credential)
 	if err != nil {
 		return sessionInfo{}, nil, time.Time{}, err
 	}
@@ -336,17 +356,16 @@ func (a *Adapter) renewSession(ctx context.Context, credential account.Credentia
 	if err != nil {
 		return sessionInfo{}, nil, time.Time{}, err
 	}
-	userAgent := lease.UserAgent
-	if userAgent == "" {
-		userAgent = sessionUserAgent
-	}
-	request.Header.Set("User-Agent", userAgent)
+	request.Header.Set("User-Agent", cmp.Or(lease.UserAgent, userAgent))
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Origin", "https://muse.ai")
 	request.Header.Set("Referer", "https://muse.ai/thread/new")
 	request.Header.Set("Sec-Fetch-Site", "same-origin")
 	request.Header.Set("Sec-Fetch-Mode", "cors")
 	request.Header.Set("Sec-Fetch-Dest", "empty")
+	for name, value := range identity.clientHints(defaultChromeVersion) {
+		request.Header.Set(name, value)
+	}
 	request.Header.Set("Cookie", cookieHeader(jar))
 	response, err := lease.Do(request)
 	if err != nil {

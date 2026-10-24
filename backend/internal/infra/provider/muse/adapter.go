@@ -96,7 +96,23 @@ func (a *Adapter) withSession(ctx context.Context, credential account.Credential
 	if err != nil {
 		return err
 	}
-	return fn(ctx, session{Cookies: jar, ProxyServer: proxy})
+	return fn(ctx, session{Cookies: jar, ProxyServer: proxy, Identity: a.identityOf(credential)})
+}
+
+// identityOf is the browser identity stored with the account. An account
+// stored without one gets a stable pick by its ID.
+func (a *Adapter) identityOf(credential account.Credential) browserIdentity {
+	if credential.EncryptedState != "" {
+		if raw, err := a.cipher.Decrypt(credential.EncryptedState); err == nil {
+			var state map[string]string
+			if json.Unmarshal([]byte(raw), &state) == nil {
+				if identity, ok := identityByKey(state[stateBrowser]); ok {
+					return identity
+				}
+			}
+		}
+	}
+	return browserIdentities[credential.ID%uint64(len(browserIdentities))]
 }
 
 // browserProxy turns an egress proxy URL into Chrome's proxyServer. Chrome

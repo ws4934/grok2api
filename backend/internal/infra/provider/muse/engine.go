@@ -24,6 +24,9 @@ type session struct {
 	Cookies []cookie
 	// ProxyServer is scheme://host:port without credentials; empty is direct.
 	ProxyServer string
+	// Identity is the desktop browser the account presents; zero keeps the
+	// browser's own.
+	Identity browserIdentity
 }
 
 // cookie uses the Cookie-Editor export field names, so an exported file is a

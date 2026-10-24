@@ -193,6 +193,71 @@ func TestSessionRenewalMergesSetCookie(t *testing.T) {
 	}
 }
 
+// Each account keeps one browser identity: import picks it, export and a
+// re-import keep it, and both the browser and session renewals present it.
+func TestAccountKeepsItsBrowserIdentity(t *testing.T) {
+	var gotAgent, gotPlatform string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAgent, gotPlatform = r.Header.Get("User-Agent"), r.Header.Get("Sec-Ch-Ua-Platform")
+		_, _ = io.WriteString(w, `{"status":"assigned","vm_id":"vm-42"}`)
+	}))
+	defer server.Close()
+	fake := &fakeEngine{chat: func(chatTurn, func(string) error) (string, error) { return "ok", nil }}
+	adapter, credential, _ := newTestAdapter(t, fake)
+	adapter.sessionURL = server.URL
+	ctx := context.Background()
+
+	seed, err := adapter.PrepareImportedCredential(ctx, provider.CredentialSeed{SourceKey: "muse:x", RefreshToken: jarJSON(testJar)})
+	identity, ok := identityByKey(seed.State[stateBrowser])
+	if err != nil || !ok {
+		t.Fatalf("imported identity = %q, err = %v", seed.State[stateBrowser], err)
+	}
+	if gotAgent != identity.userAgent(defaultChromeVersion) || gotPlatform != `"`+identity.uaPlatform+`"` {
+		t.Fatalf("renewal sent %q / %s for %s", gotAgent, gotPlatform, identity.Key)
+	}
+	exported, err := adapter.MarshalCredentials([]provider.CredentialSeed{seed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := adapter.ParseImportedCredentials(exported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip := mustPrepare(t, adapter, ctx, again[0]); roundTrip.State[stateBrowser] != identity.Key {
+		t.Fatalf("export round trip identity = %q, want %q", roundTrip.State[stateBrowser], identity.Key)
+	}
+
+	other := browserIdentities[0]
+	if other.Key == identity.Key {
+		other = browserIdentities[1]
+	}
+	credential.EncryptedState, _ = adapter.cipher.Encrypt(`{"browser":"` + other.Key + `"}`)
+	reimported := mustPrepare(t, adapter, infraegress.WithExistingAccount(ctx, credential), provider.CredentialSeed{SourceKey: "muse:x", RefreshToken: jarJSON(testJar)})
+	if reimported.State[stateBrowser] != other.Key {
+		t.Fatalf("re-import identity = %q, want the stored %q", reimported.State[stateBrowser], other.Key)
+	}
+	if _, err := adapter.ForwardResponse(ctx, provider.ResponseResourceRequest{Credential: credential, Method: http.MethodPost, Path: "/responses", Model: modelChat, Operation: conversation.OperationResponses, Body: []byte(`{"input":"hi"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.sessions[len(fake.sessions)-1].Identity; got.Key != other.Key {
+		t.Fatalf("browser session identity = %q, want %q", got.Key, other.Key)
+	}
+	// An account stored without an identity still keeps a stable one.
+	credential.EncryptedState = ""
+	if adapter.identityOf(credential) != adapter.identityOf(credential) || adapter.identityOf(credential).Key == "" {
+		t.Fatal("account without stored identity got none")
+	}
+}
+
+func mustPrepare(t *testing.T, adapter *Adapter, ctx context.Context, seed provider.CredentialSeed) provider.CredentialSeed {
+	t.Helper()
+	prepared, err := adapter.PrepareImportedCredential(ctx, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prepared
+}
+
 func TestUsageWindow(t *testing.T) {
 	reset := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
 	window := usageWindow(usage{UsedPercent: 2.4, ResetAt: reset}, time.Now())

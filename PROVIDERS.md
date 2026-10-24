@@ -275,6 +275,7 @@ Muse 是 Meta 的 agent 应用（`https://muse.ai`）。它没有公开 API：�
 
 - `hatch_sess` 有效期约 30 天，`hatch_vml` 约 48 小时。网关在 `hatch_vml` 过期前约 1 天用 `/api/session` 换新（走账号出口，不需要浏览器），并合并返回的 Cookie。
 - 会话被拒（401）→ 账号转入需重新导入。打开网页不会轮换登录 Cookie，浏览器里的操作不写回凭据。
+- **浏览器身份**：每个账号固定一个桌面 Chrome 身份（Windows 10/11、macOS Intel/Apple 芯片、Linux 之一），导入时随机分配并存在凭据里，导出再导入、重新导入都保持不变。浏览器页面的 User-Agent、`navigator.platform` 和 Client Hints（`Sec-CH-UA*`、`navigator.userAgentData`）一起按这个身份改写；续期请求也带同一个 UA。Chrome 版本跟随实际运行的浏览器（续期请求按 compose 里固定的 155 版）。共用的仍是同一个 Chrome 进程，渲染与字体特征相同，区分账号主要靠给账号绑定不同出口。
 
 ### 额度
 

@@ -1,6 +1,7 @@
 package muse
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -166,6 +167,18 @@ func (e *browserEngine) withPage(ctx context.Context, s session, path string, wo
 		return err
 	}
 	p := &page{conn: conn, session: attached.SessionID, log: e.logger()}
+	if s.Identity.Key != "" {
+		var version struct {
+			Product string `json:"product"`
+		}
+		if err := conn.call(ctx, "", "Browser.getVersion", nil, &version); err != nil {
+			return err
+		}
+		_, full, _ := strings.Cut(version.Product, "/")
+		if err := p.cmd(ctx, "Emulation.setUserAgentOverride", s.Identity.override(cmp.Or(full, defaultChromeVersion)), nil); err != nil {
+			return err
+		}
+	}
 	if err := p.cmd(ctx, "Emulation.setDeviceMetricsOverride", map[string]any{"width": 1440, "height": 1000, "deviceScaleFactor": 1, "mobile": false}, nil); err != nil {
 		return err
 	}
