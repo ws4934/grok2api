@@ -40,13 +40,14 @@ type Adapter struct {
 	fetchRemote RemoteFetcher
 	engine      engine
 	logger      *slog.Logger
-	// sessionURL renews the session cookie; a var for tests.
-	sessionURL string
+	// sessionURL renews the session cookie and wakeURL starts the cloud VM;
+	// fields for tests.
+	sessionURL, wakeURL string
 }
 
 // NewAdapter builds the Muse adapter. fetchRemote nil accepts only data URI inputs.
 func NewAdapter(cfg Config, egress *infraegress.Manager, cipher *security.Cipher, assets AssetStore, fetchRemote RemoteFetcher) *Adapter {
-	a := &Adapter{cfg: cfg, egress: egress, cipher: cipher, assets: assets, fetchRemote: fetchRemote, sessionURL: "https://muse.ai/api/session"}
+	a := &Adapter{cfg: cfg, egress: egress, cipher: cipher, assets: assets, fetchRemote: fetchRemote, sessionURL: "https://muse.ai/api/session", wakeURL: "https://muse.ai/api/hatch/vm/wake"}
 	a.engine = newBrowserEngine(a.config, a.log)
 	return a
 }

@@ -1,6 +1,7 @@
 package muse
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -12,6 +13,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
@@ -344,7 +347,8 @@ type sessionInfo struct {
 // renewSession calls /api/session through the account's egress as the
 // account's browser identity. muse.ai answers with a new 48-hour hatch_vml,
 // merged into the jar; expiresAt is when it lapses. A 401 means hatch_sess is
-// gone: the cookies must be imported again.
+// gone: the cookies must be imported again. A cloud VM that is not running is
+// woken, so the next request does not wait for it.
 func (a *Adapter) renewSession(ctx context.Context, credential account.Credential, identity browserIdentity, jar []cookie) (sessionInfo, []cookie, time.Time, error) {
 	userAgent := identity.userAgent(defaultChromeVersion)
 	lease, err := a.egress.AcquireCredential(infraegress.WithUserAgent(ctx, userAgent), scope, credential)
@@ -352,21 +356,28 @@ func (a *Adapter) renewSession(ctx context.Context, credential account.Credentia
 		return sessionInfo{}, nil, time.Time{}, err
 	}
 	defer lease.Release()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, a.sessionURL, nil)
+	newRequest := func(method, target string, body io.Reader, jar []cookie) (*http.Request, error) {
+		request, err := http.NewRequestWithContext(ctx, method, target, body)
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("User-Agent", cmp.Or(lease.UserAgent, userAgent))
+		request.Header.Set("Accept", "application/json")
+		request.Header.Set("Origin", "https://muse.ai")
+		request.Header.Set("Referer", "https://muse.ai/thread/new")
+		request.Header.Set("Sec-Fetch-Site", "same-origin")
+		request.Header.Set("Sec-Fetch-Mode", "cors")
+		request.Header.Set("Sec-Fetch-Dest", "empty")
+		for name, value := range identity.clientHints(defaultChromeVersion) {
+			request.Header.Set(name, value)
+		}
+		request.Header.Set("Cookie", cookieHeader(jar))
+		return request, nil
+	}
+	request, err := newRequest(http.MethodGet, a.sessionURL, nil, jar)
 	if err != nil {
 		return sessionInfo{}, nil, time.Time{}, err
 	}
-	request.Header.Set("User-Agent", cmp.Or(lease.UserAgent, userAgent))
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Origin", "https://muse.ai")
-	request.Header.Set("Referer", "https://muse.ai/thread/new")
-	request.Header.Set("Sec-Fetch-Site", "same-origin")
-	request.Header.Set("Sec-Fetch-Mode", "cors")
-	request.Header.Set("Sec-Fetch-Dest", "empty")
-	for name, value := range identity.clientHints(defaultChromeVersion) {
-		request.Header.Set(name, value)
-	}
-	request.Header.Set("Cookie", cookieHeader(jar))
 	response, err := lease.Do(request)
 	if err != nil {
 		a.egress.FeedbackForScope(context.WithoutCancel(ctx), scope, lease.NodeID, 0, err)
@@ -392,7 +403,32 @@ func (a *Adapter) renewSession(ctx context.Context, credential account.Credentia
 		return sessionInfo{}, nil, time.Time{}, &provider.CredentialRefreshError{Status: response.StatusCode, Code: "muse_session_unassigned", Message: "muse.ai 没有为账号分配工作区，请在官网检查账号"}
 	}
 	jar = mergeSetCookies(jar, response.Cookies(), time.Now())
+	if info.VMID != "" && info.VMState != "RUNNING" && info.VMState != "DISABLED" {
+		a.wakeVM(ctx, lease, newRequest, jar, credential.ID, info)
+	}
 	return info, jar, jarExpiry(jar), nil
+}
+
+// wakeVM asks muse.ai to start the account's cloud VM, as the web app does on
+// every page load. It is best effort: the next page load wakes it as well.
+func (a *Adapter) wakeVM(ctx context.Context, lease *infraegress.Lease, newRequest func(string, string, io.Reader, []cookie) (*http.Request, error), jar []cookie, accountID uint64, info sessionInfo) {
+	body, _ := json.Marshal(map[string]any{"vm_id": info.VMID, "retry_count": 0, "connect_attempt_id": uuid.NewString()})
+	request, err := newRequest(http.MethodPost, a.wakeURL, bytes.NewReader(body), jar)
+	if err != nil {
+		return
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := lease.Do(request)
+	if err != nil {
+		a.log().Warn("muse_vm_wake_failed", "account_id", accountID, "vm_state", info.VMState, "error", err)
+		return
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		a.log().Warn("muse_vm_wake_failed", "account_id", accountID, "vm_state", info.VMState, "status", response.StatusCode)
+		return
+	}
+	a.log().Info("muse_vm_woken", "account_id", accountID, "vm_state", info.VMState)
 }
 
 // mergeSetCookies applies Set-Cookie headers: a cookie without Domain is

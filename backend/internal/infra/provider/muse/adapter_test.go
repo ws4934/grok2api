@@ -258,6 +258,45 @@ func mustPrepare(t *testing.T, adapter *Adapter, ctx context.Context, seed provi
 	return prepared
 }
 
+// Renewal wakes a cloud VM that is not running, with the renewed cookies;
+// a failed wake never fails the renewal.
+func TestRenewalWakesASleepingVM(t *testing.T) {
+	var state string
+	var wakeStatus int
+	var wakes []map[string]any
+	var wakeCookie string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/wake" {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			wakes, wakeCookie = append(wakes, body), r.Header.Get("Cookie")
+			w.WriteHeader(wakeStatus)
+			return
+		}
+		w.Header().Add("Set-Cookie", "hatch_vml=vml-new; Max-Age=172800; Path=/; Domain=.muse.ai")
+		_, _ = io.WriteString(w, `{"status":"assigned","vm_id":"vm-42","vm_state":"`+state+`"}`)
+	}))
+	defer server.Close()
+	adapter, credential, _ := newTestAdapter(t, &fakeEngine{})
+	adapter.sessionURL, adapter.wakeURL = server.URL+"/session", server.URL+"/wake"
+	for _, tc := range []struct {
+		state      string
+		wakeStatus int
+		wakes      int
+	}{{"RUNNING", 200, 0}, {"DISABLED", 200, 0}, {"SLEEPING", 200, 1}, {"STOPPED", 500, 1}} {
+		state, wakeStatus, wakes = tc.state, tc.wakeStatus, nil
+		if _, err := adapter.RefreshCredential(context.Background(), credential); err != nil {
+			t.Fatalf("%s: %v", tc.state, err)
+		}
+		if len(wakes) != tc.wakes {
+			t.Fatalf("%s: %d wakes, want %d", tc.state, len(wakes), tc.wakes)
+		}
+		if tc.wakes > 0 && (wakes[0]["vm_id"] != "vm-42" || wakes[0]["retry_count"] != float64(0) || wakes[0]["connect_attempt_id"] == "" || !strings.Contains(wakeCookie, "hatch_vml=vml-new")) {
+			t.Fatalf("%s: wake = %v, cookie = %q", tc.state, wakes[0], wakeCookie)
+		}
+	}
+}
+
 func TestUsageWindow(t *testing.T) {
 	reset := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
 	window := usageWindow(usage{UsedPercent: 2.4, ResetAt: reset}, time.Now())
