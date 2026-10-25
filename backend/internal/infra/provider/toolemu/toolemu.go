@@ -28,6 +28,7 @@ var (
 	nameClosePattern    = regexp.MustCompile(`(?i)^</tool_name\s*>`)
 	paramsEndPattern    = regexp.MustCompile(`(?i)</parameters\s*>`)
 	paramsClosePattern  = regexp.MustCompile(`(?i)^\s*</parameters\s*>`)
+	callClosePattern    = regexp.MustCompile(`(?i)^\s*</tool_calls?\s*>`)
 	functionCallPattern = regexp.MustCompile(`(?is)<function_call\s*>(.*?)</function_call\s*>`)
 	functionNamePattern = regexp.MustCompile(`(?is)<name\s*>(.*?)</name\s*>`)
 	functionArgsPattern = regexp.MustCompile(`(?is)<arguments\s*>(.*?)</arguments\s*>`)
@@ -418,6 +419,11 @@ func (a *argScan) scan(text string, final bool) (string, int) {
 		}
 		if closing := paramsClosePattern.FindStringIndex(text[a.end:]); closing != nil {
 			return text[a.start:a.end], a.end + closing[1]
+		}
+		// Models sometimes leave </parameters> out and close the call right
+		// after the JSON; the root scan then reads the call's closing tag.
+		if callClosePattern.MatchString(text[a.end:]) {
+			return text[a.start:a.end], a.end
 		}
 	}
 	if !a.plain {

@@ -274,3 +274,18 @@ func TestSieveNeverLeaksMarkupFedCharByChar(t *testing.T) {
 		t.Fatalf("text %q calls %#v", text.String(), calls)
 	}
 }
+
+// TestMissingParametersCloseTag: models sometimes end complete JSON arguments
+// with </tool_call> and leave out </parameters>.
+func TestMissingParametersCloseTag(t *testing.T) {
+	available := map[string]struct{}{"lookup": {}}
+	reply := "Sure.\n\n<tool_calls>\n  <tool_call>\n    <tool_name>lookup</tool_name>\n    <parameters>{\"q\":\"x\"} \n  </tool_call>\n</tool_calls>"
+	if parsed := Parse(reply, available); len(parsed.Calls) != 1 || parsed.Calls[0].Arguments != `{"q":"x"}` || Strip(reply, parsed) != "Sure." {
+		t.Fatalf("parsed = %#v", parsed)
+	}
+	for _, size := range []int{1, 5, len(reply)} {
+		if text, calls := sieveAll(available, reply, size); strings.TrimSpace(text) != "Sure." || len(calls) != 1 || calls[0].Arguments != `{"q":"x"}` {
+			t.Fatalf("size %d: text %q calls %#v", size, text, calls)
+		}
+	}
+}
