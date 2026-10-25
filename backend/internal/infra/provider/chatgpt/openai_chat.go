@@ -29,6 +29,9 @@ type OpenAIChatEvent struct {
 	Done     bool
 	// Search is the web search seen so far; valid during the callback only.
 	Search *chatSearch
+	// Conversation and Parent, set on the final Done event, are where a
+	// follow-up message continues this conversation; empty when unknown.
+	Conversation, Parent string
 }
 
 // OpenAIChatImage binds decoded client image bytes to their original message
@@ -129,7 +132,7 @@ func scanOpenAIChat(reader io.Reader, inputs map[string]bool, emit func(OpenAICh
 					return err
 				}
 			}
-			return onEvent(OpenAIChatEvent{Done: true})
+			return onEvent(state.done())
 		}
 		if !strings.HasPrefix(line, "{") {
 			continue
@@ -163,7 +166,7 @@ func scanOpenAIChat(reader io.Reader, inputs map[string]bool, emit func(OpenAICh
 	if !ended || !hasText {
 		return fmt.Errorf("ChatGPT stream ended before completion: %w", io.ErrUnexpectedEOF)
 	}
-	return onEvent(OpenAIChatEvent{Done: true})
+	return onEvent(state.done())
 }
 
 func openAIChatPayloadWithImages(request wireChatRequest, images []OpenAIChatImage, references []openAIImageReference) (map[string]any, error) {
@@ -242,6 +245,19 @@ type openAIChatState struct {
 	search        chatSearch
 	// inputs holds the IDs of the request's messages, which ChatGPT echoes.
 	inputs map[string]bool
+	// conversation, lastToken and answer locate the end of the turn: the
+	// message that ended it and, when the answer streamed as fragments, the
+	// merged answer, which ChatGPT then places after the last fragment.
+	conversation, lastToken, answer string
+}
+
+// done is the final event, carrying where a follow-up message continues.
+func (s *openAIChatState) done() OpenAIChatEvent {
+	parent := s.answer
+	if parent == "" {
+		parent = s.lastToken
+	}
+	return OpenAIChatEvent{Done: true, Conversation: s.conversation, Parent: parent}
 }
 
 // displayableAssistantMessage reports whether a message is the user-visible
@@ -336,7 +352,18 @@ func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
 				Body:    stringValue(rawError["message"]),
 			}
 		}
+		if id := stringValue(object["conversation_id"]); id != "" {
+			s.conversation = id
+		}
 		switch stringValue(object["type"]) {
+		case "message_marker":
+			if stringValue(object["marker"]) == "last_token" {
+				s.lastToken = stringValue(object["message_id"])
+			}
+		case "streaming_parent_patch":
+			if id := stringValue(object["logical_answer_id"]); id != "" {
+				s.answer = id
+			}
 		case "server_ste_metadata":
 			metadata, _ := object["metadata"].(map[string]any)
 			if count, _ := metadata["search_tool_call_count"].(float64); count > 0 {
@@ -441,6 +468,9 @@ func openAIChatPayload(request wireChatRequest) map[string]any {
 		"variant_purpose":               "comparison_implicit",
 		"websocket_request_id":          firstUUID(),
 		"client_contextual_info":        map[string]any{"is_dark_mode": false, "time_since_loaded": 120, "page_height": 900, "page_width": 1400, "pixel_ratio": 2, "screen_height": 1440, "screen_width": 2560},
+	}
+	if request.ConversationID != "" {
+		payload["conversation_id"], payload["parent_message_id"] = request.ConversationID, request.ParentMessageID
 	}
 	if request.ReasoningEffort != "" && request.ReasoningEffort != "none" {
 		payload["thinking_effort"] = request.ReasoningEffort

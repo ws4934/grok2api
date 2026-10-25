@@ -53,7 +53,9 @@ func (a *Adapter) Definition() provider.Definition {
 		},
 		Conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true},
 		Media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, TTS: true, STT: true, SingleImagePerRequest: true},
-		Inference:    provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true},
+		// SessionIdentity keeps a client session on one account, whose ChatGPT
+		// conversation a follow-up request then continues.
+		Inference: provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true, SessionIdentity: true},
 	}
 }
 

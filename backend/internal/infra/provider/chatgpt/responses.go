@@ -119,8 +119,15 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 	}
 	t := &turn{id: "resp_" + strings.ReplaceAll(uuid.NewString(), "-", ""), created: time.Now().Unix(), model: request.Model, request: in}
 	m := &meter{limit: limit}
+	// Conversations are continued only within the gateway's session identity,
+	// which is scoped to the client key and the model.
+	seed := ""
+	if request.PromptCacheKey != "" {
+		seed = request.PromptCacheKey + "\x00" + request.Model
+	}
 	run := func(ctx context.Context) (map[string]any, error) {
-		if err := a.converse(ctx, credential, c, request.Model, in, t, m); err != nil {
+		next, err := a.converse(ctx, credential, c, request.Model, in, seed, t, m)
+		if err != nil {
 			return nil, err
 		}
 		// Only usage needs the input count, so it is taken after the reply
@@ -133,7 +140,11 @@ func (a *Adapter) ForwardResponse(ctx context.Context, request provider.Response
 		if err != nil {
 			return nil, err
 		}
-		return t.finish(usage, m.truncated)
+		final, err := t.finish(usage, m.truncated)
+		if err == nil && !m.truncated {
+			a.remember(seed, in.Messages, t, credential.ID, next)
+		}
+		return final, err
 	}
 	if !request.Streaming {
 		final, err := run(ctx)
@@ -199,70 +210,127 @@ func (b *streamBody) Close() error {
 	return b.PipeReader.Close()
 }
 
-// converse runs the reply on the account's egress and feeds the reasoning
-// summary, the visible text and the emulated tool calls to the turn under
-// the output limit.
-func (a *Adapter) converse(ctx context.Context, credential account.Credential, c credentials, model string, in turnRequest, t *turn, m *meter) error {
+// converse runs the reply on the account's egress: a continuation of the
+// account's conversation when it already holds the start of this history,
+// else the whole history. It returns where a follow-up can continue.
+func (a *Adapter) converse(ctx context.Context, credential account.Credential, c credentials, model string, in turnRequest, seed string, t *turn, m *meter) (chatCursor, error) {
+	var from chatCursor
+	var fromKey string
+	at, resume := 0, false
+	if seed != "" {
+		from, fromKey, at, resume = a.conversations.find(historyKeys(seed, in.Messages), len(in.Messages), credential.ID, time.Now())
+	}
+	var next chatCursor
 	_, err := a.attempt(ctx, credential, nil, func(ctx context.Context) error {
 		w, err := wire(ctx, c)
 		if err != nil {
 			return err
 		}
-		request, images, err := in.wire(model, func(value string) (OpenAIImageInput, error) { return a.loadInput(ctx, value) })
+		if resume {
+			err = a.reply(ctx, w, model, in, at, from, t, m, &next)
+			if err == nil || m.used > 0 || !continuationRejected(err) {
+				return err
+			}
+			// ChatGPT no longer continues it (expired or unknown): start over.
+			a.conversations.drop(fromKey)
+			resume = false
+		}
+		return a.reply(ctx, w, model, in, 0, chatCursor{}, t, m, &next)
+	})
+	return next, err
+}
+
+// reply streams one answer into the turn under the output limit: of the
+// messages from at, continuing from when it is set.
+func (a *Adapter) reply(ctx context.Context, w wireAccount, model string, in turnRequest, at int, from chatCursor, t *turn, m *meter, next *chatCursor) error {
+	sent := in
+	sent.Messages = in.Messages[at:]
+	request, images, err := sent.wire(model, func(value string) (OpenAIImageInput, error) { return a.loadInput(ctx, value) })
+	if err != nil {
+		return err
+	}
+	request.ConversationID, request.ParentMessageID = from.conversation, from.parent
+	// Each attempt filters its own answer: tool calls are sifted out first,
+	// so their arguments keep any markup, then citations become Markdown
+	// links and the remaining Web UI markup is rewritten.
+	var sieve *toolemu.Sieve
+	if in.Emulated.Enabled() {
+		sieve = toolemu.NewSieve(in.Emulated.Available)
+	}
+	ui, cites := &richUIFilter{}, &citer{}
+	err = NewOpenAIChat(a.image).Stream(ctx, w, request, func(event OpenAIChatEvent) error {
+		if event.Done {
+			next.conversation, next.parent = event.Conversation, event.Parent
+		}
+		reasoning, err := m.take(event.Thinking, &m.reasoning)
 		if err != nil {
 			return err
 		}
-		// Each attempt filters its own answer: tool calls are sifted out first,
-		// so their arguments keep any markup, then citations become Markdown
-		// links and the remaining Web UI markup is rewritten.
-		var sieve *toolemu.Sieve
-		if in.Emulated.Enabled() {
-			sieve = toolemu.NewSieve(in.Emulated.Available)
+		// The limit and usage count everything ChatGPT wrote, tool markup included.
+		text, err := m.take(event.Text, &m.text)
+		if err != nil {
+			return err
 		}
-		ui, cites := &richUIFilter{}, &citer{}
-		err = NewOpenAIChat(a.image).Stream(ctx, w, request, func(event OpenAIChatEvent) error {
-			reasoning, err := m.take(event.Thinking, &m.reasoning)
-			if err != nil {
-				return err
-			}
-			// The limit and usage count everything ChatGPT wrote, tool markup included.
-			text, err := m.take(event.Text, &m.text)
-			if err != nil {
-				return err
-			}
-			// A cut reply drops what the filters hold instead of leaking partial markup.
-			flush := event.Done && !m.truncated
-			if sieve != nil {
-				var calls []toolemu.Call
-				text, calls = sift(sieve, text, flush)
-				t.calls = append(t.calls, calls...)
-			}
-			text, cited := cites.Feed(text, event.Search)
-			if flush {
-				text += cites.Flush()
-			}
-			text = ui.Feed(text)
-			if flush {
-				text += ui.Flush()
-			}
-			t.search, t.cited = event.Search, append(t.cited, cited...)
-			if err := t.add(true, reasoning); err != nil {
-				return err
-			}
-			if err := t.add(false, text); err != nil {
-				return err
-			}
-			if m.truncated {
-				return errOutputLimit
-			}
-			return nil
-		}, images...)
-		if errors.Is(err, errOutputLimit) {
-			return nil
+		// A cut reply drops what the filters hold instead of leaking partial markup.
+		flush := event.Done && !m.truncated
+		if sieve != nil {
+			var calls []toolemu.Call
+			text, calls = sift(sieve, text, flush)
+			t.calls = append(t.calls, calls...)
 		}
-		return err
-	})
+		text, cited := cites.Feed(text, event.Search)
+		if flush {
+			text += cites.Flush()
+		}
+		text = ui.Feed(text)
+		if flush {
+			text += ui.Flush()
+		}
+		t.search, t.cited = event.Search, append(t.cited, cited...)
+		if err := t.add(true, reasoning); err != nil {
+			return err
+		}
+		if err := t.add(false, text); err != nil {
+			return err
+		}
+		if m.truncated {
+			return errOutputLimit
+		}
+		return nil
+	}, images...)
+	if errors.Is(err, errOutputLimit) {
+		return nil
+	}
 	return err
+}
+
+// remember records where the account's conversation now ends, keyed by the
+// history plus this reply as the client will send them back.
+func (a *Adapter) remember(seed string, history []turnMessage, t *turn, account uint64, next chatCursor) {
+	if seed == "" || next.conversation == "" || next.parent == "" {
+		return
+	}
+	messages := append(append([]turnMessage(nil), history...), t.echo()...)
+	keys := historyKeys(seed, messages)
+	if len(keys) == 0 || keys[len(keys)-1].end != len(messages) {
+		return
+	}
+	next.account = account
+	a.conversations.save(keys[len(keys)-1].key, next, time.Now())
+}
+
+// continuationRejected reports a failure of the conversation itself (gone,
+// unknown parent), which sending the whole history avoids.
+func continuationRejected(err error) bool {
+	var upstream *upstreamError
+	if !errors.As(err, &upstream) {
+		return false
+	}
+	switch upstream.Status {
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusConflict, http.StatusGone, http.StatusUnprocessableEntity:
+		return true
+	}
+	return false
 }
 
 // sift moves complete tool call blocks out of text. Blocks with no declared
@@ -965,6 +1033,9 @@ func failureResponse(operation string, err error) (*provider.Response, error) {
 		response := errorResponse(operation, http.StatusNotFound, "model_not_found", "ChatGPT rejected the model for this account")
 		response.ModelCatalogChanged = true
 		return response, nil
+	case upstream.Status == http.StatusRequestEntityTooLarge:
+		// ChatGPT Web takes about 120 KB per request.
+		return errorResponse(operation, http.StatusBadRequest, "context_length_exceeded", "The conversation is too long for one ChatGPT Web request (about 120 KB); shorten or compact the history"), nil
 	}
 	code, message := "upstream_error", "ChatGPT request failed"
 	switch upstream.Status {

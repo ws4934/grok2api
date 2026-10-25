@@ -32,6 +32,9 @@ type wireChatRequest struct {
 	ReasoningEffort string
 	// Search asks ChatGPT to search the web for this reply.
 	Search bool
+	// ConversationID and ParentMessageID continue an existing conversation;
+	// Messages then holds only what follows ParentMessageID.
+	ConversationID, ParentMessageID string
 }
 type upstreamError struct {
 	// URL is scheme, host and path of the failed request, without the query.

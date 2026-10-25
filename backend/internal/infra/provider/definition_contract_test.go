@@ -87,7 +87,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			credential:   provider.CredentialSurface{AuthType: account.AuthTypeOAuth, Import: true, Refresh: true, RedirectOAuth: true},
 			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true},
 			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, TTS: true, STT: true, SingleImagePerRequest: true},
-			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true},
+			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true, SessionIdentity: true},
 		},
 		{
 			provider: account.ProviderAdobe, catalog: provider.ModelCatalogStatic, quota: provider.QuotaRemoteWindow,

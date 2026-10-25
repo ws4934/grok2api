@@ -49,6 +49,9 @@ type Adapter struct {
 	catalogs map[uint64]imageCatalog
 	// voiceLists caches, per account, the read aloud voices (guarded by catalogMu).
 	voiceLists map[uint64]voiceList
+
+	// conversations holds where each recent reply's conversation continues.
+	conversations conversationStore
 }
 
 // SetLogger routes the adapter's diagnostic logs to the application logger.
