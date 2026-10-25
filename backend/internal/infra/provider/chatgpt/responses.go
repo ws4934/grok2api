@@ -33,7 +33,7 @@ const (
 // channel (functions, container), where they fail, or prefers its built-in
 // tools (web search, weather and other widgets) to them.
 const (
-	clientTools    = "These tools run on the client, not through your tool interface. To call one, write the <tool_calls> block as the visible text of your final reply; never call it through functions, code execution or any other built-in tool."
+	clientTools    = "These tools run on the client and are not in your tool interface: a call sent to functions.exec, code execution or any other built-in tool never reaches them and is lost. To call one, write the <tool_calls> block in the visible text of your final reply."
 	noBuiltinTools = "Do not search the web, browse, run code, or use any built-in tool or widget (weather, maps, images, canvas). When a listed tool can provide the information, call it instead of answering from your own knowledge."
 )
 

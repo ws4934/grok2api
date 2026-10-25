@@ -250,7 +250,8 @@ AVAILABLE TOOLS:
 %s
 
 TOOL CALL FORMAT - follow these rules exactly:
-- When calling a tool, output only the XML block below, with no text before or after it.
+- To call a tool, end your reply with the XML block below. A short note to the user may come before it; nothing may come after it.
+- Writing the block is the only way to call a tool. If your reply says you will use a tool, the block must be in that same reply.
 - <parameters> must contain one valid JSON object.
 - Put multiple calls inside one <tool_calls> element.
 - Do not use Markdown code fences.
