@@ -99,7 +99,7 @@ func (o ImageOutputOptions) promptSuffix() string {
 
 // A completed generation that fails the requested output contract must not
 // trigger another paid generation or mark its account as invalid.
-type imageOutputError struct{ err error }
+type imageOutputError struct{ err *upstreamError }
 
 func (e *imageOutputError) Error() string { return e.err.Error() }
 func (e *imageOutputError) Unwrap() error { return e.err }
@@ -107,6 +107,9 @@ func (e *imageOutputError) Unwrap() error { return e.err }
 // ImageOutputFailure tells callers outside this package that downloading the
 // same image again cannot satisfy the output options.
 func (e *imageOutputError) ImageOutputFailure() bool { return true }
+
+// PublicErrorMessage is the gateway's own reason, safe to show clients.
+func (e *imageOutputError) PublicErrorMessage() string { return e.err.Message }
 
 func invalidImageOutput(message string) error {
 	return &imageOutputError{err: &upstreamError{Status: http.StatusBadGateway, Message: message}}
@@ -142,8 +145,11 @@ func (o ImageOutputOptions) applyDecoded(download downloadedImage) ([]byte, stri
 			}
 			return !transparent || !visible
 		})
-		if o.Background == "transparent" && (!transparent || !visible) {
-			return nil, "", invalidImageOutput("OpenAI image output did not satisfy background=transparent: expected transparent and visible pixels")
+		if o.Background == "transparent" && !transparent {
+			return nil, "", invalidImageOutput("The image ChatGPT drew has no transparent pixels, so it fails background=transparent; a full scene has no background to cut away, use background=auto for it")
+		}
+		if o.Background == "transparent" && !visible {
+			return nil, "", invalidImageOutput("The image ChatGPT drew is fully transparent, so it fails background=transparent")
 		}
 		if o.Background == "opaque" && nonOpaque {
 			return nil, "", invalidImageOutput("OpenAI image output did not satisfy background=opaque: transparent pixels were returned")

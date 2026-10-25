@@ -9,6 +9,7 @@ import (
 
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -39,6 +40,7 @@ func writeGatewayError(c *gin.Context, err error) {
 	var upstreamFailure *gateway.UpstreamFailure
 	var selectionFailure *gateway.SelectionUnavailableError
 	var imageRejection *gateway.ImageRequestRejectedError
+	publicMessage, public := provider.ErrorPublicMessage(err)
 	switch {
 	case errors.Is(err, gateway.ErrLedgerUnavailable):
 		status, code = http.StatusServiceUnavailable, "ledger_unavailable"
@@ -70,6 +72,9 @@ func writeGatewayError(c *gin.Context, err error) {
 	case errors.Is(err, gateway.ErrMediaStorageFull):
 		status, code = http.StatusServiceUnavailable, "media_storage_full"
 		message = err.Error()
+	case public && provider.IsMediaPostProcessingError(err):
+		// The media was generated but fails the requested output (e.g. not transparent).
+		code, message = "media_postprocessing_failed", publicMessage
 	case errors.Is(err, gateway.ErrVideoOperationUnsupported):
 		status, code = http.StatusBadRequest, "unsupported_model"
 		message = err.Error()

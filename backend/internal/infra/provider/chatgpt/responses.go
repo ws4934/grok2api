@@ -1142,7 +1142,10 @@ func detailText(value any) string {
 func publicFailure(err error) (string, string) {
 	var upstream *upstreamError
 	var transport *transportError
+	var output *imageOutputError
 	switch {
+	case errors.As(err, &output):
+		return "media_postprocessing_failed", output.PublicErrorMessage()
 	case errors.Is(err, context.DeadlineExceeded):
 		return "upstream_timeout", "ChatGPT reply timed out"
 	case errors.As(err, &upstream) && upstream.Status == http.StatusTooManyRequests:

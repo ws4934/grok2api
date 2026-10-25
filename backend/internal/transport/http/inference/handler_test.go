@@ -19,6 +19,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 	"github.com/gin-gonic/gin"
 )
@@ -232,6 +233,41 @@ func TestGatewayErrorDoesNotExposeInternalDetails(t *testing.T) {
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 	if recorder.Code != http.StatusBadGateway || strings.Contains(recorder.Body.String(), "postgres") || !strings.Contains(recorder.Body.String(), "上游服务暂不可用") {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+type publicOutputError struct{}
+
+func (publicOutputError) Error() string              { return "ChatGPT upstream HTTP 502: internal detail" }
+func (publicOutputError) PublicErrorMessage() string { return "the image has no transparent pixels" }
+
+// Generated media that fails its requested output carries the provider's own
+// reason; other post-processing failures stay generic.
+func TestGatewayErrorShowsMediaOutputReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		name string
+		err  error
+		want []string
+	}{
+		{"public reason", provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, publicOutputError{}), []string{`"code":"media_postprocessing_failed"`, "no transparent pixels"}},
+		{"no public reason", provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, errors.New("GET https://files.example/secret failed")), []string{`"code":"upstream_unavailable"`, "上游服务暂不可用"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			router := gin.New()
+			router.GET("/", func(c *gin.Context) { writeGatewayError(c, test.err) })
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+			body := recorder.Body.String()
+			if recorder.Code != http.StatusBadGateway || strings.Contains(body, "internal detail") || strings.Contains(body, "secret") {
+				t.Fatalf("status=%d body=%s", recorder.Code, body)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(body, want) {
+					t.Fatalf("body %s lacks %s", body, want)
+				}
+			}
+		})
 	}
 }
 

@@ -121,6 +121,7 @@ agent 客户端每一步都带上完整历史。网关不再每次都把整份�
   `file_id` 会被明确拒绝。
 - **返回格式**：默认返回 `b64_json`；需要链接时传 `response_format: "url"`。
 - **参数**：支持 `background`（含 `transparent`）和 `output_format`（`jpg` 按 `jpeg`）。透明背景与 jpeg 同时给出时输出 jpeg、放弃透明。
+- **透明背景**：网页端没有背景字段，网关在提示词里要求透明，出图后逐像素检查。图里没有透明像素（常见于满画面的场景）时返回 502 `media_postprocessing_failed`，消息写明原因；这张图已在 ChatGPT 生成，次数照样消耗。场景图请用 `background: "auto"`。
 - **参数适配**：为其他接口写的参数不报错：`aspect_ratio` 配合 `resolution` 换成 `size`（如 16:9 + 2k → `2048x1152`，只给比例时按 1k），`size` 写成比例时按 `aspect_ratio` 处理，超出 256–4096 的尺寸按比例缩放到范围内；`quality` 的 `hd` / `standard` 对应 `high` / `medium`，`1k` / `2k` 等档位按分辨率处理；认不出的值忽略。`n` 超出 1–10 时取最近的值（流式固定为 1），`partial_images` 限在 0–3、只在流式时生效；编辑的输入图超过 8 张、蒙版超过 1 张时保留前面的；`storage_options` 等用不到的字段忽略。仍会拒绝的只有做不到的请求（没有输入图的编辑、Provider 不支持的蒙版或流式、`response_format` 写错），被拒绝的路由会换同名的其他 Provider 路由。
 - **同名模型**：Adobe 也有 `gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`；两边都有账号时同名请求可能落到任一方，用 `chatgpt/` 前缀可以固定走 ChatGPT。
 - **尺寸**：网页端不理会请求里的尺寸字段。网关把尺寸和横竖比例写进提示词，所以画面形状会按请求生成。像素面积固定在约 157 万，例如请求 `1024x1024` 会返回约 `1254x1254`。网关不在本地缩放。

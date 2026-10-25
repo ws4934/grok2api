@@ -122,6 +122,35 @@ func TestImageOutputErrorTellsCallersNotToFetchAgain(t *testing.T) {
 	}
 }
 
+// The reason a generated image fails its output options reaches clients, in
+// JSON and in a stream's error event.
+func TestImageOutputReasonIsPublic(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		alpha uint8
+		want  string
+	}{
+		{"opaque", 255, "no transparent pixels"},
+		{"empty", 0, "fully transparent"},
+	} {
+		canvas := image.NewNRGBA(image.Rect(0, 0, 2, 2))
+		for i := range canvas.Pix {
+			if i%4 == 3 {
+				canvas.Pix[i] = test.alpha
+			}
+		}
+		_, _, err := (ImageOutputOptions{Background: "transparent"}).applyDecoded(downloadedImage{decoded: canvas, mime: "image/png"})
+		err = provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, err)
+		message, ok := provider.ErrorPublicMessage(err)
+		if !ok || !strings.Contains(message, test.want) || strings.Contains(message, "HTTP 502") {
+			t.Fatalf("%s: public message = %q, %v", test.name, message, ok)
+		}
+		if code, streamed := publicFailure(err); code != "media_postprocessing_failed" || streamed != message {
+			t.Fatalf("%s: stream error = %s %q", test.name, code, streamed)
+		}
+	}
+}
+
 func TestApplyUsesTheDownloadDecodedPixels(t *testing.T) {
 	// raw is not decodable: the conversion must use the pixels decoded on download.
 	download := downloadedImage{raw: []byte("already decoded"), mime: "image/png", decoded: image.NewNRGBA(image.Rect(0, 0, 2, 2))}
