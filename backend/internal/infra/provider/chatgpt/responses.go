@@ -227,22 +227,47 @@ func (a *Adapter) converse(ctx context.Context, credential account.Credential, c
 			return err
 		}
 		if resume {
-			err = a.reply(ctx, w, model, in, at, from, t, m, &next)
-			if err == nil || m.used > 0 || !continuationRejected(err) {
-				return err
+			err = a.reply(ctx, w, model, in, at, from, t, m, &next, false)
+			if err != nil && m.used == 0 && continuationRejected(err) {
+				// ChatGPT no longer continues it (expired or unknown): start over.
+				a.conversations.drop(fromKey)
+				resume = false
 			}
-			// ChatGPT no longer continues it (expired or unknown): start over.
-			a.conversations.drop(fromKey)
-			resume = false
 		}
-		return a.reply(ctx, w, model, in, 0, chatCursor{}, t, m, &next)
+		if !resume {
+			err = a.reply(ctx, w, model, in, 0, chatCursor{}, t, m, &next, false)
+		}
+		if err == nil {
+			a.recoverLostCall(ctx, w, model, in, t, m, &next)
+		}
+		return err
 	})
 	return next, err
 }
 
+// lostCallNotice follows a reply whose call went to a ChatGPT tool channel.
+const lostCallNotice = "Your call to %s did not run: that ChatGPT tool cannot reach the tools listed for this session. Write the <tool_calls> block for the call you meant now, with nothing else."
+
+// recoverLostCall asks once, in the same conversation, for the call block when
+// the reply sent its call to a ChatGPT tool channel (functions.exec), where
+// client tools never run, and came back without a call. Only calls are taken
+// from the answer, and a failed ask leaves the reply as it was.
+func (a *Adapter) recoverLostCall(ctx context.Context, w wireAccount, model string, in turnRequest, t *turn, m *meter, next *chatCursor) {
+	if !in.Emulated.Enabled() || len(t.calls) > 0 || next.lost == "" || next.parent == "" || m.truncated {
+		return
+	}
+	ask := in
+	ask.Messages = []turnMessage{textMessage("system", fmt.Sprintf(lostCallNotice, next.lost))}
+	var after chatCursor
+	if a.reply(ctx, w, model, ask, 0, *next, t, m, &after, true) == nil && after.parent != "" {
+		*next = after
+	}
+}
+
 // reply streams one answer into the turn under the output limit: of the
-// messages from at, continuing from when it is set.
-func (a *Adapter) reply(ctx context.Context, w wireAccount, model string, in turnRequest, at int, from chatCursor, t *turn, m *meter, next *chatCursor) error {
+// messages from at, continuing from when it is set. With callsOnly only its
+// tool calls join the turn.
+func (a *Adapter) reply(ctx context.Context, w wireAccount, model string, in turnRequest, at int, from chatCursor, t *turn, m *meter, next *chatCursor, callsOnly bool) error {
 	sent := in
 	sent.Messages = in.Messages[at:]
 	request, images, err := sent.wire(model, func(value string) (OpenAIImageInput, error) { return a.loadInput(ctx, value) })
@@ -260,7 +285,7 @@ func (a *Adapter) reply(ctx context.Context, w wireAccount, model string, in tur
 	ui, cites := &richUIFilter{}, &citer{}
 	err = NewOpenAIChat(a.image).Stream(ctx, w, request, func(event OpenAIChatEvent) error {
 		if event.Done {
-			next.conversation, next.parent = event.Conversation, event.Parent
+			next.conversation, next.parent, next.lost = event.Conversation, event.Parent, event.Lost
 		}
 		reasoning, err := m.take(event.Thinking, &m.reasoning)
 		if err != nil {
@@ -277,6 +302,12 @@ func (a *Adapter) reply(ctx context.Context, w wireAccount, model string, in tur
 			var calls []toolemu.Call
 			text, calls = sift(sieve, text, flush)
 			t.calls = append(t.calls, calls...)
+		}
+		if callsOnly {
+			if m.truncated {
+				return errOutputLimit
+			}
+			return nil
 		}
 		text, cited := cites.Feed(text, event.Search)
 		if flush {
@@ -315,7 +346,7 @@ func (a *Adapter) remember(seed string, history []turnMessage, t *turn, account 
 	if len(keys) == 0 || keys[len(keys)-1].end != len(messages) {
 		return
 	}
-	next.account = account
+	next.account, next.lost = account, ""
 	a.conversations.save(keys[len(keys)-1].key, next, time.Now())
 }
 

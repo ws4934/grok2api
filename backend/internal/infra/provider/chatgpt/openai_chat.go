@@ -32,6 +32,9 @@ type OpenAIChatEvent struct {
 	// Conversation and Parent, set on the final Done event, are where a
 	// follow-up message continues this conversation; empty when unknown.
 	Conversation, Parent string
+	// Lost, set on the final Done event, is the ChatGPT tool channel (such as
+	// functions.exec) the reply sent a call to; client tools never run there.
+	Lost string
 }
 
 // OpenAIChatImage binds decoded client image bytes to their original message
@@ -249,6 +252,8 @@ type openAIChatState struct {
 	// message that ended it and, when the answer streamed as fragments, the
 	// merged answer, which ChatGPT then places after the last fragment.
 	conversation, lastToken, answer string
+	// lost is the ChatGPT tool channel a call of the reply went to.
+	lost string
 }
 
 // done is the final event, carrying where a follow-up message continues.
@@ -257,7 +262,7 @@ func (s *openAIChatState) done() OpenAIChatEvent {
 	if parent == "" {
 		parent = s.lastToken
 	}
-	return OpenAIChatEvent{Done: true, Conversation: s.conversation, Parent: parent}
+	return OpenAIChatEvent{Done: true, Conversation: s.conversation, Parent: parent, Lost: s.lost}
 }
 
 // displayableAssistantMessage reports whether a message is the user-visible
@@ -390,6 +395,9 @@ func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
 			}
 			author, _ := message["author"].(map[string]any)
 			role := stringValue(author["role"])
+			if recipient := stringValue(message["recipient"]); role == "assistant" && strings.HasPrefix(recipient, "functions.") {
+				s.lost = recipient
+			}
 			// Only explicit display summaries are exposed. Raw analysis/thought
 			// content is neither emitted nor counted as client output.
 			content, _ := message["content"].(map[string]any)

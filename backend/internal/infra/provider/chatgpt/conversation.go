@@ -29,6 +29,8 @@ type chatCursor struct {
 	account              uint64
 	conversation, parent string
 	expires              time.Time
+	// lost is the tool channel the reply that ended here sent a call to.
+	lost string
 }
 
 type conversationStore struct {

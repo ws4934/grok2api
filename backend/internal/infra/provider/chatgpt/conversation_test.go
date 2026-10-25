@@ -134,3 +134,58 @@ func TestTooLargeConversationIsContextLengthExceeded(t *testing.T) {
 		t.Fatalf("413 = %d %v", response.StatusCode, body)
 	}
 }
+
+// execAttempt is a call the model sent to ChatGPT's own tool channel; its
+// content never reaches the stream.
+const execAttempt = `data: {"message":{"id":"exec","author":{"role":"assistant"},"recipient":"functions.exec","channel":"commentary","status":"finished_successfully","content":{"content_type":"text","parts":[""]},"metadata":{"is_visually_hidden_from_conversation":true}}}` + "\n\n"
+
+func lostCallUpstream(t *testing.T, payloads chan<- map[string]any, first, ask string) *httptest.Server {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveWebBasics(w, r) {
+			return
+		}
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		payloads <- payload
+		w.Header().Set("Content-Type", "text/event-stream")
+		if payload["conversation_id"] == nil {
+			_, _ = w.Write([]byte(first))
+			return
+		}
+		_, _ = w.Write([]byte(ask))
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestLostCallIsAskedForOnceInTheSameConversation(t *testing.T) {
+	payloads := make(chan map[string]any, 3)
+	first := answerSnapshots("I will look it up first.", "{}") + execAttempt + turnEnd
+	ask := answerSnapshots(`Sorry.<tool_calls><tool_call><tool_name>lookup</tool_name><parameters>{"q":"x"}</parameters></tool_call></tool_calls>`, "{}") + turnEnd
+	a, _ := newTestAdapter(t, lostCallUpstream(t, payloads, first, ask))
+	object := forwardSession(t, a, testCredential(t, a, credentials{AccessToken: "AT"}), "", firstTurn)
+	if len(payloads) != 2 {
+		t.Fatalf("upstream calls = %d, want the reply and one ask", len(payloads))
+	}
+	<-payloads
+	p := <-payloads
+	notice := strings.Join(stringsOf(payloadParts(p, 0)), "")
+	if p["conversation_id"] != "conv-1" || p["parent_message_id"] != "msg-end" || len(p["messages"].([]any)) != 1 || !strings.Contains(notice, "functions.exec") {
+		t.Fatalf("ask = conversation %v parent %v messages %v", p["conversation_id"], p["parent_message_id"], p["messages"])
+	}
+	calls := outputOf(object, "function_call")
+	if outputText(t, object) != "I will look it up first." || len(calls) != 1 || calls[0]["name"] != "lookup" {
+		t.Fatalf("object = %v", object["output"])
+	}
+}
+
+func TestReplyWithACallIsNotAskedAgain(t *testing.T) {
+	payloads := make(chan map[string]any, 2)
+	first := answerSnapshots(callAnswer, "{}") + execAttempt + turnEnd
+	a, _ := newTestAdapter(t, lostCallUpstream(t, payloads, first, ""))
+	object := forwardSession(t, a, testCredential(t, a, credentials{AccessToken: "AT"}), "", firstTurn)
+	<-payloads
+	if len(payloads) != 0 || len(outputOf(object, "function_call")) != 1 {
+		t.Fatalf("asked again: %d more payloads, output %v", len(payloads), object["output"])
+	}
+}
