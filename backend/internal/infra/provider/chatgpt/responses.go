@@ -550,9 +550,9 @@ func reasoningEffort(raw map[string]json.RawMessage) (string, error) {
 		return "", errors.New("reasoning effort must be text")
 	}
 	switch v := strings.ToLower(strings.TrimSpace(s)); v {
-	case "", "none", "minimal":
+	case "", "none":
 		return "", nil
-	case "low", "medium", "high":
+	case "minimal", "low", "medium", "high", "min", "standard", "max":
 		return v, nil
 	case "xhigh", "extended":
 		return "extended", nil

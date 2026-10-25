@@ -242,6 +242,27 @@ func TestResponsesStreamFollowsOfficialEventSequence(t *testing.T) {
 	}
 }
 
+// ChatGPT Web answers 422 "Invalid conversation body" to the API efforts
+// low, medium and high: it takes min, standard, extended and max.
+func TestThinkingEffortUsesChatGPTWebNames(t *testing.T) {
+	for _, test := range []struct {
+		effort string
+		want   any
+	}{
+		{"", nil}, {"none", nil}, {"minimal", "min"}, {"low", "min"}, {"medium", "standard"}, {"high", "extended"},
+		{"xhigh", "extended"}, {"extended", "extended"}, {"min", "min"}, {"standard", "standard"}, {"max", "max"},
+	} {
+		raw, _ := json.Marshal(test.effort)
+		effort, err := reasoningEffort(map[string]json.RawMessage{"reasoning_effort": raw})
+		if err != nil {
+			t.Fatalf("%q: %v", test.effort, err)
+		}
+		if got := openAIChatPayload(wireChatRequest{Model: "gpt-6", ReasoningEffort: effort})["thinking_effort"]; got != test.want {
+			t.Errorf("%q: thinking_effort = %v, want %v", test.effort, got, test.want)
+		}
+	}
+}
+
 func TestResponsesJSONAndConvertedProtocols(t *testing.T) {
 	a, _ := newTestAdapter(t, chatUpstream(t, nil))
 	credential := testCredential(t, a, credentials{AccessToken: "AT"})

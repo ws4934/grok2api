@@ -480,8 +480,8 @@ func openAIChatPayload(request wireChatRequest) map[string]any {
 	if request.ConversationID != "" {
 		payload["conversation_id"], payload["parent_message_id"] = request.ConversationID, request.ParentMessageID
 	}
-	if request.ReasoningEffort != "" && request.ReasoningEffort != "none" {
-		payload["thinking_effort"] = request.ReasoningEffort
+	if effort := webThinkingEffort(request.ReasoningEffort); effort != "" {
+		payload["thinking_effort"] = effort
 	}
 	// The Web composer's search tool sends the "search" hint, as its image
 	// tool sends "picture_v2" (see OpenAIImage).
@@ -489,6 +489,23 @@ func openAIChatPayload(request wireChatRequest) map[string]any {
 		payload["system_hints"] = []any{"search"}
 	}
 	return payload
+}
+
+// webThinkingEffort maps an API reasoning effort onto the thinking efforts
+// ChatGPT Web takes: min, standard, extended and max. It answers 422 "Invalid
+// conversation body" to low, medium and high.
+func webThinkingEffort(effort string) string {
+	switch effort {
+	case "none":
+		return ""
+	case "minimal", "low":
+		return "min"
+	case "medium":
+		return "standard"
+	case "high":
+		return "extended"
+	}
+	return effort
 }
 
 func openAIMessageText(value any) string {
