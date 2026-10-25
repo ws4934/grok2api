@@ -189,3 +189,27 @@ func TestReplyWithACallIsNotAskedAgain(t *testing.T) {
 		t.Fatalf("asked again: %d more payloads, output %v", len(payloads), object["output"])
 	}
 }
+
+func TestFailureResponseCarriesChatGPTReason(t *testing.T) {
+	for _, test := range []struct {
+		status        int
+		body, message string
+	}{
+		{422, `{"detail":[{"loc":["body","messages"],"msg":"field required","type":"missing"}]}`, "ChatGPT request failed: field required"},
+		{404, `{"detail":{"message":"Conversation not found","code":"history_disabled_conversation_not_found","can_retry":false}}`, "ChatGPT resource not found: Conversation not found (history_disabled_conversation_not_found)"},
+		{400, `{"detail":"Invalid parent message"}`, "ChatGPT rejected the request: Invalid parent message"},
+		{500, `<html><body>Internal Server Error</body></html>`, "ChatGPT request failed"},
+		// Account answers stay generic.
+		{429, `{"detail":"You've reached the limit of messages"}`, "ChatGPT rate limit reached; retry later"},
+		{403, `{"detail":"Unusual activity has been detected"}`, "ChatGPT denied the request"},
+	} {
+		response, err := failureResponse("responses", &upstreamError{Status: test.status, Message: test.body})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := decodeBody(t, response)
+		if got := body["error"].(map[string]any)["message"]; got != test.message {
+			t.Errorf("%d: message = %q, want %q", test.status, got, test.message)
+		}
+	}
+}

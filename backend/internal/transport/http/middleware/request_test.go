@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"bytes"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -262,5 +264,23 @@ func TestSecurityHeaders(t *testing.T) {
 		if value := response.Header().Get(name); value != expected {
 			t.Fatalf("%s = %q", name, value)
 		}
+	}
+}
+
+func TestAccessLogRecordsTheErrorAnswered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var logs bytes.Buffer
+	router := gin.New()
+	router.Use(AccessLog(slog.New(slog.NewJSONHandler(&logs, nil))))
+	router.GET("/v1/fail", func(c *gin.Context) {
+		WriteAPIError(c, http.StatusBadRequest, "invalid_parameter", "size must be WIDTHxHEIGHT")
+	})
+	router.GET("/v1/ok", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	for _, path := range []string{"/v1/fail", "/v1/ok"} {
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"error_code":"invalid_parameter"`) || !strings.Contains(lines[0], `"error":"size must be WIDTHxHEIGHT"`) || strings.Contains(lines[1], "error") {
+		t.Fatalf("logs = %s", logs.String())
 	}
 }

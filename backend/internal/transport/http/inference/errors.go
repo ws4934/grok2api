@@ -29,6 +29,7 @@ func anthropicUpstreamHTTPErrorType(status int) string {
 }
 
 func writeOpenAIError(c *gin.Context, status int, code, message string) {
+	middleware.NoteError(c, code, message)
 	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"message": message, "type": middleware.OpenAIErrorType(status), "code": code, "param": nil}})
 }
 
@@ -195,6 +196,11 @@ func selectionErrorResponse(c *gin.Context, failure *gateway.SelectionUnavailabl
 
 func writeAnthropicError(c *gin.Context, status int, errorType, message string, errorCode ...string) {
 	errorPayload := gin.H{"type": errorType, "message": message}
+	logCode := errorType
+	if len(errorCode) > 0 && errorCode[0] != "" {
+		logCode = errorCode[0]
+	}
+	middleware.NoteError(c, logCode, message)
 	if len(errorCode) > 0 && errorCode[0] != "" && errorCode[0] != "upstream_unavailable" {
 		errorPayload["code"] = errorCode[0]
 	}

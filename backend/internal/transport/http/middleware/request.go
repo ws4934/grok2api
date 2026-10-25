@@ -100,7 +100,19 @@ func SecurityHeaders() gin.HandlerFunc {
 	}
 }
 
-// AccessLog 只记录路径、状态和耗时，不读取请求或响应正文。
+// errorNoteKey holds the error a handler answered the request with.
+const errorNoteKey = "access_log_error"
+
+type errorNote struct{ code, message string }
+
+// NoteError records the code and message a request is answered with, so the
+// access log shows why it failed.
+func NoteError(c *gin.Context, code, message string) {
+	c.Set(errorNoteKey, errorNote{code: code, message: message})
+}
+
+// AccessLog 记录路径、状态、耗时，以及处理器用 NoteError 记下的错误码和错误信息；
+// 不读取请求或响应正文。
 func AccessLog(logger *slog.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		startedAt := time.Now()
@@ -115,6 +127,15 @@ func AccessLog(logger *slog.Logger) gin.HandlerFunc {
 				path = path[:200]
 			}
 		}
-		logger.Info("http_request", "request_id", requestID, "method", c.Request.Method, "path", path, "status", c.Writer.Status(), "duration_ms", time.Since(startedAt).Milliseconds())
+		attrs := []any{"request_id", requestID, "method", c.Request.Method, "path", path, "status", c.Writer.Status(), "duration_ms", time.Since(startedAt).Milliseconds()}
+		if value, ok := c.Get(errorNoteKey); ok {
+			note, _ := value.(errorNote)
+			message := []rune(note.message)
+			if len(message) > 300 {
+				message = append(message[:299], '…')
+			}
+			attrs = append(attrs, "error_code", note.code, "error", string(message))
+		}
+		logger.Info("http_request", attrs...)
 	}
 }

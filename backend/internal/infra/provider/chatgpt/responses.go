@@ -1072,9 +1072,6 @@ func failureResponse(operation string, err error) (*provider.Response, error) {
 	switch upstream.Status {
 	case http.StatusBadRequest:
 		code, message = "upstream_rejected_request", "ChatGPT rejected the request"
-		if detail := []rune(strings.TrimSpace(upstream.Message)); len(detail) > 0 && len(detail) <= 300 && !strings.HasPrefix(string(detail), "{") {
-			message += ": " + string(detail)
-		}
 	case http.StatusUnauthorized:
 		code, message = "invalid_credential", "ChatGPT rejected the account credential"
 	case http.StatusForbidden:
@@ -1084,11 +1081,61 @@ func failureResponse(operation string, err error) (*provider.Response, error) {
 	case http.StatusTooManyRequests:
 		code, message = "rate_limit_exceeded", "ChatGPT rate limit reached; retry later"
 	}
+	// ChatGPT's own reason tells the client what to change. Account answers
+	// (credential, access, limits) stay generic: they are about the account,
+	// not the request, and the gateway retries them on other accounts.
+	switch upstream.Status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
+	default:
+		if detail := upstreamDetail(upstream.Message); detail != "" {
+			message += ": " + detail
+		}
+	}
 	response := errorResponse(operation, upstream.Status, code, message)
 	if upstream.RetryAfter != "" {
 		response.Header.Set("Retry-After", upstream.RetryAfter)
 	}
 	return response, nil
+}
+
+// upstreamDetail is ChatGPT's reason in an error body: {"detail": "…"},
+// {"detail": {"message", "code"}}, {"error": {"message"}}, a validation list
+// or plain text, on one line and at most 300 characters; "" for HTML pages and
+// bodies without a reason.
+func upstreamDetail(raw string) string {
+	raw = strings.TrimSpace(raw)
+	var body any
+	if json.Unmarshal([]byte(raw), &body) == nil {
+		raw = detailText(body)
+	} else if strings.HasPrefix(raw, "<") || strings.HasPrefix(raw, "{") || strings.HasPrefix(raw, "[") {
+		return ""
+	}
+	raw = strings.Join(strings.Fields(raw), " ")
+	if runes := []rune(raw); len(runes) > 300 {
+		raw = string(runes[:299]) + "…"
+	}
+	return raw
+}
+
+func detailText(value any) string {
+	switch value := value.(type) {
+	case string:
+		return value
+	case []any:
+		if len(value) > 0 {
+			return detailText(value[0])
+		}
+	case map[string]any:
+		for _, key := range []string{"detail", "error", "message", "msg"} {
+			if text := detailText(value[key]); text != "" {
+				if code, _ := value["code"].(string); code != "" && !strings.Contains(text, code) {
+					text += " (" + code + ")"
+				}
+				return text
+			}
+		}
+	}
+	return ""
 }
 
 // publicFailure describes a failure after output started without upstream text.

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
 
@@ -185,6 +186,7 @@ func (h *Handler) editImage(c *gin.Context) {
 func normalizeImageOption(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
 
 func writeImageGenerationUserError(c *gin.Context, code, param, message string) {
+	middleware.NoteError(c, code, message)
 	c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{
 		"message": message, "type": "image_generation_user_error", "param": param, "code": code,
 	}})
