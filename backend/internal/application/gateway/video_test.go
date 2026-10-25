@@ -1181,10 +1181,18 @@ func TestVideoWebForbiddenRetriesPinnedAccountOnceThenFailsOver(t *testing.T) {
 	registry := provider.NewRegistry(adapter)
 	sticky := memory.NewStickyStore()
 	accountService := accountapp.NewService(accountRepo, auditRepo, memory.NewDeviceSessionStore(), sticky, registry, testCipher(t), nil)
-	selector := NewSelector(accountRepo, memory.NewConcurrencyLimiter(), sticky, registry, time.Hour, time.Second, time.Minute)
+	limiter := memory.NewConcurrencyLimiter()
+	selector := NewSelector(accountRepo, limiter, sticky, registry, time.Hour, time.Second, time.Minute)
 	service := NewService(modelRepo, auditRepo, accountService, clientkeyapp.NewService(keyRepo, nil, nil, 60, 4, nil), registry, selector, nil, 3)
 	service.ConfigureMedia(mediaRepo, 1)
 	service.UpdateVideoMaxAttempts(10)
+	// A failed job must give the slot back: these accounts allow one request.
+	assertSlotFree := func(credential account.Credential) {
+		t.Helper()
+		if held, _ := limiter.Current(ctx, repository.AccountConcurrencyKey(credential.ID)); held != 0 {
+			t.Fatalf("account %s still holds %d concurrency slots", credential.Name, held)
+		}
+	}
 
 	now := time.Now().UTC()
 	job := media.Job{
@@ -1241,6 +1249,7 @@ func TestVideoWebForbiddenRetriesPinnedAccountOnceThenFailsOver(t *testing.T) {
 	if stored.Status != media.StatusFailed || stored.AccountID != first.ID {
 		t.Fatalf("unclassified failed job = %#v", stored)
 	}
+	assertSlotFree(first)
 
 	// A request-scoped rejection (bad input, moderated prompt) fails the job
 	// without failing over and without growing the account's failure count.
@@ -1276,6 +1285,7 @@ func TestVideoWebForbiddenRetriesPinnedAccountOnceThenFailsOver(t *testing.T) {
 	if after.FailureCount != before.FailureCount {
 		t.Fatalf("request-scoped failure changed account failure count %d -> %d", before.FailureCount, after.FailureCount)
 	}
+	assertSlotFree(third)
 }
 
 // The initial creation path (CreateVideoJob) always scopes account selection

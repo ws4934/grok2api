@@ -132,11 +132,18 @@ func gcd(a, b int) int {
 	return a
 }
 
-// readInput loads an input image given as a data URI or https URL.
+// readInput loads an input image given as a staged job input, a data URI or
+// an https URL.
 func (a *Adapter) readInput(ctx context.Context, ref string) (attachment, error) {
 	ref = strings.TrimSpace(ref)
 	var data []byte
 	switch meta, payload, _ := strings.Cut(ref, ","); {
+	case provider.IsInputReference(ref):
+		raw, _, err := provider.ReadInput(ctx, ref)
+		if err != nil {
+			return attachment{}, err
+		}
+		data = raw
 	case strings.HasPrefix(meta, "data:") && strings.HasSuffix(meta, ";base64"):
 		raw, err := base64.StdEncoding.DecodeString(payload)
 		if err != nil {

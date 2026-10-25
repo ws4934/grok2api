@@ -79,6 +79,8 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	failureAttempts := newFailureAttemptRecorder(http.MethodPost, "/videos/generations")
 	var selection *selectionSession
 	var lease *accountLease
+	// Every return gives the account's concurrency slot back.
+	defer func() { lease.Release() }()
 	var result provider.VideoResult
 	var lastErr error
 
@@ -288,7 +290,6 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		s.failVideoJob(parent, job, "account_unavailable", ErrNoAvailableAccount, 0, failureAttempts.snapshot())
 		return
 	}
-	defer lease.Release()
 
 	if result.Seconds > 0 && result.Seconds != job.Seconds {
 		// The provider generated a shorter video (the Web free-tier cap): record

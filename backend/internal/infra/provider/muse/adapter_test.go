@@ -541,3 +541,20 @@ func jarJSON(value any) string {
 	data, _ := json.Marshal(value)
 	return string(data)
 }
+
+// The console uploads a first frame as a staged input and video jobs stage
+// inline data URIs, so the adapter gets a reference, not the bytes.
+func TestReadInputOpensStagedReference(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	ref := media.InputReference(media.InputAssetIDPrefix + base64.RawURLEncoding.EncodeToString(make([]byte, 24)))
+	ctx := provider.WithInputOpener(context.Background(), func(_ context.Context, reference string) (provider.InputFile, error) {
+		if reference != ref {
+			t.Fatalf("opened %q", reference)
+		}
+		return provider.InputFile{Body: io.NopCloser(bytes.NewReader(png)), MIMEType: "image/png", Size: int64(len(png))}, nil
+	})
+	input, err := (&Adapter{}).readInput(ctx, ref)
+	if err != nil || input.MIME != "image/png" || !bytes.Equal(input.Data, png) {
+		t.Fatalf("input = %+v, %v", input, err)
+	}
+}
