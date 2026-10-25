@@ -638,7 +638,7 @@ func TestVideoGenerationResponseMatchesOfficialPollingShape(t *testing.T) {
 	}
 	done := videoGenerationResponse(mediadomain.Job{Model: "grok-imagine-video", Status: mediadomain.StatusCompleted, Progress: 100, Seconds: 8, UpstreamURL: "https://assets.grok.com/video.mp4", CompletedAt: &now})
 	video, ok := done["video"].(gin.H)
-	if done["status"] != "done" || done["progress"] != 100 || !ok || video["url"] != "https://assets.grok.com/video.mp4" || video["duration"] != 8 || video["respect_moderation"] != true {
+	if done["status"] != "done" || done["progress"] != 100 || !ok || video["url"] != "https://assets.grok.com/video.mp4" || video["duration"] != 8 || video["respect_moderation"] != true || done["video_url"] != video["url"] {
 		t.Fatalf("done response=%#v", done)
 	}
 	extended := videoGenerationResponse(mediadomain.Job{Operation: mediadomain.VideoOperationExtend, Status: mediadomain.StatusCompleted, Seconds: 6, UpstreamURL: "https://assets.grok.com/extended.mp4"})

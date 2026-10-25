@@ -417,9 +417,11 @@ func videoGenerationResponse(job mediadomain.Job, contentURLs ...string) gin.H {
 		if operation == mediadomain.VideoOperationGenerate && job.Seconds > 0 {
 			video["duration"] = job.Seconds
 		}
+		// video_url repeats video.url for clients that read a top-level link,
+		// such as the canvas xAI Video plugin.
 		return gin.H{
 			"status": "done", "model": job.Model, "progress": 100,
-			"video": video,
+			"video": video, "video_url": videoURL,
 		}
 	case mediadomain.StatusFailed, mediadomain.StatusUncertain, mediadomain.StatusCanceled:
 		return gin.H{
