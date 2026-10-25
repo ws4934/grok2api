@@ -36,8 +36,10 @@ func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) err
 	switch {
 	case options.Operation != provider.VideoOperationGenerate:
 		return provider.ErrVideoOperationUnsupported
-	case options.ReferenceImages > 0 || options.ReferenceAudios > 0:
-		return fmt.Errorf("%w: Muse 视频只支持首帧图片（image）", provider.ErrVideoParameterInvalid)
+	case options.HasLastFrame || options.ReferenceVideos > 0 || options.ReferenceAudios > 0:
+		return fmt.Errorf("%w: Muse 视频只支持首帧图片（image）和参考图片（reference_images）", provider.ErrVideoParameterInvalid)
+	case options.ReferenceImages > maxInputImages:
+		return fmt.Errorf("%w: Muse 视频最多 %d 张参考图片", provider.ErrVideoParameterInvalid, maxInputImages)
 	case options.Duration < 1 || options.Duration > 15:
 		return fmt.Errorf("%w: duration 必须在 1 到 15 秒之间", provider.ErrVideoParameterInvalid)
 	case !slices.Contains([]string{"16:9", "9:16", "1:1", "4:3", "3:4"}, options.AspectRatio):
@@ -59,12 +61,16 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	job := mediaJob{Kind: mediaVideo, Prompt: videoPrompt(request), Thread: checkpoint.Thread}
 	sent := false
 	if job.Thread == "" {
+		refs := request.ReferenceURLs
 		if request.ImageURL != "" {
-			input, err := a.readInput(ctx, request.ImageURL)
+			refs = append([]string{request.ImageURL}, refs...)
+		}
+		for _, ref := range refs {
+			input, err := a.readInput(ctx, ref)
 			if err != nil {
 				return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 			}
-			job.Inputs = []attachment{input}
+			job.Inputs = append(job.Inputs, input)
 		}
 		if err := provider.SaveVideoCheckpoint(request, videoCheckpoint{Submitting: true}); err != nil {
 			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
@@ -105,7 +111,8 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	return provider.VideoResult{AssetID: asset.ID, ContentType: asset.MIMEType}, nil
 }
 
-// videoPrompt asks for a new video, or one that starts from the attached frame.
+// videoPrompt asks for a new video, one that starts from the attached frame,
+// or one guided by reference images.
 func videoPrompt(request provider.VideoRequest) string {
 	shape := map[string]string{"16:9": "16:9 landscape", "9:16": "9:16 portrait", "1:1": "1:1 square", "4:3": "4:3", "3:4": "3:4 portrait"}[request.AspectRatio]
 	specs := " Aspect ratio: " + cmp.Or(shape, "16:9 landscape") + "."
@@ -113,8 +120,11 @@ func videoPrompt(request provider.VideoRequest) string {
 		specs += " Duration: " + strconv.Itoa(request.Duration) + " seconds."
 	}
 	lead := "Create a brand-new video from scratch based only on the description below (text to video; do not use earlier images)."
-	if request.ImageURL != "" {
+	switch {
+	case request.ImageURL != "":
 		lead = "Create a video that starts from the image attached to this message as its first frame and follows the description below. Use only the attached image."
+	case len(request.ReferenceURLs) > 0:
+		lead = "Create a video that uses the images attached to this message as references for the subjects, scene and style and follows the description below. Use only the attached images."
 	}
 	return lead + specs + " Reply with the video.\n\n" + request.Prompt
 }

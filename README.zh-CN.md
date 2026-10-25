@@ -315,7 +315,7 @@ Adobe 是纯媒体 Provider：图片生成与编辑（Nano Banana、GPT Image）
 | :-- | :-- | :-- |
 | `muse-spark` | 对话 | Chat Completions、Responses、Messages；回复转回 Markdown；最后一条用户消息里的图片作为附件上传；忽略客户端工具 |
 | `muse-image` | 图片、图片编辑 | Images Generations 与 Edits，每次一张，输出 WebP；比例取自 `aspect_ratio` 或 `size` |
-| `muse-video` | 视频 | 文生视频或首帧图片，720p；支持 9:16 与 16:9；时长由 agent 决定，为 5 或 10 秒 |
+| `muse-video` | 视频 | 文生视频、首帧图片，或最多 4 张参考图片（`reference_images`），720p；支持 9:16 与 16:9；时长由 agent 决定，为 5 或 10 秒 |
 
 所有 Muse 路由消费同一个每周用量窗口，数值读自账号的用量面板。每个账号固定一个桌面 Chrome 身份和一个美国时区；登录 Cookie 在过期前约一天自动续期，续期时顺带唤醒挂起的云端 VM。部署和限制见 [PROVIDERS.md](./PROVIDERS.md)。
 

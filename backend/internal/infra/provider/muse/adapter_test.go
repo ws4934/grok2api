@@ -558,3 +558,42 @@ func TestReadInputOpensStagedReference(t *testing.T) {
 		t.Fatalf("input = %+v, %v", input, err)
 	}
 }
+
+func TestVideoReferenceImages(t *testing.T) {
+	adapter := &Adapter{}
+	base := provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, AspectRatio: "16:9", Duration: 5}
+	for _, tc := range []struct {
+		edit func(*provider.VideoRequestOptions)
+		ok   bool
+	}{
+		{func(o *provider.VideoRequestOptions) { o.ReferenceImages = maxInputImages }, true},
+		{func(o *provider.VideoRequestOptions) { o.ReferenceImages = maxInputImages + 1 }, false},
+		{func(o *provider.VideoRequestOptions) { o.HasImage, o.HasLastFrame = true, true }, false},
+		{func(o *provider.VideoRequestOptions) { o.ReferenceVideos = 1 }, false},
+	} {
+		options := base
+		tc.edit(&options)
+		if err := adapter.ValidateVideoRequest(options); (err == nil) != tc.ok {
+			t.Fatalf("%+v: err = %v", options, err)
+		}
+	}
+
+	var job mediaJob
+	fake := &fakeEngine{generate: func(got mediaJob) (mediaFile, error) {
+		job = got
+		return mediaFile{Data: []byte("mp4"), MIME: "video/mp4"}, nil
+	}}
+	adapter, credential, _ := newTestAdapter(t, fake)
+	png := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"))
+	jpeg := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString([]byte("\xff\xd8\xff\xe0\x00\x10JFIF\x00"))
+	request := provider.VideoRequest{Credential: credential, JobID: "job", Prompt: "dance", Duration: 5, AspectRatio: "16:9", ReferenceURLs: []string{png, jpeg}}
+	if _, err := adapter.GenerateVideo(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(job.Inputs) != 2 || job.Inputs[0].MIME != "image/png" || job.Inputs[1].MIME != "image/jpeg" {
+		t.Fatalf("inputs = %+v", job.Inputs)
+	}
+	if !strings.Contains(job.Prompt, "as references for the subjects, scene and style") || strings.Contains(job.Prompt, "first frame") {
+		t.Fatalf("prompt = %q", job.Prompt)
+	}
+}
