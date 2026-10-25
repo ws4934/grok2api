@@ -75,14 +75,16 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 - `max_tokens` / `max_completion_tokens` / `max_output_tokens` 按"输出上限"截断；达到上限时 Responses 状态为 `incomplete`。
 - `reasoning.effort` / `reasoning_effort` 映射到上游的推理强度。
 - Responses 流式按官方事件序列输出，带 `sequence_number`；失败时发送 `response.failed`。
-- 用量为本地 `o200k_base` 估算，包含推理 token、工具定义、模型写出的调用标记和图片输入的固定 token，审计里标记为估算。
+- 用量为本地 `o200k_base` 估算，包含推理 token、工具定义、模型写出的调用标记和图片输入的固定 token，审计里标记为估算；续接会话时输入仍按完整历史计算。
 - 每个请求最前面加一条系统指令，要求 ChatGPT 只输出纯 Markdown、不写网页端的 UI 组件（`<box>`、`<row>`、天气卡片等），`<Cite/>` 引用除外；客户端的 `instructions` / 系统消息排在它后面。仍漏出的 UI 标记由网关过滤。
 
 #### 函数工具（提示词模拟）
 
 ChatGPT 网页端不能执行客户端函数，网关用和 Grok Web 相同的约定（`toolemu` 包）模拟：
 
-- 声明 `function` 工具且 `tool_choice` 不是 `none` 时，工具定义和 XML 调用格式作为系统消息发给 ChatGPT；`required`、指定函数、`parallel_tool_calls: false` 会写进提示词，`parallel_tool_calls: false` 时只保留第一个调用。提示词还说明工具在客户端执行、调用块必须写在可见回复里（否则模型会把调用发到自己的 `functions.exec` / `container.exec` 通道而失败）；没有声明搜索时，要求不使用内置搜索、天气等工具。
+- 声明 `function` 工具且 `tool_choice` 不是 `none` 时，工具定义和 XML 调用格式作为系统消息发给 ChatGPT；`required`、指定函数、`parallel_tool_calls: false` 会写进提示词，`parallel_tool_calls: false` 时只保留第一个调用。调用块写在回复末尾，前面可以有一两句说明，后面不能再有文字；回复里说要调用工具，就必须在同一条回复里写出调用块。提示词还说明工具在客户端执行、调用块必须写在可见回复里（否则模型会把调用发到自己的 `functions.exec` / `container.exec` 通道而失败）；没有声明搜索时，要求不使用内置搜索、天气等工具。
+- 模型仍把调用发到 `functions.*` 通道、回复里却没有调用块时（这类调用的参数不会出现在流里），网关在同一会话里追加一条系统消息追问一次，只取这次回答里的调用，不输出它的文字。
+- JSON 参数完整、但漏写 `</parameters>` 直接接 `</tool_call>` 的调用块也能解析。
 - 回复里的调用块被解析为 Responses `function_call`（`status: completed`，唯一 `call_id`，参数为 JSON 字符串），排在文字之后；Chat 得到 `tool_calls` / `finish_reason: tool_calls`，Messages 得到 `tool_use` / `stop_reason: tool_use`。调用块前后的文字照常作为消息输出。
 - 流式时调用块在完整解析前不会下发，客户端看不到 XML。调用块先于网页 UI 标记改写被取出，参数里的 `<title>` 等文本保持原样。
 - 历史里的 `function_call` 按同一格式回放（同一轮的多个调用合并成一个块），`function_call_output` 作为工具结果消息发送，多轮 agent 循环可以继续。ChatGPT 会在流里回显请求消息，网关按请求消息 ID 跳过这些回显，历史调用不会被当成新回复。
@@ -98,6 +100,16 @@ ChatGPT 网页端不能执行客户端函数，网关用和 Grok Web 相同的�
 - 正文里的引用组件 `<Cite refs={["turn0search8"]}/>` 按搜索结果的 `ref_id`（`turn{turn_index}{ref_type}{ref_index}`）换成 `([站点](链接))`；旧格式引用标记（`U+E200 … U+E201`）换成 `content_references[].alt` 里 ChatGPT 自带的 Markdown 链接。两者都按替换后的文字生成 `url_citation`（字符偏移）；找不到对应结果的 `<Cite/>` 随网页 UI 标记删除，旧标记原样保留，不猜测位置。`url_moderation` 标为不安全的链接不会出现在来源和正文里。
 - Chat 客户端在 `annotations` 里看到引用；Messages 客户端看到 `server_tool_use` / `web_search_tool_result`。
 - 已用免费账号实测（`gpt-6-mini`）：查询词、来源、`<Cite/>` 引用和 `url_citation` 正确。限制：旧格式引用只在其 `content_references` 与标记同时到达时替换；`citations` / `safe_urls` 不参与映射。
+
+#### 会话续接
+
+agent 客户端每一步都带上完整历史。网关不再每次都把整份历史发到新会话：
+
+- 每次回复后记下这段对话在 ChatGPT 里结束的位置（会话 ID 和最后一条消息），键为"本次历史 + 客户端将回传的这次回复"。
+- 下一个请求在这段历史后面追加消息（工具结果、用户的新消息），并且落在同一个账号上时，只把新增的消息接到同一个会话里发送，之前的图片也不再重新上传。第一次请求、历史被改写或压缩、换了账号、记录过期时，照旧把整份历史发到新会话。
+- 同一会话通过网关的会话身份（客户端密钥 + `prompt_cache_key` 或 Claude Code、Codex 的会话头，没有时用系统提示和第一条用户消息）尽量固定在同一个账号。记录保存在内存里，1 小时过期，重启后从整份历史开始。
+- ChatGPT 不再接受续接（如临时会话已失效，返回 404）时自动改发整份历史。
+- 限制：ChatGPT 网页端单次请求约 120 KB，超过时返回 400 `context_length_exceeded`；续接后每次只发新增消息，不再撞上这个上限。上下文长度仍由 ChatGPT 决定：免费账号的 `gpt-6` 实测超过约 2.5 万 token 后，会从最早的对话开始丢弃（系统消息保留），网关看不到也无法阻止，客户端应按这个窗口自行压缩历史。
 
 ### 图片
 
