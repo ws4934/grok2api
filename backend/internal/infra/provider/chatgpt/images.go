@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"math"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,18 +74,14 @@ func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditReque
 	})
 }
 
-// ValidateImageRequest applies the ChatGPT Web image limits. partial_images
-// is accepted and ignored: the Web tool sends no intermediate frames.
+// ValidateImageRequest applies the ChatGPT Web image limits. Shape, quality
+// and output parameters are adapted, never refused (see adapted);
+// partial_images is accepted and ignored: the Web tool sends no intermediate
+// frames.
 func (a *Adapter) ValidateImageRequest(o provider.ImageRequestOptions) error {
 	switch {
 	case o.Count < 0 || o.Count > 10:
 		return invalidRequest("n must be between 1 and 10")
-	case o.AspectRatio != "" || o.Resolution != "":
-		return invalidRequest("aspect_ratio and resolution are not supported; use size")
-	case !validImageSize(o.Size):
-		return invalidRequest("size must be auto or WIDTHxHEIGHT between 256 and 4096")
-	case !slices.Contains([]string{"", "auto", "low", "medium", "high"}, o.Quality):
-		return invalidRequest("quality must be auto, low, medium or high")
 	case o.ResponseFormat != "" && o.ResponseFormat != "url" && o.ResponseFormat != "b64_json":
 		return invalidRequest("response_format must be url or b64_json")
 	case o.PartialImages < 0 || o.PartialImages > 3:
@@ -95,10 +93,72 @@ func (a *Adapter) ValidateImageRequest(o provider.ImageRequestOptions) error {
 	case o.HasMask && (!o.Edit || o.InputImages != 1):
 		return invalidRequest("a mask requires exactly one input image")
 	}
-	if err := (ImageOutputOptions{OutputFormat: o.OutputFormat, Background: o.Background}).Validate(); err != nil {
-		return invalidRequest(err.Error())
-	}
 	return nil
+}
+
+// adapted maps the image parameters of other APIs onto the Images API ones
+// ChatGPT takes, so a client written for another route still draws: a ratio
+// with a resolution tier becomes a size, other quality names map to the
+// nearest level, and values with no equivalent are dropped. ChatGPT Web only
+// reads the shape from the prompt, so none of this has to be exact.
+func (j imageJob) adapted() imageJob {
+	lower := func(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
+	j.size, j.aspectRatio, j.resolution, j.quality = lower(j.size), lower(j.aspectRatio), lower(j.resolution), lower(j.quality)
+	j.outputFormat, j.background = lower(j.outputFormat), lower(j.background)
+	switch j.quality {
+	case "", "auto", "low", "medium", "high":
+	case "hd":
+		j.quality = "high"
+	case "standard":
+		j.quality = "medium"
+	default:
+		// A tier such as 2k sent as quality, as some clients do.
+		if j.resolution == "" && provider.ImageTierPixels(j.quality) > 0 {
+			j.resolution = j.quality
+		}
+		j.quality = ""
+	}
+	if strings.Contains(j.size, ":") && j.aspectRatio == "" {
+		j.aspectRatio, j.size = j.size, ""
+	}
+	if j.size != "" && j.size != "auto" && !validImageSize(j.size) {
+		w, h := provider.ImagePair(j.size)
+		j.size = sizeFor(w, h, int(max(w, h)))
+	}
+	if (j.size == "" || j.size == "auto") && j.aspectRatio != "" && j.aspectRatio != "auto" {
+		w, h := provider.ImagePair(j.aspectRatio)
+		long := provider.ImageTierPixels(j.resolution)
+		if long == 0 {
+			long = 1024
+		}
+		if size := sizeFor(w, h, long); size != "" {
+			j.size = size
+		}
+	}
+	if j.outputFormat == "jpg" {
+		j.outputFormat = "jpeg"
+	}
+	if !slices.Contains([]string{"", "png", "jpeg", "webp"}, j.outputFormat) {
+		j.outputFormat = ""
+	}
+	if !slices.Contains([]string{"", "auto", "transparent", "opaque"}, j.background) || j.background == "transparent" && j.outputFormat == "jpeg" {
+		j.background = ""
+	}
+	return j
+}
+
+// sizeFor is the w:h shape with the given long side, kept within the
+// 256–4096 range the Images API takes; "" without a shape.
+func sizeFor(w, h float64, long int) string {
+	if w <= 0 || h <= 0 {
+		return ""
+	}
+	long = min(max(long, 256), 4096)
+	short := max(int(math.Round(float64(long)*min(w, h)/max(w, h)/16))*16, 256)
+	if w >= h {
+		return fmt.Sprintf("%dx%d", long, short)
+	}
+	return fmt.Sprintf("%dx%d", short, long)
 }
 
 func validImageSize(size string) bool {
@@ -114,6 +174,7 @@ func validImageSize(size string) bool {
 // A failure before submission is a Response so the gateway may fail over;
 // after submission it is an error so the gateway never resubmits.
 func (a *Adapter) images(ctx context.Context, credential account.Credential, job imageJob) (*provider.Response, error) {
+	job = job.adapted()
 	if err := a.ValidateImageRequest(job.options()); err != nil {
 		return errorResponse("", http.StatusBadRequest, "invalid_request", err.Error()), nil
 	}
@@ -382,7 +443,7 @@ func (a *Adapter) submitDrawing(ctx context.Context, w wireAccount, job imageJob
 	if err != nil {
 		return "", nil, err
 	}
-	prompt := job.prompt + (ImageOutputOptions{OutputFormat: job.outputFormat, Background: job.background, Size: job.size}).promptSuffix()
+	prompt := job.prompt + (ImageOutputOptions{OutputFormat: job.outputFormat, Background: job.background, Size: job.size, AspectRatio: job.aspectRatio, Resolution: job.resolution}).promptSuffix()
 	conduit, err := a.image.prepare(ctx, w, requirements, prompt, model)
 	if err != nil {
 		return "", nil, err
@@ -418,7 +479,7 @@ func asyncImageJob(request provider.ImageJobRequest) imageJob {
 	return imageJob{
 		model: request.Model, edit: len(request.ImageURLs) > 0, prompt: request.Prompt, count: 1, size: request.Size, quality: request.Quality,
 		outputFormat: request.OutputFormat, background: request.Background, inputs: request.ImageURLs, mask: request.MaskURL,
-	}
+	}.adapted()
 }
 
 // SubmitImage runs the sync path's steps up to the generation request for a

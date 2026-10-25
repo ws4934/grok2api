@@ -120,8 +120,9 @@ agent 客户端每一步都带上完整历史。网关不再每次都把整份�
 
   `file_id` 会被明确拒绝。
 - **返回格式**：默认返回 `b64_json`；需要链接时传 `response_format: "url"`。
-- **参数**：支持 `background`（含 `transparent`）和 `output_format`。透明背景不能输出 jpeg。
-- **参数校验**：按 Provider 进行；被拒绝的路由会换同名的其他 Provider 路由。
+- **参数**：支持 `background`（含 `transparent`）和 `output_format`（`jpg` 按 `jpeg`）。透明背景与 jpeg 同时给出时输出 jpeg、放弃透明。
+- **参数适配**：为其他接口写的参数不报错：`aspect_ratio` 配合 `resolution` 换成 `size`（如 16:9 + 2k → `2048x1152`，只给比例时按 1k），`size` 写成比例时按 `aspect_ratio` 处理，超出 256–4096 的尺寸按比例缩放到范围内；`quality` 的 `hd` / `standard` 对应 `high` / `medium`，`1k` / `2k` 等档位按分辨率处理；认不出的值忽略。其余校验（数量、输入图、蒙版、`response_format`）按 Provider 进行，被拒绝的路由会换同名的其他 Provider 路由。
+- **同名模型**：Adobe 也有 `gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`；两边都有账号时同名请求可能落到任一方，用 `chatgpt/` 前缀可以固定走 ChatGPT。
 - **尺寸**：网页端不理会请求里的尺寸字段。网关把尺寸和横竖比例写进提示词，所以画面形状会按请求生成。像素面积固定在约 157 万，例如请求 `1024x1024` 会返回约 `1254x1254`。网关不在本地缩放。
 - **多张（`n` 为 2–10）**：网页端一次只画一张。非流式请求会拆成单张请求，同时分给空闲账号生成；没有空闲账号的图等前一轮结束后接着画。账号少时，总耗时不会比逐张生成更长。
   - 每张图单独记一条审计，在生成它的账号上计费，审计中的请求 ID 都相同。
@@ -237,7 +238,7 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 
   核对官网后改表，并用线上条目更新 `testdata/discovery-reviewed.json`。
 - **参数校验**：
-  - 图像：显式给出但模型不支持的 `aspect_ratio` / `resolution`、超过 schema 上限的 `n`、不支持的输入图 / 蒙版 / 透明背景直接 400；未给比例时按 `size` 取最接近的比例。不支持 `stream` / `partial_images`。
+  - 图像：模型不支持的 `aspect_ratio` 取最接近的比例，`resolution` 取最接近的档位，不支持透明背景时忽略 `background`；未给比例时按 `size` 取最接近的比例。超过 schema 上限的 `n`、不支持的输入图 / 蒙版直接 400，不支持 `stream` / `partial_images`。
   - 视频：首帧（`image`）、尾帧（`last_frame`，必须同时给 `image`）、参考图与参考视频（`reference_videos`）按表里的数量与素材总数上限校验；`duration` / `aspect_ratio` / `resolution` 没传时用模型默认值（Kling 5 秒、Veo 8 秒、Seedance 4 秒；比例 16:9；分辨率通常 720p），传了但不支持的就近对齐（如 2K 取最高档 1080p）；入队前就选定实际值，任务记录、计费与结果里的 `video.duration` 都用它。参考视频只对 Seedance 2.0 / 2.0 Fast / 2.5 开放（MP4 或 QuickTime，上传到 `/v2/storage/video`，以 `source` 用途引用）。Seedance 与 Veo 3.1 的首尾帧不能与参考图、参考视频同时使用（与官网一致）；Seedance 2.5 按官网只开放 9 张参考图、3 个参考视频、合计 12 个。官网前端还要求 Seedance 参考视频 480–720p、总时长 2–15 秒；网关不预检，超限时以 Adobe 的返回为准。不支持 `reference_audios`。
 - **视频编辑与延长**（`/v1/videos/edits`、`/v1/videos/extensions`，与官网一样按操作换上游版本，路由不变）：
   - `seedance-2.5`：编辑提交到 `seedance/seedance_2.5_editing`，延长提交到 `seedance/seedance_2.5_extension`（官网未开放延长，按 schema 接）。比例固定 auto，分辨率 480p / 720p（默认 720p）；延长时长 4–30 秒，默认 4 秒。编辑按官网默认不另生成音轨（`generateAudio: false`），延长与生成一样生成音轨。
@@ -310,6 +311,6 @@ Muse 是 Meta 的 agent 应用（`https://muse.ai`）。它没有公开 API：�
 
 - **出口**：使用作用域 `muse` 的出口节点，节点的代理设为该账号浏览器上下文的代理。Chrome 不支持带用户名密码的代理，也不支持 Trojan/VLESS/SS/VMess 隧道（与 FlareSolverr 相同），这类节点会被拒绝并提示原因；只能用无认证的 HTTP(S) / SOCKS 代理或直连。
 - **对话**：每个请求在网页里新开一个对话，历史消息由客户端每次带上；请求里的 `tools` 会被忽略（网页端的 agent 不会返回函数调用），历史里的工具调用和结果按文字转述。最后一条用户消息里的图片作为附件上传，更早的图片只标注为 `[image]`。
-- **图片**：每次只出一张图，`n` 大于 1 时网关把请求分摊到多个账号。不支持蒙版、流式出图；比例取自 `aspect_ratio` 或 `size`，写进提示词。agent 只回文字（多为拒绝）时返回 422，不扣账号健康度。
+- **图片**：每次只出一张图，`n` 大于 1 时网关把请求分摊到多个账号。不支持蒙版、流式出图；比例取自 `aspect_ratio` 或 `size`，和 `resolution` 一起写进提示词，`size` 不是 宽x高 时忽略。agent 只回文字（多为拒绝）时返回 422，不扣账号健康度。
 - **视频**：只支持文生视频和首帧图片（`image`），比例 16:9、9:16、1:1、4:3、3:4，`duration` 1–15 秒（默认 5），按 720p 计价。时长和比例写进提示词，最终由 agent 决定：实测要求 5 秒，得到 10 秒的 1280×720 H.264。
 - **视频无法在浏览器里播放**：headless-shell 不带 H.264 解码器，网关拿不到视频宽高，但下载不受影响。

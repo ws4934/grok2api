@@ -250,7 +250,7 @@ func TestResponsesImageToolRoutingAndValidation(t *testing.T) {
 		"unsupported tool option":                          {"POST", "/v1/responses", `{"model":"gpt-image-2","input":"x","tools":[{"type":"image_generation","output_compression":50}]}`, 400, "unsupported_parameter"},
 		"unsupported top-level parameter":                  {"POST", "/v1/responses", `{"model":"gpt-image-2","input":"x","metadata":{},"tools":[{"type":"image_generation"}]}`, 400, "unsupported_parameter"},
 		"background streaming is rejected":                 {"POST", "/v1/responses", `{"model":"gpt-image-2","input":"x","stream":true,"background":true,"tools":[{"type":"image_generation"}]}`, 400, "unsupported_parameter"},
-		"provider rejects the options":                     {"POST", "/v1/responses", `{"model":"gpt-image-2","input":"x","tools":[{"type":"image_generation","quality":"ultra"}]}`, 400, "invalid_parameter"},
+		"provider rejects the options":                     {"POST", "/v1/responses", `{"model":"gpt-image-2","input":"x","tools":[{"type":"image_generation","input_image_mask":{"image_url":"https://example.com/m.png"}}]}`, 400, "invalid_parameter"},
 		"cancel of a stored response":                      {"POST", "/v1/responses/resp_legacy/cancel", "", 404, "response_not_found"},
 	} {
 		code, body := f.call(t, tc.method, tc.path, tc.body)

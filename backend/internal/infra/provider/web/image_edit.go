@@ -39,9 +39,6 @@ func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditReque
 }
 
 func (a *Adapter) editImageAttempt(ctx context.Context, request provider.ImageEditRequest) (*provider.Response, error) {
-	if strings.TrimSpace(request.Quality) != "" {
-		return invalidImageRequest("Grok Web 图片模型不支持 quality")
-	}
 	if len(request.ImageURLs) == 0 || len(request.ImageURLs) > 8 {
 		return jsonProviderResponse(http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "image 数量必须在 1 到 8 之间", "type": "invalid_request_error"}}), nil
 	}
@@ -58,13 +55,6 @@ func (a *Adapter) editImageAttempt(ctx context.Context, request provider.ImageEd
 	if request.PartialImages > 0 && !request.Streaming {
 		return invalidImageRequest("partial_images 仅可在 stream=true 时使用")
 	}
-	resolution := strings.ToLower(strings.TrimSpace(request.Resolution))
-	if resolution == "" {
-		resolution = "1k"
-	}
-	if resolution != "1k" {
-		return invalidImageRequest("Grok Web 图片编辑当前仅支持 resolution=1k")
-	}
 	format := strings.ToLower(strings.TrimSpace(request.ResponseFormat))
 	if format == "" {
 		format = "url"
@@ -72,10 +62,7 @@ func (a *Adapter) editImageAttempt(ctx context.Context, request provider.ImageEd
 	if format != "url" && format != "b64_json" {
 		return invalidImageRequest("response_format 必须是 url 或 b64_json")
 	}
-	ratio, err := resolveImageEditAspectRatio(request.AspectRatio, request.Size)
-	if err != nil {
-		return invalidImageRequest(err.Error())
-	}
+	ratio := resolveImageEditAspectRatio(request.AspectRatio, request.Size)
 	cfg := a.config()
 	token, err := a.cipher.Decrypt(request.Credential.EncryptedAccessToken)
 	if err != nil {
@@ -168,9 +155,12 @@ func buildImageEditPayload(prompt string, assets []string, aspectRatio string) m
 	}
 }
 
-func resolveImageEditAspectRatio(aspectRatio, size string) (string, error) {
+// resolveImageEditAspectRatio keeps the source image's shape unless the client
+// asked for one; quality and resolution do not apply to Web edits, which
+// render at 1k.
+func resolveImageEditAspectRatio(aspectRatio, size string) string {
 	if strings.TrimSpace(aspectRatio) == "" && strings.TrimSpace(size) == "" {
-		return "", nil
+		return ""
 	}
 	return resolveImageAspectRatio(aspectRatio, size)
 }

@@ -895,10 +895,14 @@ func TestImageEditAspectRatioSupportsOpenAISize(t *testing.T) {
 		{size: "1536x1024", want: "3:2"},
 		{size: "auto", want: "auto"},
 		{want: ""},
+		// Other clients' shapes map to the closest ratio instead of failing.
+		{size: "1824x1024", want: "16:9"},
+		{aspectRatio: "21:9", want: "20:9"},
+		{aspectRatio: "5:4", want: "4:3"},
+		{size: "huge", want: "auto"},
 	} {
-		got, err := resolveImageEditAspectRatio(test.aspectRatio, test.size)
-		if err != nil || got != test.want {
-			t.Fatalf("aspect=%q size=%q got=%q err=%v", test.aspectRatio, test.size, got, err)
+		if got := resolveImageEditAspectRatio(test.aspectRatio, test.size); got != test.want {
+			t.Fatalf("aspect=%q size=%q got=%q", test.aspectRatio, test.size, got)
 		}
 	}
 }
@@ -1319,17 +1323,14 @@ func TestImageStreamingRejectsMultipleOutputs(t *testing.T) {
 }
 
 func TestImageAspectRatioFollowsXAIContractAndSizeAlias(t *testing.T) {
-	for input, expected := range map[string]string{"auto": "auto", "19.5:9": "19.5:9", "9:20": "9:20", "1536x1024": "3:2", "1024x1536": "2:3"} {
-		got, err := resolveImageAspectRatio(input, "")
-		if err != nil || got != expected {
-			t.Fatalf("aspect ratio %q = %q, err=%v", input, got, err)
+	// Ratios Grok Imagine lacks map to the closest one instead of failing.
+	for input, expected := range map[string]string{"auto": "auto", "19.5:9": "19.5:9", "9:20": "9:20", "1536x1024": "3:2", "1024x1536": "2:3", "1792x1024": "3:2", "7:5": "4:3", "1824x1024": "16:9"} {
+		if got := resolveImageAspectRatio(input, ""); got != expected {
+			t.Fatalf("aspect ratio %q = %q, want %q", input, got, expected)
 		}
 	}
-	if got, err := resolveImageAspectRatio("", "1024x1024"); err != nil || got != "1:1" {
-		t.Fatalf("size alias = %q, err=%v", got, err)
-	}
-	if _, err := resolveImageAspectRatio("7:5", ""); err == nil {
-		t.Fatal("unsupported aspect ratio accepted")
+	if got := resolveImageAspectRatio("", "1024x1024"); got != "1:1" {
+		t.Fatalf("size alias = %q", got)
 	}
 }
 

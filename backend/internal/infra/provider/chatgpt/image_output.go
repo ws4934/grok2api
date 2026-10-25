@@ -19,8 +19,11 @@ import (
 type ImageOutputOptions struct {
 	Background   string `json:"background,omitempty"`
 	OutputFormat string `json:"output_format,omitempty"`
-	// Size is the requested WIDTHxHEIGHT, stated in the prompt only.
-	Size string `json:"size,omitempty"`
+	// Size is the requested WIDTHxHEIGHT, stated in the prompt only, with the
+	// client's AspectRatio and Resolution when it gave them.
+	Size        string `json:"size,omitempty"`
+	AspectRatio string `json:"aspect_ratio,omitempty"`
+	Resolution  string `json:"resolution,omitempty"`
 }
 
 type ImageOptionError struct {
@@ -67,8 +70,14 @@ func (o ImageOutputOptions) promptSuffix() string {
 		} else if width < height {
 			shape = "portrait"
 		}
-		divisor := gcd(width, height)
-		suffix = fmt.Sprintf("\nOutput requirement: %dx%d pixels (%s, aspect ratio %d:%d).", width, height, shape, width/divisor, height/divisor)
+		ratio := o.AspectRatio
+		if ratio == "" {
+			divisor := gcd(width, height)
+			ratio = fmt.Sprintf("%d:%d", width/divisor, height/divisor)
+		}
+		suffix = fmt.Sprintf("\nOutput requirement: %dx%d pixels (%s, aspect ratio %s).", width, height, shape, ratio)
+	} else if o.Resolution != "" {
+		suffix = fmt.Sprintf("\nOutput requirement: about %s resolution.", strings.ToUpper(o.Resolution))
 	}
 	background := o.Background
 	if o.OutputFormat == "jpeg" && (background == "" || background == "auto") {

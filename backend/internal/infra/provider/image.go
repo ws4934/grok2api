@@ -117,9 +117,11 @@ type ImageRequestOptions struct {
 	PartialImages  int
 }
 
-// ImageRequestValidator is implemented by every image-capable provider. The
-// gateway drops routes whose provider rejects the request and returns the
-// first rejection (a RequestScopedError-style 400) when none remain.
+// ImageRequestValidator is implemented by image providers that refuse some
+// requests (counts, inputs, masks); shape and quality values are adapted, not
+// refused. The gateway drops routes whose provider rejects the request and
+// returns the first rejection (a RequestScopedError-style 400) when none
+// remain; providers without it accept every request.
 type ImageRequestValidator interface {
 	Adapter
 	ValidateImageRequest(options ImageRequestOptions) error

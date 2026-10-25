@@ -1831,7 +1831,7 @@ func TestConsoleImageEditForwardsMultipleImages(t *testing.T) {
 	}
 }
 
-func TestConsoleImage20ForwardsQualityAndRejectsItForLegacyModels(t *testing.T) {
+func TestConsoleImage20ForwardsQualityAndDropsItForLegacyModels(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if serveTestDPoPToken(t, writer, request) {
 			return
@@ -1840,30 +1840,39 @@ func TestConsoleImage20ForwardsQualityAndRejectsItForLegacyModels(t *testing.T) 
 		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 			t.Error(err)
 		}
-		if payload["model"] != "grok-imagine-image-2.0" || payload["quality"] != "low" || payload["resolution"] != "2k" {
-			t.Errorf("Image 2.0 payload = %#v", payload)
+		_, quality := payload["quality"]
+		switch payload["model"] {
+		case "grok-imagine-image-2.0":
+			if payload["quality"] != "low" || payload["resolution"] != "2k" || payload["aspect_ratio"] != "16:9" {
+				t.Errorf("Image 2.0 payload = %#v", payload)
+			}
+		default:
+			if quality || payload["resolution"] != "2k" {
+				t.Errorf("legacy payload = %#v", payload)
+			}
 		}
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"data":[{"b64_json":"aW1hZ2U="}]}`))
 	}))
 	t.Cleanup(server.Close)
 	adapter, credential := newConsoleTestAdapter(t, server.URL)
+	// A canvas-style request: a pixel size and an OpenAI tier.
 	response, err := adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{
 		Credential: credential, Model: "grok-imagine-image-2.0", Prompt: "draw", Count: 1,
-		Resolution: "2k", Quality: "low", ResponseFormat: "b64_json",
+		Size: "1824x1024", Resolution: "2K", Quality: "low", ResponseFormat: "b64_json",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
 	legacy, err := adapter.GenerateImage(context.Background(), provider.ImageGenerationRequest{
-		Credential: credential, Model: "grok-imagine-image", Prompt: "draw", Count: 1, Quality: "low",
+		Credential: credential, Model: "grok-imagine-image", Prompt: "draw", Count: 1, Quality: "high", Resolution: "4k", ResponseFormat: "b64_json",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer legacy.Body.Close()
-	if legacy.StatusCode != http.StatusBadRequest {
+	if legacy.StatusCode != http.StatusOK {
 		t.Fatalf("legacy quality response = %#v", legacy)
 	}
 }

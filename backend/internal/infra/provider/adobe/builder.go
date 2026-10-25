@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
 // genInput 是一次生成的参数，比例/分辨率/时长已对齐到模型支持的值，参考图已上传。
@@ -458,12 +460,9 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 	if limit := v.maxBlobs; limit > 0 && inputs+boolCount(mask) > limit {
 		return in, &requestError{msg: fmt.Sprintf("%s 最多支持 %d 张输入图（含 mask）", v.slug, limit)}
 	}
-	if strings.EqualFold(strings.TrimSpace(background), "transparent") {
-		if !v.transparent {
-			return in, &requestError{msg: v.slug + " 不支持透明背景"}
-		}
-		in.transparent = true
-	}
+	// Shape, resolution and background values a model lacks map to the closest
+	// it has, or are dropped: clients written for other APIs send them all.
+	in.transparent = v.transparent && strings.EqualFold(strings.TrimSpace(background), "transparent")
 
 	options := v.aspects
 	w, h := parsePair(size)
@@ -472,7 +471,10 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 	case requested != "" && !isAuto(requested):
 		match, ok := findFold(options, requested)
 		if !ok {
-			return in, &requestError{msg: fmt.Sprintf("%s 不支持 aspect_ratio %s", v.slug, requested)}
+			match = provider.ClosestImageRatio(requested, withoutAuto(options))
+		}
+		if match == "" {
+			match = v.defaultAspect(options)
 		}
 		in.aspect = match
 	case w > 0 && h > 0 && len(options) > 0:
@@ -488,7 +490,10 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 	case requested != "":
 		match, ok := findFold(tiers, requested)
 		if !ok {
-			return in, &requestError{msg: fmt.Sprintf("%s 不支持 resolution %s（可选：%s）", v.slug, requested, strings.Join(tiers, "、"))}
+			match = closestTier(requested, tiers)
+		}
+		if match == "" {
+			match = v.defaultResolution(tiers)
 		}
 		in.resolution = match
 	case w > 0 && h > 0:
@@ -549,6 +554,23 @@ func videoLines(tier string) int {
 	}
 	n, _ := strconv.Atoi(strings.TrimSuffix(tier, "p"))
 	return n
+}
+
+// closestTier is the tier nearest to the requested one ("4K" for a model that
+// stops at 2K gives 2K); "" when the request is no tier.
+func closestTier(requested string, tiers []string) string {
+	want := provider.ImageTierPixels(requested)
+	best, bestDiff := "", math.Inf(1)
+	for _, tier := range tiers {
+		have := provider.ImageTierPixels(tier)
+		if want == 0 || have == 0 {
+			continue
+		}
+		if diff := math.Abs(math.Log(float64(want) / float64(have))); diff < bestDiff {
+			best, bestDiff = tier, diff
+		}
+	}
+	return best
 }
 
 func findFold(options []string, value string) (string, bool) {

@@ -535,6 +535,13 @@ func TestAspectLabel(t *testing.T) {
 			t.Fatalf("%q = %q, want %q", size, got, want)
 		}
 	}
+	// Any size is accepted; the shape and resolution go into the prompt.
+	if err := (&Adapter{}).ValidateImageRequest(provider.ImageRequestOptions{Size: "huge"}); err != nil {
+		t.Fatalf("size rejected: %v", err)
+	}
+	if got := withShape("Draw.", "auto", "1824x1024", "2k"); got != "Draw. Aspect ratio: 57:32 (landscape). Resolution: about 2K." {
+		t.Fatalf("withShape = %q", got)
+	}
 }
 
 func jarJSON(value any) string {

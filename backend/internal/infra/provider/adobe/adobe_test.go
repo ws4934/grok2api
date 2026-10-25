@@ -828,19 +828,23 @@ func TestBuildBodyMatchesOfficialClient(t *testing.T) {
 }
 
 // 显式给出但模型不支持的参数直接 400；张数超过 schema 上限也拒绝。
-func TestImagePlanRejectsUnsupportedParameters(t *testing.T) {
+// Values a model lacks map to the closest it has instead of failing.
+func TestImagePlanMapsUnsupportedParameters(t *testing.T) {
 	nano := mustVersion(t, "nano-banana-pro")
-	if _, err := nano.imagePlan("x", "", "8:1", "", "", "", 1, 0, false); err == nil {
-		t.Error("nano-banana-pro accepted 8:1")
+	if in, err := nano.imagePlan("x", "", "8:1", "", "", "", 1, 0, false); err != nil || in.aspect != "21:9" {
+		t.Errorf("nano-banana-pro 8:1 = %+v, %v", in, err)
 	}
-	if _, err := nano.imagePlan("x", "", "", "512", "", "", 1, 0, false); err == nil {
-		t.Error("nano-banana-pro accepted 512")
+	if in, err := nano.imagePlan("x", "", "", "512", "", "", 1, 0, false); err != nil || in.resolution != "1K" {
+		t.Errorf("nano-banana-pro 512 = %+v, %v", in, err)
+	}
+	if in, err := nano.imagePlan("x", "", "", "8k", "", "", 1, 0, false); err != nil || in.resolution != "4K" {
+		t.Errorf("nano-banana-pro 8k = %+v, %v", in, err)
 	}
 	if _, err := mustVersion(t, "nano-banana-2").imagePlan("x", "", "8:1", "512", "", "", 1, 0, false); err != nil {
 		t.Errorf("nano-banana-2 rejected 8:1@512: %v", err)
 	}
-	if _, err := mustVersion(t, "gpt-image-2").imagePlan("x", "", "", "", "", "transparent", 1, 0, false); err == nil {
-		t.Error("gpt-image-2 accepted a transparent background")
+	if in, err := mustVersion(t, "gpt-image-2").imagePlan("x", "", "", "", "", "transparent", 1, 0, false); err != nil || in.transparent {
+		t.Errorf("gpt-image-2 transparent = %+v, %v", in, err)
 	}
 	in, err := mustVersion(t, "gpt-image-2.5-flare").imagePlan("x", "1536x1024", "", "", "", "transparent", 1, 0, false)
 	if err != nil || !in.transparent || in.aspect != "3:2" {

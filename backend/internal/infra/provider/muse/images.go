@@ -29,15 +29,13 @@ func (a *Adapter) ValidateImageRequest(options provider.ImageRequestOptions) err
 		return badRequest("图片编辑需要输入图片")
 	case options.InputImages > maxInputImages:
 		return badRequest(fmt.Sprintf("最多 %d 张输入图片", maxInputImages))
-	case options.Size != "" && options.Size != "auto" && aspectLabel(options.Size) == "":
-		return badRequest("size 必须是 auto 或 WIDTHxHEIGHT")
 	}
 	return nil
 }
 
 func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGenerationRequest) (*provider.Response, error) {
 	prompt := "Create a brand-new image from scratch based only on the description below. Do not use or ask for earlier or reference images. Reply with the image."
-	return a.drawImage(ctx, request.Credential, withShape(prompt, request.AspectRatio, request.Size)+"\n\n"+request.Prompt, nil, request.ResponseFormat)
+	return a.drawImage(ctx, request.Credential, withShape(prompt, request.AspectRatio, request.Size, request.Resolution)+"\n\n"+request.Prompt, nil, request.ResponseFormat)
 }
 
 func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditRequest) (*provider.Response, error) {
@@ -50,7 +48,7 @@ func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditReque
 		inputs = append(inputs, input)
 	}
 	prompt := "Edit the image attached to this message as described below. Use only the attached images, not earlier pictures. Reply with the edited image."
-	return a.drawImage(ctx, request.Credential, withShape(prompt, request.AspectRatio, request.Size)+"\n\n"+request.Prompt, inputs, request.ResponseFormat)
+	return a.drawImage(ctx, request.Credential, withShape(prompt, request.AspectRatio, request.Size, request.Resolution)+"\n\n"+request.Prompt, inputs, request.ResponseFormat)
 }
 
 // drawImage asks for one image. Once the prompt is sent the account spent
@@ -95,16 +93,20 @@ func mediaFailure(err error, sent bool) (*provider.Response, error) {
 	return errorResponse("", known.status, known.code, known.message), nil
 }
 
-// withShape states the requested aspect ratio; the agent takes it from the prompt.
-func withShape(prompt, aspectRatio, size string) string {
+// withShape states the requested aspect ratio and resolution; the agent takes
+// them from the prompt, so a size that is no WIDTHxHEIGHT is left out.
+func withShape(prompt, aspectRatio, size, resolution string) string {
 	label := strings.TrimSpace(aspectRatio)
-	if label == "" {
+	if label == "" || strings.EqualFold(label, "auto") {
 		label = aspectLabel(size)
 	}
-	if label == "" {
-		return prompt
+	if label != "" {
+		prompt += " Aspect ratio: " + label + "."
 	}
-	return prompt + " Aspect ratio: " + label + "."
+	if resolution = strings.TrimSpace(resolution); resolution != "" && !strings.EqualFold(resolution, "auto") {
+		prompt += " Resolution: about " + strings.ToUpper(resolution) + "."
+	}
+	return prompt
 }
 
 // aspectLabel names the shape of a WIDTHxHEIGHT size, "" when there is none.

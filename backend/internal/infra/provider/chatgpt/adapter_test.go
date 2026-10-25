@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -780,6 +781,9 @@ func TestValidateImageRequest(t *testing.T) {
 	valid := []provider.ImageRequestOptions{
 		{}, {Count: 10, Size: "1536x1024", Quality: "high", ResponseFormat: "url", OutputFormat: "webp", Background: "transparent", Streaming: true},
 		{Edit: true, InputImages: 1, HasMask: true, Quality: "auto", Size: "auto"}, {Edit: true, InputImages: 8, PartialImages: 3},
+		// Other APIs' shape, quality and output values are adapted, not refused.
+		{Size: "1824x1024", Resolution: "1k"}, {AspectRatio: "16:9"}, {Size: "1024"}, {Size: "100x100"}, {Quality: "hd"},
+		{OutputFormat: "gif"}, {Background: "transparent", OutputFormat: "jpeg"},
 	}
 	for _, o := range valid {
 		if err := a.ValidateImageRequest(o); err != nil {
@@ -787,15 +791,43 @@ func TestValidateImageRequest(t *testing.T) {
 		}
 	}
 	invalid := []provider.ImageRequestOptions{
-		{Count: 11}, {Size: "1024"}, {Size: "100x100"}, {Quality: "hd"}, {ResponseFormat: "base64"}, {AspectRatio: "16:9"},
+		{Count: 11}, {ResponseFormat: "base64"},
 		{Edit: true}, {Edit: true, InputImages: 9}, {Edit: true, InputImages: 2, HasMask: true}, {HasMask: true},
-		{OutputFormat: "gif"}, {Background: "transparent", OutputFormat: "jpeg"}, {PartialImages: 4},
+		{PartialImages: 4},
 	}
 	for _, o := range invalid {
 		var scoped provider.RequestScopedError
 		if err := a.ValidateImageRequest(o); !errors.As(err, &scoped) {
 			t.Fatalf("%+v accepted: %v", o, err)
 		}
+	}
+}
+
+func TestImageParametersAreAdapted(t *testing.T) {
+	for _, test := range []struct {
+		in, want imageJob
+	}{
+		{imageJob{aspectRatio: "16:9", resolution: "2K"}, imageJob{size: "2048x1152", aspectRatio: "16:9", resolution: "2k"}},
+		{imageJob{size: "16:9"}, imageJob{size: "1024x576", aspectRatio: "16:9"}},
+		{imageJob{size: "1824x1024", resolution: "1k"}, imageJob{size: "1824x1024", resolution: "1k"}},
+		{imageJob{size: "5000x3000"}, imageJob{size: "4096x2464"}},
+		{imageJob{size: "100x100"}, imageJob{size: "256x256"}},
+		{imageJob{size: "big"}, imageJob{}},
+		{imageJob{quality: "HD"}, imageJob{quality: "high"}},
+		{imageJob{quality: "standard"}, imageJob{quality: "medium"}},
+		{imageJob{quality: "2k"}, imageJob{resolution: "2k"}},
+		{imageJob{outputFormat: "jpg", background: "transparent"}, imageJob{outputFormat: "jpeg"}},
+		{imageJob{outputFormat: "gif", background: "checkered"}, imageJob{}},
+	} {
+		if got := test.in.adapted(); !reflect.DeepEqual(got, test.want) {
+			t.Errorf("%+v adapted = %+v, want %+v", test.in, got, test.want)
+		}
+	}
+	if suffix := (ImageOutputOptions{Size: "2048x1152", AspectRatio: "16:9"}).promptSuffix(); !strings.Contains(suffix, "2048x1152 pixels (landscape, aspect ratio 16:9)") {
+		t.Errorf("suffix = %q", suffix)
+	}
+	if suffix := (ImageOutputOptions{Resolution: "2k"}).promptSuffix(); !strings.Contains(suffix, "about 2K resolution") {
+		t.Errorf("suffix = %q", suffix)
 	}
 }
 

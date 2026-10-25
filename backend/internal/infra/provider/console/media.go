@@ -86,12 +86,6 @@ func (e *consoleMediaUpstreamError) PublicErrorMessage() string {
 	return e.summary
 }
 
-var _ provider.ImageRequestValidator = (*Adapter)(nil)
-
-func (a *Adapter) ValidateImageRequest(options provider.ImageRequestOptions) error {
-	return grokimage.Validate(options)
-}
-
 func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGenerationRequest) (*provider.Response, error) {
 	if !ResolveMedia(request.Model, modeldomain.CapabilityImage) {
 		return invalidConsoleMediaRequest("模型不支持 Console 图片生成"), nil
@@ -110,18 +104,9 @@ func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGener
 	if err != nil {
 		return invalidConsoleMediaRequest(err.Error()), nil
 	}
-	ratio, err := resolveConsoleImageAspectRatio(request.AspectRatio, request.Size)
-	if err != nil {
-		return invalidConsoleMediaRequest(err.Error()), nil
-	}
-	resolution, err := normalizeConsoleImageResolution(request.Resolution)
-	if err != nil {
-		return invalidConsoleMediaRequest(err.Error()), nil
-	}
-	quality, err := normalizeConsoleImageQuality(request.Model, request.Quality)
-	if err != nil {
-		return invalidConsoleMediaRequest(err.Error()), nil
-	}
+	ratio := resolveConsoleImageAspectRatio(request.AspectRatio, request.Size)
+	resolution := grokimage.Resolution(request.Resolution)
+	quality := consoleImageQuality(request.Model, request.Quality)
 	payload := map[string]any{"model": request.Model, "prompt": request.Prompt, "n": count, "response_format": format}
 	if ratio != "" {
 		payload["aspect_ratio"] = ratio
@@ -156,22 +141,13 @@ func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditReque
 	if err != nil {
 		return invalidConsoleMediaRequest(err.Error()), nil
 	}
-	ratio, err := resolveConsoleImageAspectRatio(request.AspectRatio, request.Size)
-	if err != nil {
-		return invalidConsoleMediaRequest(err.Error()), nil
-	}
-	resolution, err := normalizeConsoleImageResolution(request.Resolution)
-	if err != nil {
-		return invalidConsoleMediaRequest(err.Error()), nil
-	}
+	ratio := resolveConsoleImageAspectRatio(request.AspectRatio, request.Size)
+	resolution := grokimage.Resolution(request.Resolution)
 	if resolution == "" {
 		// The edit endpoint has always sent 1k when the client omitted it.
 		resolution = "1k"
 	}
-	quality, err := normalizeConsoleImageQuality(request.Model, request.Quality)
-	if err != nil {
-		return invalidConsoleMediaRequest(err.Error()), nil
-	}
+	quality := consoleImageQuality(request.Model, request.Quality)
 	images := make([]map[string]any, 0, len(request.ImageURLs))
 	for _, rawURL := range request.ImageURLs {
 		value := strings.TrimSpace(rawURL)
@@ -757,47 +733,30 @@ func normalizeConsoleImageFormat(value string) (string, error) {
 	return value, nil
 }
 
-func normalizeConsoleImageResolution(value string) (string, error) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return "", nil
-	}
-	if value != "1k" && value != "2k" {
-		return "", errors.New("resolution 必须是 1k 或 2k")
-	}
-	return value, nil
-}
-
-func normalizeConsoleImageQuality(model, value string) (string, error) {
-	value = strings.ToLower(strings.TrimSpace(value))
-	if value == "" {
-		return "", nil
-	}
+// consoleImageQuality: only grok-imagine-image-2.0 takes a quality.
+func consoleImageQuality(model, value string) string {
 	if strings.TrimSpace(model) != "grok-imagine-image-2.0" {
-		return "", errors.New("quality 仅支持 grok-imagine-image-2.0")
+		return ""
 	}
-	if value != "low" && value != "medium" {
-		return "", errors.New("quality 必须是 low 或 medium")
-	}
-	return value, nil
+	return grokimage.Quality(value)
 }
 
-func resolveConsoleImageAspectRatio(aspectRatio, size string) (string, error) {
+// consoleImageRatios are the aspect ratios the Console image API takes.
+var consoleImageRatios = []string{"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "2:1", "1:2"}
+
+// resolveConsoleImageAspectRatio reads aspect_ratio, else size, as the
+// closest ratio Console takes; "" leaves the default. The OpenAI sizes keep
+// their established ratios.
+func resolveConsoleImageAspectRatio(aspectRatio, size string) string {
 	value := strings.ToLower(strings.TrimSpace(aspectRatio))
 	if value == "" {
 		value = strings.ToLower(strings.TrimSpace(size))
 	}
-	if value == "" || value == "auto" {
-		return "", nil
+	aliases := map[string]string{"1792x1024": "3:2", "1024x1792": "2:3"}
+	if ratio := aliases[value]; ratio != "" {
+		return ratio
 	}
-	values := map[string]string{
-		"1:1": "1:1", "16:9": "16:9", "9:16": "9:16", "4:3": "4:3", "3:4": "3:4", "3:2": "3:2", "2:3": "2:3", "2:1": "2:1", "1:2": "1:2",
-		"1024x1024": "1:1", "1280x720": "16:9", "720x1280": "9:16", "1792x1024": "3:2", "1536x1024": "3:2", "1024x1792": "2:3", "1024x1536": "2:3",
-	}
-	if resolved := values[value]; resolved != "" {
-		return resolved, nil
-	}
-	return "", errors.New("aspect_ratio 或 size 不受支持")
+	return provider.ClosestImageRatio(value, consoleImageRatios)
 }
 
 func validConsoleMediaInputURL(value, mediaType string) bool {
