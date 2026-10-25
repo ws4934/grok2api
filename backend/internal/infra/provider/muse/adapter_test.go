@@ -568,8 +568,9 @@ func TestVideoReferenceImages(t *testing.T) {
 	}{
 		{func(o *provider.VideoRequestOptions) { o.ReferenceImages = maxInputImages }, true},
 		{func(o *provider.VideoRequestOptions) { o.ReferenceImages = maxInputImages + 1 }, false},
-		{func(o *provider.VideoRequestOptions) { o.HasImage, o.HasLastFrame = true, true }, false},
-		{func(o *provider.VideoRequestOptions) { o.ReferenceVideos = 1 }, false},
+		{func(o *provider.VideoRequestOptions) { o.HasImage, o.ReferenceImages = true, maxInputImages-1 }, true},
+		{func(o *provider.VideoRequestOptions) { o.HasImage, o.ReferenceImages = true, maxInputImages }, false},
+		{func(o *provider.VideoRequestOptions) { o.ReferenceAudios = 1 }, false},
 	} {
 		options := base
 		tc.edit(&options)
@@ -594,6 +595,18 @@ func TestVideoReferenceImages(t *testing.T) {
 		t.Fatalf("inputs = %+v", job.Inputs)
 	}
 	if !strings.Contains(job.Prompt, "as references for the subjects, scene and style") || strings.Contains(job.Prompt, "first frame") {
+		t.Fatalf("prompt = %q", job.Prompt)
+	}
+
+	// A first frame with references: the frame is attached first and named first.
+	request.ImageURL, request.ReferenceURLs = jpeg, []string{png}
+	if _, err := adapter.GenerateVideo(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(job.Inputs) != 2 || job.Inputs[0].MIME != "image/jpeg" || job.Inputs[1].MIME != "image/png" {
+		t.Fatalf("inputs = %+v", job.Inputs)
+	}
+	if !strings.Contains(job.Prompt, "first image attached to this message as its first frame, uses the other attached images as references") {
 		t.Fatalf("prompt = %q", job.Prompt)
 	}
 }

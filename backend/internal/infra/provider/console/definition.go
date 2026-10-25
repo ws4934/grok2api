@@ -65,6 +65,9 @@ func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) err
 		}
 		return provider.ErrVideoOperationUnsupported
 	}
+	if options.HasImage && (options.ReferenceImages > 0 || options.ReferenceAudios > 0) {
+		return fmt.Errorf("%w: image 不能与 reference_images/reference_audios 同时使用", provider.ErrVideoParameterInvalid)
+	}
 	if model == "grok-imagine-video" || model == "grok-imagine-video-1.5" {
 		// 实测：8 张 reference_images 上游回 400
 		// "Too many reference images: 8. Maximum allowed is 7."（两个视频模型一致）。

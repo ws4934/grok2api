@@ -338,7 +338,7 @@ Adobe is a media-only Provider: image generation and editing (Nano Banana, GPT I
 | :-- | :-- | :-- |
 | `muse-spark` | Chat | Chat Completions, Responses, Messages; replies are converted back to Markdown; images in the last user message are attached; client tools are ignored |
 | `muse-image` | Image, image edit | Images Generations and Edits, one image per request, WebP output; the aspect ratio follows `aspect_ratio` or `size` |
-| `muse-video` | Video | Text, one first frame or up to 4 reference images (`reference_images`), 720p; 9:16 and 16:9 are honored; the agent renders 5 or 10 seconds |
+| `muse-video` | Video | Text, a first frame, up to 4 reference images (`reference_images`), or a first frame with up to 3 references, 720p; 9:16 and 16:9 are honored; the agent renders 5 or 10 seconds |
 
 All Muse routes spend one weekly usage window read from the account's usage panel. Each account keeps a fixed desktop Chrome identity and a US timezone; the login cookie is renewed a day before it lapses, and a suspended cloud VM is woken at renewal. Setup and limits are described in [PROVIDERS.md](./PROVIDERS.md) (Chinese).
 

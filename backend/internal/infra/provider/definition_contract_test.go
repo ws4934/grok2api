@@ -239,3 +239,31 @@ func TestRegistryRejectsLastFrameForProvidersWithoutSupport(t *testing.T) {
 		t.Fatalf("adobe seedance reference videos err = %v", err)
 	}
 }
+
+// A first frame with reference images is the provider's call: xAI takes one or
+// the other, Muse and Kling 3.0 Omni take both.
+func TestRegistryLeavesFirstFrameWithReferencesToTheProvider(t *testing.T) {
+	registry := provider.NewRegistry(
+		cliprovider.NewAdapter(cliprovider.Config{}, nil),
+		consoleprovider.NewAdapter(consoleprovider.Config{}, nil, nil, nil),
+		adobeprovider.NewAdapter(adobeprovider.Config{}, nil, nil, nil, nil),
+		museprovider.NewAdapter(museprovider.Config{}, nil, nil, nil, nil),
+	)
+	options := provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, HasImage: true, ReferenceImages: 1, Duration: 5, AspectRatio: "16:9", Resolution: "720p"}
+	for _, test := range []struct {
+		value    account.Provider
+		upstream string
+		ok       bool
+	}{
+		{account.ProviderBuild, "grok-imagine-video", false},
+		{account.ProviderConsole, "grok-imagine-video", false},
+		{account.ProviderAdobe, "kling/kling_v3_omni", true},
+		{account.ProviderAdobe, "veo/3.1-generate", false},
+		{account.ProviderMuse, "muse-video", true},
+	} {
+		options.UpstreamModel = test.upstream
+		if err := registry.ValidateVideoRequest(test.value, options); (err == nil) != test.ok {
+			t.Errorf("%s %s: err = %v, want ok=%v", test.value, test.upstream, err, test.ok)
+		}
+	}
+}

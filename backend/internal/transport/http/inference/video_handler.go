@@ -169,10 +169,6 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "reference_audios 最多 3 个")
 			return
 		}
-		if imageURL != "" && (len(referenceURLs) > 0 || len(referenceAudios) > 0) {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "image 不能与 reference_images/reference_audios 同时使用")
-			return
-		}
 		if len(referenceURLs) > mediadomain.MaxInputImages {
 			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("reference_images 不能超过 %d 张", mediadomain.MaxInputImages))
 			return

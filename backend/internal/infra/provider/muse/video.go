@@ -36,10 +36,10 @@ func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) err
 	switch {
 	case options.Operation != provider.VideoOperationGenerate:
 		return provider.ErrVideoOperationUnsupported
-	case options.HasLastFrame || options.ReferenceVideos > 0 || options.ReferenceAudios > 0:
+	case options.ReferenceAudios > 0:
 		return fmt.Errorf("%w: Muse 视频只支持首帧图片（image）和参考图片（reference_images）", provider.ErrVideoParameterInvalid)
-	case options.ReferenceImages > maxInputImages:
-		return fmt.Errorf("%w: Muse 视频最多 %d 张参考图片", provider.ErrVideoParameterInvalid, maxInputImages)
+	case options.ReferenceImages > maxInputImages || options.HasImage && options.ReferenceImages >= maxInputImages:
+		return fmt.Errorf("%w: Muse 视频的首帧和参考图片合计最多 %d 张", provider.ErrVideoParameterInvalid, maxInputImages)
 	case options.Duration < 1 || options.Duration > 15:
 		return fmt.Errorf("%w: duration 必须在 1 到 15 秒之间", provider.ErrVideoParameterInvalid)
 	case !slices.Contains([]string{"16:9", "9:16", "1:1", "4:3", "3:4"}, options.AspectRatio):
@@ -61,6 +61,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	job := mediaJob{Kind: mediaVideo, Prompt: videoPrompt(request), Thread: checkpoint.Thread}
 	sent := false
 	if job.Thread == "" {
+		// The first frame goes first: the prompt names it as the first image.
 		refs := request.ReferenceURLs
 		if request.ImageURL != "" {
 			refs = append([]string{request.ImageURL}, refs...)
@@ -121,6 +122,8 @@ func videoPrompt(request provider.VideoRequest) string {
 	}
 	lead := "Create a brand-new video from scratch based only on the description below (text to video; do not use earlier images)."
 	switch {
+	case request.ImageURL != "" && len(request.ReferenceURLs) > 0:
+		lead = "Create a video that starts from the first image attached to this message as its first frame, uses the other attached images as references for the subjects, scene and style, and follows the description below. Use only the attached images."
 	case request.ImageURL != "":
 		lead = "Create a video that starts from the image attached to this message as its first frame and follows the description below. Use only the attached image."
 	case len(request.ReferenceURLs) > 0:

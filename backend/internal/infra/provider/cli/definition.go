@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
@@ -57,6 +59,9 @@ func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (p
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
 	if options.Operation != provider.VideoOperationGenerate {
 		return provider.ErrVideoOperationUnsupported
+	}
+	if options.HasImage && (options.ReferenceImages > 0 || options.ReferenceAudios > 0) {
+		return fmt.Errorf("%w: image 不能与 reference_images/reference_audios 同时使用", provider.ErrVideoParameterInvalid)
 	}
 	return provider.ValidateGrokVideoResolution(options)
 }
