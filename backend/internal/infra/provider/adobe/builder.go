@@ -437,22 +437,29 @@ func randomSeed() int64 {
 // --- 请求规划：校验并对齐参数 ---
 
 // imagePlan 校验图像请求并选定比例与档位。显式给出但模型不支持的值直接拒绝。
+// keptImages keeps the first input images up to what the model takes, instead
+// of refusing the rest; a mask counts toward the model's total.
+func (v *modelVersion) keptImages(urls []string, mask bool) []string {
+	keep := len(urls)
+	if _, limit := v.referenceUsage(); limit > 0 {
+		keep = min(keep, limit)
+	}
+	if limit := v.maxBlobs; limit > 0 {
+		keep = min(keep, max(limit-boolCount(mask), 1))
+	}
+	return urls[:keep]
+}
+
 func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, background string, count, inputs int, mask bool) (genInput, error) {
 	in := genInput{prompt: prompt, count: max(1, count), quality: quality}
-	if !v.has("n") && in.count > 1 {
-		return in, &requestError{msg: v.slug + " 每次只能生成 1 张"}
+	if !v.has("n") {
+		in.count = 1 // a model without n draws one image per request
 	}
 	if inputs == 0 && v.requiresImageInput() {
 		return in, &requestError{msg: v.slug + " 需要输入图片"}
 	}
-	if inputs > 0 {
-		usage, limit := v.referenceUsage()
-		if usage == "" {
-			return in, &requestError{msg: v.slug + " 不支持输入图片"}
-		}
-		if limit > 0 && inputs > limit {
-			return in, &requestError{msg: fmt.Sprintf("%s 最多支持 %d 张输入图片", v.slug, limit)}
-		}
+	if usage, _ := v.referenceUsage(); inputs > 0 && usage == "" {
+		return in, &requestError{msg: v.slug + " 不支持输入图片"}
 	}
 	if _, ok := v.refs["image:mask"]; mask && !ok {
 		return in, &requestError{msg: v.slug + " 不支持 mask"}
@@ -490,7 +497,7 @@ func (v *modelVersion) imagePlan(prompt, size, aspect, resolution, quality, back
 	case requested != "":
 		match, ok := findFold(tiers, requested)
 		if !ok {
-			match = closestTier(requested, tiers)
+			match = provider.ClosestImageTier(requested, tiers)
 		}
 		if match == "" {
 			match = v.defaultResolution(tiers)
@@ -554,23 +561,6 @@ func videoLines(tier string) int {
 	}
 	n, _ := strconv.Atoi(strings.TrimSuffix(tier, "p"))
 	return n
-}
-
-// closestTier is the tier nearest to the requested one ("4K" for a model that
-// stops at 2K gives 2K); "" when the request is no tier.
-func closestTier(requested string, tiers []string) string {
-	want := provider.ImageTierPixels(requested)
-	best, bestDiff := "", math.Inf(1)
-	for _, tier := range tiers {
-		have := provider.ImageTierPixels(tier)
-		if want == 0 || have == 0 {
-			continue
-		}
-		if diff := math.Abs(math.Log(float64(want) / float64(have))); diff < bestDiff {
-			best, bestDiff = tier, diff
-		}
-	}
-	return best
 }
 
 func findFold(options []string, value string) (string, bool) {

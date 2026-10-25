@@ -710,8 +710,9 @@ func TestVideoEditAndExtendSupport(t *testing.T) {
 			t.Errorf("%s %s: err = %v, want supported=%v", test.upstream, test.operation, err, test.supported)
 		}
 	}
-	if _, err := a.NormalizeVideoRequest(provider.VideoRequestOptions{Operation: provider.VideoOperationEdit, UpstreamModel: "seedance/seedance_2.5", Duration: 5}); !errors.Is(err, provider.ErrVideoParameterInvalid) {
-		t.Fatalf("edit with duration err = %v", err)
+	// An edit's length follows its source video: a duration is ignored.
+	if got, err := a.NormalizeVideoRequest(provider.VideoRequestOptions{Operation: provider.VideoOperationEdit, UpstreamModel: "seedance/seedance_2.5", Duration: 5}); err != nil || got.Duration != 0 {
+		t.Fatalf("edit with duration = %+v, %v", got, err)
 	}
 }
 
@@ -1152,5 +1153,20 @@ func TestGenerateVideoUploadsReferenceVideos(t *testing.T) {
 	if len(refs) != 1 || get(refs[0].(map[string]any), "usage") != "source" || get(refs[0].(map[string]any), "id") != "asset1" ||
 		fake.videoBody["modelVersion"] != "seedance_2.0" {
 		t.Fatalf("submitted body = %v", fake.videoBody)
+	}
+}
+
+// Inputs beyond a model's limits keep the first ones; n on a one-image model draws one.
+func TestImageInputsAndCountFitTheModel(t *testing.T) {
+	v := &modelVersion{slug: "m", refs: map[string]usageLimit{"image:general": {max: 3}}, maxBlobs: 3}
+	urls := []string{"a", "b", "c", "d"}
+	if got := v.keptImages(urls, false); !slices.Equal(got, []string{"a", "b", "c"}) {
+		t.Fatalf("kept = %v", got)
+	}
+	if got := v.keptImages(urls, true); !slices.Equal(got, []string{"a", "b"}) {
+		t.Fatalf("kept with mask = %v", got)
+	}
+	if in, err := v.imagePlan("x", "", "", "", "", "", 4, 2, false); err != nil || in.count != 1 {
+		t.Fatalf("plan = %+v, %v", in, err)
 	}
 }

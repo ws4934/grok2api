@@ -82,7 +82,7 @@ func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) err
 	if options.HasImage || options.ReferenceImages > 0 {
 		return fmt.Errorf("%w: Grok Web 当前仅支持文本生视频；图片视频请使用 Build 或 Console Provider", provider.ErrVideoOperationUnsupported)
 	}
-	return provider.ValidateGrokVideoResolution(options)
+	return nil
 }
 
 // VideoQuotaMode spends default and 720p videos from the dedicated 720p product.

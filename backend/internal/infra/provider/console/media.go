@@ -127,9 +127,11 @@ func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditReque
 	if request.Streaming || request.PartialImages != 0 {
 		return invalidConsoleMediaRequest("Grok Console 标准图片接口不支持 stream 或 partial_images"), nil
 	}
-	if len(request.ImageURLs) == 0 || len(request.ImageURLs) > consoleMaxEditImages {
-		return invalidConsoleMediaRequest("Console 图片编辑必须提供 1 到 3 张图片"), nil
+	if len(request.ImageURLs) == 0 {
+		return invalidConsoleMediaRequest("Console 图片编辑需要至少一张图片"), nil
 	}
+	// Images beyond the three Console edits take are dropped, the first ones kept.
+	request.ImageURLs = request.ImageURLs[:min(len(request.ImageURLs), consoleMaxEditImages)]
 	count := request.Count
 	if count <= 0 {
 		count = 1

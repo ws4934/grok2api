@@ -99,12 +99,21 @@ func TestImageEditRejectsUnsupportedInputs(t *testing.T) {
 		"invalid base64": {`{"model":"m","prompt":"p","image":"not base64!"}`, "invalid_request"},
 		"not an image":   {`{"model":"m","prompt":"p","image":"aGVsbG8="}`, "invalid_request"},
 		"text data URI":  {`{"model":"m","prompt":"p","image":"data:text/plain;base64,aGVsbG8="}`, "invalid_request"},
-		"two masks":      {`{"model":"m","prompt":"p","image":"` + onePixelDataURI + `","mask":["` + onePixelDataURI + `","` + onePixelDataURI + `"]}`, "invalid_request"},
-		"nine images":    {`{"model":"m","prompt":"p","images":["` + strings.Repeat(onePixelDataURI+`","`, 8) + onePixelDataURI + `"]}`, "invalid_request"},
 	} {
 		request := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(test.body))
 		request.Header.Set("Content-Type", "application/json")
 		if status, problem := serve(request); status != http.StatusBadRequest || problem["code"] != test.code {
+			t.Errorf("%s: status=%d error=%v", name, status, problem)
+		}
+	}
+	// Extra masks and images beyond eight are dropped, not refused.
+	for name, body := range map[string]string{
+		"two masks":   `{"model":"m","prompt":"p","image":"` + onePixelDataURI + `","mask":["` + onePixelDataURI + `","` + onePixelDataURI + `"]}`,
+		"nine images": `{"model":"m","prompt":"p","images":["` + strings.Repeat(onePixelDataURI+`","`, 8) + onePixelDataURI + `"]}`,
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		if status, problem := serve(request); status != http.StatusUnauthorized {
 			t.Errorf("%s: status=%d error=%v", name, status, problem)
 		}
 	}

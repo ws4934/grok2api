@@ -1,7 +1,6 @@
 package console
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -49,39 +48,29 @@ func (a *Adapter) Definition() provider.Definition {
 	}
 }
 
-// NormalizeVideoRequest applies the xAI video defaults and ranges.
+// NormalizeVideoRequest applies the xAI video defaults and ranges and fits
+// the request to the Console upstream instead of letting it fail the job:
+// a first frame or up to 7 references (measured: 8 answer 400 "Maximum
+// allowed is 7", on both video models), and grok-imagine-video's
+// reference-to-video stops at 10 s (measured: 15 s answers 400; image-to-video
+// and grok-imagine-video-1.5 keep 15 s).
 func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
-	return provider.NormalizeGrokVideoRequest(options)
+	if options.Operation == provider.VideoOperationGenerate {
+		options = provider.FitGrokVideoInputs(options, provider.ConsoleVideoMaxReferenceImages)
+	}
+	options, err := provider.NormalizeGrokVideoRequest(options)
+	if strings.TrimSpace(options.UpstreamModel) == "grok-imagine-video" && options.ReferenceImages > 0 {
+		options.Duration = min(options.Duration, provider.ConsoleVideoMaxReferenceDurationSeconds)
+	}
+	return options, err
 }
 
-// ValidateVideoRequest rejects requests the Console upstream fails only after
-// the asynchronous job was queued. Edit and extension exist for
-// grok-imagine-video only.
+// ValidateVideoRequest: edit and extension exist for grok-imagine-video only.
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
-	model := strings.TrimSpace(options.UpstreamModel)
-	if options.Operation != provider.VideoOperationGenerate {
-		if model == "grok-imagine-video" {
-			return nil
-		}
+	if options.Operation != provider.VideoOperationGenerate && strings.TrimSpace(options.UpstreamModel) != "grok-imagine-video" {
 		return provider.ErrVideoOperationUnsupported
 	}
-	if options.HasImage && (options.ReferenceImages > 0 || options.ReferenceAudios > 0) {
-		return fmt.Errorf("%w: image 不能与 reference_images/reference_audios 同时使用", provider.ErrVideoParameterInvalid)
-	}
-	if model == "grok-imagine-video" || model == "grok-imagine-video-1.5" {
-		// 实测：8 张 reference_images 上游回 400
-		// "Too many reference images: 8. Maximum allowed is 7."（两个视频模型一致）。
-		if options.ReferenceImages > provider.ConsoleVideoMaxReferenceImages {
-			return fmt.Errorf("%w: Console reference_images 最多 %d 张，当前为 %d 张", provider.ErrVideoParameterInvalid, provider.ConsoleVideoMaxReferenceImages, options.ReferenceImages)
-		}
-		// 实测：grok-imagine-video 的 reference-to-video 上游回 400
-		// "Duration 15s exceeds the maximum allowed for reference-to-video, which is 10s."；
-		// 走 image 字段的 image-to-video 与 grok-imagine-video-1.5 都保持 15s。
-		if model == "grok-imagine-video" && options.ReferenceImages > 0 && options.Duration > provider.ConsoleVideoMaxReferenceDurationSeconds {
-			return fmt.Errorf("%w: Console %s 的参考图生视频最长 %d 秒，当前为 %d 秒", provider.ErrVideoParameterInvalid, model, provider.ConsoleVideoMaxReferenceDurationSeconds, options.Duration)
-		}
-	}
-	return provider.ValidateGrokVideoResolution(options)
+	return nil
 }
 
 // StaticModel: every Console account serves the static catalog, and every

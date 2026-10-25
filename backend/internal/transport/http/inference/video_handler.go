@@ -24,6 +24,30 @@ type videoGenerationImage struct {
 	FileID string `json:"file_id"`
 }
 
+// UnmarshalJSON also reads a bare URL and the {"image_url": …} form other
+// video APIs use.
+func (v *videoGenerationImage) UnmarshalJSON(data []byte) error {
+	if json.Unmarshal(data, &v.URL) == nil {
+		return nil
+	}
+	var raw struct {
+		URL      string          `json:"url"`
+		FileID   string          `json:"file_id"`
+		ImageURL json.RawMessage `json:"image_url"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	v.URL, v.FileID = raw.URL, raw.FileID
+	if v.URL == "" && len(raw.ImageURL) > 0 {
+		var nested videoGenerationImage
+		if err := json.Unmarshal(raw.ImageURL, &nested); err == nil {
+			v.URL = nested.URL
+		}
+	}
+	return nil
+}
+
 type videoGenerationAudio struct {
 	VoiceID string `json:"voice_id"`
 }
@@ -41,8 +65,35 @@ type videoGenerationRequest struct {
 	ReferenceAudios []videoGenerationAudio `json:"reference_audios"`
 	ReferenceVideos []videoGenerationImage `json:"reference_videos"`
 	Video           *videoGenerationImage  `json:"video"`
-	Output          json.RawMessage        `json:"output"`
-	StorageOptions  json.RawMessage        `json:"storage_options"`
+	// Other video APIs' names, mapped onto the xAI fields: seconds (duration),
+	// size (aspect ratio and resolution), quality (resolution) and
+	// input_reference (first frame).
+	Seconds        json.RawMessage       `json:"seconds"`
+	Size           string                `json:"size"`
+	Quality        string                `json:"quality"`
+	InputReference *videoGenerationImage `json:"input_reference"`
+}
+
+// adapted maps other video APIs' field names onto the xAI ones the client
+// left empty.
+func (r videoGenerationRequest) adapted() videoGenerationRequest {
+	if !hasJSONValue(r.Duration) {
+		r.Duration = r.Seconds
+	}
+	if strings.TrimSpace(r.AspectRatio) == "" {
+		r.AspectRatio = r.Size
+	}
+	if strings.TrimSpace(r.Resolution) == "" {
+		if w, h := provider.ImagePair(r.Size); w > 0 && strings.ContainsAny(strings.ToLower(r.Size), "x×*") {
+			r.Resolution = fmt.Sprintf("%dp", int(min(w, h)))
+		} else {
+			r.Resolution = r.Quality
+		}
+	}
+	if r.Image == nil {
+		r.Image = r.InputReference
+	}
+	return r
 }
 
 func (h *Handler) generateVideo(c *gin.Context) {
@@ -69,19 +120,14 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 		writeOpenAIError(c, http.StatusUnsupportedMediaType, "invalid_request", label+"仅支持 application/json")
 		return
 	}
+	// Fields the gateway does not use (output.upload_url, storage_options,
+	// seeds, watermarks…) are ignored, not refused.
 	var request videoGenerationRequest
-	if err := decodeSingleJSON(c.Request.Body, &request, true); err != nil {
+	if err := decodeSingleJSON(c.Request.Body, &request, false); err != nil {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+" JSON 请求无效: "+err.Error())
 		return
 	}
-	if hasJSONValue(request.Output) {
-		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 output.upload_url")
-		return
-	}
-	if hasJSONValue(request.StorageOptions) {
-		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 storage_options")
-		return
-	}
+	request = request.adapted()
 	model := strings.TrimSpace(request.Model)
 	prompt := strings.TrimSpace(request.Prompt)
 	if model == "" {
@@ -112,21 +158,24 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 	referenceVideoURLs := []string{}
 	videoURL := ""
 
+	// 写法认不出的时长、比例、分辨率按没传处理：取值范围和默认值由路由的 Provider
+	// 按模型和操作决定，Provider 把其他值对齐到最接近的可用值。
 	duration, err := parseVideoDuration(request.Duration)
 	if err != nil {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", err.Error())
-		return
+		duration = 0
 	}
-	// 这里只查写法、不填默认值：取值范围和默认值由路由的 Provider 按模型和操作决定。
 	aspectRatio := strings.TrimSpace(request.AspectRatio)
-	if aspectRatio != "" && !validVideoAspectRatio(aspectRatio) {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "aspect_ratio 应为 宽:高（如 16:9）或 auto")
-		return
+	if strings.EqualFold(aspectRatio, "auto") {
+		aspectRatio = "auto"
+	} else if w, _ := provider.ImagePair(aspectRatio); w == 0 {
+		aspectRatio = ""
 	}
 	resolution := strings.ToLower(strings.TrimSpace(request.Resolution))
-	if resolution != "" && !validVideoResolution(resolution) {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "resolution 应为 720p、1080p、4k 这类写法")
-		return
+	if _, err := strconv.Atoi(resolution); err == nil {
+		resolution += "p" // a bare "720" means 720p
+	}
+	if provider.ImageTierPixels(resolution) == 0 {
+		resolution = ""
 	}
 
 	if operation == gatewayVideoOperationGenerate {
@@ -148,6 +197,11 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 			}
 			lastFrameURL = value
 		}
+		// Inputs beyond the gateway's limits are dropped, the first ones kept;
+		// the route's provider then keeps what its upstream takes.
+		request.ReferenceImages = request.ReferenceImages[:min(len(request.ReferenceImages), mediadomain.MaxInputImages)]
+		request.ReferenceAudios = request.ReferenceAudios[:min(len(request.ReferenceAudios), maxVideoReferenceAudios)]
+		request.ReferenceVideos = request.ReferenceVideos[:min(len(request.ReferenceVideos), mediadomain.MaxReferenceVideos)]
 		referenceURLs = make([]string, 0, len(request.ReferenceImages))
 		for _, input := range request.ReferenceImages {
 			value, ok := parseVideoImage(input, "reference_images")
@@ -164,18 +218,6 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 				return
 			}
 			referenceAudios = append(referenceAudios, voiceID)
-		}
-		if len(referenceAudios) > 3 {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "reference_audios 最多 3 个")
-			return
-		}
-		if len(referenceURLs) > mediadomain.MaxInputImages {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("reference_images 不能超过 %d 张", mediadomain.MaxInputImages))
-			return
-		}
-		if len(request.ReferenceVideos) > mediadomain.MaxReferenceVideos {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("reference_videos 不能超过 %d 个", mediadomain.MaxReferenceVideos))
-			return
 		}
 		for _, input := range request.ReferenceVideos {
 			value, ok := parseVideoImage(input, "reference_videos")
@@ -345,6 +387,9 @@ func normalizeVideoResponseContentType(value string) (string, bool) {
 	}
 }
 
+// maxVideoReferenceAudios is the most reference voices the xAI video API takes.
+const maxVideoReferenceAudios = 3
+
 // parseVideoDuration 解析可选的 duration；没传时返回 0，由路由的 Provider 取模型默认值。
 func parseVideoDuration(durationRaw json.RawMessage) (int, error) {
 	duration, hasDuration, err := parseOptionalVideoInteger(durationRaw)
@@ -379,27 +424,6 @@ func parseOptionalVideoInteger(raw json.RawMessage) (int, bool, error) {
 func hasJSONValue(value json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(value)
 	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
-}
-
-// validVideoAspectRatio 只检查写法：宽:高（正整数）或 auto。
-func validVideoAspectRatio(value string) bool {
-	if strings.EqualFold(value, "auto") {
-		return true
-	}
-	w, h, ok := strings.Cut(value, ":")
-	width, errW := strconv.Atoi(w)
-	height, errH := strconv.Atoi(h)
-	return ok && errW == nil && errH == nil && width > 0 && height > 0
-}
-
-// validVideoResolution 只检查写法：正整数加 p 或 k（720p、1080p、4k）。
-func validVideoResolution(value string) bool {
-	number, ok := strings.CutSuffix(value, "p")
-	if !ok {
-		number, ok = strings.CutSuffix(value, "k")
-	}
-	n, err := strconv.Atoi(number)
-	return ok && err == nil && n > 0
 }
 
 func videoGenerationResponse(job mediadomain.Job, contentURLs ...string) gin.H {

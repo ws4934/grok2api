@@ -132,18 +132,20 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		return existing, err
 	}
 	route, selection, err := s.selectSchedulableEligibleMediaRouteWithQuotaMode(ctx, routes, input.ClientKey, true, func(route model.Route) string {
-		return s.providers.VideoQuotaMode(route.Provider, s.providers.QuotaMode(route.Provider, route.UpstreamModel), input.Resolution)
+		// The quota product follows the resolution the route renders, not the requested one.
+		effective, _ := s.videoRouteOptions(route.Provider, route.UpstreamModel, options)
+		return s.providers.VideoQuotaMode(route.Provider, s.providers.QuotaMode(route.Provider, route.UpstreamModel), effective.Resolution)
 	})
 	if err != nil {
 		return media.Job{}, err
 	}
 	// 选中路由的 Provider 决定实际生成的时长、比例与分辨率；计费和任务记录都用它。
-	options.UpstreamModel = route.UpstreamModel
-	effective, err := s.providers.NormalizeVideoRequest(route.Provider, options)
+	effective, err := s.videoRouteOptions(route.Provider, route.UpstreamModel, options)
 	if err != nil {
 		return media.Job{}, err
 	}
 	input.Duration, input.AspectRatio, input.Resolution = effective.Duration, effective.AspectRatio, effective.Resolution
+	inputs = inputs.fittedTo(effective)
 	if err := s.checkLedgerReady(); err != nil {
 		return media.Job{}, err
 	}
@@ -209,39 +211,48 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	return job, nil
 }
 
-// routesForVideoParameters removes only routes that cannot accept this request.
-// Callers must first apply capability, client-key, and Provider eligibility:
-// the same public model may aggregate Console, Build, and Web routes with
-// different input contracts. options.UpstreamModel is filled per route.
+// routesForVideoParameters removes only routes that cannot accept this request,
+// and prefers the routes that keep every reference over those that would drop
+// some. Callers must first apply capability, client-key, and Provider
+// eligibility: the same public model may aggregate Console, Build, and Web
+// routes with different input contracts. options.UpstreamModel is filled per
+// route.
 func (s *Service) routesForVideoParameters(routes []model.Route, options provider.VideoRequestOptions) ([]model.Route, error) {
 	if len(routes) == 0 {
 		return routes, nil
 	}
 	compatible := make([]model.Route, 0, len(routes))
+	complete := make([]model.Route, 0, len(routes))
 	var firstErr error
 	for _, candidate := range routes {
-		if err := s.validateVideoRouteParameters(candidate.Provider, candidate.UpstreamModel, options); err != nil {
+		effective, err := s.videoRouteOptions(candidate.Provider, candidate.UpstreamModel, options)
+		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
 		compatible = append(compatible, candidate)
+		if effective.ReferenceImages == options.ReferenceImages && effective.ReferenceVideos == options.ReferenceVideos && effective.ReferenceAudios == options.ReferenceAudios {
+			complete = append(complete, candidate)
+		}
 	}
 	if len(compatible) == 0 && firstErr != nil {
 		return nil, firstErr
 	}
+	if len(complete) > 0 {
+		return complete, nil
+	}
 	return compatible, nil
 }
 
-// validateVideoRouteParameters asks the route's provider whether it can serve
-// the request. /v1/videos/generations is asynchronous, so a request the
-// upstream must fail is rejected here instead of as a failed job; the adapter
-// keeps the same checks at its outbound boundary.
-func (s *Service) validateVideoRouteParameters(providerValue account.Provider, upstreamModel string, options provider.VideoRequestOptions) error {
+// videoRouteOptions asks the route's provider what it would generate for the
+// request, or why it cannot serve it. /v1/videos/generations is asynchronous,
+// so a request the upstream must fail is rejected here instead of as a failed
+// job; the adapter keeps the same checks at its outbound boundary.
+func (s *Service) videoRouteOptions(providerValue account.Provider, upstreamModel string, options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
 	options.UpstreamModel = upstreamModel
-	_, err := s.providers.NormalizeVideoRequest(providerValue, options)
-	return err
+	return s.providers.NormalizeVideoRequest(providerValue, options)
 }
 
 // routesForVideoOperation keeps the routes whose provider serves an edit or extension.

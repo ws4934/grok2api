@@ -58,7 +58,9 @@ func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditReque
 	if err != nil {
 		return syncFailure(err, false)
 	}
-	in, err := v.imagePlan(request.Prompt, request.Size, request.AspectRatio, request.Resolution, request.Quality, request.Background, request.Count, len(request.ImageURLs), strings.TrimSpace(request.MaskURL) != "")
+	mask := strings.TrimSpace(request.MaskURL) != ""
+	request.ImageURLs = v.keptImages(request.ImageURLs, mask)
+	in, err := v.imagePlan(request.Prompt, request.Size, request.AspectRatio, request.Resolution, request.Quality, request.Background, request.Count, len(request.ImageURLs), mask)
 	if err != nil {
 		return syncFailure(err, false)
 	}
@@ -141,7 +143,9 @@ func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequ
 	if err != nil {
 		return cp, err
 	}
-	in, err := v.imagePlan(request.Prompt, request.Size, "", "", request.Quality, request.Background, 1, len(request.ImageURLs), strings.TrimSpace(request.MaskURL) != "")
+	mask := strings.TrimSpace(request.MaskURL) != ""
+	request.ImageURLs = v.keptImages(request.ImageURLs, mask)
+	in, err := v.imagePlan(request.Prompt, request.Size, "", "", request.Quality, request.Background, 1, len(request.ImageURLs), mask)
 	if err != nil {
 		return cp, err
 	}

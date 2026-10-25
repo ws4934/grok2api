@@ -121,7 +121,7 @@ agent 客户端每一步都带上完整历史。网关不再每次都把整份�
   `file_id` 会被明确拒绝。
 - **返回格式**：默认返回 `b64_json`；需要链接时传 `response_format: "url"`。
 - **参数**：支持 `background`（含 `transparent`）和 `output_format`（`jpg` 按 `jpeg`）。透明背景与 jpeg 同时给出时输出 jpeg、放弃透明。
-- **参数适配**：为其他接口写的参数不报错：`aspect_ratio` 配合 `resolution` 换成 `size`（如 16:9 + 2k → `2048x1152`，只给比例时按 1k），`size` 写成比例时按 `aspect_ratio` 处理，超出 256–4096 的尺寸按比例缩放到范围内；`quality` 的 `hd` / `standard` 对应 `high` / `medium`，`1k` / `2k` 等档位按分辨率处理；认不出的值忽略。其余校验（数量、输入图、蒙版、`response_format`）按 Provider 进行，被拒绝的路由会换同名的其他 Provider 路由。
+- **参数适配**：为其他接口写的参数不报错：`aspect_ratio` 配合 `resolution` 换成 `size`（如 16:9 + 2k → `2048x1152`，只给比例时按 1k），`size` 写成比例时按 `aspect_ratio` 处理，超出 256–4096 的尺寸按比例缩放到范围内；`quality` 的 `hd` / `standard` 对应 `high` / `medium`，`1k` / `2k` 等档位按分辨率处理；认不出的值忽略。`n` 超出 1–10 时取最近的值（流式固定为 1），`partial_images` 限在 0–3、只在流式时生效；编辑的输入图超过 8 张、蒙版超过 1 张时保留前面的；`storage_options` 等用不到的字段忽略。仍会拒绝的只有做不到的请求（没有输入图的编辑、Provider 不支持的蒙版或流式、`response_format` 写错），被拒绝的路由会换同名的其他 Provider 路由。
 - **同名模型**：Adobe 也有 `gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`；两边都有账号时同名请求可能落到任一方，用 `chatgpt/` 前缀可以固定走 ChatGPT。
 - **尺寸**：网页端不理会请求里的尺寸字段。网关把尺寸和横竖比例写进提示词，所以画面形状会按请求生成。像素面积固定在约 157 万，例如请求 `1024x1024` 会返回约 `1254x1254`。网关不在本地缩放。
 - **多张（`n` 为 2–10）**：网页端一次只画一张。非流式请求会拆成单张请求，同时分给空闲账号生成；没有空闲账号的图等前一轮结束后接着画。账号少时，总耗时不会比逐张生成更长。
@@ -157,6 +157,7 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
 
 - **路由**：先用工具里的 `model`，没有时用顶层 `model`；顶层是 ChatGPT 聊天模型时，回退到"默认图片模型"。
 - **编辑**：在 `input` 消息里放 `{"type": "input_image", "image_url": …}`。蒙版写在工具的 `input_image_mask.image_url`。
+- **参数**：顶层是图片模型或 `tool_choice` 强制图片工具时，Responses 的其他字段（`metadata`、`temperature` 等）和工具里用不到的选项（`output_compression`、`input_fidelity`、`moderation`、`partial_images`）忽略。聊天模型只是提供图片工具时，请求里有这些字段就仍走对话。
 - **幂等**：支持 `Idempotency-Key` 请求头。同一密钥、同一内容返回同一任务；内容不同返回 409。
 - **取消**：只对尚未提交到上游的任务有效，已提交的返回 `409 response_not_cancellable`。
 - **结果不确定**：`error.code = result_uncertain` 表示上游可能已经出图但无法确认。系统不会自动重试；管理员可以在"媒体任务"页手动重试，可能再次消耗上游额度。
@@ -181,6 +182,11 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
 
 - **持久化**：图片和视频任务都写入 `media_jobs`。领取任务时会递增代次，旧 worker 无法写回结果。
 - **崩溃恢复**：从 checkpoint 继续轮询，不会重复提交上游。Console 视频保存了上游 request id。
+- **视频参数**：为其他视频接口写的参数不报错。
+  - `seconds`、`size`（如 `1280x720` 换成 16:9 + 720p）、`quality`、`input_reference` 分别按 `duration`、`aspect_ratio`、`resolution`、`image` 处理；`image` 等素材也可以写成裸 URL 或 `{"image_url": …}`；`output`、`storage_options`、`seed` 等用不到的字段忽略；认不出的时长、比例、分辨率按没传处理，纯数字分辨率（`720`）按 `720p`。
+  - 取值由路由的 Provider 对齐到最近的可用值。Grok（Build / Console / Web）：比例取 1:1、16:9、9:16、4:3、3:4、3:2、2:3 中最近的（21:9 → 16:9），时长 1–15 秒（默认 8），分辨率 480p / 720p，只有 `grok-imagine-video-1.5` 不带参考图和参考音频时有 1080p（2160p → 1080p）；编辑忽略这三项，延长的时长 2–10 秒（默认 6）。
+  - 素材超出上限时保留前面的：首帧与参考图不能同时用时保留首帧（Grok、Veo、Seedance）；参考图 Build 8 张、Console 7 张（`grok-imagine-video` 带参考图时最长 10 秒），参考音频 3 个。同名模型有多条路由时，优先选能收下全部素材的路由，例如 8 张参考图走 Build 而不是 Console。
+  - 仍会拒绝的是模型做不到的输入：Web 的图生视频、不支持的尾帧或参考视频、Provider 不支持的编辑或延长。
 - **图片任务**：n 张图在同一账号上依次生成。租约 2 分钟、每 30 秒续租，任务期限 1 小时。每交付一张图，按下单时锁定的价格记一条审计。
 - **图库来源**：每个资产记录生成它的 Provider、模型、密钥、账号、操作、任务和 prompt，管理端可以按这些条件筛选。
 - **删除保护**：活动任务正在使用的资产不能删除，返回 409 `mediaAssetInUse`。
@@ -238,12 +244,12 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 
   核对官网后改表，并用线上条目更新 `testdata/discovery-reviewed.json`。
 - **参数校验**：
-  - 图像：模型不支持的 `aspect_ratio` 取最接近的比例，`resolution` 取最接近的档位，不支持透明背景时忽略 `background`；未给比例时按 `size` 取最接近的比例。超过 schema 上限的 `n`、不支持的输入图 / 蒙版直接 400，不支持 `stream` / `partial_images`。
-  - 视频：首帧（`image`）、尾帧（`last_frame`，必须同时给 `image`）、参考图与参考视频（`reference_videos`）按表里的数量与素材总数上限校验；`duration` / `aspect_ratio` / `resolution` 没传时用模型默认值（Kling 5 秒、Veo 8 秒、Seedance 4 秒；比例 16:9；分辨率通常 720p），传了但不支持的就近对齐（如 2K 取最高档 1080p）；入队前就选定实际值，任务记录、计费与结果里的 `video.duration` 都用它。参考视频只对 Seedance 2.0 / 2.0 Fast / 2.5 开放（MP4 或 QuickTime，上传到 `/v2/storage/video`，以 `source` 用途引用）。Seedance 与 Veo 3.1 的首尾帧不能与参考图、参考视频同时使用（与官网一致）；Seedance 2.5 按官网只开放 9 张参考图、3 个参考视频、合计 12 个。官网前端还要求 Seedance 参考视频 480–720p、总时长 2–15 秒；网关不预检，超限时以 Adobe 的返回为准。不支持 `reference_audios`。
+  - 图像：模型不支持的 `aspect_ratio` 取最接近的比例，`resolution` 取最接近的档位，不支持透明背景时忽略 `background`；未给比例时按 `size` 取最接近的比例。模型不支持多张时 `n` 按 1；输入图超出上限（含蒙版计入的素材总数）时保留前面的；完全不收输入图或蒙版的模型返回 400，不支持 `stream` / `partial_images`。
+  - 视频：首帧（`image`）、尾帧（`last_frame`，必须同时给 `image`）、参考图与参考视频（`reference_videos`）超出表里的数量或素材总数上限时保留前面的，模型不收的素材种类返回 400；`duration` / `aspect_ratio` / `resolution` 没传时用模型默认值（Kling 5 秒、Veo 8 秒、Seedance 4 秒；比例 16:9；分辨率通常 720p），传了但不支持的就近对齐（如 2K 取最高档 1080p）；入队前就选定实际值，任务记录、计费与结果里的 `video.duration` 都用它。参考视频只对 Seedance 2.0 / 2.0 Fast / 2.5 开放（MP4 或 QuickTime，上传到 `/v2/storage/video`，以 `source` 用途引用）。Seedance 与 Veo 3.1 的首尾帧不能与参考图、参考视频同时使用（与官网一致），同时给出时保留首尾帧；Seedance 2.5 按官网只开放 9 张参考图、3 个参考视频、合计 12 个。官网前端还要求 Seedance 参考视频 480–720p、总时长 2–15 秒；网关不预检，超限时以 Adobe 的返回为准。`reference_audios` 忽略。
 - **视频编辑与延长**（`/v1/videos/edits`、`/v1/videos/extensions`，与官网一样按操作换上游版本，路由不变）：
   - `seedance-2.5`：编辑提交到 `seedance/seedance_2.5_editing`，延长提交到 `seedance/seedance_2.5_extension`（官网未开放延长，按 schema 接）。比例固定 auto，分辨率 480p / 720p（默认 720p）；延长时长 4–30 秒，默认 4 秒。编辑按官网默认不另生成音轨（`generateAudio: false`），延长与生成一样生成音轨。
   - `kling-3.0-omni`：编辑提交到 `kling/kling_v3_omni_v2v_edit`。可选 16:9 / 9:16 / 1:1 与 720p / 1080p（默认 16:9、720p；竖屏或方形源视频请传与之一致的 `aspect_ratio`），保留原音轨（`keepAudio`）。不支持延长。
-  - 源视频上传到 `/v2/storage/video`，以 `source` 用途引用；`generationMetadata.submodule` 为 `ff-video-editor`。编辑的时长跟随源视频，传 `duration` 返回 400。源视频与其他输入一样受网关单个文件 20 MiB 的上限（Adobe 本身收到 200 MiB）。官网前端对源视频的要求（Seedance 480–1080p、4–30 秒；Kling 720–2160p、3–10 秒）网关不预检，超限时以 Adobe 的返回为准。与 Grok 一样，编辑与延长不计费。
+  - 源视频上传到 `/v2/storage/video`，以 `source` 用途引用；`generationMetadata.submodule` 为 `ff-video-editor`。编辑的时长跟随源视频，传了 `duration` 也忽略。源视频与其他输入一样受网关单个文件 20 MiB 的上限（Adobe 本身收到 200 MiB）。官网前端对源视频的要求（Seedance 480–1080p、4–30 秒；Kling 720–2160p、3–10 秒）网关不预检，超限时以 Adobe 的返回为准。与 Grok 一样，编辑与延长不计费。
 - 输入图支持 Base64 data URI 与 `https` URL（经带 SSRF 防护的下载器，不走账号出口），只接受 PNG/JPEG/WebP。
 - Veo 3.1 带参考图时固定 16:9、8 秒，Veo 3.1 Fast 不接受参考图；`generateAudio` 按 schema 默认值（Kling 3.0 / Omni 关闭，其余开启）。图像 4K：Nano Banana Pro / 2 / 2.1 按 schema 的 4K 尺寸（如 16:9 为 5504×3072）；GPT Image 2 / 2.5 的 4K 取 schema 上限内的最大尺寸（边长 ≤3840、总像素 ≤8,294,400，如 16:9 为 3840×2160、1:1 为 2880×2880），官网前端只开放到 1K/2K；推导尺寸超限时按比例缩进上限。
 - 定价：Adobe 无官方价，未设价按 0 计费、模型页标"未定价"；价格按上游模型（`modelId/版本`）存储。积分（`firefly.adobe.io/v1/credits/balance`）作为 `credits` 窗口，所有 Adobe 路由都消费它。
@@ -311,6 +317,6 @@ Muse 是 Meta 的 agent 应用（`https://muse.ai`）。它没有公开 API：�
 
 - **出口**：使用作用域 `muse` 的出口节点，节点的代理设为该账号浏览器上下文的代理。Chrome 不支持带用户名密码的代理，也不支持 Trojan/VLESS/SS/VMess 隧道（与 FlareSolverr 相同），这类节点会被拒绝并提示原因；只能用无认证的 HTTP(S) / SOCKS 代理或直连。
 - **对话**：每个请求在网页里新开一个对话，历史消息由客户端每次带上；请求里的 `tools` 会被忽略（网页端的 agent 不会返回函数调用），历史里的工具调用和结果按文字转述。最后一条用户消息里的图片作为附件上传，更早的图片只标注为 `[image]`。
-- **图片**：每次只出一张图，`n` 大于 1 时网关把请求分摊到多个账号。不支持蒙版、流式出图；比例取自 `aspect_ratio` 或 `size`，和 `resolution` 一起写进提示词，`size` 不是 宽x高 时忽略。agent 只回文字（多为拒绝）时返回 422，不扣账号健康度。
-- **视频**：只支持文生视频和首帧图片（`image`），比例 16:9、9:16、1:1、4:3、3:4，`duration` 1–15 秒（默认 5），按 720p 计价。时长和比例写进提示词，最终由 agent 决定：实测要求 5 秒，得到 10 秒的 1280×720 H.264。
+- **图片**：每次只出一张图，`n` 大于 1 时网关把请求分摊到多个账号。编辑的输入图超过 4 张时保留前 4 张。不支持蒙版、流式出图；比例取自 `aspect_ratio` 或 `size`，和 `resolution` 一起写进提示词，`size` 不是 宽x高 时忽略。agent 只回文字（多为拒绝）时返回 422，不扣账号健康度。
+- **视频**：支持文生视频、首帧图片（`image`）和参考图（`reference_images`），两者合计最多 4 张，多出的保留前面的；参考音频忽略。比例取 16:9、9:16、1:1、4:3、3:4 中最近的，`duration` 对齐到 1–15 秒（默认 5），按 720p 计价。时长和比例写进提示词，最终由 agent 决定：实测要求 5 秒，得到 10 秒的 1280×720 H.264。
 - **视频无法在浏览器里播放**：headless-shell 不带 H.264 解码器，网关拿不到视频宽高，但下载不受影响。

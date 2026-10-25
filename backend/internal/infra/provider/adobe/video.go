@@ -37,8 +37,8 @@ func (v *modelVersion) forOperation(operation provider.VideoOperation) *modelVer
 
 // NormalizeVideoRequest 选定实际生成（也用于计费和任务记录）的比例、分辨率与时长：
 // 没传的用模型默认值，传了但模型不支持的就近对齐；参考图模式下 Veo 固定 16:9、8 秒。
-// 编辑的时长跟随源视频，传了 duration 直接拒绝。未知模型或不支持的操作原样返回，
-// 由随后的 ValidateVideoRequest 拒绝。
+// 编辑的时长跟随源视频，传了 duration 也忽略。生成时素材按模型收的留下（见
+// fitVideoInputs）。未知模型或不支持的操作原样返回，由随后的 ValidateVideoRequest 拒绝。
 func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
 	base, ok := lookup(options.UpstreamModel)
 	if !ok || !base.video {
@@ -48,8 +48,11 @@ func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (p
 	if v == nil {
 		return options, nil
 	}
-	if options.Operation == provider.VideoOperationEdit && options.Duration != 0 {
-		return options, fmt.Errorf("%w: %s 的视频编辑时长跟随源视频，不支持 duration", provider.ErrVideoParameterInvalid, base.slug)
+	switch options.Operation {
+	case provider.VideoOperationEdit:
+		options.Duration = 0
+	case provider.VideoOperationGenerate:
+		options = v.fitVideoInputs(options)
 	}
 	in := v.videoPlan("", options.AspectRatio, options.Resolution, options.Duration, options.HasImage, options.ReferenceImages > 0)
 	options.AspectRatio, options.Resolution = in.aspect, in.resolution
@@ -78,6 +81,28 @@ func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) err
 		return fmt.Errorf("%w: %s", provider.ErrVideoParameterInvalid, err.Error())
 	}
 	return nil
+}
+
+// fitVideoInputs 把素材数量对齐到模型收的，不拒绝：参考音频丢弃；首尾帧不能与参考
+// 素材同用时保留首尾帧；参考图、参考视频超出上限（含素材总数上限）时保留前几个。
+// 模型根本不收的素材种类仍由 checkVideoInputs 拒绝。
+func (v *modelVersion) fitVideoInputs(options provider.VideoRequestOptions) provider.VideoRequestOptions {
+	options.ReferenceAudios = 0
+	if v.framesExclusive && (options.HasImage || options.HasLastFrame) {
+		options.ReferenceImages, options.ReferenceVideos = 0, 0
+	}
+	if _, limit := v.referenceUsage(); limit > 0 {
+		options.ReferenceImages = min(options.ReferenceImages, limit)
+	}
+	if limit := v.refs["video:source"].max; limit > 0 {
+		options.ReferenceVideos = min(options.ReferenceVideos, limit)
+	}
+	if limit := v.maxBlobs; limit > 0 {
+		room := max(limit-boolCount(options.HasImage)-boolCount(options.HasLastFrame), 0)
+		options.ReferenceImages = min(options.ReferenceImages, room)
+		options.ReferenceVideos = min(options.ReferenceVideos, room-options.ReferenceImages)
+	}
+	return options
 }
 
 // checkVideoInputs 按表里的上限检查首帧、尾帧、参考图与参考视频。首尾帧共用 frame

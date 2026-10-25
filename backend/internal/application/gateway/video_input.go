@@ -66,6 +66,15 @@ type videoInputs struct {
 	referenceAudios                   []string
 }
 
+// fittedTo keeps the references the route's provider takes, as its
+// normalized options count them: the first ones, in the client's order.
+func (in videoInputs) fittedTo(options provider.VideoRequestOptions) videoInputs {
+	in.referenceURLs = in.referenceURLs[:min(len(in.referenceURLs), max(options.ReferenceImages, 0))]
+	in.referenceVideoURLs = in.referenceVideoURLs[:min(len(in.referenceVideoURLs), max(options.ReferenceVideos, 0))]
+	in.referenceAudios = in.referenceAudios[:min(len(in.referenceAudios), max(options.ReferenceAudios, 0))]
+	return in
+}
+
 // imageRefs 按 首帧、尾帧、参考图 的顺序列出图像输入。
 func (in videoInputs) imageRefs() []string {
 	values := make([]string, 0, 2+len(in.referenceURLs))

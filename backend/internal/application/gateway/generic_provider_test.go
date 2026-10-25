@@ -163,7 +163,7 @@ func TestGenericProviderSelectorUsesSnapshotRouting(t *testing.T) {
 
 func TestGenericProviderVideoAndFailureDefaults(t *testing.T) {
 	service := &Service{providers: provider.NewRegistry(&genericAdapter{})}
-	if err := service.validateVideoRouteParameters(genericProvider, "any-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080p", HasImage: true, ReferenceImages: 9, Duration: 30}); err != nil {
+	if _, err := service.videoRouteOptions(genericProvider, "any-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080p", HasImage: true, ReferenceImages: 9, Duration: 30}); err != nil {
 		t.Fatalf("generation without a validator = %v", err)
 	}
 	routes := []modeldomain.Route{{ID: 1, Provider: genericProvider, UpstreamModel: "any-video"}}

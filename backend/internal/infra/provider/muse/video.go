@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -20,30 +19,32 @@ type videoCheckpoint struct {
 	Submitting bool   `json:"submitting,omitempty"`
 }
 
+// museVideoRatios are the shapes the agent renders.
+var museVideoRatios = []string{"16:9", "9:16", "1:1", "4:3", "3:4"}
+
 // NormalizeVideoRequest: the agent renders 720p and picks the final length
-// itself; the requested duration and shape go into the prompt.
+// itself; the requested duration and shape go into the prompt. Other values
+// map to the closest it takes: a ratio it lacks, a duration outside 1–15 s,
+// and a first frame plus references beyond 4 images keep the first ones;
+// reference audios are dropped.
 func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
 	if options.Operation != provider.VideoOperationGenerate {
 		return options, nil
 	}
-	options.AspectRatio = cmp.Or(options.AspectRatio, "16:9")
+	options.AspectRatio = cmp.Or(provider.ClosestImageRatio(options.AspectRatio, museVideoRatios), "16:9")
 	options.Resolution = "720p"
-	options.Duration = cmp.Or(options.Duration, 5)
+	options.Duration = min(max(cmp.Or(options.Duration, 5), 1), 15)
+	limit := maxInputImages
+	if options.HasImage {
+		limit--
+	}
+	options.ReferenceImages, options.ReferenceAudios = min(options.ReferenceImages, limit), 0
 	return options, nil
 }
 
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
-	switch {
-	case options.Operation != provider.VideoOperationGenerate:
+	if options.Operation != provider.VideoOperationGenerate {
 		return provider.ErrVideoOperationUnsupported
-	case options.ReferenceAudios > 0:
-		return fmt.Errorf("%w: Muse 视频只支持首帧图片（image）和参考图片（reference_images）", provider.ErrVideoParameterInvalid)
-	case options.ReferenceImages > maxInputImages || options.HasImage && options.ReferenceImages >= maxInputImages:
-		return fmt.Errorf("%w: Muse 视频的首帧和参考图片合计最多 %d 张", provider.ErrVideoParameterInvalid, maxInputImages)
-	case options.Duration < 1 || options.Duration > 15:
-		return fmt.Errorf("%w: duration 必须在 1 到 15 秒之间", provider.ErrVideoParameterInvalid)
-	case !slices.Contains([]string{"16:9", "9:16", "1:1", "4:3", "3:4"}, options.AspectRatio):
-		return fmt.Errorf("%w: aspect_ratio 必须是 16:9、9:16、1:1、4:3 或 3:4", provider.ErrVideoParameterInvalid)
 	}
 	return nil
 }

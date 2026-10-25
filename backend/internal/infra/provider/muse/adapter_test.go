@@ -569,20 +569,22 @@ func TestReadInputOpensStagedReference(t *testing.T) {
 func TestVideoReferenceImages(t *testing.T) {
 	adapter := &Adapter{}
 	base := provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, AspectRatio: "16:9", Duration: 5}
+	// Images beyond four keep the first ones; reference audios are dropped.
 	for _, tc := range []struct {
-		edit func(*provider.VideoRequestOptions)
-		ok   bool
+		edit       func(*provider.VideoRequestOptions)
+		references int
 	}{
-		{func(o *provider.VideoRequestOptions) { o.ReferenceImages = maxInputImages }, true},
-		{func(o *provider.VideoRequestOptions) { o.ReferenceImages = maxInputImages + 1 }, false},
-		{func(o *provider.VideoRequestOptions) { o.HasImage, o.ReferenceImages = true, maxInputImages-1 }, true},
-		{func(o *provider.VideoRequestOptions) { o.HasImage, o.ReferenceImages = true, maxInputImages }, false},
-		{func(o *provider.VideoRequestOptions) { o.ReferenceAudios = 1 }, false},
+		{func(o *provider.VideoRequestOptions) { o.ReferenceImages = maxInputImages }, maxInputImages},
+		{func(o *provider.VideoRequestOptions) { o.ReferenceImages = maxInputImages + 1 }, maxInputImages},
+		{func(o *provider.VideoRequestOptions) { o.HasImage, o.ReferenceImages = true, maxInputImages-1 }, maxInputImages - 1},
+		{func(o *provider.VideoRequestOptions) { o.HasImage, o.ReferenceImages = true, maxInputImages }, maxInputImages - 1},
+		{func(o *provider.VideoRequestOptions) { o.ReferenceAudios = 1 }, 0},
 	} {
 		options := base
 		tc.edit(&options)
-		if err := adapter.ValidateVideoRequest(options); (err == nil) != tc.ok {
-			t.Fatalf("%+v: err = %v", options, err)
+		got, err := adapter.NormalizeVideoRequest(options)
+		if err != nil || got.ReferenceImages != tc.references || got.ReferenceAudios != 0 || adapter.ValidateVideoRequest(got) != nil {
+			t.Fatalf("%+v = %+v, %v", options, got, err)
 		}
 	}
 

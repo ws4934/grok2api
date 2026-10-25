@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
@@ -50,20 +48,18 @@ func (a *Adapter) AccountTier(candidate account.RoutingCandidate) clientkey.Acco
 	return clientkey.AccountTierUnknown
 }
 
-// NormalizeVideoRequest applies the xAI video defaults and ranges.
+// NormalizeVideoRequest applies the xAI video defaults and ranges and keeps
+// the images Build takes: a first frame or up to 8 references.
 func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
-	return provider.NormalizeGrokVideoRequest(options)
+	return provider.NormalizeGrokVideoRequest(provider.FitGrokVideoInputs(options, buildVideoMaxImages))
 }
 
-// ValidateVideoRequest: Build generates videos only, within the Imagine resolution tiers.
+// ValidateVideoRequest: Build generates videos only.
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
 	if options.Operation != provider.VideoOperationGenerate {
 		return provider.ErrVideoOperationUnsupported
 	}
-	if options.HasImage && (options.ReferenceImages > 0 || options.ReferenceAudios > 0) {
-		return fmt.Errorf("%w: image 不能与 reference_images/reference_audios 同时使用", provider.ErrVideoParameterInvalid)
-	}
-	return provider.ValidateGrokVideoResolution(options)
+	return nil
 }
 
 // SchedulingRisk reports accounts whose access token carries an xAI bot flag.

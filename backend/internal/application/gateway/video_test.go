@@ -196,42 +196,42 @@ func TestVideoPricingLeavesUnmeasurableOperationsUnpriced(t *testing.T) {
 }
 
 // 上游对 Console 视频的这两条限制原先只在 provider 层拦截，而生成接口是异步的，
-// 客户端会先拿到 request_id 再从轮询里读到失败任务。入队前校验让错误立刻可见。
-func TestVideoRouteParametersRejectConsoleReferenceLimits(t *testing.T) {
+// 客户端会先拿到 request_id 再从轮询里读到失败任务。现在入队前就对齐到上游收的值。
+func TestVideoRouteParametersFitConsoleReferenceLimits(t *testing.T) {
 	// 实测：8 张 reference_images 上游回 400 "Too many reference images: 8. Maximum allowed is 7."
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 8, Duration: 6}); !errors.Is(err, ErrVideoParameterInvalid) {
-		t.Fatalf("8 references error = %v", err)
+	if got, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 8, Duration: 6}); err != nil || got.ReferenceImages != 7 {
+		t.Fatalf("8 references = %+v, %v", got, err)
 	}
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 7, Duration: 6}); err != nil {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 7, Duration: 6}); err != nil {
 		t.Fatalf("7 references error = %v", err)
 	}
 	// 实测：grok-imagine-video 的 reference-to-video 回 400
 	// "Duration 15s exceeds the maximum allowed for reference-to-video, which is 10s."
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 1, Duration: 15}); !errors.Is(err, ErrVideoParameterInvalid) {
-		t.Fatalf("base model reference duration error = %v", err)
+	if got, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 1, Duration: 15}); err != nil || got.Duration != 10 {
+		t.Fatalf("base model reference duration = %+v, %v", got, err)
 	}
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 1, Duration: 10}); err != nil {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 1, Duration: 10}); err != nil {
 		t.Fatalf("base model 10s reference error = %v", err)
 	}
 	// image-to-video（无 reference_images）与 1.5 都保持 15s。
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", HasImage: true, Duration: 15}); err != nil {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", HasImage: true, Duration: 15}); err != nil {
 		t.Fatalf("base model text/first-frame 15s error = %v", err)
 	}
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 2, Duration: 15}); err != nil {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 2, Duration: 15}); err != nil {
 		t.Fatalf("1.5 multi-reference 15s error = %v", err)
 	}
 	// Build 使用相同的 1.5 上游模型名，但支持通用上限 8；不能因同名套用 Console 的 7 张限制。
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderBuild, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 8, Duration: 15}); err != nil {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderBuild, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 8, Duration: 15}); err != nil {
 		t.Fatalf("Build 1.5 references error = %v", err)
 	}
 	// Web 新协议只有文本生视频抓包证据；不能退回已删除的 media-post 旧链路。
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", Duration: 15}); err != nil {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", Duration: 15}); err != nil {
 		t.Fatalf("Web text video error = %v", err)
 	}
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", HasImage: true, Duration: 6}); !errors.Is(err, ErrVideoOperationUnsupported) {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", HasImage: true, Duration: 6}); !errors.Is(err, ErrVideoOperationUnsupported) {
 		t.Fatalf("Web image video error = %v", err)
 	}
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 1, Duration: 6}); !errors.Is(err, ErrVideoOperationUnsupported) {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 1, Duration: 6}); !errors.Is(err, ErrVideoOperationUnsupported) {
 		t.Fatalf("Web reference video error = %v", err)
 	}
 }
@@ -245,11 +245,13 @@ func TestRoutesForVideoParametersKeepsCompatibleSameNameProviders(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Build keeps all 8 references, so it wins over Console, which would drop one.
 	if len(compatible) != 1 || compatible[0].ID != 2 {
 		t.Fatalf("compatible routes = %#v", compatible)
 	}
-	if _, err := grokPolicyService.routesForVideoParameters(routes[:1], provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 8, Duration: 15}); !errors.Is(err, ErrVideoParameterInvalid) {
-		t.Fatalf("Console-only invalid route error = %v", err)
+	// With Console alone, the request runs with the 7 references Console takes.
+	if compatible, err := grokPolicyService.routesForVideoParameters(routes[:1], provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 8, Duration: 15}); err != nil || len(compatible) != 1 {
+		t.Fatalf("Console-only routes = %#v, %v", compatible, err)
 	}
 }
 
@@ -512,13 +514,10 @@ func TestCreateVideoAppliesRouteConstraintsAfterKeyEligibilityAndBeforeInputIO(t
 		mediaJobs:  jobs, mediaAssets: assets, mediaQueue: make(chan string, 1), mediaQueued: make(map[string]struct{}),
 		logger: slog.Default(),
 	}
-	references := make([]string, provider.ConsoleVideoMaxReferenceImages+1)
-	for index := range references {
-		references[index] = VideoInputFileReference(fmt.Sprintf("unused_%d", index))
-	}
+	// Console takes no reference videos: the only eligible route refuses them.
 	_, err := service.CreateVideo(context.Background(), VideoInput{
 		PublicModel: "shared-video", Prompt: "animate", Duration: 6, Resolution: "720p",
-		ReferenceURLs: references,
+		ReferenceVideoURLs: []string{VideoInputFileReference("unused")},
 		ClientKey: clientkey.Key{
 			ProviderScope: clientkey.ProviderScopeOf(account.ProviderConsole),
 			AllowedModels: []uint64{3},
@@ -533,15 +532,15 @@ func TestCreateVideoAppliesRouteConstraintsAfterKeyEligibilityAndBeforeInputIO(t
 }
 
 func TestVideo1080pValidationUsesResolvedUpstreamModel(t *testing.T) {
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080P", Duration: 6}); err != nil {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080P", Duration: 6}); err != nil {
 		t.Fatalf("1.5 text/image 1080p rejected: %v", err)
 	}
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080p", Duration: 6}); !errors.Is(err, ErrVideoOperationUnsupported) {
-		t.Fatalf("legacy 1080p error = %v", err)
+	// grok-imagine-video and reference-image requests render 1080p as 720p.
+	if got, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080p", Duration: 6}); err != nil || got.Resolution != "720p" {
+		t.Fatalf("legacy 1080p = %+v, %v", got, err)
 	}
-	// 参考图模式的 1080p 先被 xAI 取值规则拦下（与原先接口层的 400 invalid_request 一致）。
-	if err := grokPolicyService.validateVideoRouteParameters(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080p", ReferenceImages: 1, Duration: 6}); !errors.Is(err, ErrVideoParameterInvalid) {
-		t.Fatalf("reference 1080p error = %v", err)
+	if got, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080p", ReferenceImages: 1, Duration: 6}); err != nil || got.Resolution != "720p" {
+		t.Fatalf("reference 1080p = %+v, %v", got, err)
 	}
 }
 
@@ -1494,5 +1493,13 @@ func TestResumedVideoKeepsTheAccountQuotaRecovery(t *testing.T) {
 	}
 	if recovery, err := accountRepo.GetQuotaRecovery(ctx, credential.ID); err != nil || recovery.Status != account.QuotaRecoveryStatusExhausted {
 		t.Fatalf("quota recovery after a resumed video = %#v, err = %v", recovery, err)
+	}
+}
+
+func TestVideoInputsFittedToKeepTheFirstReferences(t *testing.T) {
+	in := videoInputs{imageURL: "f", referenceURLs: []string{"a", "b", "c"}, referenceVideoURLs: []string{"v1", "v2"}, referenceAudios: []string{"eve"}}
+	got := in.fittedTo(provider.VideoRequestOptions{HasImage: true, ReferenceImages: 2, ReferenceVideos: 1})
+	if got.imageURL != "f" || !slices.Equal(got.referenceURLs, []string{"a", "b"}) || !slices.Equal(got.referenceVideoURLs, []string{"v1"}) || len(got.referenceAudios) != 0 {
+		t.Fatalf("fitted = %+v", got)
 	}
 }

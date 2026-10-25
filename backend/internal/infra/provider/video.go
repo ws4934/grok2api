@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"slices"
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -181,21 +180,6 @@ type VideoQuotaModeAdapter interface {
 	VideoQuotaMode(quotaMode, resolution string) string
 }
 
-// ValidateGrokVideoResolution enforces the Grok Imagine resolution tiers: only
-// grok-imagine-video-1.5 renders 1080p, and reference images cap it at 720p.
-func ValidateGrokVideoResolution(options VideoRequestOptions) error {
-	if !strings.EqualFold(strings.TrimSpace(options.Resolution), "1080p") {
-		return nil
-	}
-	if strings.TrimSpace(options.UpstreamModel) != "grok-imagine-video-1.5" {
-		return fmt.Errorf("%w: %s 不支持 1080p", ErrVideoOperationUnsupported, options.UpstreamModel)
-	}
-	if options.ReferenceImages > 0 {
-		return fmt.Errorf("%w: reference_images 模式最高支持 720p", ErrVideoOperationUnsupported)
-	}
-	return nil
-}
-
 type VideoRequest struct {
 	Credential account.Credential
 	// Billing is used only to determine XAI eligibility in Build auto mode; nil means the account tier is unknown.
@@ -313,47 +297,48 @@ func (r *Registry) NormalizeVideoRequest(value account.Provider, options VideoRe
 	return options, r.ValidateVideoRequest(value, options)
 }
 
-// NormalizeGrokVideoRequest fills the xAI defaults and enforces the xAI
-// ranges: generation defaults to 16:9, 720p and 8 s; an edit takes no
-// duration, aspect ratio or resolution; an extension takes no aspect ratio or
-// resolution and runs 2-10 s, 6 s by default.
+// grokVideoRatios are the aspect ratios the Grok video APIs take.
+var grokVideoRatios = []string{"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}
+
+// NormalizeGrokVideoRequest fills the xAI defaults and maps other values onto
+// the xAI ranges instead of refusing them, since clients written for other
+// video APIs send theirs: generation defaults to 16:9, 720p and 8 s and takes
+// the closest ratio and resolution and a 1–15 s duration, where only
+// grok-imagine-video-1.5 without references renders 1080p; an edit takes no
+// duration, aspect ratio or resolution; an extension runs 2–10 s, 6 s by
+// default.
 func NormalizeGrokVideoRequest(options VideoRequestOptions) (VideoRequestOptions, error) {
 	switch options.Operation {
 	case VideoOperationGenerate:
 	case VideoOperationEdit:
-		switch {
-		case options.AspectRatio != "" || options.Resolution != "":
-			return options, fmt.Errorf("%w: 视频编辑不支持 aspect_ratio 或 resolution", ErrVideoParameterInvalid)
-		case options.Duration != 0:
-			return options, fmt.Errorf("%w: 视频编辑不支持 duration", ErrVideoParameterInvalid)
-		}
+		options.AspectRatio, options.Resolution, options.Duration = "", "", 0
 		return options, nil
 	case VideoOperationExtend:
-		options.Duration = cmp.Or(options.Duration, 6)
-		switch {
-		case options.AspectRatio != "" || options.Resolution != "":
-			return options, fmt.Errorf("%w: 视频延长不支持 aspect_ratio 或 resolution", ErrVideoParameterInvalid)
-		case options.Duration < 2 || options.Duration > 10:
-			return options, fmt.Errorf("%w: 视频延长 duration 必须在 2 到 10 秒之间", ErrVideoParameterInvalid)
-		}
+		options.AspectRatio, options.Resolution = "", ""
+		options.Duration = min(max(cmp.Or(options.Duration, 6), 2), 10)
 		return options, nil
 	default:
 		return options, nil
 	}
-	options.AspectRatio = cmp.Or(options.AspectRatio, "16:9")
-	options.Resolution = cmp.Or(strings.ToLower(options.Resolution), "720p")
-	options.Duration = cmp.Or(options.Duration, 8)
-	switch {
-	case options.Duration < 1 || options.Duration > 15:
-		return options, fmt.Errorf("%w: duration 必须在 1 到 15 秒之间", ErrVideoParameterInvalid)
-	case !slices.Contains([]string{"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"}, options.AspectRatio):
-		return options, fmt.Errorf("%w: aspect_ratio 必须是 1:1、16:9、9:16、4:3、3:4、3:2 或 2:3", ErrVideoParameterInvalid)
-	case !slices.Contains([]string{"480p", "720p", "1080p"}, options.Resolution):
-		return options, fmt.Errorf("%w: resolution 必须是 480p、720p 或 1080p", ErrVideoParameterInvalid)
-	case options.Resolution == "1080p" && (options.ReferenceImages > 0 || options.ReferenceAudios > 0):
-		return options, fmt.Errorf("%w: 参考图视频 resolution 最高 720p", ErrVideoParameterInvalid)
+	options.AspectRatio = cmp.Or(ClosestImageRatio(options.AspectRatio, grokVideoRatios), "16:9")
+	options.Duration = min(max(cmp.Or(options.Duration, 8), 1), 15)
+	tiers := []string{"480p", "720p"}
+	if strings.TrimSpace(options.UpstreamModel) == "grok-imagine-video-1.5" && options.ReferenceImages == 0 && options.ReferenceAudios == 0 {
+		tiers = append(tiers, "1080p")
 	}
+	options.Resolution = cmp.Or(ClosestImageTier(options.Resolution, tiers), "720p")
 	return options, nil
+}
+
+// FitGrokVideoInputs keeps the images a Grok video API takes: a first frame
+// cannot go with references, so the requested start wins and the references
+// are dropped, and at most maxReferences references remain.
+func FitGrokVideoInputs(options VideoRequestOptions, maxReferences int) VideoRequestOptions {
+	if options.HasImage {
+		options.ReferenceImages, options.ReferenceAudios = 0, 0
+	}
+	options.ReferenceImages = min(options.ReferenceImages, maxReferences)
+	return options
 }
 
 // VideoQuotaMode refines a video route's quota mode by resolution.

@@ -1,7 +1,9 @@
 package provider_test
 
 import (
+	"cmp"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -154,8 +156,8 @@ func TestProviderDefinitionRejectsInconsistentMediaCapability(t *testing.T) {
 }
 
 // 尾帧与参考视频只交给声明了对应 Media 能力的 Provider；其余渠道在注册表层直接拒绝。
-// 不传的视频参数由各 Provider 补：Grok 三家用 xAI 的 16:9 / 720p / 8 秒并限定取值，Adobe
-// 用模型自己的默认值，传了不支持的就近对齐。
+// 不传的视频参数由各 Provider 补：Grok 三家用 xAI 的 16:9 / 720p / 8 秒，Adobe 用模型
+// 自己的默认值；传了不支持的取值都就近对齐，不拒绝。
 func TestRegistryNormalizesVideoParametersPerProvider(t *testing.T) {
 	registry := provider.NewRegistry(
 		cliprovider.NewAdapter(cliprovider.Config{}, nil),
@@ -168,10 +170,22 @@ func TestRegistryNormalizesVideoParametersPerProvider(t *testing.T) {
 		if got, err := registry.NormalizeVideoRequest(value, grok); err != nil || got.AspectRatio != "16:9" || got.Resolution != "720p" || got.Duration != 8 {
 			t.Fatalf("%s defaults = %+v, %v", value, got, err)
 		}
-		for _, bad := range []provider.VideoRequestOptions{{Duration: 16}, {AspectRatio: "21:9"}, {Resolution: "4k"}, {Resolution: "1080p", ReferenceAudios: 1}} {
-			bad.Operation, bad.UpstreamModel = grok.Operation, grok.UpstreamModel
-			if _, err := registry.NormalizeVideoRequest(value, bad); !errors.Is(err, provider.ErrVideoParameterInvalid) {
-				t.Errorf("%s %+v err = %v", value, bad, err)
+		for _, test := range []struct {
+			in   provider.VideoRequestOptions
+			want string // aspect ratio, resolution and duration
+		}{
+			{provider.VideoRequestOptions{Duration: 16}, "16:9 720p 15"},
+			{provider.VideoRequestOptions{AspectRatio: "21:9"}, "16:9 720p 8"},
+			{provider.VideoRequestOptions{AspectRatio: "1080x1920"}, "9:16 720p 8"},
+			{provider.VideoRequestOptions{Resolution: "4k"}, "16:9 720p 8"},
+			{provider.VideoRequestOptions{Resolution: "360p"}, "16:9 480p 8"},
+			{provider.VideoRequestOptions{UpstreamModel: "grok-imagine-video-1.5", Resolution: "2160p"}, "16:9 1080p 8"},
+			{provider.VideoRequestOptions{UpstreamModel: "grok-imagine-video-1.5", Resolution: "1080p", ReferenceAudios: 1}, "16:9 720p 8"},
+		} {
+			test.in.Operation, test.in.UpstreamModel = grok.Operation, cmp.Or(test.in.UpstreamModel, grok.UpstreamModel)
+			got, err := registry.NormalizeVideoRequest(value, test.in)
+			if err != nil || fmt.Sprintf("%s %s %d", got.AspectRatio, got.Resolution, got.Duration) != test.want {
+				t.Errorf("%s %+v = %+v, %v; want %s", value, test.in, got, err, test.want)
 			}
 		}
 	}
@@ -185,32 +199,28 @@ func TestRegistryNormalizesVideoParametersPerProvider(t *testing.T) {
 	}
 }
 
-// 编辑与延长的取值也归 Provider：xAI 的编辑不收 duration、比例和分辨率；延长不收比例和
-// 分辨率，时长 2 到 10 秒，默认 6 秒。
+// 编辑与延长的取值也归 Provider：xAI 的编辑不收 duration、比例和分辨率，传了也忽略；
+// 延长忽略比例和分辨率，时长对齐到 2 到 10 秒，默认 6 秒。
 func TestNormalizeGrokVideoRequestEditAndExtension(t *testing.T) {
 	edit, extend := provider.VideoOperationEdit, provider.VideoOperationExtend
 	for _, test := range []struct {
 		in   provider.VideoRequestOptions
-		want int // 实际时长；-1 表示拒绝
+		want int // 实际时长
 	}{
 		{provider.VideoRequestOptions{Operation: edit}, 0},
-		{provider.VideoRequestOptions{Operation: edit, Duration: 6}, -1},
-		{provider.VideoRequestOptions{Operation: edit, Resolution: "720p"}, -1},
-		{provider.VideoRequestOptions{Operation: edit, AspectRatio: "16:9"}, -1},
+		{provider.VideoRequestOptions{Operation: edit, Duration: 6}, 0},
+		{provider.VideoRequestOptions{Operation: edit, Resolution: "720p"}, 0},
+		{provider.VideoRequestOptions{Operation: edit, AspectRatio: "16:9"}, 0},
 		{provider.VideoRequestOptions{Operation: extend}, 6},
 		{provider.VideoRequestOptions{Operation: extend, Duration: 2}, 2},
 		{provider.VideoRequestOptions{Operation: extend, Duration: 10}, 10},
-		{provider.VideoRequestOptions{Operation: extend, Duration: 1}, -1},
-		{provider.VideoRequestOptions{Operation: extend, Duration: 11}, -1},
-		{provider.VideoRequestOptions{Operation: extend, AspectRatio: "16:9"}, -1},
-		{provider.VideoRequestOptions{Operation: extend, Resolution: "720p"}, -1},
+		{provider.VideoRequestOptions{Operation: extend, Duration: 1}, 2},
+		{provider.VideoRequestOptions{Operation: extend, Duration: 11}, 10},
+		{provider.VideoRequestOptions{Operation: extend, AspectRatio: "16:9"}, 6},
+		{provider.VideoRequestOptions{Operation: extend, Resolution: "720p"}, 6},
 	} {
 		got, err := provider.NormalizeGrokVideoRequest(test.in)
-		if test.want < 0 {
-			if !errors.Is(err, provider.ErrVideoParameterInvalid) {
-				t.Errorf("%+v err = %v, want rejected", test.in, err)
-			}
-		} else if err != nil || got.Duration != test.want || got.AspectRatio != "" || got.Resolution != "" {
+		if err != nil || got.Duration != test.want || got.AspectRatio != "" || got.Resolution != "" {
 			t.Errorf("%+v = %+v, %v; want %d s", test.in, got, err, test.want)
 		}
 	}
@@ -240,8 +250,8 @@ func TestRegistryRejectsLastFrameForProvidersWithoutSupport(t *testing.T) {
 	}
 }
 
-// A first frame with reference images is the provider's call: xAI takes one or
-// the other, Muse and Kling 3.0 Omni take both.
+// A first frame with reference images is the provider's call: xAI and Veo take
+// one or the other and keep the first frame, Muse and Kling 3.0 Omni take both.
 func TestRegistryLeavesFirstFrameWithReferencesToTheProvider(t *testing.T) {
 	registry := provider.NewRegistry(
 		cliprovider.NewAdapter(cliprovider.Config{}, nil),
@@ -251,19 +261,20 @@ func TestRegistryLeavesFirstFrameWithReferencesToTheProvider(t *testing.T) {
 	)
 	options := provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, HasImage: true, ReferenceImages: 1, Duration: 5, AspectRatio: "16:9", Resolution: "720p"}
 	for _, test := range []struct {
-		value    account.Provider
-		upstream string
-		ok       bool
+		value      account.Provider
+		upstream   string
+		references int
 	}{
-		{account.ProviderBuild, "grok-imagine-video", false},
-		{account.ProviderConsole, "grok-imagine-video", false},
-		{account.ProviderAdobe, "kling/kling_v3_omni", true},
-		{account.ProviderAdobe, "veo/3.1-generate", false},
-		{account.ProviderMuse, "muse-video", true},
+		{account.ProviderBuild, "grok-imagine-video", 0},
+		{account.ProviderConsole, "grok-imagine-video", 0},
+		{account.ProviderAdobe, "kling/kling_v3_omni", 1},
+		{account.ProviderAdobe, "veo/3.1-generate", 0},
+		{account.ProviderMuse, "muse-video", 1},
 	} {
 		options.UpstreamModel = test.upstream
-		if err := registry.ValidateVideoRequest(test.value, options); (err == nil) != test.ok {
-			t.Errorf("%s %s: err = %v, want ok=%v", test.value, test.upstream, err, test.ok)
+		got, err := registry.NormalizeVideoRequest(test.value, options)
+		if err != nil || !got.HasImage || got.ReferenceImages != test.references {
+			t.Errorf("%s %s: %+v, %v; want first frame and %d references", test.value, test.upstream, got, err, test.references)
 		}
 	}
 }

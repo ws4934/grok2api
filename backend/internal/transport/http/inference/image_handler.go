@@ -8,24 +8,22 @@ import (
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
-	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
 
 type imageGenerationRequest struct {
-	Model          string          `json:"model"`
-	Prompt         string          `json:"prompt"`
-	Count          *int            `json:"n"`
-	PartialImages  *int            `json:"partial_images"`
-	Size           string          `json:"size"`
-	AspectRatio    string          `json:"aspect_ratio"`
-	Resolution     string          `json:"resolution"`
-	Quality        string          `json:"quality"`
-	ResponseFormat string          `json:"response_format"`
-	OutputFormat   string          `json:"output_format"`
-	Background     string          `json:"background"`
-	StorageOptions json.RawMessage `json:"storage_options"`
-	Stream         bool            `json:"stream"`
+	Model          string `json:"model"`
+	Prompt         string `json:"prompt"`
+	Count          *int   `json:"n"`
+	PartialImages  *int   `json:"partial_images"`
+	Size           string `json:"size"`
+	AspectRatio    string `json:"aspect_ratio"`
+	Resolution     string `json:"resolution"`
+	Quality        string `json:"quality"`
+	ResponseFormat string `json:"response_format"`
+	OutputFormat   string `json:"output_format"`
+	Background     string `json:"background"`
+	Stream         bool   `json:"stream"`
 }
 
 // imageEditJSONRequest is also filled from multipart fields; image, images,
@@ -45,7 +43,6 @@ type imageEditJSONRequest struct {
 	ResponseFormat string          `json:"response_format"`
 	OutputFormat   string          `json:"output_format"`
 	Background     string          `json:"background"`
-	StorageOptions json.RawMessage `json:"storage_options"`
 	Stream         bool            `json:"stream"`
 	PartialImages  *int            `json:"partial_images"`
 }
@@ -66,34 +63,7 @@ func (h *Handler) generateImage(c *gin.Context) {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "图片请求缺少有效 model 或 prompt")
 		return
 	}
-	if value := bytes.TrimSpace(request.StorageOptions); len(value) > 0 && !bytes.Equal(value, []byte("null")) {
-		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 storage_options")
-		return
-	}
-	count := 1
-	if request.Count != nil {
-		if *request.Count < 1 || *request.Count > 10 {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "n 必须在 1 到 10 之间")
-			return
-		}
-		count = *request.Count
-	}
-	if request.Stream && count != 1 {
-		writeImageGenerationUserError(c, "unsupported_parameter", "input", "Streaming is only supported with n=1.")
-		return
-	}
-	partialImages := 0
-	if request.PartialImages != nil {
-		if *request.PartialImages < 0 || *request.PartialImages > 3 {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "partial_images 必须在 0 到 3 之间")
-			return
-		}
-		partialImages = *request.PartialImages
-		if partialImages > 0 && !request.Stream {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "partial_images 仅可在 stream=true 时使用")
-			return
-		}
-	}
+	count, partialImages := imageCounts(request.Count, request.PartialImages, request.Stream)
 	clientKey, requestID, ok := requestIdentity(c)
 	if !ok {
 		return
@@ -119,44 +89,19 @@ func (h *Handler) editImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if value := bytes.TrimSpace(request.StorageOptions); len(value) > 0 && !bytes.Equal(value, []byte("null")) {
-		writeOpenAIError(c, http.StatusBadRequest, "unsupported_parameter", "当前兼容层暂不支持 storage_options")
-		return
-	}
 	model := strings.TrimSpace(request.Model)
 	prompt := strings.TrimSpace(request.Prompt)
-	count := 1
-	if request.Count != nil {
-		count = *request.Count
-	}
-	if len(imageURLs) == 0 || len(imageURLs) > 8 {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "image 或 images 数量必须在 1 到 8 之间")
+	if len(imageURLs) == 0 {
+		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "图片编辑需要至少一张 image")
 		return
 	}
-	if len(maskURLs) > 1 {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "mask 最多只能提供一张")
-		return
-	}
+	// Images beyond the 8 an edit takes, and masks after the first, are dropped.
+	imageURLs, maskURLs = imageURLs[:min(len(imageURLs), maxEditImages)], maskURLs[:min(len(maskURLs), 1)]
 	if model == "" || prompt == "" {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "图片编辑缺少有效 model 或 prompt")
 		return
 	}
-	if count < 1 || count > 10 {
-		writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "n 必须在 1 到 10 之间")
-		return
-	}
-	partialImages := 0
-	if request.PartialImages != nil {
-		if *request.PartialImages < 0 || *request.PartialImages > 3 {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "partial_images 必须在 0 到 3 之间")
-			return
-		}
-		partialImages = *request.PartialImages
-		if partialImages > 0 && !request.Stream {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_parameter", "partial_images 仅可在 stream=true 时使用")
-			return
-		}
-	}
+	count, partialImages := imageCounts(request.Count, request.PartialImages, request.Stream)
 	maskURL := ""
 	if len(maskURLs) == 1 {
 		maskURL = maskURLs[0]
@@ -181,13 +126,26 @@ func (h *Handler) editImage(c *gin.Context) {
 	h.writeResult(c, result, request.Stream, streamProtocolImage)
 }
 
+// maxEditImages is the most source images an edit takes.
+const maxEditImages = 8
+
+// imageCounts maps n and partial_images into the ranges the routes take
+// instead of refusing them: n to 1–10 (1 when streaming), partial images to
+// 0–3 and only when streaming.
+func imageCounts(n, partial *int, streaming bool) (int, int) {
+	count, partialImages := 1, 0
+	if n != nil {
+		count = min(max(*n, 1), 10)
+	}
+	if streaming {
+		count = 1
+		if partial != nil {
+			partialImages = min(max(*partial, 0), 3)
+		}
+	}
+	return count, partialImages
+}
+
 // normalizeImageOption trims and lowercases an enum-like image parameter;
 // providers validate the values.
 func normalizeImageOption(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
-
-func writeImageGenerationUserError(c *gin.Context, code, param, message string) {
-	middleware.NoteError(c, code, message)
-	c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{
-		"message": message, "type": "image_generation_user_error", "param": param, "code": code,
-	}})
-}

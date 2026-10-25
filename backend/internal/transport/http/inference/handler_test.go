@@ -57,29 +57,29 @@ func TestVideoGenerationUsesOfficialXAIEndpointsAndFields(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "unsupported seconds", body: `{"model":"grok-imagine-video","prompt":"test","seconds":8}`},
-		{name: "unsupported nested image url", body: `{"model":"grok-imagine-video","image":{"image_url":"https://example.com/input.png"}}`},
-		{name: "unsupported size", body: `{"model":"grok-imagine-video","prompt":"test","size":"16:9"}`},
-		{name: "unsupported quality", body: `{"model":"grok-imagine-video","prompt":"test","quality":"720p"}`},
-		{name: "unsupported input reference", body: `{"model":"grok-imagine-video","input_reference":"https://example.com/input.png"}`},
+		// Other video APIs' fields and values are mapped or ignored, never refused.
+		{name: "seconds", body: `{"model":"grok-imagine-video","prompt":"test","seconds":8}`},
+		{name: "nested image url", body: `{"model":"grok-imagine-video","image":{"image_url":"https://example.com/input.png"}}`},
+		{name: "size", body: `{"model":"grok-imagine-video","prompt":"test","size":"16:9"}`},
+		{name: "quality", body: `{"model":"grok-imagine-video","prompt":"test","quality":"720p"}`},
+		{name: "input reference", body: `{"model":"grok-imagine-video","input_reference":"https://example.com/input.png"}`},
+		{name: "zero duration", body: `{"model":"grok-imagine-video","prompt":"test","duration":0}`},
+		{name: "unknown fields", body: `{"model":"grok-imagine-video","prompt":"test","seed":7,"watermark":false,"output":{"upload_url":"https://example.com/u"}}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(test.body))
 			request.Header.Set("Content-Type", "application/json")
 			recorder := httptest.NewRecorder()
 			router.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "unknown field") {
-				t.Fatalf("unsupported field status=%d body=%s", recorder.Code, recorder.Body.String())
+			// The fixture has no client key: passing validation answers 401.
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 			}
 		})
 	}
-
-	invalidDuration := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{"model":"grok-imagine-video","prompt":"test","duration":0}`))
-	invalidDuration.Header.Set("Content-Type", "application/json")
-	invalidRecorder := httptest.NewRecorder()
-	router.ServeHTTP(invalidRecorder, invalidDuration)
-	if invalidRecorder.Code != http.StatusBadRequest || !strings.Contains(invalidRecorder.Body.String(), "正整数") {
-		t.Fatalf("invalid duration status=%d body=%s", invalidRecorder.Code, invalidRecorder.Body.String())
+	adapted := videoGenerationRequest{Seconds: json.RawMessage(`8`), Size: "1280x720", InputReference: &videoGenerationImage{URL: "https://example.com/a.png"}}.adapted()
+	if string(adapted.Duration) != "8" || adapted.AspectRatio != "1280x720" || adapted.Resolution != "720p" || adapted.Image == nil || adapted.Image.URL != "https://example.com/a.png" {
+		t.Fatalf("adapted = %+v", adapted)
 	}
 
 	valid := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{
@@ -613,22 +613,26 @@ func TestVideoDurationUsesOfficialFieldOnly(t *testing.T) {
 	}
 }
 
-// 接口层只查写法；21:9、4k、30 秒是否支持由路由的 Provider 决定。
-func TestVideoParametersCheckFormatOnly(t *testing.T) {
-	for value, want := range map[string]bool{"21:9": true, "auto": true, "AUTO": true, "16x9": false, "0:1": false, "16:": false} {
-		if validVideoAspectRatio(value) != want {
-			t.Errorf("validVideoAspectRatio(%q) = %v", value, !want)
-		}
-	}
-	for value, want := range map[string]bool{"4k": true, "1080p": true, "360p": true, "720": false, "p": false, "0p": false} {
-		if validVideoResolution(value) != want {
-			t.Errorf("validVideoResolution(%q) = %v", value, !want)
-		}
-	}
+// 接口层不拒绝写法：认不出的值按没传处理，21:9、4k、30 秒由路由的 Provider 对齐。
+func TestVideoParametersAreNeverRefusedForTheirFormat(t *testing.T) {
 	if value, err := parseVideoDuration(json.RawMessage(`30`)); err != nil || value != 30 {
 		t.Fatalf("duration=%d err=%v", value, err)
 	}
+	counts := []struct {
+		n, partial *int
+		stream     bool
+		count, p   int
+	}{
+		{n: ptr(100), count: 10}, {n: ptr(0), count: 1}, {n: ptr(4), stream: true, partial: ptr(9), count: 1, p: 3}, {partial: ptr(2), count: 1},
+	}
+	for _, c := range counts {
+		if count, partial := imageCounts(c.n, c.partial, c.stream); count != c.count || partial != c.p {
+			t.Errorf("imageCounts(%v, %v, %v) = %d, %d", c.n, c.partial, c.stream, count, partial)
+		}
+	}
 }
+
+func ptr(value int) *int { return &value }
 
 func TestVideoGenerationResponseMatchesOfficialPollingShape(t *testing.T) {
 	now := time.Now().UTC()
@@ -653,29 +657,43 @@ func TestVideoGenerationResponseMatchesOfficialPollingShape(t *testing.T) {
 	}
 }
 
-func TestImageGenerationEndpointValidatesXAIContractBeforeRouting(t *testing.T) {
+func TestImageGenerationEndpointMapsCountsInsteadOfRefusing(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	NewHandler(nil, nil, 1<<20).Register(router.Group("/v1"))
 
-	for _, test := range []struct {
-		name string
-		body string
-		want string
-	}{
-		{name: "zero n", body: `{"model":"grok-imagine-image","prompt":"test","n":0}`, want: "n 必须在 1 到 10 之间"},
-		{name: "large n", body: `{"model":"grok-imagine-image","prompt":"test","n":11}`, want: "n 必须在 1 到 10 之间"},
-		{name: "storage options", body: `{"model":"grok-imagine-image","prompt":"test","storage_options":{"filename":"test.jpg"}}`, want: "不支持 storage_options"},
+	for _, body := range []string{
+		`{"model":"grok-imagine-image","prompt":"test","n":0}`,
+		`{"model":"grok-imagine-image","prompt":"test","n":100}`,
+		`{"model":"grok-imagine-image","prompt":"test","storage_options":{"filename":"test.jpg"}}`,
+		`{"model":"grok-imagine-image","prompt":"test","n":2,"stream":true,"partial_images":9}`,
+		`{"model":"grok-imagine-image","prompt":"test","partial_images":-1}`,
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(test.body))
-			request.Header.Set("Content-Type", "application/json")
-			recorder := httptest.NewRecorder()
-			router.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), test.want) {
-				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-			}
-		})
+		request := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		// The fixture has no client key: passing validation answers 401.
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: status=%d body=%s", body, recorder.Code, recorder.Body.String())
+		}
+	}
+	for _, test := range []struct {
+		n, partial         *int
+		stream             bool
+		wantN, wantPartial int
+	}{
+		{wantN: 1},
+		{n: ptr(0), wantN: 1},
+		{n: ptr(100), wantN: 10},
+		{n: ptr(4), wantN: 4},
+		{n: ptr(4), partial: ptr(2), wantN: 4},
+		{n: ptr(4), partial: ptr(9), stream: true, wantN: 1, wantPartial: 3},
+		{partial: ptr(-1), stream: true, wantN: 1},
+	} {
+		if n, partial := imageCounts(test.n, test.partial, test.stream); n != test.wantN || partial != test.wantPartial {
+			t.Fatalf("imageCounts(%+v) = %d, %d", test, n, partial)
+		}
 	}
 
 	recorder := httptest.NewRecorder()
@@ -696,7 +714,7 @@ func TestImageEditAcceptsOfficialJSONShape(t *testing.T) {
 	missingImage.Header.Set("Content-Type", "application/json")
 	missingRecorder := httptest.NewRecorder()
 	router.ServeHTTP(missingRecorder, missingImage)
-	if missingRecorder.Code != http.StatusBadRequest || !strings.Contains(missingRecorder.Body.String(), "image 或 images") {
+	if missingRecorder.Code != http.StatusBadRequest || !strings.Contains(missingRecorder.Body.String(), "至少一张 image") {
 		t.Fatalf("missing image status=%d body=%s", missingRecorder.Code, missingRecorder.Body.String())
 	}
 
@@ -723,34 +741,20 @@ func TestImageEditAcceptsOfficialJSONShape(t *testing.T) {
 		t.Fatalf("valid batch count status=%d body=%s", validBatchRecorder.Code, validBatchRecorder.Body.String())
 	}
 
-	invalidCount := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(`{
-		"model":"grok-imagine-image-quality","prompt":"test","n":11,
-		"image":{"url":"https://example.com/input.png"}
-	}`))
-	invalidCount.Header.Set("Content-Type", "application/json")
-	invalidCountRecorder := httptest.NewRecorder()
-	router.ServeHTTP(invalidCountRecorder, invalidCount)
-	if invalidCountRecorder.Code != http.StatusBadRequest || !strings.Contains(invalidCountRecorder.Body.String(), "n 必须在 1 到 10 之间") {
-		t.Fatalf("invalid count status=%d body=%s", invalidCountRecorder.Code, invalidCountRecorder.Body.String())
-	}
-
-	for _, test := range []struct {
-		name string
-		body string
-	}{
-		{name: "negative partial images", body: `{"model":"grok-imagine-image-edit","prompt":"test","stream":true,"partial_images":-1,"image":{"url":"https://example.com/input.png"}}`},
-		{name: "too many partial images", body: `{"model":"grok-imagine-image-edit","prompt":"test","stream":true,"partial_images":4,"image":{"url":"https://example.com/input.png"}}`},
-		{name: "partial images require stream", body: `{"model":"grok-imagine-image-edit","prompt":"test","partial_images":1,"image":{"url":"https://example.com/input.png"}}`},
+	// Counts and partial images out of range are mapped, not refused.
+	for _, body := range []string{
+		`{"model":"grok-imagine-image-quality","prompt":"test","n":11,"image":{"url":"https://example.com/input.png"}}`,
+		`{"model":"grok-imagine-image-edit","prompt":"test","stream":true,"partial_images":-1,"image":{"url":"https://example.com/input.png"}}`,
+		`{"model":"grok-imagine-image-edit","prompt":"test","stream":true,"partial_images":4,"image":{"url":"https://example.com/input.png"}}`,
+		`{"model":"grok-imagine-image-edit","prompt":"test","partial_images":1,"image":{"url":"https://example.com/input.png"}}`,
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(test.body))
-			request.Header.Set("Content-Type", "application/json")
-			recorder := httptest.NewRecorder()
-			router.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusBadRequest {
-				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-			}
-		})
+		request := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: status=%d body=%s", body, recorder.Code, recorder.Body.String())
+		}
 	}
 
 	malformedMultipart := httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader("ignored"))
@@ -767,59 +771,6 @@ func TestImageEditAcceptsOfficialJSONShape(t *testing.T) {
 	router.ServeHTTP(plainTextRecorder, plainText)
 	if plainTextRecorder.Code != http.StatusUnsupportedMediaType || !strings.Contains(plainTextRecorder.Body.String(), "multipart/form-data") {
 		t.Fatalf("plain text status=%d body=%s", plainTextRecorder.Code, plainTextRecorder.Body.String())
-	}
-}
-
-func TestImageGenerationValidatesOpenAIPartialImages(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	NewHandler(nil, nil, 1<<20).Register(router.Group("/v1"))
-
-	for _, test := range []struct {
-		name string
-		body string
-	}{
-		{name: "negative", body: `{"model":"grok-imagine-image-quality","prompt":"cat","stream":true,"partial_images":-1}`},
-		{name: "too many", body: `{"model":"grok-imagine-image-quality","prompt":"cat","stream":true,"partial_images":4}`},
-		{name: "requires stream", body: `{"model":"grok-imagine-image-quality","prompt":"cat","partial_images":1}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(test.body))
-			request.Header.Set("Content-Type", "application/json")
-			recorder := httptest.NewRecorder()
-			router.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "partial_images") {
-				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
-			}
-		})
-	}
-
-	invalidStreamingCount := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{
-		"model":"grok-imagine-image-quality","prompt":"cat","n":2,"stream":true
-	}`))
-	invalidStreamingCount.Header.Set("Content-Type", "application/json")
-	invalidStreamingCountRecorder := httptest.NewRecorder()
-	router.ServeHTTP(invalidStreamingCountRecorder, invalidStreamingCount)
-	if invalidStreamingCountRecorder.Code != http.StatusBadRequest {
-		t.Fatalf("stream n status=%d body=%s", invalidStreamingCountRecorder.Code, invalidStreamingCountRecorder.Body.String())
-	}
-	var payload map[string]any
-	if json.Unmarshal(invalidStreamingCountRecorder.Body.Bytes(), &payload) != nil {
-		t.Fatalf("stream n body=%s", invalidStreamingCountRecorder.Body.String())
-	}
-	errorValue, _ := payload["error"].(map[string]any)
-	if errorValue["message"] != "Streaming is only supported with n=1." || errorValue["type"] != "image_generation_user_error" || errorValue["param"] != "input" || errorValue["code"] != "unsupported_parameter" {
-		t.Fatalf("stream n error=%#v", errorValue)
-	}
-
-	valid := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{
-		"model":"grok-imagine-image-quality","prompt":"cat","n":1,"stream":true,"partial_images":1
-	}`))
-	valid.Header.Set("Content-Type", "application/json")
-	validRecorder := httptest.NewRecorder()
-	router.ServeHTTP(validRecorder, valid)
-	if validRecorder.Code != http.StatusUnauthorized {
-		t.Fatalf("valid status=%d body=%s", validRecorder.Code, validRecorder.Body.String())
 	}
 }
 
@@ -1919,7 +1870,8 @@ func TestReferenceToVideoRequestValidation(t *testing.T) {
 	tooManyAudio.Header.Set("Content-Type", "application/json")
 	tooManyAudioRec := httptest.NewRecorder()
 	router.ServeHTTP(tooManyAudioRec, tooManyAudio)
-	if tooManyAudioRec.Code != http.StatusBadRequest || !strings.Contains(tooManyAudioRec.Body.String(), "最多 3") {
+	// Voices beyond three are dropped, not refused.
+	if tooManyAudioRec.Code != http.StatusUnauthorized {
 		t.Fatalf("too many audios status=%d body=%s", tooManyAudioRec.Code, tooManyAudioRec.Body.String())
 	}
 
@@ -1961,14 +1913,14 @@ func TestEditAndExtendVideoRequestValidation(t *testing.T) {
 		t.Fatalf("extend missing video status = %d body = %s", rec.Code, rec.Body.String())
 	}
 
-	// 接口层只查写法：写法不对回 400；写法合法的取值交给路由的 Provider，这里进入鉴权
-	// （测试里没有 client key → 401）。xAI 的延长时长与编辑参数规则在 provider.NormalizeGrokVideoRequest。
+	// 时长、比例、分辨率不论写法都不拒绝：认不出的按没传处理，取值交给路由的 Provider
+	// 对齐，这里进入鉴权（测试里没有 client key → 401）。
 	for _, test := range []struct {
 		path, body string
 		status     int
 	}{
-		{"/v1/videos/extensions", `{"model":"grok-imagine-video","prompt":"x","duration":"abc","video":{"url":"https://example.com/a.mp4"}}`, http.StatusBadRequest},
-		{"/v1/videos/edits", `{"model":"grok-imagine-video","prompt":"x","resolution":"720","video":{"url":"https://example.com/a.mp4"}}`, http.StatusBadRequest},
+		{"/v1/videos/extensions", `{"model":"grok-imagine-video","prompt":"x","duration":"abc","video":{"url":"https://example.com/a.mp4"}}`, http.StatusUnauthorized},
+		{"/v1/videos/edits", `{"model":"grok-imagine-video","prompt":"x","resolution":"720","video":{"url":"https://example.com/a.mp4"}}`, http.StatusUnauthorized},
 		{"/v1/videos/extensions", `{"model":"grok-imagine-video","prompt":"x","duration":15,"video":{"url":"https://example.com/a.mp4"}}`, http.StatusUnauthorized},
 		{"/v1/videos/edits", `{"model":"grok-imagine-video","prompt":"x","duration":5,"aspect_ratio":"16:9","resolution":"1080p","video":{"url":"https://example.com/a.mp4"}}`, http.StatusUnauthorized},
 	} {
@@ -2022,7 +1974,7 @@ func TestReferenceVideoRequestValidation(t *testing.T) {
 		t.Fatalf("reference video without prompt status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	many := strings.Repeat(`{"url":"https://example.com/a.mp4"},`, mediadomain.MaxReferenceVideos) + `{"url":"https://example.com/a.mp4"}`
-	if rec := post("/v1/videos/generations", `{"model":"adobe/seedance-2.0","prompt":"x","reference_videos":[`+many+`]}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "reference_videos") {
+	if rec := post("/v1/videos/generations", `{"model":"adobe/seedance-2.0","prompt":"x","reference_videos":[`+many+`]}`); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("too many reference videos status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if rec := post("/v1/videos/edits", `{"model":"grok-imagine-video","prompt":"x","video":{"url":"https://example.com/v.mp4"},"reference_videos":[{"url":"https://example.com/a.mp4"}]}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "reference_videos") {

@@ -60,15 +60,16 @@ type imageResponseInput struct {
 	Tool   imageGenerationTool
 }
 
-func strictJSON(raw []byte, value any) error {
-	return decodeSingleJSON(bytes.NewReader(raw), value, true)
-}
-
-// decodeImageResponse validates the request strictly: unsupported options are
-// rejected instead of being silently dropped.
-func decodeImageResponse(data []byte) (imageResponseRequest, imageResponseInput, error) {
+// decodeImageResponse reads an image request. Strict, it refuses options the
+// image job does not use, which tells a plain image request from a
+// conversation that merely offers the tool; otherwise those options (other
+// Responses fields, output_compression, moderation…) are ignored.
+func decodeImageResponse(data []byte, strict bool) (imageResponseRequest, imageResponseInput, error) {
 	var r imageResponseRequest
 	var out imageResponseInput
+	strictJSON := func(raw []byte, value any) error {
+		return decodeSingleJSON(bytes.NewReader(raw), value, strict)
+	}
 	if err := strictJSON(data, &r); err != nil {
 		return r, out, fmt.Errorf("unsupported or invalid parameter: %v", err)
 	}
@@ -79,10 +80,10 @@ func decodeImageResponse(data []byte) (imageResponseRequest, imageResponseInput,
 		return r, out, errors.New("exactly one image_generation tool with supported options is required")
 	}
 	t := out.Tool
-	if t.PartialImages != nil && (*t.PartialImages < 0 || *t.PartialImages > 3) {
+	if strict && t.PartialImages != nil && (*t.PartialImages < 0 || *t.PartialImages > 3) {
 		return r, out, errors.New("partial_images must be 0-3")
 	}
-	if t.Moderation != "" && t.Moderation != "auto" {
+	if strict && t.Moderation != "" && t.Moderation != "auto" {
 		return r, out, errors.New("only moderation=auto is supported")
 	}
 	if len(r.ToolChoice) > 0 && string(r.ToolChoice) != "null" {
@@ -137,7 +138,7 @@ func decodeImageResponse(data []byte) (imageResponseRequest, imageResponseInput,
 			switch {
 			case p.Type == "input_text":
 				texts = append(texts, p.Text)
-			case p.Type == "input_image" && p.ImageURL != "" && (p.Detail == "" || p.Detail == "auto"):
+			case p.Type == "input_image" && p.ImageURL != "" && (!strict || p.Detail == "" || p.Detail == "auto"):
 				out.Images = append(out.Images, p.ImageURL)
 			default:
 				return r, out, errors.New("unsupported content part; use input_text or input_image with image_url")
@@ -191,13 +192,14 @@ func (h *Handler) handleImageResponse(c *gin.Context, body []byte, key clientkey
 	if model == "" {
 		return false
 	}
-	request, in, err := decodeImageResponse(body)
-	// A text model that merely offers the tool (next to other tools, in a
-	// conversation, with store=false...) stays on the conversation path. An
-	// image model or a forced image tool takes the image path, whose strict
-	// validation then answers 400.
-	if !h.gateway.IsImageJobModel(ctx, topModel) && !forcesImageTool(head.ToolChoice, len(head.Tools)) &&
-		(err != nil || (request.Store != nil && !*request.Store)) {
+	// An image model or a forced image tool takes the image path, which ignores
+	// options the job does not use. A text model that merely offers the tool
+	// (next to other tools, in a conversation, with store=false...) stays on
+	// the conversation path: only a request with nothing but image options
+	// passes the strict decode.
+	imagePath := h.gateway.IsImageJobModel(ctx, topModel) || forcesImageTool(head.ToolChoice, len(head.Tools))
+	request, in, err := decodeImageResponse(body, !imagePath)
+	if !imagePath && (err != nil || (request.Store != nil && !*request.Store)) {
 		return false
 	}
 	if err != nil {

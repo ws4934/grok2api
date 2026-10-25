@@ -67,3 +67,21 @@ func ImageTierPixels(value string) int {
 	}
 	return int(math.Round(number * scale))
 }
+
+// ClosestImageTier returns the tier nearest to the requested one ("4K" for a
+// model that stops at 2K gives 2K; "2160p" among 480p–1080p gives 1080p), or
+// "" when the request is no tier.
+func ClosestImageTier(requested string, tiers []string) string {
+	want := ImageTierPixels(requested)
+	best, bestDiff := "", math.Inf(1)
+	for _, tier := range tiers {
+		have := ImageTierPixels(tier)
+		if want == 0 || have == 0 {
+			continue
+		}
+		if diff := math.Abs(math.Log(float64(want) / float64(have))); diff < bestDiff {
+			best, bestDiff = tier, diff
+		}
+	}
+	return best
+}

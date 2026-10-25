@@ -27,8 +27,6 @@ func (a *Adapter) ValidateImageRequest(options provider.ImageRequestOptions) err
 		return badRequest("response_format 只支持 url 或 b64_json")
 	case options.Edit && options.InputImages == 0:
 		return badRequest("图片编辑需要输入图片")
-	case options.InputImages > maxInputImages:
-		return badRequest(fmt.Sprintf("最多 %d 张输入图片", maxInputImages))
 	}
 	return nil
 }
@@ -39,8 +37,10 @@ func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGener
 }
 
 func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditRequest) (*provider.Response, error) {
-	inputs := make([]attachment, 0, len(request.ImageURLs))
-	for _, ref := range request.ImageURLs {
+	// Images beyond the four one prompt carries are dropped, the first ones kept.
+	refs := request.ImageURLs[:min(len(request.ImageURLs), maxInputImages)]
+	inputs := make([]attachment, 0, len(refs))
+	for _, ref := range refs {
 		input, err := a.readInput(ctx, ref)
 		if err != nil {
 			return failureResponse("", err)

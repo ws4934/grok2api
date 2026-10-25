@@ -247,8 +247,6 @@ func TestResponsesImageToolRoutingAndValidation(t *testing.T) {
 		"unknown stored response stays on the stored path": {"GET", "/v1/responses/resp_legacy", "", 404, "response_not_found"},
 		"unknown image response":                           {"GET", "/v1/responses/" + gateway.ImageJobIDPrefix + "missing", "", 404, "response_not_found"},
 		"non-image model keeps the conversation path":      {"POST", "/v1/responses", `{"model":"grok-4","input":"x","tools":[{"type":"image_generation"}]}`, 404, "model_not_found"},
-		"unsupported tool option":                          {"POST", "/v1/responses", `{"model":"gpt-image-2","input":"x","tools":[{"type":"image_generation","output_compression":50}]}`, 400, "unsupported_parameter"},
-		"unsupported top-level parameter":                  {"POST", "/v1/responses", `{"model":"gpt-image-2","input":"x","metadata":{},"tools":[{"type":"image_generation"}]}`, 400, "unsupported_parameter"},
 		"background streaming is rejected":                 {"POST", "/v1/responses", `{"model":"gpt-image-2","input":"x","stream":true,"background":true,"tools":[{"type":"image_generation"}]}`, 400, "unsupported_parameter"},
 		"provider rejects the options":                     {"POST", "/v1/responses", `{"model":"gpt-image-2","input":"x","tools":[{"type":"image_generation","input_image_mask":{"image_url":"https://example.com/m.png"}}]}`, 400, "invalid_parameter"},
 		"cancel of a stored response":                      {"POST", "/v1/responses/resp_legacy/cancel", "", 404, "response_not_found"},
@@ -257,6 +255,15 @@ func TestResponsesImageToolRoutingAndValidation(t *testing.T) {
 		problem, _ := body["error"].(map[string]any)
 		if code != tc.code || problem["code"] != tc.errorCode {
 			t.Errorf("%s: got %d %v", name, code, body)
+		}
+	}
+	// On the image path, options the job does not use are ignored.
+	for _, body := range []string{
+		`{"model":"gpt-image-2","input":"x","background":true,"tools":[{"type":"image_generation","output_compression":50,"input_fidelity":"high","moderation":"low","partial_images":9}]}`,
+		`{"model":"gpt-image-2","input":[{"role":"user","content":[{"type":"input_text","text":"x"}]}],"background":true,"metadata":{},"temperature":1,"tools":[{"type":"image_generation"}]}`,
+	} {
+		if code, response := f.call(t, "POST", "/v1/responses", body); code != 200 || response["status"] != "queued" {
+			t.Errorf("%s: got %d %v", body, code, response)
 		}
 	}
 }
