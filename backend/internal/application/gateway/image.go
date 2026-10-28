@@ -271,6 +271,7 @@ func (s *Service) executeImage(
 	var response *provider.Response
 	var lastCredentialFailure *accountdomain.Credential
 	var lastCredentialError error
+	var lastUpstreamFailure *UpstreamFailure
 	for attempt := 0; attemptPolicy.allows(attempt); attempt++ {
 		// A skipped attempt must not leave its error or response to the next one.
 		err, response = nil, nil
@@ -283,6 +284,10 @@ func (s *Service) executeImage(
 		if err != nil {
 			if extra && attempt == 0 {
 				return nil, errImageAccountsBusy
+			}
+			if lastUpstreamFailure != nil && lastCredentialError == nil {
+				writeFailureAudit(lastUpstreamFailure.HTTPStatus, lastUpstreamFailure.Code, lastCredentialFailure)
+				return nil, lastUpstreamFailure
 			}
 			errorCode := "upstream_unavailable"
 			var selectionFailure *SelectionUnavailableError
@@ -325,15 +330,27 @@ func (s *Service) executeImage(
 				lease.Release()
 				continue
 			}
-			if !provider.IsMediaPostProcessingError(err) {
-				s.selector.MarkFailure(ctx, credential, 0, 0)
+			failure := ProviderUpstreamFailure(err, credential.ID, credential.Name)
+			if !provider.IsMediaPostProcessingError(err) && !provider.IsRequestScopedError(err) && (failure == nil || (!failure.SafetyRejection && !failure.RequestScopedForbidden)) {
+				if failure != nil && failure.HTTPStatus == http.StatusTooManyRequests && s.providers.Failure(credential.Provider).SoftRateLimit {
+					// A typed error may follow an accepted generation or a result
+					// fetch: cool down and refresh quota, but never replay it.
+					s.applyRateLimitReconciliation(ctx, credential, failure.HTTPStatus, failure.RetryAfter, accountapp.RateLimitReconcileInconclusive, nil)
+					s.accounts.QueueQuotaRefresh(credential.ID, lease.QuotaMode)
+				} else {
+					s.selector.MarkFailure(ctx, credential, 0, 0)
+				}
 			}
 			lease.Release()
 			errorCode := "upstream_unavailable"
 			if provider.IsMediaPostProcessingError(err) {
 				errorCode = "media_postprocessing_failed"
 			}
-			writeFailureAudit(http.StatusBadGateway, errorCode, &credential)
+			status := http.StatusBadGateway
+			if failure != nil && !provider.IsMediaPostProcessingError(err) {
+				status, errorCode, err = failure.HTTPStatus, failure.Code, failure
+			}
+			writeFailureAudit(status, errorCode, &credential)
 			return nil, err
 		}
 		if response.StatusCode == http.StatusUnauthorized && credential.AuthType == accountdomain.AuthTypeSSO {
@@ -391,12 +408,15 @@ func (s *Service) executeImage(
 		}
 		if quotaKind, _ := s.providers.QuotaKind(credential.Provider); quotaKind == provider.QuotaRemoteWindow && response.StatusCode == http.StatusTooManyRequests && lease.QuotaMode != "" {
 			retryAfter := parseRetryAfter(response.Header.Get("Retry-After"), time.Now().UTC())
-			exhausted, reconcileErr := s.accounts.ReconcileWebRateLimit(ctx, credential.ID, lease.QuotaMode, retryAfter)
-			if reconcileErr != nil || !exhausted {
-				s.selector.MarkFailure(ctx, credential, response.StatusCode, retryAfter)
-			}
+			state, reconcileErr := s.accounts.ReconcileRateLimit(ctx, credential.ID, lease.QuotaMode, retryAfter)
+			s.applyRateLimitReconciliation(ctx, credential, response.StatusCode, retryAfter, state, reconcileErr)
 			if attemptPolicy.hasNext(attempt) {
-				_, _ = readRetryableBody(response.Body)
+				body, _ := readRetryableBody(response.Body)
+				lastUpstreamFailure = newHTTPUpstreamFailure(response.StatusCode, body, credential.ID, credential.Name)
+				lastUpstreamFailure.RetryAfter = retryAfter
+				failedCredential := credential
+				lastCredentialFailure, lastCredentialError = &failedCredential, nil
+				response = nil
 				lease.Release()
 				continue
 			}

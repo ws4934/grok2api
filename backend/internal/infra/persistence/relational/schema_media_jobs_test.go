@@ -39,6 +39,7 @@ func TestPostgresMediaJobChecksAndLifecycle(t *testing.T) {
 	}
 	verifyMediaJobChecks(t, database)
 	verifyMediaJobLifecycle(t, database)
+	verifyMediaJobDeleteSettlement(t, database)
 }
 
 func TestMediaJobModelTagsAllowAllVideoProvidersAndPrimaryScopes(t *testing.T) {
@@ -74,10 +75,13 @@ func TestMediaJobModelTagsAllowAllVideoProvidersAndPrimaryScopes(t *testing.T) {
 		t.Fatal("InputImageCount field missing")
 	}
 	countTag := countField.Tag.Get("gorm")
-	maxImages := strconv.Itoa(mediadomain.MaxInputImages)
+	maxImages := strconv.Itoa(mediadomain.MaxVideoInputImages)
 	if !strings.Contains(countTag, "chk_media_jobs_input_image_count") ||
 		!strings.Contains(countTag, "not null") || !strings.Contains(countTag, "input_image_count BETWEEN 0 AND "+maxImages) {
 		t.Fatalf("input_image_count tag = %q, want max %s", countTag, maxImages)
+	}
+	if !strings.Contains(countTag, "kind <> 'image' OR input_image_count <= "+strconv.Itoa(mediadomain.MaxInputImages)) {
+		t.Fatalf("image job input ceiling changed: %s", countTag)
 	}
 	operationField, ok := modelType.FieldByName("Operation")
 	if !ok {
@@ -166,6 +170,22 @@ func verifyMediaJobChecks(t *testing.T, database *Database) {
 	extend.Operation = mediadomain.VideoOperationExtend
 	if err := jobs.CreateMediaJob(ctx, extend); err == nil {
 		t.Fatal("image job accepted the video-only extend operation")
+	}
+	for _, tc := range []struct {
+		kind  mediadomain.Kind
+		count int
+		ok    bool
+	}{
+		{mediadomain.KindVideo, mediadomain.MaxVideoInputImages, true},
+		{mediadomain.KindVideo, mediadomain.MaxVideoInputImages + 1, false},
+		{mediadomain.KindImage, mediadomain.MaxInputImages, true},
+		{mediadomain.KindImage, mediadomain.MaxInputImages + 1, false},
+	} {
+		job := testMediaJob("video_count_"+string(tc.kind)+strconv.Itoa(tc.count), accountID, keyID, mediadomain.StatusQueued, time.Now().UTC())
+		job.Kind, job.InputImageCount = tc.kind, tc.count
+		if err := jobs.CreateMediaJob(ctx, job); (err == nil) != tc.ok {
+			t.Errorf("%s with %d images: %v", tc.kind, tc.count, err)
+		}
 	}
 	for _, tc := range []struct {
 		id, provider, scope string
@@ -282,6 +302,12 @@ func verifyMediaJobLifecycle(t *testing.T, database *Database) {
 	stats, err := jobs.SummarizeMediaJobs(ctx, string(mediadomain.KindImage))
 	if err != nil || stats.Canceled < 1 || stats.Uncertain < 1 || stats.Failed < 1 {
 		t.Fatalf("image stats = %#v err = %v", stats, err)
+	}
+	if err := jobs.DeleteMediaJob(ctx, canceled.ID); !errors.Is(err, repository.ErrConflict) {
+		t.Fatalf("delete unsettled canceled image job: %v", err)
+	}
+	if err := jobs.MarkMediaJobUsageRecorded(ctx, canceled.ID, now); err != nil {
+		t.Fatal(err)
 	}
 	if err := jobs.DeleteMediaJob(ctx, canceled.ID); err != nil {
 		t.Fatalf("delete canceled job: %v", err)

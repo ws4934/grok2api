@@ -52,7 +52,8 @@ type mediaJobDTO struct {
 	Cancellable   bool     `json:"cancellable"`
 	// Retryable: an uncertain job (retried as a new job) or a failed image job
 	// whose drawn image can be fetched again (resumed in place).
-	Retryable bool `json:"retryable"`
+	Retryable    bool `json:"retryable"`
+	UsagePending bool `json:"usagePending"`
 }
 
 // retryJobDTO is the retried job; Resumed means it is the same job fetching

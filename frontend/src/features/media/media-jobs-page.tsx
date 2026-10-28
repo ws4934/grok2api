@@ -68,7 +68,7 @@ export function MediaJobsPage() {
   const debouncedSearch = useDebouncedValue(search);
   const normalizedSearch = debouncedSearch.trim();
 
-  // Both poll while a listed job runs; react-query pauses the interval in a hidden tab.
+  // Both poll until work and settlement finish; hidden tabs pause the interval.
   const jobsQuery = useQuery({
     queryKey: ["media", "jobs", kind, page, pageSize, statusFilter, providerFilter, normalizedSearch, sort.field, sort.order],
     queryFn: () => listMediaJobs({ page, pageSize, kind, status: statusFilter, provider: providerFilter, search: normalizedSearch || undefined, sortBy: sort.field, sortOrder: sort.order }),
@@ -452,6 +452,7 @@ function JobStatus({ status }: { status: MediaJobStatus }) {
 }
 
 function JobProgress({ job, locale }: { job: MediaJobDTO; locale: string }) {
+  const { t } = useTranslation();
   const normalized = Math.max(0, Math.min(100, job.progress));
   const error = [job.errorCode, job.errorMessage].filter(Boolean).join(": ");
   return (
@@ -470,6 +471,12 @@ function JobProgress({ job, locale }: { job: MediaJobDTO; locale: string }) {
       <span className="block h-1 w-full overflow-hidden rounded-full bg-muted">
         <span className={cn("block h-full rounded-full", statusTones[job.status].dot)} style={{ width: `${normalized}%` }} />
       </span>
+      {job.usagePending ? (
+        <Tooltip>
+          <TooltipTrigger asChild><span tabIndex={0} className="block cursor-help text-xs text-muted-foreground">{t("media.jobs.usagePending")}</span></TooltipTrigger>
+          <TooltipContent>{t("media.jobs.usagePendingHint")}</TooltipContent>
+        </Tooltip>
+      ) : null}
     </div>
   );
 }

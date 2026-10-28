@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -109,6 +110,12 @@ func newHTTPUpstreamFailure(status int, body []byte, accountID uint64, accountNa
 		failure.HTTPStatus = http.StatusBadGateway
 	}
 	metadataText := strings.ToLower(strings.Join([]string{upstreamCode, upstreamType, upstreamMessage}, " "))
+	if status >= 400 && status < 500 && isSafetyRejection(metadataText) {
+		failure.Code, failure.PublicMessage = provider.ContentPolicyViolation, provider.ContentPolicyMessage
+		failure.SafetyRejection = true
+		failure.Fingerprint = fmt.Sprintf("%d:%s", status, provider.ContentPolicyViolation)
+		return failure
+	}
 	switch status {
 	case http.StatusUnauthorized:
 		failure.Code = "upstream_unauthorized"
@@ -198,18 +205,53 @@ func newHTTPUpstreamFailure(status int, body []byte, accountID uint64, accountNa
 		fingerprintPart = "unknown"
 	}
 	failure.Fingerprint = fmt.Sprintf("%d:%s", status, fingerprintPart)
+	if failure.SafetyRejection {
+		failure.Code, failure.PublicMessage = provider.ContentPolicyViolation, provider.ContentPolicyMessage
+	}
+	failure.PublicMessage = provider.LocalizePublicErrorMessage(failure.HTTPStatus, failure.Code, failure.PublicMessage)
 	return failure
 }
 
 // ClassifyUpstreamHTTPError maps an upstream HTTP error body to a client-facing
-// error code and message. Request-scoped 400s (invalid-argument) keep the
-// upstream text so the client can see the tool name.
+// machine code and a Chinese message. Raw text remains in request diagnostics.
 func ClassifyUpstreamHTTPError(status int, body []byte) (string, string) {
 	failure := newHTTPUpstreamFailure(status, body, 0, "")
 	if failure == nil {
 		return "upstream_error", "上游服务返回错误"
 	}
 	return failure.Code, failure.PublicMessage
+}
+
+// ProviderUpstreamFailure gives error-returning media adapters the same public
+// classification as HTTP responses, without exposing diagnostic-only bodies.
+func ProviderUpstreamFailure(err error, accountID uint64, accountName string) *UpstreamFailure {
+	var existing *UpstreamFailure
+	if errors.As(err, &existing) {
+		return existing
+	}
+	status, ok := provider.ErrorHTTPStatus(err)
+	if !ok || status < 400 || status > 599 {
+		return nil
+	}
+	message, public := provider.ErrorPublicMessage(err)
+	var body []byte
+	var diagnostic provider.UpstreamDiagnosticError
+	if errors.As(err, &diagnostic) {
+		_, response := diagnostic.UpstreamDiagnostic()
+		body = response.Body
+	} else if public {
+		body, _ = json.Marshal(map[string]any{"error": map[string]string{"message": message}})
+	}
+	failure := newHTTPUpstreamFailure(status, body, accountID, accountName)
+	failure.Cause, failure.RetryAfter = err, provider.ErrorRetryAfter(err)
+	if !failure.SafetyRejection {
+		if !public {
+			message = ""
+		}
+		failure.PublicMessage = provider.LocalizePublicErrorMessage(status, failure.Code, message)
+		failure.RequestScopedForbidden = failure.RequestScopedForbidden || provider.IsRequestScopedError(err)
+	}
+	return failure
 }
 
 func newTransportUpstreamFailure(err error, accountID uint64, accountName string) *UpstreamFailure {
@@ -264,12 +306,7 @@ func isPermanentAccountDenial(text string) bool {
 // isSafetyRejection identifies request-level content safety denials that must
 // be returned to the client without account rotation or invalidation.
 func isSafetyRejection(text string) bool {
-	if text == "" {
-		return false
-	}
-	lower := strings.ToLower(text)
-	return strings.Contains(lower, "content violates usage guidelines") ||
-		strings.Contains(lower, "safety_check_type_")
+	return provider.IsContentSafetyRejection(text)
 }
 
 // isRequestScopedForbidden recognizes only high-confidence request-level

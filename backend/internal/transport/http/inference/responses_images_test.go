@@ -218,7 +218,7 @@ func TestResponsesImageToolBackgroundGetCancelAndSync(t *testing.T) {
 	}
 	// A request the provider rejects fails with the official error object.
 	code, failed := f.call(t, "POST", "/v1/responses", `{"model":"gpt-image-2","input":"fail","tools":[{"type":"image_generation"}]}`)
-	if problem, _ := failed["error"].(map[string]any); code != 200 || failed["status"] != "failed" || problem["code"] != "invalid_request" {
+	if problem, _ := failed["error"].(map[string]any); code != 200 || failed["status"] != "failed" || problem["code"] != "invalid_prompt" {
 		t.Fatalf("failed response: %d %v", code, failed)
 	}
 }

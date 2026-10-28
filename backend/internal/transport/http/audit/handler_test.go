@@ -15,6 +15,7 @@ import (
 	auditapp "github.com/chenyme/grok2api/backend/internal/application/audit"
 	auditdomain "github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/gin-gonic/gin"
 )
 
@@ -56,6 +57,7 @@ func TestAuditDetailReturnsCompleteTextAndBinaryBodies(t *testing.T) {
 				AttemptCount int `json:"attemptCount"`
 			} `json:"audit"`
 			Attempts []struct {
+				ErrorMessage          string `json:"errorMessage"`
 				ResponseBody          string `json:"responseBody"`
 				ResponseBodyEncoding  string `json:"responseBodyEncoding"`
 				ResponseBodyTruncated bool   `json:"responseBodyTruncated"`
@@ -71,6 +73,9 @@ func TestAuditDetailReturnsCompleteTextAndBinaryBodies(t *testing.T) {
 	if payload.Data.Attempts[0].ResponseBodyEncoding != "utf8" || payload.Data.Attempts[0].ResponseBody != `{"error":"complete"}` || !payload.Data.Attempts[0].ResponseBodyTruncated {
 		t.Fatalf("text body = %#v", payload.Data.Attempts[0])
 	}
+	if !strings.Contains(payload.Data.Attempts[0].ErrorMessage, "上游") {
+		t.Fatal("missing Chinese diagnostic summary")
+	}
 	if payload.Data.Attempts[1].ResponseBodyEncoding != "base64" || payload.Data.Attempts[1].ResponseBody != base64.StdEncoding.EncodeToString([]byte{0x00, 0xff, 0x01}) {
 		t.Fatalf("binary body = %#v", payload.Data.Attempts[1])
 	}
@@ -79,6 +84,27 @@ func TestAuditDetailReturnsCompleteTextAndBinaryBodies(t *testing.T) {
 	router.ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "/api/admin/v1/request-audits/999", nil))
 	if missing.Code != http.StatusNotFound {
 		t.Fatalf("missing status = %d, body = %s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestAuditModerationSummaryDoesNotChangeOriginalEvidence(t *testing.T) {
+	for _, raw := range []string{
+		`{"error":{"message":"Generated video rejected by content moderation."}}`,
+		"ChatGPT upstream HTTP 422: OpenAI image generation stopped by upstream: We’re so sorry, but the image we created may violate our content policies.",
+	} {
+		status := 422
+		attempt := auditdomain.Attempt{UpstreamStatusCode: &status, ResponseBody: []byte(raw)}
+		if got := auditAttemptErrorMessage(attempt); got != provider.ContentPolicyMessage {
+			t.Fatal(got)
+		}
+		if string(attempt.ResponseBody) != raw {
+			t.Fatal("raw diagnostic was translated")
+		}
+	}
+	status := 200
+	attempt := auditdomain.Attempt{UpstreamStatusCode: &status, ResponseBody: []byte(`{"type":"response.failed","response":{"status":"failed","error":{"code":"image_content_policy_violation","message":"Generated video rejected by content moderation."}}}`)}
+	if got := auditAttemptErrorMessage(attempt); got != provider.ContentPolicyMessage {
+		t.Fatal(got)
 	}
 }
 

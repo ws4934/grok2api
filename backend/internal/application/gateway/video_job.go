@@ -200,6 +200,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		stage, hasStage := provider.VideoErrorStage(err)
 		safeCreateFailure := hasStage && stage == provider.VideoStageCreate
 		status, hasStatus := provider.ErrorHTTPStatus(err)
+		classifiedFailure := ProviderUpstreamFailure(err, lease.Credential.ID, lease.Credential.Name)
 		if errors.Is(err, provider.ErrUnauthorized) {
 			if lease.Credential.AuthType == account.AuthTypeSSO {
 				s.markSSOCredentialRejected(failureCtx, lease.Credential, fmt.Sprintf("%s SSO credential rejected", lease.Credential.Provider))
@@ -208,7 +209,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			retriableCreate = safeCreateFailure
 		} else if hasStatus {
 			switch {
-			case provider.IsRequestScopedError(err):
+			case provider.IsRequestScopedError(err) || (classifiedFailure != nil && classifiedFailure.SafetyRejection):
 				// The request itself was refused; any account would be refused the
 				// same way, so it neither cools this account down nor fails over.
 				failureHandled = true
@@ -275,7 +276,9 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			if hasStatus {
 				upstreamStatus = status
 			}
-			if errors.Is(err, provider.ErrUnauthorized) || (hasStatus && (status == http.StatusUnauthorized || status == http.StatusForbidden)) {
+			if classifiedFailure != nil && classifiedFailure.SafetyRejection {
+				failureCode = provider.ContentPolicyViolation
+			} else if errors.Is(err, provider.ErrUnauthorized) || (hasStatus && (status == http.StatusUnauthorized || status == http.StatusForbidden)) {
 				failureCode, publicErr = "provider_unavailable", errors.New("上游服务暂不可用")
 			} else if hasStatus && status == http.StatusTooManyRequests {
 				failureCode = "rate_limited"
@@ -375,6 +378,9 @@ func (s *Service) failVideoJob(ctx context.Context, job media.Job, code string, 
 // endVideoJob records a failed or uncertain outcome. Uncertain jobs keep
 // their inputs so an administrator can retry them.
 func (s *Service) endVideoJob(ctx context.Context, job media.Job, status media.Status, code string, err error, upstreamStatus int, attempts []audit.Attempt) {
+	if failure := ProviderUpstreamFailure(err, job.AccountID, job.AccountName); failure != nil && failure.SafetyRejection {
+		code = provider.ContentPolicyViolation
+	}
 	now := time.Now().UTC()
 	job.Status, job.ErrorCode, job.ErrorMessage = status, code, jobErrorMessage(err)
 	job.LeaseUntil, job.UpdatedAt, job.CompletedAt = nil, now, &now

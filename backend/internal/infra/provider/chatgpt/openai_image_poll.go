@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
 // imagePollInterval spaces the image result polls; imagePollMissing is how
@@ -108,14 +110,30 @@ type imageTerminalError struct {
 func (e *imageTerminalError) Error() string { return e.err.Error() }
 func (e *imageTerminalError) Unwrap() error { return e.err }
 
+func (e *imageTerminalError) RequestScopedFailure() bool {
+	return !e.retryable && provider.IsContentSafetyRejection(e.detail.Message)
+}
+
+func (e *imageTerminalError) PublicErrorMessage() string {
+	return provider.LocalizePublicErrorMessage(provider.ErrorHTTPStatusOrZero(e.err), "", e.detail.Message)
+}
+
 func openAIImageTerminalError(value any, secrets ...string) error {
 	reason := openAIImageTerminalReason(value)
+	quota := quotaRejection(value)
+	if quota != nil {
+		reason = quota.Message
+	}
 	if reason == "" {
 		return nil
 	}
 	detail := imageErrorDetail(reason, secrets...)
 	message := imageTerminalPrefix + truncateOpenAIImageReason(strings.TrimPrefix(detail.Message, imageTerminalPrefix))
-	return &imageTerminalError{err: &upstreamError{Status: http.StatusUnprocessableEntity, Message: message, Body: message}, detail: detail, retryable: false}
+	upstream := &upstreamError{Status: http.StatusUnprocessableEntity, Message: message, Body: message}
+	if quota != nil {
+		upstream.Status, upstream.RetryAfter = quota.Status, quota.RetryAfter
+	}
+	return &imageTerminalError{err: upstream, detail: detail, retryable: quota != nil}
 }
 
 func openAIImageTerminalReason(value any) string {

@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -11,9 +12,11 @@ import (
 	"unicode/utf8"
 
 	auditapp "github.com/chenyme/grok2api/backend/internal/application/audit"
+	"github.com/chenyme/grok2api/backend/internal/application/gateway"
 	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	auditdomain "github.com/chenyme/grok2api/backend/internal/domain/audit"
 	pricingdomain "github.com/chenyme/grok2api/backend/internal/domain/pricing"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
@@ -204,6 +207,7 @@ type auditAttemptResponse struct {
 	ResponseBodyEncoding  string                    `json:"responseBodyEncoding"`
 	ResponseBodyTruncated bool                      `json:"responseBodyTruncated"`
 	TransportError        string                    `json:"transportError,omitempty"`
+	ErrorMessage          string                    `json:"errorMessage,omitempty"`
 	ErrorChain            []auditErrorFrameResponse `json:"errorChain"`
 }
 
@@ -279,9 +283,46 @@ func (h *Handler) get(c *gin.Context) {
 			ResponseHeaders: attempt.ResponseHeaders, ResponseBody: body, ResponseBodyEncoding: encoding,
 			ResponseBodyTruncated: attempt.ResponseBodyTruncated,
 			TransportError:        attempt.TransportError, ErrorChain: errorChain,
+			ErrorMessage: auditAttemptErrorMessage(attempt),
 		})
 	}
 	response.Success(c, http.StatusOK, auditDetailResponse{Audit: newAuditResponse(value, h.lookupPrices(c.Request.Context(), []auditdomain.Record{value})), Attempts: attempts})
+}
+
+func auditAttemptErrorMessage(attempt auditdomain.Attempt) string {
+	status := http.StatusBadGateway
+	if attempt.UpstreamStatusCode != nil {
+		status = *attempt.UpstreamStatusCode
+	}
+	if len(attempt.ResponseBody) > 0 && utf8.Valid(attempt.ResponseBody) {
+		if status < http.StatusBadRequest {
+			// A failed SSE event can arrive after successful HTTP headers.
+			body := attempt.ResponseBody
+			var event struct {
+				Response json.RawMessage `json:"response"`
+			}
+			if json.Unmarshal(body, &event) == nil && len(event.Response) > 0 {
+				body = event.Response
+			}
+			code, errorType, message := provider.ExtractUpstreamErrorMetadata(body)
+			if message != "" {
+				if code == "" {
+					code = errorType
+				}
+				return provider.LocalizePublicErrorMessage(http.StatusBadGateway, code, message)
+			}
+		}
+		_, message := gateway.ClassifyUpstreamHTTPError(status, attempt.ResponseBody)
+		return message
+	}
+	message := attempt.TransportError
+	if message == "" && len(attempt.ErrorChain) > 0 {
+		message = attempt.ErrorChain[0].Message
+	}
+	if message == "" {
+		return ""
+	}
+	return provider.LocalizePublicErrorMessage(status, "", message)
 }
 
 type summaryResponse struct {

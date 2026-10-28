@@ -46,7 +46,6 @@ import {
   type STTResult,
   type TTSResult,
   type VideoStatus,
-  type VoiceInfo,
 } from "@/features/creative-console/creative-console-api";
 import {
   finiteTimestamp,
@@ -64,6 +63,7 @@ import {
   type VideoHistoryRecord,
 } from "@/features/creative-console/creative-console-history";
 import { resolveVoice } from "@/features/creative-console/creative-console-voice";
+import { parseVideoReferenceURL, videoInputPolicy, type VideoReferenceImage } from "@/features/creative-console/creative-console-video";
 import { getClientKeySecret, listClientKeys, type ClientKeyDTO } from "@/features/client-keys/client-keys-api";
 import { importVideoInputFromURL, listMediaAssets, uploadMediaInput } from "@/features/media/media-api";
 import { mediaAssetPath } from "@/features/media/media-model";
@@ -1141,7 +1141,8 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const [imageURL, setImageURL] = useState("");
   const [imageFileID, setImageFileID] = useState("");
   const [referenceURL, setReferenceURL] = useState("");
-  const [referenceFileID, setReferenceFileID] = useState("");
+  const [referenceImages, setReferenceImages] = useState<VideoReferenceImage[]>([]);
+  const [referenceError, setReferenceError] = useState("");
   const [referenceVoiceId, setReferenceVoiceId] = useState("");
   const [sourceVideoURL, setSourceVideoURL] = useState("");
   const [sourceVideoFileID, setSourceVideoFileID] = useState("");
@@ -1177,6 +1178,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   // without a Grok target is served by Adobe: a resolution for edits and extensions,
   // an aspect ratio for Kling edits, and 4–30 s extensions.
   const activeTargets = modelOptions.filter((item) => item.publicId === activeModel).map((item) => item.upstreamModel);
+  const inputPolicy = videoInputPolicy(modelOptions.filter((item) => item.publicId === activeModel));
   const grokTarget = activeTargets.includes("Console/grok-imagine-video");
   const extendDurations: readonly string[] = grokTarget ? videoExtendDurations : adobeVideoExtendDurations;
   const selectedExtendDuration = extendDurations.includes(extendDuration) ? extendDuration : "6";
@@ -1192,42 +1194,48 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
     queryKey: ["creative-console", "voices", apiKey, "grok-voice-latest"],
     queryFn: ({ signal }) => listVoices({ apiKey, model: "grok-voice-latest", signal }),
     // Reference voices come from the grok-voice-latest catalog; without that route the request can only 404.
-    enabled: Boolean(active && apiKey && action === "generate" && grokVoiceRoute),
+    enabled: Boolean(active && apiKey && action === "generate" && grokVoiceRoute && inputPolicy.canReferenceVoices),
     retry: false,
     staleTime: 60_000,
   });
   const voices = useMemo(() => voicesQuery.data ?? [], [voicesQuery.data]);
   const hasFirstFrame = Boolean(imageURL.trim() || imageFileID);
-  const hasReferenceImage = Boolean(referenceURL.trim() || referenceFileID);
+  const hasReferenceImage = referenceImages.length > 0;
   const hasReferenceAudio = Boolean(referenceVoiceId.trim());
+  const unsupportedVoice = hasReferenceAudio && !inputPolicy.canReferenceVoices;
+  const referenceVoices = inputPolicy.canReferenceVoices
+    ? (voices.length > 0 ? voices : [{ voiceId: "eve", name: "Eve" }, { voiceId: "ara", name: "Ara" }])
+    : hasReferenceAudio ? [{ voiceId: referenceVoiceId, name: voices.find((voice) => voice.voiceId === referenceVoiceId)?.name || referenceVoiceId }] : [];
   const isReferenceMode = hasReferenceImage || hasReferenceAudio;
   const generateResolutions = isReferenceMode ? videoResolutions.filter((item) => item !== "1080p") : videoResolutions;
   const selectedVideoResolution = isReferenceMode && resolution === "1080p" ? "720p" : resolution;
+  const generateDurations: readonly string[] = isReferenceMode ? videoDurations.filter((value) => Number(value) <= inputPolicy.referenceDurationLimit) : videoDurations;
+  const selectedVideoDuration = generateDurations.includes(duration) ? duration : generateDurations.at(-1) ?? "6";
+  const inputConflict = hasFirstFrame && isReferenceMode && !inputPolicy.canCombineFirstFrame;
+  const tooManyReferences = referenceImages.length > inputPolicy.maxReferenceImages;
 
   // Variables are the history record ID; the request itself reads the composer state captured at submit.
   const createMutation = useMutation<string, Error, string>({
     mutationFn: async () => {
       if (!apiKey || !activeModel) throw new Error(t("creativeConsole.errors.noModels"));
       if (action === "generate") {
+        if (unsupportedVoice) throw new Error(t("creativeConsole.videoVoiceUnsupported"));
         let nextImageURL = imageURL.trim() || undefined;
         let nextImageFileID = imageFileID || undefined;
-        let nextReferenceURL = referenceURL.trim() || undefined;
-        let nextReferenceFileID = referenceFileID || undefined;
-        let nextReferenceVoice = referenceVoiceId.trim() || undefined;
-        if (nextImageFileID || nextImageURL) {
-          nextReferenceURL = undefined;
-          nextReferenceFileID = undefined;
-          nextReferenceVoice = undefined;
-        }
+        const nextReferenceVoice = referenceVoiceId.trim() || undefined;
         if (!nextImageFileID && nextImageURL && /^https?:\/\//i.test(nextImageURL)) {
           const staged = await importVideoInputFromURL(nextImageURL);
           nextImageURL = undefined;
           nextImageFileID = staged.fileId;
         }
-        if (!nextReferenceFileID && nextReferenceURL && /^https?:\/\//i.test(nextReferenceURL)) {
-          const staged = await importVideoInputFromURL(nextReferenceURL);
-          nextReferenceURL = undefined;
-          nextReferenceFileID = staged.fileId;
+        const stagedReferences = [];
+        for (const reference of referenceImages) {
+          if (!reference.fileId && reference.url && /^https?:\/\//i.test(reference.url)) {
+            const staged = await importVideoInputFromURL(reference.url);
+            stagedReferences.push({ fileId: staged.fileId });
+          } else {
+            stagedReferences.push({ fileId: reference.fileId, url: reference.url });
+          }
         }
         return createVideo({
           apiKey,
@@ -1235,13 +1243,9 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
           prompt: prompt.trim(),
           imageURL: nextImageURL,
           imageFileID: nextImageFileID,
-          referenceImages: nextReferenceFileID
-            ? [{ fileId: nextReferenceFileID }]
-            : nextReferenceURL
-              ? [{ url: nextReferenceURL }]
-              : undefined,
+          referenceImages: stagedReferences,
           referenceVoiceIds: nextReferenceVoice ? [nextReferenceVoice] : undefined,
-          duration: Number(duration),
+          duration: Number(selectedVideoDuration),
           aspectRatio,
           resolution: selectedVideoResolution,
         });
@@ -1298,29 +1302,46 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
 
   // 本地媒体进入有 TTL 的隐藏临时区；视频任务只持久化短 file_id，不写入图库或公开 URL。
   const uploadMutation = useMutation({
-    mutationFn: async ({ file, kind, selectionVersion }: { file: File; kind: "image" | "reference"; selectionVersion: number }) => {
-      if (file.type && !file.type.startsWith("image/")) throw new Error(t("creativeConsole.errors.invalidImage"));
-      const input = await uploadMediaInput(file);
-      if (input.kind !== "image") throw new Error(t("creativeConsole.errors.invalidImage"));
-      return { ...input, kind, selectionVersion };
+    mutationFn: async ({ files, kind, selectionVersion }: { files: File[]; kind: "image" | "reference"; selectionVersion: number }) => {
+      if (files.some((file) => file.type && !file.type.startsWith("image/"))) throw new Error(t("creativeConsole.errors.invalidImage"));
+      if (kind === "reference" && referenceImages.length + files.length > inputPolicy.maxReferenceImages) {
+        throw new Error(t("creativeConsole.referenceImageLimit", { count: inputPolicy.maxReferenceImages }));
+      }
+      const inputs: VideoReferenceImage[] = [];
+      for (const file of files) {
+        const input = await uploadMediaInput(file);
+        if (input.kind !== "image") throw new Error(t("creativeConsole.errors.invalidImage"));
+        inputs.push({ id: createCreativeMessageId(), fileId: input.fileId, name: file.name });
+      }
+      return { inputs, kind, selectionVersion };
     },
     onSuccess: (input) => {
       if (input.kind === "image") {
         if (input.selectionVersion !== imageSelectionVersionRef.current) return;
-        setImageFileID(input.fileId);
+        setImageFileID(input.inputs[0].fileId ?? "");
         setImageURL("");
-        setReferenceURL("");
-        setReferenceFileID("");
-        setReferenceVoiceId("");
         return;
       }
       if (input.selectionVersion !== referenceSelectionVersionRef.current) return;
-      setReferenceFileID(input.fileId);
-      setReferenceURL("");
-      setImageURL("");
-      setImageFileID("");
+      setReferenceImages((current) => [...current, ...input.inputs]);
     },
   });
+
+  function addReferenceURL(): void {
+    const url = referenceURL.trim();
+    if (!url) return;
+    if (referenceImages.length >= inputPolicy.maxReferenceImages) {
+      setReferenceError(t("creativeConsole.referenceImageLimit", { count: inputPolicy.maxReferenceImages }));
+      return;
+    }
+    if (!parseVideoReferenceURL(url)) {
+      setReferenceError(t("creativeConsole.referenceImageURLInvalid"));
+      return;
+    }
+    setReferenceImages((current) => [...current, { id: createCreativeMessageId(), url, name: url }]);
+    setReferenceURL("");
+    setReferenceError("");
+  }
 
   const videoUploadMutation = useMutation({
     mutationFn: async ({ file }: { file: File; selectionVersion: number }) => {
@@ -1340,7 +1361,8 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
     event.preventDefault();
     if (!apiKey || !activeModel || createMutation.isPending || uploadMutation.isPending || videoUploadMutation.isPending) return;
     if (action === "generate") {
-      if ((!prompt.trim() && !hasFirstFrame && !isReferenceMode) || !validDuration(duration)) return;
+      if (inputConflict || unsupportedVoice || tooManyReferences || referenceURL.trim()) return;
+      if ((!prompt.trim() && !hasFirstFrame && !isReferenceMode) || !validDuration(selectedVideoDuration)) return;
       if (isReferenceMode && !prompt.trim()) return;
     } else {
       if (!prompt.trim() || (!sourceVideoURL.trim() && !sourceVideoFileID)) return;
@@ -1352,7 +1374,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       prompt: prompt.trim(),
       model: activeModel,
       params: action === "generate"
-        ? { duration: Number(duration), aspectRatio, resolution: selectedVideoResolution }
+        ? { duration: Number(selectedVideoDuration), aspectRatio, resolution: selectedVideoResolution }
         : { ...(action === "extend" ? { duration: Number(selectedExtendDuration) } : {}), ...operationParams },
       status: "submitting",
     };
@@ -1378,7 +1400,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       : t("creativeConsole.extendVideo");
   const canSubmit = Boolean(apiKey && activeModel && !createMutation.isPending && !uploadMutation.isPending && !videoUploadMutation.isPending
     && (action === "generate"
-      ? ((prompt.trim() || hasFirstFrame || isReferenceMode) && (!isReferenceMode || prompt.trim()) && validDuration(duration) && !(hasFirstFrame && isReferenceMode))
+      ? ((prompt.trim() || hasFirstFrame || isReferenceMode) && (!isReferenceMode || prompt.trim()) && validDuration(selectedVideoDuration) && !inputConflict && !unsupportedVoice && !tooManyReferences && !referenceURL.trim())
       : prompt.trim() && (sourceVideoURL.trim() || sourceVideoFileID)));
 
   return (
@@ -1430,6 +1452,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
             ))}
           </div>
           <Textarea id="video-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={placeholder} className="min-h-24 resize-none border-0 bg-transparent px-4 py-3 text-sm focus-visible:ring-0" />
+          {action === "generate" && (unsupportedVoice || inputConflict || tooManyReferences) ? <p role="alert" className="px-4 pb-3 text-sm text-destructive">{unsupportedVoice ? t("creativeConsole.videoVoiceUnsupported") : inputConflict ? t("creativeConsole.videoInputConflict") : t("creativeConsole.referenceImageLimit", { count: inputPolicy.maxReferenceImages })}</p> : null}
           <div className="flex items-center justify-between gap-3 px-3 pb-3">
             <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
               <CompactModelSelect value={activeModel} models={activeModels} onChange={onModelChange} />
@@ -1437,14 +1460,14 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                 <>
                 <Popover>
                   <PopoverTrigger asChild>
-                    <Button type="button" variant="ghost" size="sm" className={cn("h-8 gap-1.5 px-2 font-normal", hasFirstFrame && "bg-secondary/70 text-foreground")} aria-label={t("creativeConsole.firstFrameImage")} disabled={isReferenceMode}>
+                    <Button type="button" variant="ghost" size="sm" className={cn("h-8 gap-1.5 px-2 font-normal", hasFirstFrame && "bg-secondary/70 text-foreground")} aria-label={t("creativeConsole.firstFrameImage")} disabled={!inputPolicy.canCombineFirstFrame && isReferenceMode && !hasFirstFrame}>
                       <ImagePlus />{hasFirstFrame ? t("creativeConsole.firstFrameImageAdded") : t("creativeConsole.firstFrameImageShort")}
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent align="start" className="w-80 p-3">
                     <div className="mb-2 text-xs font-medium">{t("creativeConsole.firstFrameImage")}</div>
                     <div className="flex items-center gap-2">
-                      <Input id="video-image" type="url" value={imageURL} onChange={(event) => { imageSelectionVersionRef.current += 1; referenceSelectionVersionRef.current += 1; setImageURL(event.target.value); setImageFileID(""); setReferenceURL(""); setReferenceFileID(""); setReferenceVoiceId(""); }} placeholder={imageFileID ? t("creativeConsole.firstFrameImageAdded") : "https://..."} aria-label={t("creativeConsole.firstFrameImage")} />
+                      <Input id="video-image" type="url" value={imageURL} onChange={(event) => { imageSelectionVersionRef.current += 1; setImageURL(event.target.value); setImageFileID(""); }} placeholder={imageFileID ? t("creativeConsole.firstFrameImageAdded") : "https://..."} aria-label={t("creativeConsole.firstFrameImage")} />
                       {hasFirstFrame ? <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label={t("creativeConsole.clearFirstFrameImage")} onClick={() => { imageSelectionVersionRef.current += 1; setImageURL(""); setImageFileID(""); }}><X /></Button> : null}
                     </div>
                     <input
@@ -1457,14 +1480,10 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                         if (file) {
                           const selectionVersion = imageSelectionVersionRef.current + 1;
                           imageSelectionVersionRef.current = selectionVersion;
-                          referenceSelectionVersionRef.current += 1;
                           setImageURL("");
                           setImageFileID("");
-                          setReferenceURL("");
-                          setReferenceFileID("");
-                          setReferenceVoiceId("");
                           uploadMutation.reset();
-                          uploadMutation.mutate({ file, kind: "image", selectionVersion });
+                          uploadMutation.mutate({ files: [file], kind: "image", selectionVersion });
                         }
                         event.target.value = "";
                       }}
@@ -1478,53 +1497,60 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                 </Popover>
                 <Popover>
                   <PopoverTrigger asChild>
-                    <Button type="button" variant="ghost" size="sm" className={cn("h-8 gap-1.5 px-2 font-normal", hasReferenceImage && "bg-secondary/70 text-foreground")} aria-label={t("creativeConsole.referenceImage")} disabled={hasFirstFrame}>
-                      <Images />{hasReferenceImage ? t("creativeConsole.referenceImageAdded") : t("creativeConsole.referenceImageShort")}
+                    <Button type="button" variant="ghost" size="sm" className={cn("h-8 gap-1.5 px-2 font-normal", hasReferenceImage && "bg-secondary/70 text-foreground")} aria-label={t("creativeConsole.referenceImage")} disabled={!inputPolicy.canCombineFirstFrame && hasFirstFrame && !hasReferenceImage}>
+                      <Images />{t("creativeConsole.referenceImageShort")} {referenceImages.length}/{inputPolicy.maxReferenceImages}
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent align="start" className="w-80 p-3">
-                    <div className="mb-2 text-xs font-medium">{t("creativeConsole.referenceImage")}</div>
+                  <PopoverContent align="start" className="w-96 max-w-[calc(100vw-2rem)] p-3">
+                    <div className="mb-2 flex items-center justify-between text-sm font-medium"><span>{t("creativeConsole.referenceImageShort")}</span><span className="text-muted-foreground">{referenceImages.length}/{inputPolicy.maxReferenceImages}</span></div>
+                    {inputPolicy.canCombineFirstFrame ? <p className="mb-3 text-sm text-muted-foreground">{t("creativeConsole.videoCombinedInputs")}</p> : null}
+                    {hasReferenceImage ? <ol className="mb-3 max-h-56 space-y-1 overflow-y-auto">
+                      {referenceImages.map((reference, index) => <li key={reference.id} className="flex items-center gap-2 rounded-md bg-secondary/50 py-1 pl-2 pr-1 text-sm">
+                        <code className="shrink-0 text-xs text-muted-foreground">{`<IMAGE_${index + (hasFirstFrame && inputPolicy.canCombineFirstFrame ? 1 : 0)}>`}</code>
+                        <span className="min-w-0 flex-1 truncate" title={reference.name}>{reference.name}</span>
+                        <Button type="button" variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t("creativeConsole.removeReferenceImage", { index: index + 1 })} disabled={uploadMutation.isPending} onClick={() => { setReferenceImages((current) => current.filter((item) => item.id !== reference.id)); setReferenceError(""); }}><X /></Button>
+                      </li>)}
+                    </ol> : null}
                     <div className="flex items-center gap-2">
-                      <Input id="video-reference" type="url" value={referenceURL} onChange={(event) => { referenceSelectionVersionRef.current += 1; imageSelectionVersionRef.current += 1; setReferenceURL(event.target.value); setReferenceFileID(""); setImageURL(""); setImageFileID(""); }} placeholder={referenceFileID ? t("creativeConsole.referenceImageAdded") : "https://..."} aria-label={t("creativeConsole.referenceImage")} />
-                      {hasReferenceImage ? <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label={t("creativeConsole.clearReferenceImage")} onClick={() => { referenceSelectionVersionRef.current += 1; setReferenceURL(""); setReferenceFileID(""); }}><X /></Button> : null}
+                      <Input id="video-reference" type="url" value={referenceURL} onChange={(event) => { setReferenceURL(event.target.value); setReferenceError(""); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addReferenceURL(); } }} placeholder="https://..." aria-label={t("creativeConsole.referenceImage")} disabled={uploadMutation.isPending} />
+                      <Button type="button" variant="secondary" size="sm" disabled={!referenceURL.trim() || uploadMutation.isPending || referenceImages.length >= inputPolicy.maxReferenceImages} onClick={addReferenceURL}>{t("creativeConsole.addReferenceImage")}</Button>
                     </div>
+                    {referenceURL.trim() ? <p className="mt-2 text-sm text-muted-foreground">{t("creativeConsole.referenceImageAddHint")}</p> : null}
                     <input
                       ref={referenceFileInputRef}
                       type="file"
+                      multiple
                       accept="image/png,image/jpeg,image/webp,image/gif"
                       className="hidden"
                       onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        if (file) {
+                        const files = Array.from(event.target.files ?? []);
+                        if (files.length > 0) {
                           const selectionVersion = referenceSelectionVersionRef.current + 1;
                           referenceSelectionVersionRef.current = selectionVersion;
-                          imageSelectionVersionRef.current += 1;
-                          setReferenceURL("");
-                          setReferenceFileID("");
-                          setImageURL("");
-                          setImageFileID("");
+                          setReferenceError("");
                           uploadMutation.reset();
-                          uploadMutation.mutate({ file, kind: "reference", selectionVersion });
+                          uploadMutation.mutate({ files, kind: "reference", selectionVersion });
                         }
                         event.target.value = "";
                       }}
                     />
-                    <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" disabled={uploadMutation.isPending} onClick={() => referenceFileInputRef.current?.click()}>
+                    <Button type="button" variant="secondary" size="sm" className="mt-2 w-full" disabled={uploadMutation.isPending || referenceImages.length >= inputPolicy.maxReferenceImages} onClick={() => referenceFileInputRef.current?.click()}>
                       {uploadMutation.isPending ? <Loader2 className="animate-spin" /> : <Upload />}
                       {t("creativeConsole.uploadImage")}
                     </Button>
                     {uploadMutation.isError ? <p className="mt-1 text-[11px] text-destructive">{uploadMutation.error.message}</p> : null}
+                    {referenceError ? <p role="alert" className="mt-2 text-sm text-destructive">{referenceError}</p> : null}
                   </PopoverContent>
                 </Popover>
-                <Select value={referenceVoiceId || "__none__"} onValueChange={(value) => { setReferenceVoiceId(value === "__none__" ? "" : value); if (value !== "__none__") { imageSelectionVersionRef.current += 1; setImageURL(""); setImageFileID(""); } }} disabled={hasFirstFrame}>
+                <Select value={referenceVoiceId || "__none__"} onValueChange={(value) => setReferenceVoiceId(value === "__none__" ? "" : value)} disabled={!inputPolicy.canReferenceVoices && !hasReferenceAudio}>
                   <SelectTrigger className={cn("h-8 w-auto gap-1.5 border-0 bg-transparent px-2 shadow-none", hasReferenceAudio && "bg-secondary/70")} aria-label={t("creativeConsole.referenceVoice")}>
                     <AudioLines className="size-3.5" />
                     <SelectValue placeholder={t("creativeConsole.referenceVoiceShort")} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">{t("creativeConsole.referenceVoiceNone")}</SelectItem>
-                    {(voices.length > 0 ? voices : [{ voiceId: "eve", name: "Eve" }, { voiceId: "ara", name: "Ara" }] as VoiceInfo[]).map((voice) => (
-                      <SelectItem key={voice.voiceId} value={voice.voiceId}>{voice.name || voice.voiceId}</SelectItem>
+                    {referenceVoices.map((voice) => (
+                      <SelectItem key={voice.voiceId} value={voice.voiceId} disabled={!inputPolicy.canReferenceVoices}>{voice.name || voice.voiceId}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -1570,7 +1596,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
               )}
               {action === "generate" ? (
                 <>
-                  <CompactSelect value={duration} options={videoDurations} onChange={setDuration} ariaLabel={t("creativeConsole.duration")} suffix="s" icon={<Clock3 />} />
+                  <CompactSelect value={selectedVideoDuration} options={generateDurations} onChange={setDuration} ariaLabel={t("creativeConsole.duration")} suffix="s" icon={<Clock3 />} />
                   <CompactSelect value={aspectRatio} options={videoAspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
                   <CompactSelect value={selectedVideoResolution} options={generateResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} />
                 </>

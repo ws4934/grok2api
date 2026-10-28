@@ -15,20 +15,19 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 	"github.com/gin-gonic/gin"
 )
 
 func (h *Handler) writeMediaResult(c *gin.Context, result *gateway.Result) {
+	if result.StatusCode >= http.StatusBadRequest {
+		h.writeResult(c, result, false, streamProtocolChat)
+		return
+	}
 	errorCode := ""
 	defer result.Body.Close()
 	defer func() { result.Finalize(gateway.Usage{}, "", errorCode) }()
-	if isUpstreamCredentialStatus(result.StatusCode) {
-		errorCode = "upstream_unavailable"
-		clientCode := readCredentialErrorCode(result.StatusCode, result.Body)
-		writeOpenAIError(c, http.StatusServiceUnavailable, clientCode, credentialErrorMessage(clientCode))
-		return
-	}
 	if result.StatusCode < http.StatusOK || (result.StatusCode >= http.StatusMultipleChoices && result.StatusCode < http.StatusBadRequest) {
 		errorCode = "invalid_upstream_status"
 		writeOpenAIError(c, http.StatusBadGateway, "invalid_upstream_response", "上游媒体服务返回了不安全的重定向响应")
@@ -112,6 +111,10 @@ func setResponseWriteDeadline(writer http.ResponseWriter) error {
 func writeMediaBody(c *gin.Context, source io.Reader, contentType string, statusCode int, limit int64) error {
 	c.Header("Content-Type", contentType)
 	c.Status(statusCode)
+	return copyResponseBodyLimited(c.Writer, source, limit)
+}
+
+func copyResponseBodyLimited(writer gin.ResponseWriter, source io.Reader, limit int64) error {
 	buffer := make([]byte, 64<<10)
 	var transferred int64
 	for {
@@ -125,10 +128,10 @@ func writeMediaBody(c *gin.Context, source io.Reader, contentType string, status
 			if int64(writeSize) > remaining {
 				writeSize = int(remaining)
 			}
-			if err := setResponseWriteDeadline(c.Writer); err != nil {
+			if err := setResponseWriteDeadline(writer); err != nil {
 				return err
 			}
-			written, writeErr := c.Writer.Write(buffer[:writeSize])
+			written, writeErr := writer.Write(buffer[:writeSize])
 			transferred += int64(written)
 			if writeErr != nil {
 				return writeErr
@@ -169,7 +172,15 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 	defer func() { result.Finalize(usage, responseID, errorCode) }()
 	if isUpstreamCredentialStatus(result.StatusCode) {
 		errorCode = "upstream_unavailable"
-		clientCode := readCredentialErrorCode(result.StatusCode, result.Body)
+		raw, readErr := io.ReadAll(io.LimitReader(result.Body, maxCredentialErrorInspectBytes+1))
+		clientCode := "upstream_unavailable"
+		if readErr == nil && len(raw) <= maxCredentialErrorInspectBytes {
+			if code, _ := gateway.ClassifyUpstreamHTTPError(result.StatusCode, raw); code == provider.ContentPolicyViolation {
+				errorCode = writeLocalizedHTTPError(c, result.StatusCode, raw, anthropic)
+				return
+			}
+			clientCode = gateway.ClientCredentialErrorCodeFromBody(result.StatusCode, raw)
+		}
 		if anthropic {
 			writeAnthropicError(c, http.StatusServiceUnavailable, "overloaded_error", credentialErrorMessage(clientCode), clientCode)
 		} else {
@@ -214,9 +225,18 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 	copyHeaders(c.Writer.Header(), result.Header)
 	if result.StatusCode >= 400 {
 		errorCode = "upstream_error"
-		if stream && !isEventStreamContentType(result.Header.Get("Content-Type")) {
+		if !isEventStreamContentType(result.Header.Get("Content-Type")) {
 			raw, readErr := io.ReadAll(io.LimitReader(result.Body, maxJSONResponseTransferBytes+1))
-			if readErr != nil {
+			if readErr != nil || len(raw) > maxJSONResponseTransferBytes {
+				if len(raw) > maxJSONResponseTransferBytes {
+					errorCode = "response_too_large"
+					if anthropic {
+						writeAnthropicError(c, http.StatusBadGateway, "api_error", "上游响应超过代理安全上限", errorCode)
+					} else {
+						writeOpenAIError(c, http.StatusBadGateway, errorCode, "上游响应超过代理安全上限")
+					}
+					return
+				}
 				if anthropic {
 					writeAnthropicError(c, http.StatusBadGateway, "api_error", "读取上游错误响应失败", "upstream_error")
 				} else {
@@ -225,13 +245,7 @@ func (h *Handler) writeProtocolResult(c *gin.Context, result *gateway.Result, st
 				return
 			}
 			c.Writer.Header().Del("Content-Length")
-			code, message := gateway.ClassifyUpstreamHTTPError(result.StatusCode, raw)
-			errorCode = code
-			if anthropic {
-				writeAnthropicError(c, result.StatusCode, anthropicUpstreamHTTPErrorType(result.StatusCode), message, errorCode)
-			} else {
-				writeOpenAIError(c, result.StatusCode, errorCode, message)
-			}
+			errorCode = writeLocalizedHTTPError(c, result.StatusCode, raw, anthropic)
 			return
 		}
 	}
@@ -310,6 +324,7 @@ func copyStream(writer gin.ResponseWriter, source io.Reader, protocol streamProt
 func copyStreamWithFallbackModel(writer gin.ResponseWriter, source io.Reader, protocol streamProtocol, onFirstToken func(), fallbackModel string) (responseMetadata, error) {
 	inspector := &responseInspector{protocol: protocol, onFirstToken: onFirstToken}
 	markerFilter := internalSSEMarkerFilter{enabled: protocol == streamProtocolChat || protocol == streamProtocolAnthropic}
+	var errorLocalizer errorSSELocalizer
 	var compat responsesCompatState
 	compat.model = strings.TrimSpace(fallbackModel)
 	buffer := make([]byte, responseCopyBufferBytes)
@@ -338,6 +353,7 @@ func copyStreamWithFallbackModel(writer gin.ResponseWriter, source io.Reader, pr
 				// output-observed classification.
 				inspector.Inspect(chunk)
 			}
+			chunk = errorLocalizer.filter(chunk, false)
 			if transferred+len(chunk) > maxStreamResponseTransferBytes {
 				return inspector.Metadata(), fmt.Errorf("%w: 流式响应超过 %d MiB", errResponseTransferLimit, maxStreamResponseTransferBytes>>20)
 			}
@@ -354,7 +370,7 @@ func copyStreamWithFallbackModel(writer gin.ResponseWriter, source io.Reader, pr
 			inspector.markFirstTokenForwarded()
 		}
 		if readErr != nil {
-			if tail := markerFilter.Filter(nil, true); len(tail) > 0 {
+			if tail := errorLocalizer.filter(markerFilter.Filter(nil, true), false); len(tail) > 0 {
 				if transferred+len(tail) > maxStreamResponseTransferBytes {
 					return inspector.Metadata(), fmt.Errorf("%w: 流式响应超过 %d MiB", errResponseTransferLimit, maxStreamResponseTransferBytes>>20)
 				}
@@ -370,6 +386,7 @@ func copyStreamWithFallbackModel(writer gin.ResponseWriter, source io.Reader, pr
 			if protocol == streamProtocolResponses {
 				if tail := flushResponsesStreamTail(&compat); len(tail) > 0 {
 					inspector.Inspect(tail)
+					tail = errorLocalizer.filter(tail, false)
 					if transferred+len(tail) > maxStreamResponseTransferBytes {
 						return inspector.Metadata(), fmt.Errorf("%w: 流式响应超过 %d MiB", errResponseTransferLimit, maxStreamResponseTransferBytes>>20)
 					}
@@ -382,6 +399,18 @@ func copyStreamWithFallbackModel(writer gin.ResponseWriter, source io.Reader, pr
 					writer.Flush()
 					transferred += len(tail)
 				}
+			}
+			if tail := errorLocalizer.filter(nil, true); len(tail) > 0 {
+				if transferred+len(tail) > maxStreamResponseTransferBytes {
+					return inspector.Metadata(), errResponseTransferLimit
+				}
+				if err := setResponseWriteDeadline(writer); err != nil {
+					return inspector.Metadata(), err
+				}
+				if _, err := writer.Write(tail); err != nil {
+					return inspector.Metadata(), err
+				}
+				writer.Flush()
 			}
 			inspector.Finish()
 			inspector.markFirstTokenForwarded()
@@ -546,46 +575,39 @@ func nextInternalSSEMarker(value []byte) (int, int) {
 }
 
 func copyJSON(writer gin.ResponseWriter, source io.Reader, protocol streamProtocol) (responseMetadata, error) {
-	buffer := make([]byte, responseCopyBufferBytes)
-	metadataBody := make([]byte, 0, responseCopyBufferBytes)
-	metadataComplete := true
-	transferred := 0
-	for {
-		n, readErr := source.Read(buffer)
-		if n > 0 {
-			if transferred+n > maxJSONResponseTransferBytes {
-				return responseMetadata{}, fmt.Errorf("%w: 非流式响应超过 %d MiB", errResponseTransferLimit, maxJSONResponseTransferBytes>>20)
-			}
-			chunk := buffer[:n]
-			if err := setResponseWriteDeadline(writer); err != nil {
-				return responseMetadata{}, err
-			}
-			if _, err := writer.Write(chunk); err != nil {
-				return responseMetadata{}, err
-			}
-			transferred += n
-			if metadataComplete {
-				if len(metadataBody)+len(chunk) <= maxJSONMetadataInspectionBytes {
-					metadataBody = append(metadataBody, chunk...)
-				} else {
-					metadataBody = nil
-					metadataComplete = false
-				}
-			}
-		}
+	// Keep the existing metadata-sized prefix. A complete small JSON response
+	// can localize error.message before writing; large image results still stream.
+	prefix, readErr := io.ReadAll(io.LimitReader(source, maxJSONMetadataInspectionBytes+1))
+	if len(prefix) == 0 {
 		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				if transferred == 0 {
-					return responseMetadata{}, neterror.ErrUpstreamResponseEmpty
-				}
-				if metadataComplete {
-					return normalizeMetadataUsage(extractMetadata(metadataBody), protocol), nil
-				}
-				return responseMetadata{}, nil
-			}
-			return responseMetadata{Usage: gateway.Usage{OutputObserved: transferred > 0}}, readErr
+			return responseMetadata{}, readErr
 		}
+		return responseMetadata{}, neterror.ErrUpstreamResponseEmpty
 	}
+	metadata := responseMetadata{}
+	complete := int64(len(prefix)) <= maxJSONMetadataInspectionBytes
+	payload := prefix
+	if complete && readErr == nil {
+		metadata = normalizeMetadataUsage(extractMetadata(prefix), protocol)
+		payload = localizeErrorJSON(prefix, http.StatusBadGateway)
+	}
+	if err := setResponseWriteDeadline(writer); err != nil {
+		return metadata, err
+	}
+	if _, err := writer.Write(payload); err != nil {
+		return metadata, err
+	}
+	if readErr != nil {
+		return responseMetadata{Usage: gateway.Usage{OutputObserved: len(prefix) > 0}}, readErr
+	}
+	if complete {
+		return metadata, nil
+	}
+	err := copyResponseBodyLimited(writer, source, maxJSONResponseTransferBytes-int64(len(prefix)))
+	if err != nil {
+		return responseMetadata{Usage: gateway.Usage{OutputObserved: true}}, err
+	}
+	return responseMetadata{}, nil
 }
 
 func copyHeaders(destination, source http.Header) {

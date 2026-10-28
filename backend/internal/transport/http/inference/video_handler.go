@@ -199,7 +199,7 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 		}
 		// Inputs beyond the gateway's limits are dropped, the first ones kept;
 		// the route's provider then keeps what its upstream takes.
-		request.ReferenceImages = request.ReferenceImages[:min(len(request.ReferenceImages), mediadomain.MaxInputImages)]
+		request.ReferenceImages = request.ReferenceImages[:min(len(request.ReferenceImages), mediadomain.MaxVideoReferenceImages)]
 		request.ReferenceAudios = request.ReferenceAudios[:min(len(request.ReferenceAudios), maxVideoReferenceAudios)]
 		request.ReferenceVideos = request.ReferenceVideos[:min(len(request.ReferenceVideos), mediadomain.MaxReferenceVideos)]
 		referenceURLs = make([]string, 0, len(request.ReferenceImages))
@@ -448,9 +448,10 @@ func videoGenerationResponse(job mediadomain.Job, contentURLs ...string) gin.H {
 			"video": video, "video_url": videoURL,
 		}
 	case mediadomain.StatusFailed, mediadomain.StatusUncertain, mediadomain.StatusCanceled:
+		message := provider.LocalizePublicErrorMessage(http.StatusBadGateway, job.ErrorCode, job.ErrorMessage)
 		return gin.H{
 			"status": "failed",
-			"error":  gin.H{"code": officialVideoErrorCode(job.ErrorCode), "message": job.ErrorMessage},
+			"error":  gin.H{"code": officialVideoErrorCode(job.ErrorCode), "message": message},
 		}
 	default:
 		return gin.H{"status": "pending", "model": job.Model, "progress": min(99, max(0, job.Progress))}
@@ -461,7 +462,7 @@ func officialVideoErrorCode(value string) string {
 	switch value {
 	case "account_unavailable", "provider_unavailable":
 		return "service_unavailable"
-	case "model_not_found":
+	case "model_not_found", "invalid_request", "invalid_argument", provider.ContentPolicyViolation:
 		return "invalid_argument"
 	default:
 		return "internal_error"

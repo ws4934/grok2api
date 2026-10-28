@@ -90,6 +90,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true},
 			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, TTS: true, STT: true, SingleImagePerRequest: true},
 			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true, SessionIdentity: true},
+			failure:      provider.FailurePolicy{SoftRateLimit: true},
 		},
 		{
 			provider: account.ProviderAdobe, catalog: provider.ModelCatalogStatic, quota: provider.QuotaRemoteWindow,

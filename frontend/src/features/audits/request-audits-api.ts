@@ -95,6 +95,7 @@ export type AuditAttemptDTO = {
   responseBodyEncoding: "utf8" | "base64";
   responseBodyTruncated: boolean;
   transportError?: string;
+  errorMessage?: string;
   errorChain: Array<{ type: string; message: string }>;
 };
 
@@ -170,7 +171,7 @@ const auditAttemptValidator = hasShape({
   accountId: isOptional(isString), accountName: isOptional(isString), method: isOptional(isString), requestPath: isOptional(isString), upstreamUrl: isOptional(isString),
   startedAt: isString, durationMs: isNumber, upstreamStatusCode: isOptional(isNumber), upstreamStatus: isOptional(isString),
   responseHeaders: isRecordOf(isArrayOf(isString)), responseBody: isString, responseBodyEncoding: isOneOf("utf8", "base64"), responseBodyTruncated: isBoolean,
-  transportError: isOptional(isString), errorChain: isArrayOf(hasShape({ type: isString, message: isString })),
+  transportError: isOptional(isString), errorMessage: isOptional(isString), errorChain: isArrayOf(hasShape({ type: isString, message: isString })),
 });
 const decodeAuditPage = createObjectDecoder<AuditCursorPageDTO>("audit page", {
   items: isArrayOf(auditValidator), pageSize: isNumber, nextCursor: isString, hasMore: isBoolean,

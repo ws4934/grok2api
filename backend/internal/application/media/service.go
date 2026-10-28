@@ -27,6 +27,8 @@ var (
 	ErrInvalidImageSelection = errors.New("图片选择无效")
 	ErrInvalidJobSelection   = errors.New("媒体任务选择无效")
 	ErrActiveJobSelection    = errors.New("排队中或生成中的媒体任务不能删除")
+	ErrPendingJobUsage       = errors.New("任务正在结算，请稍后再删除")
+	ErrJobStateChanged       = errors.New("任务状态已变化，请刷新后重试")
 	ErrInvalidFilter         = errors.New("媒体筛选条件无效")
 	ErrMediaJobsUnavailable  = errors.New("媒体任务仓储未配置")
 	ErrInputAssetNotFound    = errors.New("临时输入资产不存在或已过期")
@@ -427,6 +429,9 @@ func (s *Service) AdminDeleteJobs(ctx context.Context, ids []string) (int, error
 		if !job.Status.Terminal() {
 			return 0, ErrActiveJobSelection
 		}
+		if job.UsagePending() {
+			return 0, ErrPendingJobUsage
+		}
 	}
 
 	deleted := 0
@@ -442,6 +447,9 @@ func (s *Service) AdminDeleteJobs(ctx context.Context, ids []string) (int, error
 		if err := s.jobs.DeleteMediaJob(ctx, job.ID); err != nil {
 			if errors.Is(err, repository.ErrNotFound) {
 				continue
+			}
+			if errors.Is(err, repository.ErrConflict) {
+				return deleted, ErrJobStateChanged
 			}
 			return deleted, err
 		}

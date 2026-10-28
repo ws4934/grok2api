@@ -36,8 +36,14 @@ const (
 // Keep the relational CHECK constraint and gateway encode guard aligned with this value.
 const MaxInputJSONBytes = 32 << 20
 
-// MaxInputImages is the maximum number of reference images accepted for a video job.
+// MaxInputImages is the input-image ceiling for image jobs and Build video references.
 const MaxInputImages = 8
+
+// MaxVideoReferenceImages admits the largest supported video reference set.
+const MaxVideoReferenceImages = 14
+
+// MaxVideoInputImages includes a pinned first frame alongside all references.
+const MaxVideoInputImages = MaxVideoReferenceImages + 1
 
 // MaxReferenceVideos is the maximum number of reference videos accepted for a video job.
 const MaxReferenceVideos = 10
@@ -121,4 +127,10 @@ type Job struct {
 	// ResumeGeneration is the generation the latest administrator resume of an
 	// image job started from (0: never resumed).
 	ResumeGeneration int
+}
+
+// UsagePending keeps terminal jobs available for durable audit settlement.
+// A canceled video was never submitted and has no billable outcome.
+func (j Job) UsagePending() bool {
+	return j.Status.Terminal() && j.UsageRecordedAt == nil && !(j.Status == StatusCanceled && j.Kind != KindImage)
 }

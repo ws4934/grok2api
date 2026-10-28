@@ -2,7 +2,6 @@ package inference
 
 import (
 	"errors"
-	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,6 +19,10 @@ func anthropicUpstreamHTTPErrorType(status int) string {
 		return "invalid_request_error"
 	case http.StatusNotFound:
 		return "not_found_error"
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
 	case http.StatusTooManyRequests:
 		return "rate_limit_error"
 	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
@@ -30,6 +33,7 @@ func anthropicUpstreamHTTPErrorType(status int) string {
 }
 
 func writeOpenAIError(c *gin.Context, status int, code, message string) {
+	message = provider.LocalizePublicErrorMessage(status, code, message)
 	middleware.NoteError(c, code, message)
 	c.AbortWithStatusJSON(status, gin.H{"error": gin.H{"message": message, "type": middleware.OpenAIErrorType(status), "code": code, "param": nil}})
 }
@@ -37,7 +41,7 @@ func writeOpenAIError(c *gin.Context, status int, code, message string) {
 func writeGatewayError(c *gin.Context, err error) {
 	status, code := http.StatusBadGateway, "upstream_unavailable"
 	message := "上游服务暂不可用"
-	var upstreamFailure *gateway.UpstreamFailure
+	upstreamFailure := gateway.ProviderUpstreamFailure(err, 0, "")
 	var selectionFailure *gateway.SelectionUnavailableError
 	var imageRejection *gateway.ImageRequestRejectedError
 	publicMessage, public := provider.ErrorPublicMessage(err)
@@ -81,7 +85,7 @@ func writeGatewayError(c *gin.Context, err error) {
 	case errors.As(err, &imageRejection):
 		status, code = http.StatusBadRequest, "invalid_parameter"
 		message = err.Error()
-	case errors.As(err, &upstreamFailure):
+	case upstreamFailure != nil:
 		if isSanitizedUpstreamAvailabilityFailure(upstreamFailure) {
 			// Gateway mid-tier behavior: never expose upstream upgrade/billing prompts to clients.
 			code = upstreamFailure.ClientCredentialErrorCode()
@@ -108,7 +112,7 @@ func writeGatewayAnthropicError(c *gin.Context, err error) {
 	status, errorType := http.StatusBadGateway, "api_error"
 	message := "上游服务暂不可用"
 	clientCode := ""
-	var upstreamFailure *gateway.UpstreamFailure
+	upstreamFailure := gateway.ProviderUpstreamFailure(err, 0, "")
 	var selectionFailure *gateway.SelectionUnavailableError
 	switch {
 	case errors.Is(err, gateway.ErrLedgerUnavailable):
@@ -126,7 +130,7 @@ func writeGatewayAnthropicError(c *gin.Context, err error) {
 	case errors.Is(err, gateway.ErrResponseStateUnsupported), errors.Is(err, gateway.ErrConversationUnsupported):
 		status, errorType = http.StatusBadRequest, "invalid_request_error"
 		message = err.Error()
-	case errors.As(err, &upstreamFailure):
+	case upstreamFailure != nil:
 		if isSanitizedUpstreamAvailabilityFailure(upstreamFailure) {
 			clientCode = upstreamFailure.ClientCredentialErrorCode()
 			if upstreamFailure.QuotaExhausted || upstreamFailure.FreeQuotaExhausted || upstreamFailure.HTTPStatus == http.StatusPaymentRequired {
@@ -135,6 +139,7 @@ func writeGatewayAnthropicError(c *gin.Context, err error) {
 			status, errorType, message = http.StatusServiceUnavailable, "overloaded_error", credentialErrorMessage(clientCode)
 		} else {
 			status, message = upstreamFailure.HTTPStatus, upstreamFailure.PublicMessage
+			errorType = anthropicUpstreamHTTPErrorType(status)
 			if upstreamFailure.Code == "upstream_header_timeout" {
 				errorType = "timeout_error"
 			}
@@ -165,7 +170,7 @@ func isUpstreamCredentialStatus(status int) bool {
 }
 
 func isSanitizedUpstreamAvailabilityFailure(failure *gateway.UpstreamFailure) bool {
-	return failure != nil && (isUpstreamCredentialStatus(failure.HTTPStatus) || failure.QuotaExhausted || failure.FreeQuotaExhausted)
+	return failure != nil && !failure.SafetyRejection && (isUpstreamCredentialStatus(failure.HTTPStatus) || failure.QuotaExhausted || failure.FreeQuotaExhausted)
 }
 
 func selectionErrorResponse(c *gin.Context, failure *gateway.SelectionUnavailableError) (int, string, string) {
@@ -200,6 +205,7 @@ func selectionErrorResponse(c *gin.Context, failure *gateway.SelectionUnavailabl
 }
 
 func writeAnthropicError(c *gin.Context, status int, errorType, message string, errorCode ...string) {
+	message = provider.LocalizePublicErrorMessage(status, errorType, message)
 	errorPayload := gin.H{"type": errorType, "message": message}
 	logCode := errorType
 	if len(errorCode) > 0 && errorCode[0] != "" {
@@ -210,14 +216,6 @@ func writeAnthropicError(c *gin.Context, status int, errorType, message string, 
 		errorPayload["code"] = errorCode[0]
 	}
 	c.AbortWithStatusJSON(status, gin.H{"type": "error", "error": errorPayload})
-}
-
-func readCredentialErrorCode(status int, source io.Reader) string {
-	body, err := io.ReadAll(io.LimitReader(source, maxCredentialErrorInspectBytes+1))
-	if err != nil || len(body) > maxCredentialErrorInspectBytes {
-		return "upstream_unavailable"
-	}
-	return gateway.ClientCredentialErrorCodeFromBody(status, body)
 }
 
 func credentialErrorMessage(code string) string {

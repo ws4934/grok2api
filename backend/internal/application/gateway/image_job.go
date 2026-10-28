@@ -570,6 +570,9 @@ func (s *Service) submitImage(ctx context.Context, job *media.Job, route modeldo
 			err = context.Cause(ctx)
 			status = ""
 		}
+		if status == media.StatusFailed && provider.ErrorHTTPStatusOrZero(err) == http.StatusTooManyRequests {
+			code = "rate_limited"
+		}
 		return nil, cp, &imageOutcome{status: status, code: code, err: err, upstreamStatus: provider.ErrorHTTPStatusOrZero(err), attempts: attempts.snapshot()}
 	}
 	scope := clientkey.AccountScope{}
@@ -633,6 +636,11 @@ func (s *Service) submitImage(ctx context.Context, job *media.Job, route modeldo
 			lease.Release()
 			return stop("", "", err)
 		}
+		if failure := ProviderUpstreamFailure(err, credential.ID, credential.Name); failure != nil && failure.SafetyRejection {
+			lease.completeSelectorObservation(false)
+			lease.Release()
+			return stop(media.StatusFailed, provider.ContentPolicyViolation, err)
+		}
 		if cp.Submitted {
 			switch {
 			case status >= http.StatusBadRequest && status < http.StatusInternalServerError:
@@ -685,10 +693,9 @@ func (s *Service) submitImage(ctx context.Context, job *media.Job, route modeldo
 			pinned = credential.ID
 		case status == http.StatusTooManyRequests && lease.QuotaMode != "":
 			if quotaKind, _ := s.providers.QuotaKind(credential.Provider); quotaKind == provider.QuotaRemoteWindow {
-				exhausted, reconcileErr := s.accounts.ReconcileWebRateLimit(ctx, credential.ID, lease.QuotaMode, provider.ErrorRetryAfter(err))
-				if reconcileErr != nil || !exhausted {
-					s.selector.MarkFailure(ctx, credential, status, provider.ErrorRetryAfter(err))
-				}
+				retryAfter := provider.ErrorRetryAfter(err)
+				state, reconcileErr := s.accounts.ReconcileRateLimit(ctx, credential.ID, lease.QuotaMode, retryAfter)
+				s.applyRateLimitReconciliation(ctx, credential, status, retryAfter, state, reconcileErr)
 				continue
 			}
 			s.selector.MarkFailure(ctx, credential, status, provider.ErrorRetryAfter(err))
@@ -729,6 +736,9 @@ func (s *Service) consumeMediaQuota(route modeldomain.Route, accountID uint64, q
 // endImageJob writes the terminal state, releases the reservations of
 // undelivered images and records the remaining audits.
 func (s *Service) endImageJob(ctx context.Context, job *media.Job, status media.Status, code string, err error, upstreamStatus int, attempts ...audit.Attempt) {
+	if failure := ProviderUpstreamFailure(err, job.AccountID, job.AccountName); failure != nil && failure.SafetyRejection {
+		code = provider.ContentPolicyViolation
+	}
 	if status == media.StatusUncertain && job.ResumeGeneration > 0 {
 		// A resumed job still names its upstream result: it stays resumable,
 		// never resubmitted (its inputs were compacted when it first failed).

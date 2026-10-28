@@ -497,16 +497,25 @@ func (r *MediaJobRepository) ResumeMediaJob(ctx context.Context, id string, gene
 	return mediaJobToDomain(row), nil
 }
 
-// DeleteMediaJob 仅删除终态任务，避免管理端与媒体 Worker 并发修改同一任务。
+// DeleteMediaJob only removes settled terminal jobs. The database predicate
+// also protects usage recovery if a caller read an older job snapshot.
 func (r *MediaJobRepository) DeleteMediaJob(ctx context.Context, id string) error {
 	result := r.db.db.WithContext(ctx).
 		Where("id = ? AND status IN ?", id, []media.Status{media.StatusCompleted, media.StatusFailed, media.StatusCanceled, media.StatusUncertain}).
+		Where("usage_recorded_at IS NOT NULL OR (status = ? AND kind <> ?)", media.StatusCanceled, media.KindImage).
 		Delete(&mediaJobModel{})
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return repository.ErrNotFound
+		var count int64
+		if err := r.db.db.WithContext(ctx).Model(&mediaJobModel{}).Where("id = ?", id).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return repository.ErrNotFound
+		}
+		return repository.ErrConflict
 	}
 	return nil
 }

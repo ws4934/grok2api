@@ -11,6 +11,8 @@ import (
 type responseInspector struct {
 	protocol        streamProtocol
 	pending         []byte
+	imageProjection imageEventProjection
+	droppingLine    bool
 	metadata        responseMetadata
 	onFirstToken    func()
 	firstTokenSeen  bool
@@ -30,10 +32,21 @@ var internalSSEMarkers = [][]byte{
 }
 
 func (i *responseInspector) Inspect(chunk []byte) {
-	i.pending = append(i.pending, chunk...)
-	for {
-		index := bytes.IndexByte(i.pending, '\n')
-		if index < 0 {
+	for len(chunk) > 0 {
+		index := bytes.IndexByte(chunk, '\n')
+		fragment := chunk
+		if index >= 0 {
+			fragment = chunk[:index]
+		}
+		if !i.droppingLine {
+			if i.protocol == streamProtocolImage {
+				i.pending = i.imageProjection.append(i.pending, fragment)
+				if i.imageProjection.payloadObserved && bytes.HasPrefix(bytes.TrimSpace(i.pending), []byte("data:")) {
+					i.metadata.Usage.OutputObserved = true
+				}
+			} else {
+				i.pending = append(i.pending, fragment...)
+			}
 			if len(i.pending) > maxStreamEventInspectionBytes {
 				// The line has already been forwarded by copyStream. Treat an
 				// oversized SSE data line as observed output conservatively so a
@@ -43,44 +56,56 @@ func (i *responseInspector) Inspect(chunk []byte) {
 					i.metadata.Usage.OutputObserved = true
 				}
 				i.pending = nil
+				i.droppingLine = true
 			}
+		}
+		if index < 0 {
 			return
 		}
-		line := bytes.TrimSpace(i.pending[:index])
-		i.pending = i.pending[index+1:]
-		if i.protocol == streamProtocolChat && bytes.Equal(line, []byte(reasoningStartSSEComment)) {
-			i.observeReasoningStart()
-			continue
+		if !i.droppingLine && !i.imageProjection.invalid {
+			i.inspectLine(i.pending)
 		}
-		if bytes.HasPrefix(line, []byte("data:")) {
-			value := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
-			event := inspectStreamEvent(value, i.protocol)
-			if event.generated {
-				i.metadata.Usage.OutputObserved = true
+		i.pending = i.pending[:0]
+		i.droppingLine = false
+		i.imageProjection = imageEventProjection{}
+		chunk = chunk[index+1:]
+	}
+}
+
+func (i *responseInspector) inspectLine(raw []byte) {
+	line := bytes.TrimSpace(raw)
+	if i.protocol == streamProtocolChat && bytes.Equal(line, []byte(reasoningStartSSEComment)) {
+		i.observeReasoningStart()
+		return
+	}
+	if bytes.HasPrefix(line, []byte("data:")) {
+		value := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		event := inspectStreamEvent(value, i.protocol)
+		if event.generated {
+			i.metadata.Usage.OutputObserved = true
+		}
+		i.observeFirstToken(event.generated)
+		i.observeTerminal(value, event)
+		if !bytes.Equal(value, []byte("[DONE]")) {
+			metadata := event.metadata
+			if hasUsageMetadata(metadata.Usage) {
+				if metadata.Usage.ResponseModel == "" {
+					metadata.Usage.ResponseModel = i.metadata.Model
+				}
+				i.metadata.Usage = mergeGatewayUsage(i.metadata.Usage, metadata.Usage)
 			}
-			i.observeFirstToken(event.generated)
-			i.observeTerminal(value, event)
-			if !bytes.Equal(value, []byte("[DONE]")) {
-				metadata := event.metadata
-				if hasUsageMetadata(metadata.Usage) {
-					if metadata.Usage.ResponseModel == "" {
-						metadata.Usage.ResponseModel = i.metadata.Model
-					}
-					i.metadata.Usage = mergeGatewayUsage(i.metadata.Usage, metadata.Usage)
-				}
-				if metadata.ResponseID != "" {
-					i.metadata.ResponseID = metadata.ResponseID
-				}
-				if metadata.SequenceNumber > i.metadata.SequenceNumber {
-					i.metadata.SequenceNumber = metadata.SequenceNumber
-				}
-				if metadata.Model != "" {
-					i.metadata.Model = metadata.Model
-					i.metadata.Usage.ResponseModel = metadata.Model
-				}
-				if metadata.cacheCreationInputTokens > 0 {
-					i.metadata.cacheCreationInputTokens = metadata.cacheCreationInputTokens
-				}
+			if metadata.ResponseID != "" {
+				i.metadata.ResponseID = metadata.ResponseID
+			}
+			if metadata.SequenceNumber > i.metadata.SequenceNumber {
+				i.metadata.SequenceNumber = metadata.SequenceNumber
+			}
+			if metadata.Model != "" {
+				i.metadata.Model = metadata.Model
+				i.metadata.Usage.ResponseModel = metadata.Model
+			}
+			if metadata.cacheCreationInputTokens > 0 {
+				i.metadata.cacheCreationInputTokens = metadata.cacheCreationInputTokens
 			}
 		}
 	}
@@ -293,6 +318,16 @@ func (i *responseInspector) observeTerminal(data []byte, event streamEvent) {
 		}
 		return
 	}
+	// Chat Completions can end with {"error": {...}} without a type field.
+	if i.protocol == streamProtocolChat && bytes.Contains(data, []byte(`"error"`)) {
+		var envelope struct {
+			Error json.RawMessage `json:"error"`
+		}
+		if json.Unmarshal(data, &envelope) == nil && len(envelope.Error) > 0 && !bytes.Equal(bytes.TrimSpace(envelope.Error), []byte("null")) {
+			i.markTerminalFailure(data)
+			return
+		}
+	}
 	if !event.typed {
 		return
 	}
@@ -431,9 +466,10 @@ func projectSafeScalar(raw json.RawMessage) json.RawMessage {
 }
 
 func (i *responseInspector) Finish() {
-	if len(i.pending) == 0 {
-		return
+	if !i.droppingLine && !i.imageProjection.invalid && len(i.pending) > 0 {
+		i.inspectLine(i.pending)
 	}
-	i.pending = append(i.pending, '\n')
-	i.Inspect(nil)
+	i.pending = nil
+	i.droppingLine = false
+	i.imageProjection = imageEventProjection{}
 }

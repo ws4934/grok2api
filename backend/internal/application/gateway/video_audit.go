@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -103,6 +104,8 @@ func resolveVideoAuditStatusCode(job media.Job, upstreamStatus int, attempts []a
 		return http.StatusNotFound
 	case "rate_limited":
 		return http.StatusTooManyRequests
+	case provider.ContentPolicyViolation:
+		return http.StatusBadRequest
 	default:
 		return http.StatusBadGateway
 	}
@@ -163,6 +166,13 @@ func captureVideoAttempt(recorder *failureAttemptRecorder, credential account.Cr
 		attempt.UpstreamStatus = http.StatusText(status)
 		body := []byte(sanitizeDiagnosticText(err.Error(), diagnosticTextLimit))
 		attempt.ResponseBody = body
+	}
+	var diagnosticError provider.UpstreamDiagnosticError
+	if errors.As(err, &diagnosticError) {
+		url, response := diagnosticError.UpstreamDiagnostic()
+		attempt.UpstreamURL = sanitizeUpstreamURL(url)
+		attempt.ResponseHeaders = sanitizeDiagnosticHeaders(response.Header)
+		attempt.ResponseBody, attempt.ResponseBodyTruncated = recorder.captureBody(response.Body, response.BodyTruncated)
 	}
 	recorder.append(attempt)
 }

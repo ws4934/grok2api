@@ -76,6 +76,7 @@ type MediaJobRepository interface {
 	GetMediaJob(ctx context.Context, id string, clientKeyID uint64) (media.Job, error)
 	GetMediaJobsByIDs(ctx context.Context, ids []string) ([]media.Job, error)
 	UpdateMediaJob(ctx context.Context, value media.Job) error
+	// DeleteMediaJob rejects active or unsettled jobs with ErrConflict.
 	DeleteMediaJob(ctx context.Context, id string) error
 	ListMediaJobs(ctx context.Context, query MediaJobListQuery) ([]media.Job, int64, error)
 	// SummarizeMediaJobs counts jobs per status; an empty kind counts every kind.

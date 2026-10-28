@@ -56,6 +56,7 @@ func (a *Adapter) Definition() provider.Definition {
 		// SessionIdentity keeps a client session on one account, whose ChatGPT
 		// conversation a follow-up request then continues.
 		Inference: provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true, SessionIdentity: true},
+		Failure:   provider.FailurePolicy{SoftRateLimit: true},
 	}
 }
 

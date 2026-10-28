@@ -132,13 +132,13 @@ const (
 	VideoOperationExtend   = media.VideoOperationExtend
 )
 
-// ConsoleVideoMaxReferenceImages and ConsoleVideoMaxReferenceDurationSeconds
-// describe the Console reference-to-video contract enforced by the upstream.
+// Console video reference limits follow the model-specific xAI contract.
 // They are shared by admission control and the Console adapter so invalid
 // asynchronous jobs are rejected before enqueueing without weakening the
 // adapter's final request-boundary validation.
 const (
 	ConsoleVideoMaxReferenceImages          = 7
+	ConsoleVideo15MaxReferenceImages        = 14
 	ConsoleVideoMaxReferenceDurationSeconds = 10
 )
 
@@ -202,7 +202,7 @@ type VideoRequest struct {
 	ReferenceVideoURLs []string
 	// ReferenceURLs are style/content references (official "reference_images").
 	// A single reference must stay in reference_images and must not be coerced to image.
-	// Official docs forbid combining image with reference_images.
+	// Whether references combine with ImageURL depends on the provider and model.
 	ReferenceURLs []string
 	// ReferenceAudios are preset voice_ids for reference-to-video (official "reference_audios").
 	// At most 3 entries; may be used alone or with reference_images.
@@ -330,9 +330,8 @@ func NormalizeGrokVideoRequest(options VideoRequestOptions) (VideoRequestOptions
 	return options, nil
 }
 
-// FitGrokVideoInputs keeps the images a Grok video API takes: a first frame
-// cannot go with references, so the requested start wins and the references
-// are dropped, and at most maxReferences references remain.
+// FitGrokVideoInputs fits Build and classic Console's exclusive input modes:
+// the first frame wins over references, otherwise at most maxReferences remain.
 func FitGrokVideoInputs(options VideoRequestOptions, maxReferences int) VideoRequestOptions {
 	if options.HasImage {
 		options.ReferenceImages, options.ReferenceAudios = 0, 0

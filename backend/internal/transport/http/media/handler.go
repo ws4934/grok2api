@@ -12,6 +12,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
 	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/pkg/mediafile"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
@@ -282,14 +283,19 @@ func (h *Handler) jobDTO(job mediadomain.Job) mediaJobDTO {
 		assetID = job.ResultAssetID
 		assetIDs, assetURLs = []string{assetID}, []string{h.service.PublicVideoURL(assetID)}
 	}
+	message := job.ErrorMessage
+	if message != "" {
+		message = provider.LocalizePublicErrorMessage(http.StatusBadGateway, job.ErrorCode, message)
+	}
 	return mediaJobDTO{
 		ID: job.ID, Kind: string(job.Kind), Provider: job.Provider, Model: job.Model, Operation: string(job.Operation),
 		Prompt: job.Prompt, Status: string(job.Status), Progress: job.Progress, Seconds: job.Seconds, Size: job.Size, Quality: job.Quality,
 		AccountName: job.AccountName, ClientKeyName: job.ClientKeyName,
 		CreatedAt: job.CreatedAt.Format("2006-01-02T15:04:05Z"), CompletedAt: completedAt,
-		ErrorCode: job.ErrorCode, ErrorMessage: job.ErrorMessage, AssetID: assetID, AssetIDs: assetIDs, AssetURLs: assetURLs,
-		Cancellable: job.Status == mediadomain.StatusQueued || (job.Kind == mediadomain.KindImage && job.Status == mediadomain.StatusInProgress && !job.Submitted),
-		Retryable:   job.Status == mediadomain.StatusUncertain || gateway.ImageJobResumable(job),
+		ErrorCode: job.ErrorCode, ErrorMessage: message, AssetID: assetID, AssetIDs: assetIDs, AssetURLs: assetURLs,
+		Cancellable:  job.Status == mediadomain.StatusQueued || (job.Kind == mediadomain.KindImage && job.Status == mediadomain.StatusInProgress && !job.Submitted),
+		Retryable:    job.Status == mediadomain.StatusUncertain || gateway.ImageJobResumable(job),
+		UsagePending: job.UsagePending(),
 	}
 }
 
@@ -316,6 +322,14 @@ func (h *Handler) deleteJobs(c *gin.Context) {
 		return
 	}
 	deleted, err := h.service.AdminDeleteJobs(c.Request.Context(), request.IDs)
+	if errors.Is(err, mediaapp.ErrPendingJobUsage) {
+		response.Error(c, http.StatusConflict, "mediaJobUsagePending", err.Error())
+		return
+	}
+	if errors.Is(err, mediaapp.ErrJobStateChanged) {
+		response.Error(c, http.StatusConflict, "mediaJobStateChanged", err.Error())
+		return
+	}
 	if errors.Is(err, mediaapp.ErrInvalidJobSelection) || errors.Is(err, mediaapp.ErrActiveJobSelection) {
 		response.Error(c, http.StatusBadRequest, "invalidJobSelection", err.Error())
 		return

@@ -50,7 +50,7 @@ func TestWriteResultImageStreamCountsImagesBeforeAnError(t *testing.T) {
 		": keep-alive\n\n" +
 		"event: error\ndata: " + `{"type":"error","error":{"type":"server_error","code":"upstream_error","message":"second image failed","param":null}}` + "\n\n"
 	recorder, usage, code := writeImageStream(t, body)
-	if code != "upstream_stream_error" || usage.OutputImages != 1 || recorder.Body.String() != body {
+	if code != "upstream_stream_error" || usage.OutputImages != 1 || !strings.Contains(recorder.Body.String(), "上游服务处理失败") || !strings.Contains(recorder.Body.String(), `"code":"upstream_error"`) {
 		t.Fatalf("final = %q images = %d body = %q", code, usage.OutputImages, recorder.Body.String())
 	}
 }

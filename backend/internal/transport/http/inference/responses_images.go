@@ -13,6 +13,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
 	clientkeydomain "github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
@@ -343,7 +344,7 @@ func imageResponseObject(job mediadomain.Job, result *gateway.ImageJobImage, usa
 	call := gin.H{"id": imageCallID(job), "type": "image_generation_call", "status": "failed", "result": nil}
 	switch {
 	case result != nil && result.Missing:
-		call["error"] = gin.H{"code": "result_unavailable", "message": "The generated image was removed from storage and can no longer be returned"}
+		call["error"] = gin.H{"code": "result_unavailable", "type": "server_error", "param": nil, "message": "生成的图片已从存储中移除，无法返回。"}
 	case result != nil:
 		size := job.Size
 		if result.Width > 0 && result.Height > 0 {
@@ -363,12 +364,18 @@ func imageResponseObject(job mediadomain.Job, result *gateway.ImageJobImage, usa
 	}
 	var problem any
 	if status == "failed" {
-		code, message := "image_generation_failed", "Image generation failed"
+		code := "server_error"
+		message := provider.LocalizePublicErrorMessage(http.StatusBadGateway, job.ErrorCode, job.ErrorMessage)
 		switch job.ErrorCode {
 		case "invalid_request":
-			code, message = "invalid_request", job.ErrorMessage
+			code, message = "invalid_prompt", provider.LocalizePublicErrorMessage(http.StatusBadRequest, job.ErrorCode, job.ErrorMessage)
+		case provider.ContentPolicyViolation:
+			code, message = "image_content_policy_violation", provider.ContentPolicyMessage
+			call["error"] = gin.H{"code": provider.ContentPolicyViolation, "type": "invalid_request_error", "message": message, "param": nil}
 		case "submission_uncertain":
-			code, message = "result_uncertain", "The image may have been submitted upstream, but its result is unknown"
+			message = "上游可能已接收图片生成请求，但结果暂时无法确认，请查询任务状态，避免重复提交。"
+		case "rate_limited":
+			code, message = "rate_limit_exceeded", provider.LocalizePublicErrorMessage(http.StatusTooManyRequests, job.ErrorCode, job.ErrorMessage)
 		}
 		problem = gin.H{"code": code, "message": message}
 	}

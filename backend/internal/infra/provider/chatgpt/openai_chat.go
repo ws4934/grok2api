@@ -338,6 +338,9 @@ func (s *openAIChatState) fragmentText() string {
 
 func (s *openAIChatState) event(value any) (OpenAIChatEvent, error) {
 	event := OpenAIChatEvent{}
+	if err := quotaRejection(value); err != nil {
+		return event, err
+	}
 	if object, ok := value.(map[string]any); ok {
 		if detail, ok := object["detail"].(string); ok {
 			return OpenAIChatEvent{}, &upstreamError{

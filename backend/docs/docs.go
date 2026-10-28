@@ -1754,6 +1754,7 @@ const docTemplate = `{
                     }
                 },
                 "reference_images": {
+                    "description": "Reference images: Console 1.5 accepts 14 alongside image; classic Console accepts 7, Build 8, both exclusive with image. Extra inputs are trimmed.",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/httpserver.SwaggerVideoMediaInput"

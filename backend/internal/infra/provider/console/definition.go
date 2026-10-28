@@ -50,19 +50,34 @@ func (a *Adapter) Definition() provider.Definition {
 
 // NormalizeVideoRequest applies the xAI video defaults and ranges and fits
 // the request to the Console upstream instead of letting it fail the job:
-// a first frame or up to 7 references (measured: 8 answer 400 "Maximum
-// allowed is 7", on both video models), and grok-imagine-video's
-// reference-to-video stops at 10 s (measured: 15 s answers 400; image-to-video
-// and grok-imagine-video-1.5 keep 15 s).
+// classic video takes a first frame or 7 references; 1.5 takes 14 references
+// alongside a pinned first frame and voices. Classic reference-to-video stops
+// at 10 s; image-to-video and 1.5 keep 15 s.
 func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
 	if options.Operation == provider.VideoOperationGenerate {
-		options = provider.FitGrokVideoInputs(options, provider.ConsoleVideoMaxReferenceImages)
+		if consoleVideoSupportsReferenceAudio(options.UpstreamModel) {
+			options.ReferenceImages = min(options.ReferenceImages, provider.ConsoleVideo15MaxReferenceImages)
+		} else {
+			options = provider.FitGrokVideoInputs(options, provider.ConsoleVideoMaxReferenceImages)
+			options.ReferenceAudios = 0
+		}
 	}
 	options, err := provider.NormalizeGrokVideoRequest(options)
 	if strings.TrimSpace(options.UpstreamModel) == "grok-imagine-video" && options.ReferenceImages > 0 {
 		options.Duration = min(options.Duration, provider.ConsoleVideoMaxReferenceDurationSeconds)
 	}
 	return options, err
+}
+
+func consoleVideoSupportsReferenceAudio(model string) bool {
+	return strings.TrimSpace(model) == "grok-imagine-video-1.5"
+}
+
+func consoleVideoReferenceImageLimit(model string) int {
+	if model == "grok-imagine-video-1.5" {
+		return provider.ConsoleVideo15MaxReferenceImages
+	}
+	return provider.ConsoleVideoMaxReferenceImages
 }
 
 // ValidateVideoRequest: edit and extension exist for grok-imagine-video only.

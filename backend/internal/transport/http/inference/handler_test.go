@@ -250,7 +250,7 @@ func TestGatewayErrorShowsMediaOutputReason(t *testing.T) {
 		err  error
 		want []string
 	}{
-		{"public reason", provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, publicOutputError{}), []string{`"code":"media_postprocessing_failed"`, "no transparent pixels"}},
+		{"public reason", provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, publicOutputError{}), []string{`"code":"media_postprocessing_failed"`, "透明区域"}},
 		{"no public reason", provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, errors.New("GET https://files.example/secret failed")), []string{`"code":"upstream_unavailable"`, "上游服务暂不可用"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1569,8 +1569,11 @@ func TestCopyStreamRequiresProtocolTerminalEvent(t *testing.T) {
 			} else if metadata.StreamFailure != nil {
 				t.Fatalf("unexpected stream failure diagnostic = %#v", metadata.StreamFailure)
 			}
-			if test.protocol != streamProtocolResponses && recorder.Body.String() != test.body {
+			if test.protocol != streamProtocolResponses && !test.wantDiagnostic && recorder.Body.String() != test.body {
 				t.Fatalf("forwarded = %q", recorder.Body.String())
+			}
+			if test.wantDiagnostic && !strings.Contains(recorder.Body.String(), "上游服务处理失败") {
+				t.Fatal(recorder.Body.String())
 			}
 			if test.protocol == streamProtocolResponses && !strings.Contains(recorder.Body.String(), `"type":`) {
 				t.Fatalf("responses stream missing type: %q", recorder.Body.String())
@@ -1744,7 +1747,7 @@ func TestWriteProtocolResultDoesNotRemapOtherJSON4xxAsServerError(t *testing.T) 
 	})
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
-	if recorder.Code != http.StatusNotFound || finalCode != "upstream_error" || !strings.Contains(recorder.Body.String(), "requested response is missing") {
+	if recorder.Code != http.StatusNotFound || finalCode != "upstream_error" || !strings.Contains(recorder.Body.String(), "请求的资源不存在") || !strings.Contains(recorder.Body.String(), `"code":"not_found"`) {
 		t.Fatalf("status=%d final=%q body=%s", recorder.Code, finalCode, recorder.Body.String())
 	}
 }
@@ -1922,6 +1925,30 @@ func TestReferenceToVideoRequestValidation(t *testing.T) {
 	router.ServeHTTP(validRec, valid)
 	if validRec.Code != http.StatusUnauthorized {
 		t.Fatalf("valid r2v status=%d body=%s", validRec.Code, validRec.Body.String())
+	}
+}
+
+func TestVideoReferenceImageGatewayCeiling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &Handler{maxBodyBytes: 1 << 20}
+	router := gin.New()
+	handler.Register(router.Group("/v1"))
+	// A malformed 14th reference must be checked, not silently lost at the old
+	// 8-image ceiling. Only inputs after the 14th are trimmed before parsing.
+	for _, tc := range []struct {
+		validImages int
+		want        int
+	}{
+		{13, http.StatusBadRequest}, {14, http.StatusUnauthorized},
+	} {
+		references := strings.Repeat(`{"url":"https://example.com/ref.png"},`, tc.validImages) + `{}`
+		request := httptest.NewRequest(http.MethodPost, "/v1/videos/generations", strings.NewReader(`{"model":"grok-imagine-video-1.5","prompt":"animate","image":{"url":"https://example.com/first.png"},"reference_images":[`+references+`]}`))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != tc.want {
+			t.Fatalf("%d valid refs then invalid: %d %s", tc.validImages, recorder.Code, recorder.Body.String())
+		}
 	}
 }
 func TestEditAndExtendVideoRequestValidation(t *testing.T) {

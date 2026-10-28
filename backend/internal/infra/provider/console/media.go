@@ -27,13 +27,8 @@ const (
 	consoleImageBodyLimit       = 32 << 20
 	consoleImageDownloadTimeout = 45 * time.Second
 	consoleMaxEditImages        = 3
-	// Upstream enforces the two video image inputs separately (measured against
-	// console.x.ai on both grok-imagine-video and grok-imagine-video-1.5):
-	//   image            = first frame, image-to-video, at most 1
-	//   reference_images = style/content references, reference-to-video, at most 7
-	//     8 references answer 400 "Too many reference images: 8. Maximum allowed is 7."
-	// The two are mutually exclusive below and their limits are never summed, so a
-	// combined ceiling would accept payloads that upstream then rejects.
+	// image is a single first frame. Classic video makes it exclusive with
+	// references; 1.5 pins it alongside up to 14 reference_images.
 	consoleMaxVideoFirstFrames = 1
 )
 
@@ -43,6 +38,8 @@ var consoleVideoPollEvery = 2 * time.Second
 type consoleMediaUpstreamError struct {
 	status        int
 	summary       string
+	message       string
+	body          []byte
 	retryAfter    time.Duration
 	requestScoped bool
 }
@@ -59,6 +56,10 @@ func (e *consoleMediaUpstreamError) Error() string {
 		return ""
 	}
 	return e.summary
+}
+
+func (e *consoleMediaUpstreamError) UpstreamDiagnostic() (string, provider.DiagnosticResponse) {
+	return "", provider.DiagnosticResponse{StatusCode: e.status, Status: http.StatusText(e.status), Body: e.body}
 }
 
 func (e *consoleMediaUpstreamError) HTTPStatusCode() int {
@@ -83,7 +84,7 @@ func (e *consoleMediaUpstreamError) PublicErrorMessage() string {
 	if e == nil {
 		return ""
 	}
-	return e.summary
+	return provider.LocalizePublicErrorMessage(e.status, "", e.message)
 }
 
 func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGenerationRequest) (*provider.Response, error) {
@@ -421,10 +422,15 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	if firstFrames > consoleMaxVideoFirstFrames {
 		return provider.VideoResult{}, fmt.Errorf("Console %s 最多支持 %d 张首帧图，当前为 %d 张", modelName, consoleMaxVideoFirstFrames, firstFrames)
 	}
-	if referenceImages > provider.ConsoleVideoMaxReferenceImages {
-		return provider.VideoResult{}, fmt.Errorf("Console %s 最多支持 %d 张参考图，当前为 %d 张", modelName, provider.ConsoleVideoMaxReferenceImages, referenceImages)
+	if limit := consoleVideoReferenceImageLimit(modelName); referenceImages > limit {
+		return provider.VideoResult{}, fmt.Errorf("Console %s 最多支持 %d 张参考图，当前为 %d 张", modelName, limit, referenceImages)
 	}
 	if operation == provider.VideoOperationGenerate {
+		// Match admission's soft fitting even for direct adapter callers.
+		// Reference voices belong to Console 1.5, not the classic model.
+		if !consoleVideoSupportsReferenceAudio(modelName) {
+			request.ReferenceAudios = nil
+		}
 		if request.Duration < 1 || request.Duration > 15 {
 			return provider.VideoResult{}, errors.New("duration 必须在 1 到 15 秒之间")
 		}
@@ -477,7 +483,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 			}
 			payload["image"] = map[string]any{"url": imageURL}
 		}
-		if strings.TrimSpace(request.ImageURL) != "" && (len(request.ReferenceURLs) > 0 || len(request.ReferenceAudios) > 0) {
+		if modelName != "grok-imagine-video-1.5" && strings.TrimSpace(request.ImageURL) != "" && (len(request.ReferenceURLs) > 0 || len(request.ReferenceAudios) > 0) {
 			return provider.VideoResult{}, errors.New("image 不能与 reference_images/reference_audios 同时使用")
 		}
 		if len(request.ReferenceURLs) > 0 {
@@ -841,8 +847,8 @@ func newConsoleMediaUpstreamError(status int, body []byte, retryAfter time.Durat
 		retryAfter = provider.RateLimitResetAfter(string(body))
 	}
 	return &consoleMediaUpstreamError{
-		status: status, summary: summary, retryAfter: retryAfter,
-		requestScoped: status == http.StatusForbidden && provider.IsDPoPProofRequiredBody(body),
+		status: status, summary: summary, message: message, body: body, retryAfter: retryAfter,
+		requestScoped: (status >= 400 && status < 500 && provider.IsContentSafetyRejection(message)) || (status == http.StatusForbidden && provider.IsDPoPProofRequiredBody(body)),
 	}
 }
 

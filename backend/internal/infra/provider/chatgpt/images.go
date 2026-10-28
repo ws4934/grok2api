@@ -274,21 +274,27 @@ func (a *Adapter) streamImages(ctx context.Context, credential account.Credentia
 }
 
 // generateImage draws one image. Uploads made before a retried egress failure
-// are reused; the generation request itself is sent at most once.
-func (a *Adapter) generateImage(ctx context.Context, credential account.Credential, c credentials, job imageJob, model string, submitted func()) (imageOutput, bool, error) {
+// are reused; the generation request itself is sent at most once. onAccepted
+// starts downstream keepalives only after the upstream acknowledges the draw.
+func (a *Adapter) generateImage(ctx context.Context, credential account.Credential, c credentials, job imageJob, model string, onAccepted func()) (imageOutput, bool, error) {
 	if _, ok := codexImageEngine(job.model); ok {
-		return a.generateCodexImage(ctx, credential, c, job, model, submitted)
+		return a.generateCodexImage(ctx, credential, c, job, model, onAccepted)
 	}
 	var inputs []OpenAIImageInput
 	var mask *OpenAIImageInput
 	prepared := false
 	uploads := map[int]openAIImageReference{}
 	var download downloadedImage
-	var onSubmit func() error
-	if submitted != nil {
-		onSubmit = func() error { submitted(); return nil }
+	accepted := false
+	accept := func() {
+		if !accepted {
+			accepted = true
+			if onAccepted != nil {
+				onAccepted()
+			}
+		}
 	}
-	sent, err := a.attempt(ctx, credential, onSubmit, func(ctx context.Context) error {
+	sent, err := a.attempt(ctx, credential, nil, func(ctx context.Context) error {
 		var err error
 		if !prepared {
 			if inputs, mask, err = a.prepareImage(ctx, job); err != nil {
@@ -300,13 +306,14 @@ func (a *Adapter) generateImage(ctx context.Context, credential account.Credenti
 		if err != nil {
 			return err
 		}
-		ctx = a.image.withTimezone(ctx, w)
+		ctx = withConversationObserver(a.image.withTimezone(ctx, w), func(string) error { accept(); return nil })
 		started := time.Now()
 		id, files, err := a.submitDrawing(ctx, w, job, model, inputs, mask, uploads)
 		a.logImageStage(ctx, credential, "submit", started, err, "conversation_id", id, "image_refs", len(files), "conversation_model", model)
 		if err != nil {
 			return err
 		}
+		accept()
 		// The generation is sent and costs quota: finish it even if the client
 		// went away, so the image still lands in the gallery.
 		finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), a.image.RequestTimeout)
@@ -317,6 +324,9 @@ func (a *Adapter) generateImage(ctx context.Context, credential account.Credenti
 		return err
 	})
 	if err != nil {
+		if !accepted && imageSubmissionRejected(err) {
+			sent = false
+		}
 		return imageOutput{}, sent, err
 	}
 	output, err := a.archiveImage(ctx, job, download)
@@ -552,7 +562,7 @@ func (a *Adapter) SubmitImage(ctx context.Context, request provider.ImageJobRequ
 	})
 	var upstream *upstreamError
 	var terminal *imageTerminalError
-	if err != nil && cp.UpstreamID == "" && errors.As(err, &upstream) && !errors.As(err, &terminal) && upstream.Status >= 400 && upstream.Status < 500 {
+	if err != nil && cp.UpstreamID == "" && errors.As(err, &upstream) && (!errors.As(err, &terminal) || terminal.retryable) && upstream.Status >= 400 && upstream.Status < 500 {
 		cp.Submitted = false
 	}
 	return cp, err

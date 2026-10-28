@@ -385,6 +385,7 @@ function AttemptDetail({ attempt }: { attempt: AuditAttemptDTO }) {
             </TabsList>
           </div>
         </div>
+        {attempt.errorMessage ? <OverviewField className="mb-3 shrink-0" label={t("audits.errorMessage")} value={attempt.errorMessage} copy /> : null}
         <TabsContent value="overview" className="min-h-0 flex-1 overflow-y-auto">
           <AttemptOverview attempt={attempt} />
         </TabsContent>

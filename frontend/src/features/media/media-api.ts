@@ -44,7 +44,7 @@ export function getMediaJobStats(kind: string): Promise<MediaJobStatsDTO> {
   return apiRequest(`/api/admin/v1/media/jobs/stats${query}`, {}, (value) => mediaJobStatsSchema.parse(value));
 }
 
-// Only ended jobs; image results stay in the gallery.
+// Only settled, ended jobs; image results stay in the gallery.
 export function deleteMediaJobs(ids: string[]): Promise<{ deleted: number }> {
   return apiRequest("/api/admin/v1/media/jobs", { method: "DELETE", body: { ids } }, decodeCountResult<{ deleted: number }>("deleted"));
 }

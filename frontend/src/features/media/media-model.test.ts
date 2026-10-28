@@ -39,8 +39,8 @@ describe("gallery query", () => {
 });
 
 describe("media job actions", () => {
-  const job = (status: MediaJobStatus, flags: { cancellable?: boolean; retryable?: boolean; assetIds?: string[] } = {}) => ({
-    status, cancellable: flags.cancellable ?? false, retryable: flags.retryable ?? false, assetIds: flags.assetIds ?? [],
+  const job = (status: MediaJobStatus, flags: { cancellable?: boolean; retryable?: boolean; assetIds?: string[]; usagePending?: boolean } = {}) => ({
+    status, cancellable: flags.cancellable ?? false, retryable: flags.retryable ?? false, assetIds: flags.assetIds ?? [], usagePending: flags.usagePending ?? false,
   });
 
   it("maps statuses to the allowed actions", () => {
@@ -62,14 +62,21 @@ describe("media job actions", () => {
     const completed = mediaJobActions(job("completed", { retryable: true }));
     assert.equal(completed.retry || completed.resume, false);
   });
+
+  it("keeps unsettled jobs, without hiding their delivered results", () => {
+    assert.deepEqual(mediaJobActions(job("completed", { usagePending: true, assetIds: ["a"] })), { cancel: false, retry: false, resume: false, delete: false, results: true });
+    assert.equal(mediaJobActions(job("canceled", { usagePending: true })).delete, false);
+  });
 });
 
 describe("media jobs polling", () => {
-  it("polls only while a listed job is running", () => {
+  it("polls while a listed job is running or awaiting settlement", () => {
     assert.equal(mediaJobsRefetchInterval(), false);
-    assert.equal(mediaJobsRefetchInterval([{ status: "completed" }, { status: "failed" }, { status: "uncertain" }]), false);
-    assert.equal(mediaJobsRefetchInterval([{ status: "completed" }, { status: "queued" }]), 5_000);
-    assert.equal(mediaJobsRefetchInterval([{ status: "in_progress" }]), 5_000);
+    assert.equal(mediaJobsRefetchInterval([{ status: "completed", usagePending: false }, { status: "failed", usagePending: false }, { status: "uncertain", usagePending: false }]), false);
+    assert.equal(mediaJobsRefetchInterval([{ status: "completed", usagePending: false }, { status: "queued", usagePending: false }]), 5_000);
+    assert.equal(mediaJobsRefetchInterval([{ status: "in_progress", usagePending: false }]), 5_000);
+    assert.equal(mediaJobsRefetchInterval([{ status: "completed", usagePending: true }]), 5_000);
+    assert.equal(mediaJobsRefetchInterval([{ status: "canceled", usagePending: true }]), 5_000);
   });
 });
 
@@ -77,7 +84,7 @@ describe("media jobs polling", () => {
 const jobPayload = {
   id: "img_1", kind: "image", provider: "", model: "", operation: "", prompt: "", status: "queued", progress: 0, seconds: 0,
   size: "", quality: "", assetIds: [], accountName: "", clientKeyName: "", createdAt: "2026-10-18T00:00:00Z",
-  completedAt: null, errorCode: "", errorMessage: "", cancellable: true, retryable: false,
+  completedAt: null, errorCode: "", errorMessage: "", cancellable: true, retryable: false, usagePending: false,
 };
 
 describe("media job retry result", () => {

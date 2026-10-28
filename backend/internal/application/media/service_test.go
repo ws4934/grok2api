@@ -271,7 +271,7 @@ func TestAdminDeleteJobsRemovesTerminalVideoAssetAndTicket(t *testing.T) {
 		AccountID: accountValue.ID, AccountName: accountValue.Name, Provider: string(accountdomain.ProviderWeb),
 		Model: "grok-imagine-video", ModelRouteID: 1, UpstreamModel: "grok-imagine-video", Prompt: "delete me",
 		Seconds: 6, Size: "16:9", Quality: "720p", Status: mediadomain.StatusCompleted, Progress: 100,
-		InputJSON: `{}`, ResultAssetID: asset.ID, ContentType: asset.MIMEType, CreatedAt: now, UpdatedAt: completedAt, CompletedAt: &completedAt,
+		InputJSON: `{}`, ResultAssetID: asset.ID, ContentType: asset.MIMEType, CreatedAt: now, UpdatedAt: completedAt, CompletedAt: &completedAt, UsageRecordedAt: &completedAt,
 	}
 	if err := jobs.CreateMediaJob(ctx, job); err != nil {
 		t.Fatal(err)

@@ -27,6 +27,16 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 
 账号页、密钥范围、出口作用域、价格、审计、仪表盘都从目录读取，不需要改动。
 
+## 客户端错误协议
+
+- 客户端错误的 `message` 使用中文；HTTP 状态、`type`、`code`、`param` 和 SSE 事件名按对应 API 协议返回，不把机器字段翻译成中文。已符合协议的上游错误对象保留其机器字段。
+- 同步接口中的内容审核拒绝保留实际的 400／403／422 状态，不改成 502；网关生成的 OpenAI 风格错误使用 `content_policy_violation`。审核拒绝不自动重新生成、不切换账号，也不计入账号故障。
+- Responses 图片任务通过 `status: "failed"` 和 `error` 返回失败；审核拒绝使用 `image_content_policy_violation`，无效输入使用 `invalid_prompt`，其他生成故障使用 `server_error`。流式请求通过 `response.failed` 或对应协议的 `error` 事件报告，开始输出后不另写 HTTP 错误正文。
+- xAI 视频任务轮询仍返回 `status: "failed"` 和 `error: {code, message}`，审核拒绝使用 `invalid_argument`，不将内部错误码直接放入该字段。
+- 管理端上游诊断展示中文错误说明，并保留脱敏后的原始响应、错误详情和错误链，便于排查。
+
+协议依据：[OpenAI Response error](https://developers.openai.com/api/reference/resources/responses/methods/cancel)、[xAI Video Error Handling](https://docs.x.ai/developers/model-capabilities/video/generation#error-handling)。
+
 ## ChatGPT 接入步骤
 
 1. **添加账号**（账号页 → ChatGPT 标签）：
@@ -68,6 +78,13 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 | `GET /v1/responses/{id}`、`POST /v1/responses/{id}/cancel` | 查询或取消异步图片响应（id 以 `resp_img_` 开头） |
 | `POST /v1/audio/speech`、`POST /v1/tts`、`GET /v1/tts/voices` | 语音合成（`chatgpt-tts`）和账号音色列表 |
 | `POST /v1/audio/transcriptions`、`POST /v1/stt` | 语音识别（`chatgpt-transcribe`） |
+
+### 额度耗尽时自动换号
+
+- 已知当前额度窗口为 0 的账号在选路时跳过；上游首次报告耗尽、且尚未接收生成任务时，网关在同一次客户端请求内换到可用账号，遵守密钥的账号范围和最大尝试次数。
+- 聊天和图片 SSE 中的明确额度错误按 429 处理，不当成普通 400／422／502。流式生图确认上游接收后才开始下发响应，避免先返回 200、再把原本可换号解决的限额错误发给客户端。
+- 已无可用账号或达到配置的尝试上限后，才返回限流错误：同步请求保留 429；Responses 图片任务使用 `error.code = "rate_limit_exceeded"`。`Retry-After` 和 SSE 中的等待时长用于冷却与额度恢复。
+- 临时限流只做冷却，不增加账号故障次数；已接受、已开始输出或结果不确定的生成不自动重新提交，以免重复消耗额度。
 
 ### 聊天
 
@@ -161,7 +178,7 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
 - **参数**：顶层是图片模型或 `tool_choice` 强制图片工具时，Responses 的其他字段（`metadata`、`temperature` 等）和工具里用不到的选项（`output_compression`、`input_fidelity`、`moderation`、`partial_images`）忽略。聊天模型只是提供图片工具时，请求里有这些字段就仍走对话。
 - **幂等**：支持 `Idempotency-Key` 请求头。同一密钥、同一内容返回同一任务；内容不同返回 409。
 - **取消**：只对尚未提交到上游的任务有效，已提交的返回 `409 response_not_cancellable`。
-- **结果不确定**：`error.code = result_uncertain` 表示上游可能已经出图但无法确认。系统不会自动重试；管理员可以在"媒体任务"页手动重试，可能再次消耗上游额度。
+- **结果不确定**：Responses 的 `error.code` 使用协议内的 `server_error`，中文消息说明结果尚未确认；管理端任务保留 `uncertain` 状态和内部码 `submission_uncertain`。系统不会自动重试；管理员可在“媒体任务”页手动重试，可能再次消耗上游额度。
 
 ### 语音
 
@@ -186,11 +203,13 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
 - **视频参数**：为其他视频接口写的参数不报错。
   - `seconds`、`size`（如 `1280x720` 换成 16:9 + 720p）、`quality`、`input_reference` 分别按 `duration`、`aspect_ratio`、`resolution`、`image` 处理；`image` 等素材也可以写成裸 URL 或 `{"image_url": …}`；`output`、`storage_options`、`seed` 等用不到的字段忽略；认不出的时长、比例、分辨率按没传处理，纯数字分辨率（`720`）按 `720p`。
   - 取值由路由的 Provider 对齐到最近的可用值。Grok（Build / Console / Web）：比例取 1:1、16:9、9:16、4:3、3:4、3:2、2:3 中最近的（21:9 → 16:9），时长 1–15 秒（默认 8），分辨率 480p / 720p，只有 `grok-imagine-video-1.5` 不带参考图和参考音频时有 1080p（2160p → 1080p）；编辑忽略这三项，延长的时长 2–10 秒（默认 6）。
-  - 素材超出上限时保留前面的：首帧与参考图不能同时用时保留首帧（Grok、Veo、Seedance）；参考图 Build 8 张、Console 7 张（`grok-imagine-video` 带参考图时最长 10 秒），参考音频 3 个。同名模型有多条路由时，优先选能收下全部素材的路由，例如 8 张参考图走 Build 而不是 Console。
+  - 素材超出上限时保留前面的：参考图入口最多接收 14 张；Console 的 `grok-imagine-video-1.5` 支持 14 张参考图，并可叠加 1 张首帧和最多 3 个参考音色，最长 15 秒、最高 720p。Console 旧版 `grok-imagine-video` 支持 7 张参考图、最长 10 秒，不支持参考音色（API 会忽略，创作台不允许选择），首帧与参考图互斥；Build 保持 8 张参考图和首帧互斥。互斥时保留首帧（也适用于 Veo、Seedance）。同名模型有多条路由时，优先选能收下全部素材的路由，例如 14 张参考图或首帧加参考图优先走 Console 1.5。
+  - Console 1.5 的 `image` 固定开场，不会降为普通参考图；同时提供首帧时，提示词中的 `<IMAGE_0>` 指首帧，`reference_images` 从 `<IMAGE_1>` 开始编号；无首帧时从 `<IMAGE_0>` 开始。依据 [xAI Reference-to-Video](https://docs.x.ai/developers/model-capabilities/video/reference-to-video)。创作控制台按实际路由识别这些能力，支持批量上传、逐张移除和图片编号；切换到不兼容模型时提示移除冲突素材，不静默清空。
   - 仍会拒绝的是模型做不到的输入：Web 的图生视频、不支持的尾帧或参考视频、Provider 不支持的编辑或延长。
 - **图片任务**：n 张图在同一账号上依次生成。租约 2 分钟、每 30 秒续租，任务期限 1 小时。每交付一张图，按下单时锁定的价格记一条审计。
 - **图库来源**：每个资产记录生成它的 Provider、模型、密钥、账号、操作、任务和 prompt，管理端可以按这些条件筛选。
 - **删除保护**：活动任务正在使用的资产不能删除，返回 409 `mediaAssetInUse`。
+  - 终态任务的用量或费用尚未持久化时也不能删除，返回 409 `mediaJobUsagePending`，以保留补账依据。管理端显示“结算中”并继续刷新，结算完成后恢复删除；未提交就取消的视频无需结算。
 
 ## 计费
 

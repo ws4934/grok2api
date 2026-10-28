@@ -768,11 +768,8 @@ func TestImageFailuresBeforeAndAfterSubmit(t *testing.T) {
 		t.Fatalf("post-submit failure = %+v, %v (submits %d)", response, err, submits.Load())
 	}
 	response, err := b.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-image-2", Prompt: "a fox", Streaming: true})
-	if err != nil || response.StatusCode != 200 {
-		t.Fatalf("submitted stream = %+v, %v", response, err)
-	}
-	if stream := events(t, response.Body); len(stream) != 1 || stream[0]["type"] != "error" || submits.Load() != 2 {
-		t.Fatalf("submitted stream failure = %v (submits %d)", stream, submits.Load())
+	if err == nil || response != nil || submits.Load() != 2 {
+		t.Fatalf("uncertain submission must fail without replay: response=%+v err=%v submits=%d", response, err, submits.Load())
 	}
 
 	if response, err := b.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "gpt-6", Prompt: "a fox"}); err != nil || response.StatusCode != 404 {

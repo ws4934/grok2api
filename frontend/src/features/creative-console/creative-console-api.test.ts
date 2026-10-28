@@ -1,7 +1,24 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { apiErrorFromResponse, describeError, getImageJob, imageGenerationBody, imageJobState, imageJobsRefetchInterval, refreshImageJobs } from "./creative-console-api.ts";
+import { apiErrorFromResponse, createVideo, describeError, getImageJob, imageGenerationBody, imageJobState, imageJobsRefetchInterval, refreshImageJobs } from "./creative-console-api.ts";
+
+describe("video generation inputs", () => {
+  it("sends a pinned first frame, all 14 ordered references, and a voice together", async (t) => {
+    const references = Array.from({ length: 14 }, (_, index) => index % 2 ? { fileId: `file_${index}` } : { url: `https://example.com/${index}.png` });
+    t.mock.method(globalThis, "fetch", async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      assert.deepEqual(body.image, { file_id: "file_first" });
+      assert.deepEqual(body.reference_images, references.map((item) => item.fileId ? { file_id: item.fileId } : { url: item.url }));
+      assert.deepEqual(body.reference_audios, [{ voice_id: "eve" }]);
+      assert.equal(body.duration, 15);
+      assert.equal(body.resolution, "720p");
+      return new Response(JSON.stringify({ request_id: "video_combined" }));
+    });
+    assert.equal(await createVideo({ apiKey: "test", model: "renamed-video", prompt: "animate", imageFileID: "file_first", referenceImages: references,
+      referenceVoiceIds: ["eve"], duration: 15, aspectRatio: "16:9", resolution: "720p" }), "video_combined");
+  });
+});
 
 describe("image generation body", () => {
   it("sends size and quality on basic routes, defaulting both to auto", () => {
@@ -51,7 +68,7 @@ describe("image job state", () => {
     assert.deepEqual(imageJobState({ status: "queued" }, "rec_1"), { done: false, succeeded: false });
     assert.deepEqual(imageJobState({ status: "in_progress" }, "rec_1"), { done: false, succeeded: false });
     assert.deepEqual(imageJobState({ status: "completed" }, "rec_1"), { done: true, succeeded: true });
-    assert.deepEqual(imageJobState({ id: "resp_img_1", status: "failed", error: { code: "result_uncertain", message: "maybe drawn" } }, "rec_1"), { done: true, succeeded: false, error: { message: "maybe drawn", code: "result_uncertain", requestId: "rec_1" } });
+    assert.deepEqual(imageJobState({ id: "resp_img_1", status: "failed", error: { code: "server_error", message: "生成结果暂时无法确认" } }, "rec_1"), { done: true, succeeded: false, error: { message: "生成结果暂时无法确认", code: "server_error", requestId: "rec_1" } });
     assert.deepEqual(imageJobState({ status: "cancelled" }, "rec_1-1"), { done: true, succeeded: false, error: { message: "cancelled", code: undefined, requestId: "rec_1-1" } });
   });
 

@@ -78,6 +78,10 @@ func (s *Service) ExhaustQuota(ctx context.Context, id uint64, mode string, rese
 			}
 		}
 	}
+	return s.saveExhaustedQuota(ctx, id, mode, resetAt)
+}
+
+func (s *Service) saveExhaustedQuota(ctx context.Context, id uint64, mode string, resetAt *time.Time) error {
 	if err := s.accounts.ExhaustQuotaWindow(ctx, id, mode, resetAt, s.now()); err != nil {
 		return err
 	}
@@ -197,17 +201,18 @@ func (s *Service) ReconcileRateLimit(ctx context.Context, id uint64, mode string
 	if err != nil {
 		return RateLimitReconcileInconclusive, err
 	}
-	if _, ok := quotaWindowByMode(windows[id], mode); !ok {
+	window, ok := quotaWindowByMode(windows[id], mode)
+	if !ok {
 		// No window limits this mode (a Plus account has no message limit):
 		// the 429 is a rate limit the caller cools down, not a spent quota.
 		return RateLimitReconcileInconclusive, nil
 	}
-	var resetAt *time.Time
+	resetAt := quotaRecoveryDueAt(window, s.now(), true)
 	if retryAfter > 0 {
 		value := s.now().Add(retryAfter)
 		resetAt = &value
 	}
-	if err := s.ExhaustQuota(ctx, id, mode, resetAt); err != nil {
+	if err := s.saveExhaustedQuota(ctx, id, mode, resetAt); err != nil {
 		return RateLimitReconcileInconclusive, err
 	}
 	return RateLimitReconcileExhausted, nil

@@ -2194,6 +2194,7 @@ func TestConsoleVideoPostsReferenceAudios(t *testing.T) {
 	adapter, credential := newConsoleTestAdapter(t, server.URL)
 	result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
 		Credential: credential, Prompt: "speak", Duration: 8, AspectRatio: "9:16", Resolution: "720p",
+		Model:           "grok-imagine-video-1.5",
 		ReferenceURLs:   []string{"https://example.com/person.png"},
 		ReferenceAudios: []string{"eve"},
 	})
@@ -2205,19 +2206,78 @@ func TestConsoleVideoPostsReferenceAudios(t *testing.T) {
 	}
 }
 
-// Measured upstream ceiling: 8 references answer 400 "Too many reference images:
-// 8. Maximum allowed is 7." on both grok-imagine-video and grok-imagine-video-1.5.
 func TestConsoleVideoRejectsTooManyReferenceImages(t *testing.T) {
 	adapter, credential := newConsoleTestAdapter(t, "https://console.example")
-	references := make([]string, provider.ConsoleVideoMaxReferenceImages+1)
-	for i := range references {
-		references[i] = "https://example.com/" + strings.Repeat("x", i+1) + ".png"
+	for _, model := range []string{"grok-imagine-video", "grok-imagine-video-1.5"} {
+		references := make([]string, consoleVideoReferenceImageLimit(model)+1)
+		for i := range references {
+			references[i] = fmt.Sprintf("https://example.com/%d.png", i)
+		}
+		_, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+			Credential: credential, Model: model, Prompt: "animate", Duration: 6, ReferenceURLs: references,
+		})
+		if err == nil || !strings.Contains(err.Error(), "最多支持") {
+			t.Fatalf("%s: error = %v", model, err)
+		}
 	}
-	_, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
-		Credential: credential, Prompt: "animate", Duration: 6, ReferenceURLs: references,
+}
+
+func TestConsoleVideo15PostsPinnedFrameWithFourteenReferencesAndVoice(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if serveTestDPoPToken(t, writer, request) {
+			return
+		}
+		verifyTestDPoPProof(t, request)
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.Method + " " + request.URL.Path {
+		case "POST /v1/videos/generations":
+			var payload struct {
+				Model string `json:"model"`
+				Image struct {
+					URL string `json:"url"`
+				} `json:"image"`
+				References []struct {
+					URL string `json:"url"`
+				} `json:"reference_images"`
+				Audios []struct {
+					VoiceID string `json:"voice_id"`
+				} `json:"reference_audios"`
+				Duration   int    `json:"duration"`
+				Resolution string `json:"resolution"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Error(err)
+			}
+			if payload.Model != "grok-imagine-video-1.5" || payload.Image.URL != "https://example.com/first.png" || len(payload.References) != 14 || len(payload.Audios) != 1 || payload.Duration != 15 || payload.Resolution != "720p" {
+				t.Errorf("combined payload = %+v", payload)
+			}
+			for i, reference := range payload.References {
+				if reference.URL != fmt.Sprintf("https://example.com/ref-%d.png", i) {
+					t.Errorf("reference %d = %s", i, reference.URL)
+				}
+			}
+			if len(payload.Audios) == 1 && payload.Audios[0].VoiceID != "eve" {
+				t.Errorf("voices = %+v", payload.Audios)
+			}
+			_, _ = writer.Write([]byte(`{"request_id":"combined-15"}`))
+		case "GET /v1/videos/combined-15":
+			_, _ = writer.Write([]byte(`{"status":"done","video":{"url":"https://vidgen.x.ai/combined.mp4"}}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+	adapter, credential := newConsoleTestAdapter(t, server.URL)
+	references := make([]string, 14)
+	for i := range references {
+		references[i] = fmt.Sprintf("https://example.com/ref-%d.png", i)
+	}
+	result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
+		Credential: credential, Model: "grok-imagine-video-1.5", Prompt: "animate", Duration: 15, Resolution: "720p",
+		ImageURL: "https://example.com/first.png", ReferenceURLs: references, ReferenceAudios: []string{"eve"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "最多支持") {
-		t.Fatalf("error = %v", err)
+	if err != nil || result.URL != "https://vidgen.x.ai/combined.mp4" {
+		t.Fatalf("result = %+v, %v", result, err)
 	}
 }
 

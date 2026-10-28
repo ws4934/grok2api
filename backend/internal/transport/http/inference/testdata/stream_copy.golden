@@ -89,7 +89,7 @@ data: {"id":"resp_f","response":{"created_at":1760000002,"id":"resp_f","model":"
 data: {"type":"response.output_text.delta","item_id":"m","output_index":0,"delta":"x"}
 
 event: response.failed
-data: {"id":"resp_f","response":{"created_at":1760000002,"error":{"code":"server_error","id":"err_f","message":"boom"},"id":"resp_f","model":"grok-4","object":"response","output":[],"status":"failed"},"type":"response.failed"}
+data: {"id":"resp_f","response":{"created_at":1760000002,"error":{"code":"server_error","id":"err_f","message":"上游服务处理失败，请稍后重试。"},"id":"resp_f","model":"grok-4","object":"response","output":[],"status":"failed"},"type":"response.failed"}
 
 
 == responses_error_event
@@ -100,7 +100,7 @@ failure: {"code":"server_error","message":"failed","type":"error"} truncated=fal
 output:
 data: {"type":"response.created","id":"resp_e","response":{"id":"resp_e","object":"response","created_at":1760000003,"model":"grok-4","output":[]}}
 
-data: {"type":"error","code":"server_error","message":"failed","sequence_number":3}
+data: {"code":"server_error","message":"上游服务处理失败，请稍后重试。","sequence_number":3,"type":"error"}
 
 
 == responses_image
@@ -154,7 +154,7 @@ data: {"type":"message_stop"}
 == image
 err: <nil>
 first_token: 0
-meta: {Usage:{Reported:true OutputObserved:false InputTokens:10 CachedInputTokens:0 OutputTokens:100 ReasoningTokens:0 TotalTokens:110 CostInUSDTicks:0 NumSourcesUsed:0 NumServerSideToolsUsed:0 ContextInputTokens:0 ContextOutputTokens:0 ResponseModel: OutputImages:1} cacheCreationInputTokens:0 ResponseID: Model: SequenceNumber:0 StreamFailure:<nil>}
+meta: {Usage:{Reported:true OutputObserved:true InputTokens:10 CachedInputTokens:0 OutputTokens:100 ReasoningTokens:0 TotalTokens:110 CostInUSDTicks:0 NumSourcesUsed:0 NumServerSideToolsUsed:0 ContextInputTokens:0 ContextOutputTokens:0 ResponseModel: OutputImages:1} cacheCreationInputTokens:0 ResponseID: Model: SequenceNumber:0 StreamFailure:<nil>}
 output:
 data: {"type":"image_generation.partial_image","b64_json":"AAAA","partial_image_index":0}
 

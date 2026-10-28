@@ -54,6 +54,10 @@ func (e *upstreamError) UpstreamDiagnostic() (string, provider.DiagnosticRespons
 	return e.URL, provider.DiagnosticResponse{StatusCode: e.Status, Status: fmt.Sprintf("%d %s", e.Status, http.StatusText(e.Status)), Body: []byte(e.Body)}
 }
 
+func (e *upstreamError) RetryAfterDuration() time.Duration {
+	return provider.ParseRetryAfterHeader(e.RetryAfter, time.Now().UTC())
+}
+
 // Error is for logs and admin views only (no PublicErrorMessage): it carries
 // the endpoint and a redacted body excerpt so failures can be diagnosed.
 func (e *upstreamError) Error() string {

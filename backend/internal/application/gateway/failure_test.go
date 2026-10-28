@@ -158,7 +158,11 @@ func TestHTTPUpstreamFailureClassifiesBuildForbiddenBodies(t *testing.T) {
 			if failure.HTTPStatus != status || failure.AccountScoped != test.accountScoped || failure.AccountBlocked != test.accountBlocked || failure.PermanentAccountDenial != test.permanentAccountDenial || failure.SafetyRejection != test.safetyRejection || failure.RequestScopedForbidden != test.requestScopedForbidden || failure.QuotaExhausted != test.quotaExhausted || failure.FreeQuotaExhausted != test.freeQuotaExhausted || failure.ModelQuotaExhausted != test.modelQuotaExhausted || failure.SpendingLimitBlocked != test.spendingLimitBlocked || failure.UpstreamCode != test.upstreamCode {
 				t.Fatalf("failure = %#v", failure)
 			}
-			if test.upstreamCode == "permission-denied" && (failure.ClientCredentialErrorCode() != "permission-denied" || failure.AuditCode() != "upstream_forbidden_permission_denied") {
+			wantAudit := "upstream_forbidden_permission_denied"
+			if test.safetyRejection {
+				wantAudit = "content_policy_violation_permission_denied"
+			}
+			if test.upstreamCode == "permission-denied" && (failure.ClientCredentialErrorCode() != "permission-denied" || failure.AuditCode() != wantAudit) {
 				t.Fatalf("public=%q audit=%q", failure.ClientCredentialErrorCode(), failure.AuditCode())
 			}
 		})
@@ -176,9 +180,9 @@ func TestClassifyUpstreamHTTPErrorInvalidArgument(t *testing.T) {
 	}
 }
 
-func TestClassifyUpstreamHTTPErrorKeepsOther4xxMessage(t *testing.T) {
+func TestClassifyUpstreamHTTPErrorLocalizesOther4xxMessage(t *testing.T) {
 	code, message := ClassifyUpstreamHTTPError(http.StatusNotFound, []byte(`{"error":{"code":"not_found","message":"requested response is missing"}}`))
-	if code != "upstream_error" || message != "requested response is missing" {
+	if code != "upstream_error" || message != "请求的资源不存在或已过期。" {
 		t.Fatalf("code=%q message=%q", code, message)
 	}
 }

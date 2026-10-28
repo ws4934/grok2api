@@ -115,6 +115,7 @@ func TestAdminMediaJobsListStatsActionsAndDelete(t *testing.T) {
 		t.Fatalf("image jobs: %d %v", code, envelope)
 	}
 	if images[1]["kind"] != "image" || images[1]["retryable"] != true ||
+		images[1]["usagePending"] != true || images[0]["usagePending"] != false ||
 		images[1]["assetUrls"].([]any)[0] != "https://api.example/v1/media/images/img_jobs_result_00000001" {
 		t.Fatalf("uncertain image job: %v", images[1])
 	}
@@ -152,6 +153,12 @@ func TestAdminMediaJobsListStatsActionsAndDelete(t *testing.T) {
 
 	if code, envelope := call("DELETE", "/media/jobs", `{"ids":["`+queued.ID+`"]}`); code != http.StatusBadRequest {
 		t.Fatalf("delete active job: %d %v", code, envelope)
+	}
+	if code, envelope := call("DELETE", "/media/jobs", `{"ids":["`+uncertain.ID+`"]}`); code != http.StatusConflict || envelope["error"].(map[string]any)["code"] != "mediaJobUsagePending" {
+		t.Fatalf("delete unsettled job: %d %v", code, envelope)
+	}
+	if err := jobs.MarkMediaJobUsageRecorded(ctx, uncertain.ID, now); err != nil {
+		t.Fatal(err)
 	}
 	if code, envelope := call("DELETE", "/media/jobs", `{"ids":["`+uncertain.ID+`"]}`); code != 200 || envelope["data"].(map[string]any)["deleted"] != float64(1) {
 		t.Fatalf("delete uncertain job: %d %v", code, envelope)

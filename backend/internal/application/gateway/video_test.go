@@ -30,6 +30,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/adobe"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider/console"
 	"github.com/chenyme/grok2api/backend/internal/infra/runtime/memory"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
@@ -198,8 +199,8 @@ func TestVideoPricingLeavesUnmeasurableOperationsUnpriced(t *testing.T) {
 // 上游对 Console 视频的这两条限制原先只在 provider 层拦截，而生成接口是异步的，
 // 客户端会先拿到 request_id 再从轮询里读到失败任务。现在入队前就对齐到上游收的值。
 func TestVideoRouteParametersFitConsoleReferenceLimits(t *testing.T) {
-	// 实测：8 张 reference_images 上游回 400 "Too many reference images: 8. Maximum allowed is 7."
-	if got, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 8, Duration: 6}); err != nil || got.ReferenceImages != 7 {
+	// 1.5 now accepts 14 references, independently of the pinned first frame.
+	if got, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 8, Duration: 6}); err != nil || got.ReferenceImages != 8 {
 		t.Fatalf("8 references = %+v, %v", got, err)
 	}
 	if _, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 7, Duration: 6}); err != nil {
@@ -245,13 +246,120 @@ func TestRoutesForVideoParametersKeepsCompatibleSameNameProviders(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Build keeps all 8 references, so it wins over Console, which would drop one.
-	if len(compatible) != 1 || compatible[0].ID != 2 {
+	// Both providers keep 8 references on this public alias.
+	if len(compatible) != 2 {
 		t.Fatalf("compatible routes = %#v", compatible)
 	}
-	// With Console alone, the request runs with the 7 references Console takes.
+	// 14 references, or a pinned frame alongside references, prefer Console 1.5.
+	for _, options := range []provider.VideoRequestOptions{
+		{Operation: provider.VideoOperationGenerate, ReferenceImages: 14, Duration: 15},
+		{Operation: provider.VideoOperationGenerate, HasImage: true, ReferenceImages: 2, ReferenceAudios: 1, Duration: 15},
+	} {
+		if got, err := grokPolicyService.routesForVideoParameters(routes, options); err != nil || len(got) != 1 || got[0].ID != 1 {
+			t.Fatalf("complete route for %+v = %#v, %v", options, got, err)
+		}
+	}
 	if compatible, err := grokPolicyService.routesForVideoParameters(routes[:1], provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 8, Duration: 15}); err != nil || len(compatible) != 1 {
 		t.Fatalf("Console-only routes = %#v, %v", compatible, err)
+	}
+}
+
+func TestConsoleVideoModelSpecificInputFitting(t *testing.T) {
+	for _, tc := range []struct {
+		name, model                string
+		firstFrame                 bool
+		wantReferences, wantAudios int
+		wantResolution             string
+	}{
+		{"1.5 references", "grok-imagine-video-1.5", false, 14, 1, "720p"},
+		{"1.5 pinned frame", "grok-imagine-video-1.5", true, 14, 1, "720p"},
+		{"classic references", "grok-imagine-video", false, 7, 0, "720p"},
+		{"classic first frame wins", "grok-imagine-video", true, 0, 0, "720p"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := grokPolicyService.videoRouteOptions(account.ProviderConsole, tc.model, provider.VideoRequestOptions{
+				Operation: provider.VideoOperationGenerate, HasImage: tc.firstFrame, ReferenceImages: 15, ReferenceAudios: 1, Resolution: "1080p", Duration: 15,
+			})
+			if err != nil || got.ReferenceImages != tc.wantReferences || got.ReferenceAudios != tc.wantAudios || got.Resolution != tc.wantResolution {
+				t.Fatalf("options = %+v, %v", got, err)
+			}
+		})
+	}
+	got, err := grokPolicyService.videoRouteOptions(account.ProviderBuild, "grok-imagine-video-1.5", provider.VideoRequestOptions{
+		Operation: provider.VideoOperationGenerate, HasImage: true, ReferenceImages: 14, ReferenceAudios: 1, Resolution: "1080p", Duration: 15,
+	})
+	if err != nil || got.ReferenceImages != 0 || got.ReferenceAudios != 0 || got.Resolution != "1080p" {
+		t.Fatalf("Build's existing contract changed: %+v, %v", got, err)
+	}
+}
+
+func TestCreateConsoleVideo15PersistsPinnedFrameAndFourteenReferences(t *testing.T) {
+	ctx := context.Background()
+	database, err := relational.OpenSQLite(ctx, filepath.Join(t.TempDir(), "console-video-inputs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.InitializeSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accounts, models, audits, keys := relational.NewAccountRepository(database), relational.NewModelRepository(database), relational.NewAuditRepository(database), relational.NewClientKeyRepository(database)
+	credential, _, err := accounts.UpsertByIdentity(ctx, account.Credential{
+		Provider: account.ProviderConsole, AuthType: account.AuthTypeSSO, Name: "video-inputs", SourceKey: "video-inputs",
+		EncryptedAccessToken: "encrypted", Enabled: true, AuthStatus: account.AuthStatusActive, MaxConcurrent: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := accounts.SaveQuotaWindows(ctx, credential.ID, "", now, []account.QuotaWindow{{
+		AccountID: credential.ID, Mode: console.QuotaModeVideo, Remaining: 10, Total: 10, SyncedAt: &now,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := models.ReplaceProviderRoutes(ctx, account.ProviderConsole, console.Routes()); err != nil {
+		t.Fatal(err)
+	}
+	key, err := keys.Create(ctx, clientkey.Key{Name: "video-inputs", Prefix: "vinputs", SecretHash: strings.Repeat("e", 64), EncryptedSecret: "e",
+		Enabled: true, RPMLimit: 60, MaxConcurrent: 4, ProviderScope: clientkey.AllProviders()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sticky := memory.NewStickyStore()
+	accountService := accountapp.NewService(accounts, audits, memory.NewDeviceSessionStore(), sticky, grokTestRegistry, testCipher(t), nil)
+	selector := NewSelector(accounts, memory.NewConcurrencyLimiter(), sticky, grokTestRegistry, time.Hour, time.Second, time.Minute)
+	service := NewService(models, audits, accountService, clientkeyapp.NewService(keys, nil, nil, 60, 4, nil), grokTestRegistry, selector, nil, 1)
+	jobs := relational.NewMediaJobRepository(database)
+	service.ConfigureMedia(jobs, 1)
+	references := make([]string, 14)
+	for i := range references {
+		references[i] = fmt.Sprintf("https://example.com/ref-%d.png", i)
+	}
+	publicModel, _ := model.NormalizePublicID(account.ProviderConsole, "grok-imagine-video-1.5")
+	job, err := service.CreateVideo(ctx, VideoInput{
+		RequestID: "console-video-inputs", ClientKey: key, PublicModel: publicModel,
+		Prompt: "animate", ImageURL: "https://example.com/first.png", ReferenceURLs: references, ReferenceAudios: []string{"eve"},
+		Duration: 15, Resolution: "1080p",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := jobs.GetMediaJobInput(ctx, job.ID)
+	inputs := decodeVideoInputs(stored)
+	if err != nil || job.InputImageCount != 15 || job.Quality != "720p" || job.Seconds != 15 || inputs.imageURL != "https://example.com/first.png" || !slices.Equal(inputs.referenceURLs, references) || !slices.Equal(inputs.referenceAudios, []string{"eve"}) {
+		t.Fatalf("job = %+v, inputs = %+v, %v", job, inputs, err)
+	}
+	classicModel, _ := model.NormalizePublicID(account.ProviderConsole, "grok-imagine-video")
+	classic, err := service.CreateVideo(ctx, VideoInput{
+		RequestID: "console-classic-voices", ClientKey: key, PublicModel: classicModel,
+		Prompt: "animate", ReferenceAudios: []string{"eve"}, Duration: 15, Resolution: "1080p",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err = jobs.GetMediaJobInput(ctx, classic.ID)
+	if classicInputs := decodeVideoInputs(stored); err != nil || len(classicInputs.referenceAudios) != 0 || classic.Quality != "720p" || classic.Seconds != 15 {
+		t.Fatalf("classic job=%+v inputs=%+v err=%v", classic, classicInputs, err)
 	}
 }
 
@@ -1076,6 +1184,7 @@ type videoCreateFailoverAdapter struct {
 	mu       sync.Mutex
 	failures map[uint64]int
 	status   int
+	failure  error
 	// scoped makes the failure a request-scoped rejection.
 	scoped   bool
 	attempts []uint64
@@ -1098,6 +1207,9 @@ func (a *videoCreateFailoverAdapter) GenerateVideo(_ context.Context, request pr
 	}
 	a.mu.Unlock()
 	if remaining > 0 {
+		if a.failure != nil {
+			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageCreate, a.status, a.failure)
+		}
 		if a.status == 0 {
 			return provider.VideoResult{}, errors.New("unclassified create failure")
 		}
@@ -1283,6 +1395,32 @@ func TestVideoWebForbiddenRetriesPinnedAccountOnceThenFailsOver(t *testing.T) {
 	}
 	if after.FailureCount != before.FailureCount {
 		t.Fatalf("request-scoped failure changed account failure count %d -> %d", before.FailureCount, after.FailureCount)
+	}
+	assertSlotFree(third)
+
+	// Explicit moderation in a typed upstream error also stops regeneration
+	// when the adapter has no request-scoped marker interface.
+	adapter.mu.Lock()
+	adapter.failures = map[uint64]int{third.ID: 1}
+	adapter.status, adapter.scoped, adapter.attempts = http.StatusBadRequest, false, nil
+	adapter.failure = moderationDiagnosticError{400, "Generated video rejected by content moderation."}
+	adapter.mu.Unlock()
+	moderated := scopedJob
+	moderated.ID, moderated.RequestID = "video_moderation", "request-video-moderation"
+	if err := mediaRepo.CreateMediaJob(ctx, moderated); err != nil {
+		t.Fatal(err)
+	}
+	service.runVideoJob(ctx, moderated, route)
+	stored, err = mediaRepo.GetMediaJob(ctx, moderated.ID, moderated.ClientKeyID)
+	if err != nil || stored.Status != media.StatusFailed || stored.ErrorCode != provider.ContentPolicyViolation {
+		t.Fatalf("moderated job = %+v, %v", stored, err)
+	}
+	if attempts := adapter.Attempts(); len(attempts) != 1 || attempts[0] != third.ID {
+		t.Fatalf("moderation attempts = %v", attempts)
+	}
+	after, err = accountRepo.Get(ctx, third.ID)
+	if err != nil || after.FailureCount != before.FailureCount {
+		t.Fatalf("moderation penalized account: %+v, %v", after, err)
 	}
 	assertSlotFree(third)
 }

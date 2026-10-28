@@ -124,7 +124,7 @@ func (a *Adapter) codexDo(ctx context.Context, credential account.Credential, c 
 // generateCodexImage draws one image through the Codex Images API. The
 // request is sent at most once; inputs and mask go as data URLs and the mask
 // keeps the Images API alpha convention.
-func (a *Adapter) generateCodexImage(ctx context.Context, credential account.Credential, c credentials, job imageJob, engine string, submitted func()) (imageOutput, bool, error) {
+func (a *Adapter) generateCodexImage(ctx context.Context, credential account.Credential, c credentials, job imageJob, engine string, onAccepted func()) (imageOutput, bool, error) {
 	payload := map[string]any{"model": engine, "prompt": job.prompt, "n": 1}
 	for key, value := range map[string]string{"size": job.size, "quality": job.quality, "background": job.background, "output_format": job.outputFormat} {
 		if value != "" {
@@ -151,12 +151,8 @@ func (a *Adapter) generateCodexImage(ctx context.Context, credential account.Cre
 			payload["mask"] = map[string]string{"image_url": dataURL(mask)}
 		}
 	}
-	var onSubmit func() error
-	if submitted != nil {
-		onSubmit = func() error { submitted(); return nil }
-	}
 	var raw []byte
-	sent, err := a.attempt(ctx, credential, onSubmit, func(ctx context.Context) error {
+	sent, err := a.attempt(ctx, credential, nil, func(ctx context.Context) error {
 		if err := markSubmitted(ctx); err != nil {
 			return err
 		}
@@ -167,6 +163,9 @@ func (a *Adapter) generateCodexImage(ctx context.Context, credential account.Cre
 		started := time.Now()
 		resp, err := a.codexDo(drawCtx, credential, c, http.MethodPost, path, payload)
 		if err == nil {
+			if onAccepted != nil {
+				onAccepted()
+			}
 			raw, err = decodeCodexImage(resp)
 		}
 		a.logImageStage(ctx, credential, "codex", started, err, "engine", engine, "bytes", len(raw))
