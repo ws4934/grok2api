@@ -199,6 +199,7 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
 ## 媒体任务与图库
 
 - **持久化**：图片和视频任务都写入 `media_jobs`。领取任务时会递增代次，旧 worker 无法写回结果。
+  - 初始化会将旧的“图片输入统一最多 8 张”约束更新为“视频最多 15 张（首帧 + 参考图）、图片最多 8 张”，保留已有任务、图库和计费数据；当前约束不会在每次启动时重复重建。
 - **崩溃恢复**：从 checkpoint 继续轮询，不会重复提交上游。Console 视频保存了上游 request id。
 - **视频参数**：为其他视频接口写的参数不报错。
   - `seconds`、`size`（如 `1280x720` 换成 16:9 + 720p）、`quality`、`input_reference` 分别按 `duration`、`aspect_ratio`、`resolution`、`image` 处理；`image` 等素材也可以写成裸 URL 或 `{"image_url": …}`；`output`、`storage_options`、`seed` 等用不到的字段忽略；认不出的时长、比例、分辨率按没传处理，纯数字分辨率（`720`）按 `720p`。

@@ -137,7 +137,10 @@ func (d *Database) InitializeSchema(ctx context.Context) error {
 func (d *Database) initializeSchema(ctx context.Context) error {
 	db := d.db.WithContext(ctx)
 	autoMigrate := func() error {
-		return d.db.WithContext(ctx).AutoMigrate(schemaModels...)
+		if err := db.AutoMigrate(schemaModels...); err != nil {
+			return err
+		}
+		return d.updateMediaJobInputImageConstraint(ctx)
 	}
 	var migrateErr error
 	if d.dialect == "sqlite" {
