@@ -3,6 +3,8 @@ package inference
 import (
 	"bytes"
 	"encoding/json"
+
+	"github.com/chenyme/grok2api/backend/internal/pkg/imagejson"
 	"net/http"
 	"strings"
 	"testing"
@@ -123,13 +125,13 @@ func FuzzImageEventProjection(f *testing.F) {
 		f.Add(seed, uint8(3))
 	}
 	f.Fuzz(func(t *testing.T, raw string, chunk uint8) {
-		var projection imageEventProjection
+		var projection imagejson.Projection
 		var compact []byte
 		for start, size := 0, max(1, int(chunk)); start < len(raw); start += size {
-			compact = projection.append(compact, []byte(raw[start:min(start+size, len(raw))]))
+			compact = projection.Append(compact, []byte(raw[start:min(start+size, len(raw))]))
 		}
-		if valid := !projection.invalid && json.Valid(compact); valid != json.Valid([]byte(raw)) {
-			t.Fatalf("JSON validity changed: input=%q compact=%q invalid=%v", raw, compact, projection.invalid)
+		if valid := !projection.Invalid() && json.Valid(compact); valid != json.Valid([]byte(raw)) {
+			t.Fatalf("JSON validity changed: input=%q compact=%q invalid=%v", raw, compact, projection.Invalid())
 		}
 	})
 }

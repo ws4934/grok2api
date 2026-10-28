@@ -276,7 +276,9 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 		}
 		return err == nil
 	}
-	route, selection, err := s.selectSchedulableMediaRoute(ctx, routes, input.ClientKey, capability, true, supports)
+	route, selection, err := s.selectSchedulableMediaRouteWithQuotaMode(ctx, routes, input.ClientKey, capability, true, supports, func(route modeldomain.Route) string {
+		return s.providers.ImageQuotaMode(route.Provider, route.UpstreamModel, edit)
+	})
 	if err != nil {
 		if rejection != nil && errors.Is(err, ErrNoAvailableAccount) {
 			return media.Job{}, rejection
@@ -480,7 +482,7 @@ func (s *Service) drawImage(ctx context.Context, job *media.Job, route modeldoma
 		job.Checkpoint, job.Submitted = string(data), next.Submitted
 		return s.saveMediaJob(ctx, job)
 	}
-	quotaMode := s.providers.QuotaMode(route.Provider, route.UpstreamModel)
+	quotaMode := s.providers.ImageQuotaMode(route.Provider, route.UpstreamModel, len(request.ImageURLs) > 0)
 	var lease *accountLease
 	switch {
 	case cp.Submitted && cp.UpstreamID == "":

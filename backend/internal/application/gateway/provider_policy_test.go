@@ -84,6 +84,7 @@ func withGrokPolicy(definition provider.Definition) provider.Definition {
 	definition.Inference.QualityHold = grok.Inference.QualityHold
 	definition.Inference.QualityAutoDisable = grok.Inference.QualityAutoDisable
 	definition.Media.ImageGenerationModelPriced = grok.Media.ImageGenerationModelPriced
+	definition.Media.ImageEditModelPriced = grok.Media.ImageEditModelPriced
 	definition.Failure = grok.Failure
 	return definition
 }

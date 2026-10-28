@@ -112,6 +112,11 @@ type Result struct {
 	MarkFirstToken      func()
 	RecordStreamFailure func(StreamFailureDiagnostic)
 	Finalize            func(usage Usage, responseID, errorCode string)
+	imageBatchSize      int
+	imageOutputCount    func() int
+	// completeImage releases the upstream lease and commits native quota after
+	// a batch is read, while client billing still waits for response delivery.
+	completeImage func()
 }
 
 // StreamFailureDiagnostic safely projects a failure termination event returned in-stream after downstream 2xx headers.

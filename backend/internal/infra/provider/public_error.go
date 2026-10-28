@@ -25,6 +25,7 @@ func IsContentSafetyRejection(text string) bool {
 }
 
 var publicToolName = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9_]*(?:__[A-Za-z0-9_]+)+\b`)
+var publicChannelLabel = regexp.MustCompile(`(?i)\b(?:Grok\s+(?:Web|Console|Build)|ChatGPT|Adobe(?:\s+Firefly)?|Muse|Console)\s+`)
 
 // LocalizePublicErrorMessage changes only human-readable text. Callers retain
 // their protocol's status, machine codes, parameters and envelope. Raw upstream
@@ -35,6 +36,9 @@ func LocalizePublicErrorMessage(status int, code, message string) string {
 	if IsContentSafetyRejection(text) {
 		return ContentPolicyMessage
 	}
+	// Channel labels belong to diagnostics, not the client's failure reason.
+	// This runs only on error messages; model IDs, codes and generated text stay intact.
+	message = strings.TrimSpace(publicChannelLabel.ReplaceAllString(message, ""))
 	switch {
 	case strings.Contains(text, "fully transparent"):
 		return "生成的图片完全透明，没有可见内容，请调整提示词后重试。"

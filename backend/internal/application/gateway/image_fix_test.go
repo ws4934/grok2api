@@ -24,7 +24,7 @@ import (
 )
 
 // partialImageAdapter answers like chatgpt.Adapter.images after a later image
-// failed: a 200 carrying the images already drawn, QuotaUnits = delivered.
+// failed: a 200 carrying one image. Native quota units need not equal outputs.
 type partialImageAdapter struct {
 	staleTokenImageAdapter
 	units int
@@ -43,8 +43,8 @@ func TestSyncImageBillsDeliveredImagesOnly(t *testing.T) {
 		units, wantImages int
 	}{
 		"partial delivery":      {units: 1, wantImages: 1},
-		"units not reported":    {units: 0, wantImages: 3},
-		"units above the count": {units: 5, wantImages: 3},
+		"units not reported":    {units: 0, wantImages: 1},
+		"units above the count": {units: 5, wantImages: 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()

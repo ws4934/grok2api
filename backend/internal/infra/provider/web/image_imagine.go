@@ -218,6 +218,34 @@ func (c *imagineCollector) UsableCount() int {
 	return count
 }
 
+// A completed, entirely moderated batch is a policy outcome, not an empty
+// transport response. Keep only counts in diagnostics, never blocked images.
+type imagineModerationError struct{ count int }
+
+func (e *imagineModerationError) Error() string {
+	return fmt.Sprintf("Imagine WebSocket 内容未通过上游安全审核（completed=%d, moderated=%d）", e.count, e.count)
+}
+
+func (*imagineModerationError) HTTPStatusCode() int        { return http.StatusBadRequest }
+func (*imagineModerationError) RequestScopedFailure() bool { return true }
+func (*imagineModerationError) PublicErrorMessage() string { return provider.ContentPolicyMessage }
+
+func (c *imagineCollector) moderationError() error {
+	completed, moderated := 0, 0
+	for _, slot := range c.slots {
+		if slot.completed {
+			completed++
+			if slot.moderated {
+				moderated++
+			}
+		}
+	}
+	if completed > 0 && moderated == completed {
+		return &imagineModerationError{count: moderated}
+	}
+	return nil
+}
+
 func (a *Adapter) generateWSImage(ctx context.Context, request provider.ImageGenerationRequest, count int, format, ratio string, modelConfig imagineModelConfig) (*provider.Response, error) {
 	for attempt := 0; attempt < 2; attempt++ {
 		response, err := a.generateWSImageAttempt(ctx, request, count, format, ratio, modelConfig)
@@ -316,13 +344,18 @@ func (a *Adapter) generateWSImageAttempt(ctx context.Context, request provider.I
 		leaseOwned = false
 		connectionOwned = false
 		go a.streamImagineImages(streamCtx, writer, connection, lease, request.Credential, count, request.PartialImages, modelConfig, reqID)
-		return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: streamHeaders(), Body: &cancelBody{ReadCloser: reader, cancel: cancel}, QuotaUnits: count}, nil
+		return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: streamHeaders(), Body: &cancelBody{ReadCloser: reader, cancel: cancel}, QuotaUnits: count, UpstreamURL: wsURL}, nil
 	}
 
 	collector := newImagineCollector(reqID)
+	var transportErr error
 	for collector.UsableCount() < count && !collector.Done(modelConfig.ExpectedCount) {
 		messageType, data, readErr := connection.ReadMessage()
 		if readErr != nil {
+			transportErr = readErr
+			if ctx.Err() == nil && collector.UsableCount() > 0 {
+				break // Keep final, unmoderated results; never replay the missing slots.
+			}
 			a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, readErr)
 			return nil, fmt.Errorf("读取 Imagine WebSocket: %w", readErr)
 		}
@@ -334,21 +367,25 @@ func (a *Adapter) generateWSImageAttempt(ctx context.Context, request provider.I
 			continue
 		}
 		if message["type"] == "error" {
+			if collector.UsableCount() > 0 {
+				break
+			}
 			a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusOK, nil)
 			return nil, fmt.Errorf("Imagine WebSocket 返回错误")
 		}
 		collector.Accept(message)
 	}
-	a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusOK, nil)
+	if transportErr != nil {
+		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, transportErr)
+	} else {
+		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusOK, nil)
+	}
 	images := collector.Images()
 	if len(images) == 0 {
+		if err := collector.moderationError(); err != nil {
+			return nil, &url.Error{Op: "Imagine WebSocket", URL: wsURL, Err: err}
+		}
 		return nil, fmt.Errorf("Imagine WebSocket 完成但没有可用图片")
-	}
-	if len(images) < count {
-		return jsonProviderResponse(http.StatusBadGateway, map[string]any{"error": map[string]any{
-			"message": fmt.Sprintf("上游仅返回 %d/%d 张可用图片", len(images), count),
-			"type":    "server_error", "code": "image_generation_incomplete",
-		}}), nil
 	}
 	urls := make([]string, 0, len(images))
 	blobs := make([]string, 0, len(images))
@@ -356,9 +393,9 @@ func (a *Adapter) generateWSImageAttempt(ctx context.Context, request provider.I
 		urls = append(urls, image.URL)
 		blobs = append(blobs, image.Blob)
 	}
-	result, err := a.imageResponse(ctx, request.Credential, urls, blobs, count, format)
+	result, err := a.imageResponse(ctx, request.Credential, urls, blobs, min(count, len(images)), format)
 	if result != nil {
-		result.QuotaUnits = count
+		result.QuotaUnits = len(images)
 	}
 	return result, err
 }
@@ -442,6 +479,20 @@ func (a *Adapter) streamImagineImages(ctx context.Context, writer *io.PipeWriter
 			emitted++
 		}
 		if collector.Done(modelConfig.ExpectedCount) && emitted < count {
+			if emitted == 0 && collector.moderationError() != nil {
+				if err := writeSSE(writer, "error", map[string]any{
+					"type": "error", "error": map[string]any{
+						"type": "invalid_request_error", "code": provider.ContentPolicyViolation,
+						"message": provider.ContentPolicyMessage, "param": nil,
+					},
+				}); err != nil {
+					_ = writer.CloseWithError(err)
+					return
+				}
+				a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, http.StatusOK, nil)
+				_ = writer.Close()
+				return
+			}
 			incompleteErr := fmt.Errorf("上游仅返回 %d/%d 张可用图片", emitted, count)
 			_ = writer.CloseWithError(incompleteErr)
 			return
@@ -491,7 +542,15 @@ func imagineResetMessage() map[string]any {
 }
 
 func imagineRequestMessage(id, prompt, ratio string, nsfw, pro bool, generations int) map[string]any {
-	return map[string]any{"type": "conversation.item.create", "timestamp": time.Now().UnixMilli(), "item": map[string]any{"type": "message", "content": []any{map[string]any{"requestId": id, "text": prompt, "type": "input_text", "properties": map[string]any{"section_count": 0, "is_kids_mode": false, "enable_nsfw": nsfw, "skip_upsampler": false, "enable_side_by_side": true, "is_initial": false, "aspect_ratio": ratio, "enable_pro": pro, "num_generations": generations}}}}}
+	properties := map[string]any{
+		"section_count": 0, "is_kids_mode": false, "enable_nsfw": nsfw,
+		"skip_upsampler": pro, "enable_side_by_side": true, "is_initial": false,
+		"aspect_ratio": ratio, "enable_pro": pro, "num_generations": generations,
+	}
+	if pro && (ratio == "" || ratio == "auto") {
+		delete(properties, "aspect_ratio")
+	}
+	return map[string]any{"type": "conversation.item.create", "timestamp": time.Now().UnixMilli(), "item": map[string]any{"type": "message", "content": []any{map[string]any{"requestId": id, "text": prompt, "type": "input_text", "properties": properties}}}}
 }
 
 func imageIDFromURL(value string) string {

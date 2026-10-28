@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/gin-gonic/gin"
 )
 
@@ -52,5 +53,13 @@ func TestWriteResultImageStreamCountsImagesBeforeAnError(t *testing.T) {
 	recorder, usage, code := writeImageStream(t, body)
 	if code != "upstream_stream_error" || usage.OutputImages != 1 || !strings.Contains(recorder.Body.String(), "上游服务处理失败") || !strings.Contains(recorder.Body.String(), `"code":"upstream_error"`) {
 		t.Fatalf("final = %q images = %d body = %q", code, usage.OutputImages, recorder.Body.String())
+	}
+}
+
+func TestWriteResultImagePolicyErrorIsVisibleWithoutCountingAnImage(t *testing.T) {
+	body := "event: error\ndata: " + `{"type":"error","error":{"type":"invalid_request_error","code":"content_policy_violation","message":"` + provider.ContentPolicyMessage + `","param":null}}` + "\n\n"
+	recorder, usage, code := writeImageStream(t, body)
+	if recorder.Code != http.StatusOK || code != "upstream_stream_error" || usage.OutputImages != 0 || recorder.Body.String() != body {
+		t.Fatalf("status=%d final=%q images=%d body=%q", recorder.Code, code, usage.OutputImages, recorder.Body.String())
 	}
 }

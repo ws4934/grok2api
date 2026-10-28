@@ -31,6 +31,14 @@ func TestPendingImageSettlementSurvivesAdminDelete(t *testing.T) {
 	if stored.Status != media.StatusCompleted || stored.ResultAssetID == "" || !stored.UsagePending() {
 		t.Fatalf("not pending settlement: %+v", stored)
 	}
+	assertListedPending := func(want bool) {
+		t.Helper()
+		listed, total, err := f.jobs.ListMediaJobs(ctx, repository.MediaJobListQuery{Page: repository.PageQuery{Limit: 20}})
+		if err != nil || total != 1 || len(listed) != 1 || listed[0].ID != job.ID || listed[0].UsagePending() != want {
+			t.Fatalf("listed settlement pending=%v: %+v total=%d err=%v", want, listed, total, err)
+		}
+	}
+	assertListedPending(true)
 	if billed, reserved := f.billing(t); billed != 0 || reserved != 400_000_000 {
 		t.Fatalf("before recovery: billed=%d reserved=%d", billed, reserved)
 	}
@@ -53,6 +61,7 @@ func TestPendingImageSettlementSurvivesAdminDelete(t *testing.T) {
 	if stored := f.job(t, job.ID); stored.UsagePending() || stored.UsageRecordedAt == nil {
 		t.Fatalf("settlement marker missing: %+v", stored)
 	}
+	assertListedPending(false)
 	if billed, reserved := f.billing(t); billed != 400_000_000 || reserved != 0 {
 		t.Fatalf("after recovery: billed=%d reserved=%d", billed, reserved)
 	}

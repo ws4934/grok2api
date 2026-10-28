@@ -111,8 +111,12 @@ export async function generateImage(input: {
   params: ImageParams;
   signal?: AbortSignal;
   requestId?: string;
+  imageURLs?: string[];
 }): Promise<ImageResult[]> {
-  const payload = await publicApiRequest(input.apiKey, "/images/generations", { method: "POST", body: imageGenerationBody(input), signal: input.signal, requestId: input.requestId });
+  const sourceImages = input.imageURLs?.map((url) => ({ url, type: "image_url" }));
+  const editing = Boolean(sourceImages?.length);
+  const body = { ...imageGenerationBody(input), ...(editing ? { images: sourceImages } : {}) };
+  const payload = await publicApiRequest(input.apiKey, editing ? "/images/edits" : "/images/generations", { method: "POST", body, signal: input.signal, requestId: input.requestId });
   const images = readImages(payload);
   if (images.length === 0) throw new CreativeApiError(200, "The image response did not contain any images", "invalid_response");
   return images.map((image) => ({ ...image, url: resolveMediaURL(image.url) }));
@@ -120,9 +124,10 @@ export async function generateImage(input: {
 
 // submitImageJob starts one image as a durable job through the Responses
 // image_generation tool in background mode, so it survives leaving the page.
-export async function submitImageJob(input: { apiKey: string; model: string; prompt: string; params: ImageParams; requestId?: string }): Promise<string> {
+export async function submitImageJob(input: { apiKey: string; model: string; prompt: string; params: ImageParams; requestId?: string; imageURLs?: string[] }): Promise<string> {
   const tool = { type: "image_generation", size: input.params.size || "auto", quality: input.params.quality || "auto" };
-  const payload = await publicApiRequest(input.apiKey, "/responses", { method: "POST", body: { model: input.model, input: input.prompt, background: true, tools: [tool] }, requestId: input.requestId });
+  const prompt = input.imageURLs?.length ? [{ role: "user", content: [{ type: "input_text", text: input.prompt }, ...input.imageURLs.map((url) => ({ type: "input_image", image_url: url }))] }] : input.prompt;
+  const payload = await publicApiRequest(input.apiKey, "/responses", { method: "POST", body: { model: input.model, input: prompt, background: true, tools: [tool] }, requestId: input.requestId });
   const id = isRecord(payload) && typeof payload.id === "string" ? payload.id : "";
   if (!id) throw new CreativeApiError(200, "The image job response did not contain an id", "invalid_response");
   return id;

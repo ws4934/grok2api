@@ -31,11 +31,33 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 
 - 客户端错误的 `message` 使用中文；HTTP 状态、`type`、`code`、`param` 和 SSE 事件名按对应 API 协议返回，不把机器字段翻译成中文。已符合协议的上游错误对象保留其机器字段。
 - 同步接口中的内容审核拒绝保留实际的 400／403／422 状态，不改成 502；网关生成的 OpenAI 风格错误使用 `content_policy_violation`。审核拒绝不自动重新生成、不切换账号，也不计入账号故障。
+- Grok Web Imagine 全批结果被标记为 `moderated: true` 时，同步 Images 请求映射为 400 `content_policy_violation`；流式保留已发送的 200，通过 `error` 事件报告审核拒绝，不空断流。诊断保留 WebSocket 地址及拦截数量，不保存被拦截的图片内容；没有已交付图片时不扣客户端费用。
 - Responses 图片任务通过 `status: "failed"` 和 `error` 返回失败；审核拒绝使用 `image_content_policy_violation`，无效输入使用 `invalid_prompt`，其他生成故障使用 `server_error`。流式请求通过 `response.failed` 或对应协议的 `error` 事件报告，开始输出后不另写 HTTP 错误正文。
 - xAI 视频任务轮询仍返回 `status: "failed"` 和 `error: {code, message}`，审核拒绝使用 `invalid_argument`，不将内部错误码直接放入该字段。
 - 管理端上游诊断展示中文错误说明，并保留脱敏后的原始响应、错误详情和错误链，便于排查。
+- 客户端 `error.message` 只写原因和必要的处理方法，不附带 Grok Web、Grok Console 等渠道标签；状态码、协议错误类型、机器码和参数名不变，渠道与账号信息留在管理端诊断。
 
 协议依据：[OpenAI Response error](https://developers.openai.com/api/reference/resources/responses/methods/cancel)、[xAI Video Error Handling](https://docs.x.ai/developers/model-capabilities/video/generation#error-handling)。
+
+## Grok 图片：同一入口，按实际路由提供参数
+
+客户端继续使用 `/v1/images/generations` 和 `/v1/images/edits`。创作台按实际 Provider 和上游模型决定可选参数，不依赖管理员可修改的公开模型名。同名模型跨多个路由时，只展示这些路由都支持的 Grok 参数；发送请求和新历史记录使用同一组有效值。
+
+- **Console 生图**：可选 `1k/2k` 和 9 种宽高比；只有 `grok-imagine-image-2.0` 展示 `auto/low/medium` 质量选项。2.0 的 `auto` / 省略质量在生图时使用 `low`、编辑时使用 `medium`；`high` 对齐 `medium`，超出支持档位的分辨率就近适配。归一化在账号选择及费用预占前完成，转发、审计与结算用同一组有效参数。编辑保留前 3 张输入图，输入图费用也按这 3 张计算。
+- **Web 2.0**：`grok-imagine-image-2.0` 同时注册生图和编辑能力，不带输入图调用 `/v1/images/generations`，带图调用 `/v1/images/edits`；编辑合计最多 5 张输入图，每个上游批次出 1 张，客户端可用 `n` 请求多张，由网关分批。编辑沿用官网的 `modelName=imagine-image-edit`，通过 `responseMetadata.modelConfigOverride.modelMap.imageEditModel=imagine` 选择当前引擎，而不是把 API 模型名硬塞给私有接口。宽高比支持 `auto`、1:1、16:9、9:16、4:3、3:2、2:3、21:9、5:2，其他值就近适配。
+- **免费号路径**：当前 Web 接入按 1K 和模型自身质量运行；官网的 2K 字段 `resolution_name/resolutionName` 受账号功能开关控制，本次不发送它，也不将 API 的 `low/medium/auto` 当作 Web 质量档。创作台不展示无效选项，Web 生图和编辑计费也不再因被忽略的 `resolution/quality` 加价。Basic 编辑使用 `image_pro` 额度；付费号仍使用 `image_edit`，与同名文生图的额度分开。
+- **其他 Web 入口**：`grok-imagine-image` 保留原有 13 种比例，Lite 仅展示数量；已有 `grok-imagine-image-edit` 编辑入口继续可用，保留原有最多 8 张输入图的调用契约。
+- **创作台参考图**：在同一图片面板粘贴 HTTPS 图片地址，每行一张，自动切换生成/编辑接口；参考图和新历史记录一起保存，重新生成仍是编辑。切换模型不清空输入，若新模型不支持或超出数量则提示移除，不静默丢图。切换模型保留各控件选择，但请求与新记录只包含当前有效参数。API 仍支持原有 JSON、Base64 和 multipart 文件输入。
+- **其他 Provider**：既有 OpenAI 风格的 `size/quality` 控件和调用方式不变。
+
+### 多张生成保留成功结果，按有效额度分批
+
+- 同步 Images 接口的 `n` 支持 1–10。请求 N 张只成功 K 张（K>0）时，仍返回标准 `200` / `data`，其中只含成功的 K 张，客户端费用按 K 张结算；一张都没有时才返回协议错误。`url` 和 `b64_json` 规则相同，创作台显示实际数量 K / N。
+- 原生支持批量的模型，按账号已知余量提交可负担的最大批次，再把尚未提交的数量交给后续账号。Web / ChatGPT 次数型窗口按张数；Console 的共享窗口单位是美分，按实际模型、质量、分辨率和每批参考图成本计算，不能把 8 美分理解为 8 张。可计量窗口尚未同步时先逐张提交；无法换算成张数的周用量窗口仍遵守原有选择规则。
+- 单张模型保留空闲账号间的并发分轮；编辑原生只出一张时也能聚合为客户端请求的 N 张。共享预算的在途占用不随路由缓存刷新而丢失，上游完成后先记实际额度消耗、释放账号，客户端费用等交付结果后结算。
+- 某个已提交批次少出图、审核拒绝、断流或结果不确定时，不自动补发缺失结果；之前成功的图片保留。上游已生成却下载失败的图片可能仍消耗账号额度，但不计入客户端的成功图片费用。流式仍固定 `n=1`。
+
+依据：[Imagine Image 2.0](https://x.ai/news/grok-imagine-image-2) 和 2026-10-28 登录后的官网前端 [请求构造及功能开关](https://cdn.grok.com/_next/static/chunks/01ovajz11efdy.js)。本次免费账号页面未开放 2K；尚未用付费账号验证其分辨率能力。
 
 ## ChatGPT 接入步骤
 

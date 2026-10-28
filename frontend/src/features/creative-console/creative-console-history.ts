@@ -11,6 +11,7 @@ export type ImageHistoryRecord = {
   model: string;
   basicProtocol: boolean;
   params: ImageParams;
+  imageURLs?: string[];
   status: "generating" | "completed" | "failed" | "interrupted";
   images: ImageResult[];
   error?: ApiErrorDetail;
@@ -117,6 +118,7 @@ export function parseImageRecord(value: unknown): ImageHistoryRecord[] {
     model: value.model,
     basicProtocol: value.basicProtocol === true,
     params: { count, size: optionalString(params.size), quality: optionalString(params.quality), aspectRatio: optionalString(params.aspectRatio), resolution: optionalString(params.resolution) },
+    ...(Array.isArray(value.imageURLs) ? { imageURLs: value.imageURLs.filter((url): url is string => typeof url === "string" && /^https:\/\//i.test(url)).slice(0, 8) } : {}),
     status: value.status === "generating" && jobIds.length === 0 ? "interrupted" : value.status,
     images: Array.isArray(value.images) ? value.images.flatMap(parseStoredImage) : [],
     error: parseErrorDetail(value.error),

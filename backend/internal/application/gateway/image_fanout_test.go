@@ -249,7 +249,7 @@ func TestImagesFanOutDrawsPlainOnlyAfterABusyRound(t *testing.T) {
 		extras, plains := 0, 0
 		// An extra draw takes a free account; a plain draw always finds it
 		// taken by a sibling, the race's losing interleaving.
-		draw := func(_ context.Context, extra bool) (*Result, error) {
+		draw := func(_ context.Context, _ int, extra bool) (*Result, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			if !extra {
@@ -260,9 +260,9 @@ func TestImagesFanOutDrawsPlainOnlyAfterABusyRound(t *testing.T) {
 			if !free {
 				return nil, errImageAccountsBusy
 			}
-			return &Result{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[{}]}`)), Finalize: func(Usage, string, string) {}}, nil
+			return &Result{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[{}]}`)), Finalize: func(Usage, string, string) {}, imageBatchSize: 1, imageOutputCount: func() int { return 1 }}, nil
 		}
-		result, err := new(Service).fanOutImages(context.Background(), 3, draw)
+		result, err := new(Service).drawImageBatches(context.Background(), 3, true, draw)
 		if free {
 			if err != nil || len(readFanned(t, result).Data) != 3 || plains != 0 {
 				t.Fatalf("free account: err = %v, plain draws = %d", err, plains)

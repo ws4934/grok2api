@@ -89,95 +89,60 @@ func (e *consoleMediaUpstreamError) PublicErrorMessage() string {
 
 func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGenerationRequest) (*provider.Response, error) {
 	if !ResolveMedia(request.Model, modeldomain.CapabilityImage) {
-		return invalidConsoleMediaRequest("模型不支持 Console 图片生成"), nil
+		return invalidConsoleMediaRequest("当前模型不支持图片生成"), nil
 	}
-	if request.Streaming || request.PartialImages != 0 {
-		return invalidConsoleMediaRequest("Grok Console 标准图片接口不支持 stream 或 partial_images"), nil
-	}
-	count := request.Count
-	if count <= 0 {
-		count = 1
-	}
-	if count > 10 {
+	if request.Count > 10 {
 		return invalidConsoleMediaRequest("n 必须在 1 到 10 之间"), nil
 	}
-	format, err := normalizeConsoleImageFormat(request.ResponseFormat)
+	o, err := a.NormalizeImageRequest(request.Options())
 	if err != nil {
 		return invalidConsoleMediaRequest(err.Error()), nil
 	}
-	ratio := resolveConsoleImageAspectRatio(request.AspectRatio, request.Size)
-	resolution := grokimage.Resolution(request.Resolution)
-	quality := consoleImageQuality(request.Model, request.Quality)
-	payload := map[string]any{"model": request.Model, "prompt": request.Prompt, "n": count, "response_format": format}
-	if ratio != "" {
-		payload["aspect_ratio"] = ratio
+	payload := map[string]any{"model": request.Model, "prompt": request.Prompt, "n": o.Count, "response_format": o.ResponseFormat, "resolution": o.Resolution}
+	if o.AspectRatio != "" {
+		payload["aspect_ratio"] = o.AspectRatio
 	}
-	if resolution != "" {
-		payload["resolution"] = resolution
+	if o.Quality != "" {
+		payload["quality"] = o.Quality
 	}
-	if quality != "" {
-		payload["quality"] = quality
-	}
-	return a.forwardConsoleMedia(ctx, request.Credential, "/images/generations", payload, format, count)
+	return a.forwardConsoleMedia(ctx, request.Credential, "/images/generations", payload, o.ResponseFormat, o)
 }
 
 func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditRequest) (*provider.Response, error) {
 	if !ResolveMedia(request.Model, modeldomain.CapabilityImageEdit) {
-		return invalidConsoleMediaRequest("模型不支持 Console 图片编辑"), nil
+		return invalidConsoleMediaRequest("当前模型不支持图片编辑"), nil
 	}
-	if request.Streaming || request.PartialImages != 0 {
-		return invalidConsoleMediaRequest("Grok Console 标准图片接口不支持 stream 或 partial_images"), nil
-	}
-	if len(request.ImageURLs) == 0 {
-		return invalidConsoleMediaRequest("Console 图片编辑需要至少一张图片"), nil
-	}
-	// Images beyond the three Console edits take are dropped, the first ones kept.
-	request.ImageURLs = request.ImageURLs[:min(len(request.ImageURLs), consoleMaxEditImages)]
-	count := request.Count
-	if count <= 0 {
-		count = 1
-	}
-	if count > 10 {
+	if request.Count > 10 {
 		return invalidConsoleMediaRequest("n 必须在 1 到 10 之间"), nil
 	}
-	format, err := normalizeConsoleImageFormat(request.ResponseFormat)
+	o, err := a.NormalizeImageRequest(request.Options())
 	if err != nil {
 		return invalidConsoleMediaRequest(err.Error()), nil
 	}
-	ratio := resolveConsoleImageAspectRatio(request.AspectRatio, request.Size)
-	resolution := grokimage.Resolution(request.Resolution)
-	if resolution == "" {
-		// The edit endpoint has always sent 1k when the client omitted it.
-		resolution = "1k"
-	}
-	quality := consoleImageQuality(request.Model, request.Quality)
-	images := make([]map[string]any, 0, len(request.ImageURLs))
-	for _, rawURL := range request.ImageURLs {
+	images := make([]map[string]any, 0, o.InputImages)
+	for _, rawURL := range request.ImageURLs[:o.InputImages] {
 		value := strings.TrimSpace(rawURL)
 		if !validConsoleMediaInputURL(value, "image") {
 			return invalidConsoleMediaRequest("每张编辑图片都必须是 HTTPS URL 或 image data URL"), nil
 		}
 		images = append(images, map[string]any{"type": "image_url", "url": value})
 	}
-	payload := map[string]any{"model": request.Model, "prompt": request.Prompt, "n": count, "response_format": format}
+	payload := map[string]any{"model": request.Model, "prompt": request.Prompt, "n": o.Count, "response_format": o.ResponseFormat, "resolution": o.Resolution}
 	if len(images) == 1 {
 		payload["image"] = images[0]
 	} else {
 		payload["images"] = images
 	}
-	if ratio != "" {
-		payload["aspect_ratio"] = ratio
+	if o.AspectRatio != "" {
+		payload["aspect_ratio"] = o.AspectRatio
 	}
-	if resolution != "" {
-		payload["resolution"] = resolution
+	if o.Quality != "" {
+		payload["quality"] = o.Quality
 	}
-	if quality != "" {
-		payload["quality"] = quality
-	}
-	return a.forwardConsoleMedia(ctx, request.Credential, "/images/edits", payload, format, count)
+	return a.forwardConsoleMedia(ctx, request.Credential, "/images/edits", payload, o.ResponseFormat, o)
 }
 
-func (a *Adapter) forwardConsoleMedia(ctx context.Context, credential account.Credential, path string, payload any, format string, quotaUnits int) (*provider.Response, error) {
+func (a *Adapter) forwardConsoleMedia(ctx context.Context, credential account.Credential, path string, payload any, format string, options provider.ImageRequestOptions) (*provider.Response, error) {
 	token, err := a.cipher.Decrypt(credential.EncryptedAccessToken)
 	if err != nil {
 		return nil, err
@@ -239,7 +204,9 @@ func (a *Adapter) forwardConsoleMedia(ctx context.Context, credential account.Cr
 			readErr = errors.New("Console 图片上游响应超过 2 MiB")
 		}
 		if readErr == nil {
-			data, readErr = a.localizeConsoleImageResponse(ctx, credential, cfg.BaseURL, data)
+			var nativeCount int
+			data, nativeCount, readErr = a.localizeConsoleImageResponse(ctx, credential, cfg.BaseURL, data)
+			options.Count = nativeCount
 		}
 		if readErr != nil {
 			if !provider.IsMediaPostProcessingError(readErr) {
@@ -252,7 +219,7 @@ func (a *Adapter) forwardConsoleMedia(ctx context.Context, credential account.Cr
 		response.Header.Set("Content-Length", strconv.Itoa(len(data)))
 		response.Header.Set("Content-Type", "application/json")
 		result := responseResult(response, response.Body)
-		result.QuotaUnits = max(1, quotaUnits)
+		result.QuotaUnits, _ = a.ImageQuotaUnits(QuotaModeImage, options)
 		result.RateLimit = rateLimit
 		return result, nil
 	}
@@ -262,50 +229,70 @@ func (a *Adapter) forwardConsoleMedia(ctx context.Context, credential account.Cr
 		cancel()
 	}
 	result := responseResult(response, &releaseBody{ReadCloser: response.Body, release: release})
-	result.QuotaUnits = max(1, quotaUnits)
+	// Base64 output is counted by the shared result reader without buffering it.
+	result.QuotaUnits = 0
 	result.RateLimit = rateLimit
 	return result, nil
 }
 
-func (a *Adapter) localizeConsoleImageResponse(ctx context.Context, credential account.Credential, baseURL string, data []byte) ([]byte, error) {
+func (a *Adapter) localizeConsoleImageResponse(ctx context.Context, credential account.Credential, baseURL string, data []byte) ([]byte, int, error) {
 	if a.assets == nil {
-		return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, errors.New("图片媒体存储未配置"))
+		return nil, 0, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, errors.New("图片媒体存储未配置"))
 	}
 	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(data, &envelope); err != nil {
-		return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, fmt.Errorf("解析 Console 图片响应: %w", err))
+		return nil, 0, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, fmt.Errorf("解析图片响应: %w", err))
 	}
 	var items []map[string]json.RawMessage
 	if err := json.Unmarshal(envelope["data"], &items); err != nil || len(items) == 0 || len(items) > 10 {
-		return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, errors.New("Console 图片响应缺少有效 data"))
+		return nil, 0, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, errors.New("图片响应缺少有效 data"))
 	}
-
+	kept := make([]map[string]json.RawMessage, 0, len(items))
+	nativeCount := 0
+	var firstError error
 	for index, item := range items {
 		var rawURL string
 		if err := json.Unmarshal(item["url"], &rawURL); err != nil || strings.TrimSpace(rawURL) == "" {
-			return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, fmt.Errorf("Console 图片响应第 %d 项缺少 URL", index+1))
+			if firstError == nil {
+				firstError = provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, fmt.Errorf("图片响应第 %d 项缺少 URL", index+1))
+			}
+			continue
 		}
+		nativeCount++
 		raw, err := a.downloadConsoleImage(ctx, credential, baseURL, rawURL)
 		if err != nil {
-			return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, err)
+			if firstError == nil {
+				firstError = provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, err)
+			}
+			continue
 		}
 		asset, err := grokimage.SaveWithRetry(ctx, a.assets, raw)
 		if err != nil {
-			return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
+			if firstError == nil {
+				firstError = provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
+			}
+			continue
 		}
-		items[index]["url"], _ = json.Marshal(a.assets.PublicImageURL(asset.ID))
-		items[index]["mime_type"], _ = json.Marshal(asset.MIMEType)
+		item["url"], _ = json.Marshal(a.assets.PublicImageURL(asset.ID))
+		item["mime_type"], _ = json.Marshal(asset.MIMEType)
+		kept = append(kept, item)
 	}
-	encodedItems, err := json.Marshal(items)
+	if len(kept) == 0 {
+		return nil, nativeCount, firstError
+	}
+	if len(kept) < len(items) {
+		a.logger().Warn("console_image_result_partial", "generated", nativeCount, "delivered", len(kept))
+	}
+	encodedItems, err := json.Marshal(kept)
 	if err != nil {
-		return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
+		return nil, nativeCount, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
 	}
 	envelope["data"] = encodedItems
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
-		return nil, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
+		return nil, nativeCount, provider.NewMediaPostProcessingError(provider.MediaPostProcessingStorage, err)
 	}
-	return encoded, nil
+	return encoded, nativeCount, nil
 }
 
 func (a *Adapter) downloadConsoleImage(ctx context.Context, credential account.Credential, baseURL, rawURL string) ([]byte, error) {

@@ -63,6 +63,7 @@ import {
   type VideoHistoryRecord,
 } from "@/features/creative-console/creative-console-history";
 import { resolveVoice } from "@/features/creative-console/creative-console-voice";
+import { imageGenerationParams, imageGenerationPolicy, imageReferencePolicy, parseImageReferenceURLs } from "@/features/creative-console/creative-console-image";
 import { parseVideoReferenceURL, videoInputPolicy, type VideoReferenceImage } from "@/features/creative-console/creative-console-video";
 import { getClientKeySecret, listClientKeys, type ClientKeyDTO } from "@/features/client-keys/client-keys-api";
 import { importVideoInputFromURL, listMediaAssets, uploadMediaInput } from "@/features/media/media-api";
@@ -117,9 +118,7 @@ type ChatSession = {
   messages: ConversationMessage[];
 };
 
-const imageAspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
 const videoAspectRatios = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
-const imageResolutions = ["1k", "2k"] as const;
 const basicImageSizes = ["auto", "1024x1024", "1536x1024", "1024x1536"] as const;
 const basicImageQualities = ["auto", "low", "medium", "high"] as const;
 const videoResolutions = ["480p", "720p", "1080p"] as const;
@@ -170,7 +169,8 @@ export function CreativeConsolePage() {
   }, [availableModels, selectedKey]);
   const modelGroups = useMemo(() => ({
     chat: uniqueModelsByPublicID(permittedModels.filter((model) => model.capability === "chat" || model.capability === "responses")),
-    image: uniqueModelsByPublicID(permittedModels.filter((model) => model.capability === "image")),
+    // Image controls must reflect every possible target of a shared public ID.
+    image: permittedModels.filter((model) => model.capability === "image" || model.capability === "image_edit"),
     // Keep every route target for VideoPanel. It presents one row per public ID,
     // but edit/extend eligibility depends on whether any aggregated target serves
     // the operation, not on the public name chosen by the operator.
@@ -922,15 +922,26 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const [count, setCount] = useState("1");
   const [aspectRatio, setAspectRatio] = useState("1:1");
   const [resolution, setResolution] = useState("1k");
-  const [quality, setQuality] = useState<"low" | "medium">("medium");
+  const [quality, setQuality] = useState("medium");
   const [size, setSize] = useState("auto");
   const [basicQuality, setBasicQuality] = useState("auto");
+  const [referenceURLs, setReferenceURLs] = useState("");
   // Newest first, matching the storage order; rendered oldest-to-newest like the chat transcript.
   const [records, setRecords] = useState(() => loadImageHistory(storageScope));
   const timeline = useMemo(() => [...records].reverse(), [records]);
-  const selectedModelRoute = modelOptions.find((option) => option.publicId === model);
-  const basicProtocol = !usesGrokDialect(selectedModelRoute);
-  const supportsQuality = !basicProtocol && model.toLowerCase().endsWith("grok-imagine-image-2.0");
+  const currentRoutes = modelOptions.filter((option) => option.publicId === model);
+  const editRoutes = currentRoutes.filter((route) => route.capability === "image_edit");
+  const generationRoutes = currentRoutes.filter((route) => route.capability === "image");
+  const references = parseImageReferenceURLs(referenceURLs);
+  const referencePolicy = imageReferencePolicy(editRoutes);
+  const editing = references.urls.length > 0 || (generationRoutes.length === 0 && editRoutes.length > 0);
+  const referenceError = references.invalid ? t("creativeConsole.imageReferenceInvalid")
+    : references.urls.length > 0 && referencePolicy.limit === 0 ? t("creativeConsole.imageReferencesUnsupported")
+    : references.urls.length > referencePolicy.limit ? t("creativeConsole.imageReferencesLimit", { count: referencePolicy.limit })
+    : editing && references.urls.length === 0 ? t("creativeConsole.imageReferenceRequired") : "";
+  const policy = imageGenerationPolicy(editing ? editRoutes : generationRoutes);
+  const { basicProtocol } = policy;
+  const effectiveParams = imageGenerationParams(policy, { count: Number(count), aspectRatio, resolution, quality: basicProtocol ? basicQuality : quality, size });
   const providers = useProviders().data;
   const [submittingJobs, setSubmittingJobs] = useState(false);
 
@@ -942,7 +953,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   }
 
   const mutation = useMutation({
-    mutationFn: ({ record, key }: { record: ImageHistoryRecord; key: string }) => generateImage({ apiKey: key, basicProtocol: record.basicProtocol, model: record.model, prompt: record.prompt, params: record.params, requestId: record.id }),
+    mutationFn: ({ record, key }: { record: ImageHistoryRecord; key: string }) => generateImage({ apiKey: key, basicProtocol: record.basicProtocol, model: record.model, prompt: record.prompt, params: record.params, requestId: record.id, imageURLs: record.imageURLs }),
     onSuccess: (images, { record }) => patchRecord(record.id, { status: "completed", images }),
     // The record ID doubles as the X-Request-ID, so even network failures stay traceable in the audit log.
     onError: (error, { record }) => {
@@ -973,7 +984,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       for (let index = 0; index < record.params.count; index += 1) {
         const requestId = imageJobRequestId(record.id, index);
         try {
-          jobIds.push(await submitImageJob({ apiKey: key, model: record.model, prompt: record.prompt, params: record.params, requestId }));
+          jobIds.push(await submitImageJob({ apiKey: key, model: record.model, prompt: record.prompt, params: record.params, requestId, imageURLs: record.imageURLs }));
         } catch (error) {
           const detail = describeError(error);
           failure = { ...detail, requestId: detail.requestId ?? requestId };
@@ -986,9 +997,20 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
     patchRecord(record.id, jobIds.length > 0 ? { jobIds, ...(failure ? { error: failure } : {}) } : { status: "failed", error: failure });
   }
 
-  function generate(request: Pick<ImageHistoryRecord, "prompt" | "model" | "basicProtocol" | "params">): void {
+  function generate(request: Pick<ImageHistoryRecord, "prompt" | "model" | "basicProtocol" | "params" | "imageURLs">): void {
     if (!apiKey || !request.model || !request.prompt || busy) return;
-    const record = newImageRecord(request);
+    const routes = modelOptions.filter((option) => option.publicId === request.model && option.capability === (request.imageURLs?.length ? "image_edit" : "image"));
+    const targetPolicy = imageGenerationPolicy(routes);
+    const targetReferences = imageReferencePolicy(routes);
+    // A historical model may no longer be listed; keep that existing request
+    // contract and let the server report its availability.
+    const record = newImageRecord(routes.length > 0 ? { ...request, basicProtocol: targetPolicy.basicProtocol, params: imageGenerationParams(targetPolicy, request.params) } : request);
+    if (request.imageURLs?.length && routes.length > 0 && request.imageURLs.length > targetReferences.limit) {
+      record.status = "failed";
+      record.error = { message: t("creativeConsole.imageReferencesLimit", { count: targetReferences.limit }), requestId: record.id };
+      updateRecords((current) => [record, ...current]);
+      return;
+    }
     updateRecords((current) => [record, ...current]);
     if (usesImageJobs(request.model)) {
       void startImageJobs(record, apiKey);
@@ -1000,23 +1022,22 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
 
   function submit(event: FormEvent): void {
     event.preventDefault();
-    const params: ImageParams = basicProtocol
-      ? { count: Number(count), size, quality: basicQuality }
-      : { count: Number(count), aspectRatio, resolution, quality: supportsQuality ? quality : undefined };
-    generate({ prompt: prompt.trim(), model, basicProtocol, params });
+    if (referenceError) return;
+    generate({ prompt: prompt.trim(), model, basicProtocol, params: effectiveParams, ...(references.urls.length ? { imageURLs: references.urls } : {}) });
   }
 
   function reuse(record: ImageHistoryRecord): void {
     const { params } = record;
     setPrompt(record.prompt);
     setCount(String(params.count));
+    setReferenceURLs(record.imageURLs?.join("\n") ?? "");
     if (record.basicProtocol) {
       setSize(params.size ?? "auto");
       setBasicQuality(params.quality ?? "auto");
     } else {
       if (params.aspectRatio) setAspectRatio(params.aspectRatio);
       if (params.resolution) setResolution(params.resolution);
-      if (params.quality === "low" || params.quality === "medium") setQuality(params.quality);
+      if (params.quality) setQuality(params.quality);
     }
     if (modelOptions.some((option) => option.publicId === record.model)) onModelChange(record.model);
   }
@@ -1033,7 +1054,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                 <MessageScrollerItem key={record.id} messageId={record.id} scrollAnchor>
                   <HistoryRecordItem
                     prompt={record.prompt}
-                    meta={[record.model, imageParamsLabel(record.params), formatChatSessionTime(record.createdAt, i18n.language)].join(" · ")}
+                    meta={[record.model, imageParamsLabel(record.params), record.imageURLs?.length ? t("creativeConsole.imageReferenceCount", { count: record.imageURLs.length }) : "", formatChatSessionTime(record.createdAt, i18n.language)].filter(Boolean).join(" · ")}
                     status={record.status}
                     error={record.error}
                     actions={<>
@@ -1042,6 +1063,9 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                       <HistoryAction label={t("creativeConsole.deleteRecord")} icon={<Trash2 />} destructive onClick={() => updateRecords((current) => current.filter((item) => item.id !== record.id))} />
                     </>}
                   >
+                    {record.status === "completed" && record.images.length < record.params.count ? (
+                      <p className="mb-2 text-sm text-amber-700 dark:text-amber-400">{t("creativeConsole.imagePartialResult", { actual: record.images.length, requested: record.params.count })}</p>
+                    ) : null}
                     {record.status === "generating" || record.images.length > 0 ? (
                       <div className="flex flex-wrap gap-2">
                         {record.status === "generating"
@@ -1071,17 +1095,34 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       <form className="w-full shrink-0 px-3 pb-2 sm:px-6 sm:pb-3" onSubmit={submit}>
         <div className={composerClassName}>
           <Textarea id="image-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={t("creativeConsole.imagePlaceholder")} className="min-h-24 resize-none border-0 bg-transparent px-4 py-3 text-sm focus-visible:ring-0" />
+          {referenceError ? <p role="alert" className="px-4 pb-2 text-sm text-destructive">{referenceError}</p> : null}
           <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-3">
             <div className="flex min-w-0 flex-wrap items-center gap-1">
-              <CompactModelSelect value={model} models={modelOptions} onChange={onModelChange} />
-              <CompactSelect value={count} options={["1", "2", "3", "4"]} onChange={setCount} ariaLabel={t("creativeConsole.count")} suffix="×" icon={<Images />} />
+              <CompactModelSelect value={model} models={uniqueModelsByPublicID(modelOptions)} onChange={onModelChange} />
+              <CompactSelect value={String(effectiveParams.count)} options={["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]} onChange={setCount} ariaLabel={t("creativeConsole.count")} suffix="×" icon={<Images />} />
+              {referencePolicy.limit > 0 || referenceURLs ? (
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button type="button" variant="ghost" size="sm" className="h-8 gap-1.5 px-2" aria-label={t("creativeConsole.imageReferences")}>
+                      <ImagePlus className="size-3.5" />{t("creativeConsole.imageReferences")}{references.urls.length ? ` ${references.urls.length}` : ""}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-80 space-y-2">
+                    <label htmlFor="image-reference-urls" className="text-sm font-medium">{referencePolicy.limit > 0 ? t("creativeConsole.imageReferencesLimit", { count: referencePolicy.limit }) : t("creativeConsole.imageReferences")}</label>
+                    <Textarea id="image-reference-urls" value={referenceURLs} onChange={(event) => setReferenceURLs(event.target.value)} placeholder={t("creativeConsole.imageReferencesPlaceholder")} rows={5} className="resize-y text-sm" />
+                    {referenceURLs ? <Button type="button" variant="ghost" size="sm" onClick={() => setReferenceURLs("")}>{t("common.clear")}</Button> : null}
+                  </PopoverContent>
+                </Popover>
+              ) : null}
               {/* Keys keep React from reusing a Radix Select across protocols, which leaves its value blank. */}
               {basicProtocol ? <><CompactSelect key="size" value={size} options={basicImageSizes} onChange={setSize} ariaLabel={t("creativeConsole.size")} icon={<TvMinimal />} />
-              <CompactSelect key="basic-quality" value={basicQuality} options={basicImageQualities} onChange={setBasicQuality} ariaLabel={t("creativeConsole.quality")} icon={<ImageUpscale />} /></> : <><CompactSelect key="aspect-ratio" value={aspectRatio} options={imageAspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} />
-              <CompactSelect key="resolution" value={resolution} options={imageResolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} /></>}
-              {supportsQuality ? <CompactSelect value={quality} options={["low", "medium"]} onChange={(value) => setQuality(value as "low" | "medium")} ariaLabel={t("creativeConsole.quality")} /> : null}
+              <CompactSelect key="basic-quality" value={basicQuality} options={basicImageQualities} onChange={setBasicQuality} ariaLabel={t("creativeConsole.quality")} icon={<ImageUpscale />} /></> : <>
+                {effectiveParams.aspectRatio ? <CompactSelect key="aspect-ratio" value={effectiveParams.aspectRatio} options={policy.aspectRatios} onChange={setAspectRatio} ariaLabel={t("creativeConsole.aspectRatio")} icon={<TvMinimal />} /> : null}
+                {effectiveParams.resolution ? <CompactSelect key="resolution" value={effectiveParams.resolution} options={policy.resolutions} onChange={setResolution} ariaLabel={t("creativeConsole.resolution")} icon={<ImageUpscale />} /> : null}
+                {effectiveParams.quality ? <CompactSelect key="quality" value={effectiveParams.quality} options={policy.qualities} onChange={setQuality} ariaLabel={t("creativeConsole.quality")} /> : null}
+              </>}
             </div>
-            <Button type="submit" size="icon" aria-label={t("creativeConsole.generateImage")} disabled={!apiKey || !model || !prompt.trim() || busy}>{busy ? <Loader2 className="animate-spin" /> : <ArrowUp />}</Button>
+            <Button type="submit" size="icon" aria-label={t("creativeConsole.generateImage")} disabled={!apiKey || !model || !prompt.trim() || busy || Boolean(referenceError)}>{busy ? <Loader2 className="animate-spin" /> : <ArrowUp />}</Button>
           </div>
         </div>
       </form>
@@ -1089,8 +1130,8 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   );
 }
 
-function newImageRecord(request: Pick<ImageHistoryRecord, "prompt" | "model" | "basicProtocol" | "params">): ImageHistoryRecord {
-  return { id: createCreativeMessageId(), createdAt: Date.now(), prompt: request.prompt, model: request.model, basicProtocol: request.basicProtocol, params: request.params, status: "generating", images: [] };
+function newImageRecord(request: Pick<ImageHistoryRecord, "prompt" | "model" | "basicProtocol" | "params" | "imageURLs">): ImageHistoryRecord {
+  return { id: createCreativeMessageId(), createdAt: Date.now(), prompt: request.prompt, model: request.model, basicProtocol: request.basicProtocol, params: request.params, ...(request.imageURLs?.length ? { imageURLs: request.imageURLs } : {}), status: "generating", images: [] };
 }
 
 // ImageJobPoller follows a record's durable image jobs until all of them end,

@@ -16,7 +16,7 @@ import (
 
 func (a *Adapter) forwardImageChatCompletion(ctx context.Context, request provider.ResponseResourceRequest, input openAIRequest, normalized normalizedChatInput, spec ModelSpec) (*provider.Response, error) {
 	if len(normalized.Attachments) > 0 {
-		return invalidImageRequest("文生图模型只接受当前用户消息中的纯文本；图生图请使用 grok-imagine-image-edit 和 /v1/images/edits")
+		return invalidImageRequest("图片模型的对话入口只接受纯文本；带参考图请使用 /v1/images/edits，Image 2.0 可沿用 grok-imagine-image-2.0 模型")
 	}
 	count := 1
 	format := "url"

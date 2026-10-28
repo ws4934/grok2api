@@ -31,3 +31,16 @@ func TestPublicErrorsUseChineseAndKeepTechnicalDetails(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestPublicErrorsOmitChannelLabelsAndKeepParameters(t *testing.T) {
+	for _, label := range []string{"Grok Web", "Grok Console", "ChatGPT", "Adobe Firefly", "Muse", "Console"} {
+		got := LocalizePublicErrorMessage(400, "invalid_parameter", label+" 图片编辑不支持 mask，最多允许 3 张 image")
+		if got != "图片编辑不支持 mask，最多允许 3 张 image" {
+			t.Fatalf("channel %q leaked or parameters changed: %q", label, got)
+		}
+	}
+	message := "模型 grok-imagine-image-2.0 不支持该参数"
+	if got := LocalizePublicErrorMessage(400, "invalid_parameter", message); got != message {
+		t.Fatalf("model ID changed: %q", got)
+	}
+}

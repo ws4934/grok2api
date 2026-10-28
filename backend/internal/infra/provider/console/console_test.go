@@ -1756,7 +1756,7 @@ func TestConsoleImageGenerationForwardsStandardDPoPRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK || response.QuotaUnits != 2 {
+	if response.StatusCode != http.StatusOK || response.QuotaUnits != 7 {
 		t.Fatalf("image response = %#v", response)
 	}
 	body, err := io.ReadAll(response.Body)
@@ -1782,6 +1782,40 @@ func TestConsoleImageGenerationForwardsStandardDPoPRequest(t *testing.T) {
 	}
 	if selection, ok := trace.Selection(egressdomain.ScopeConsoleAsset); !ok || selection.Scope != egressdomain.ScopeConsoleAsset {
 		t.Fatalf("Console image asset selection = %#v, ok=%v", selection, ok)
+	}
+}
+
+func TestConsoleImageKeepsDownloadedResultsAndTracksNativeSpend(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveTestDPoPToken(t, w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/images/generations":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []any{
+				map[string]any{"url": "http://" + r.Host + "/good.png"},
+				map[string]any{"url": "http://" + r.Host + "/missing.png"},
+			}})
+		case "/good.png":
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte("\x89PNG\r\n\x1a\nimage"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	store := &consoleImageAssetStoreStub{}
+	a, credential := newConsoleTestAdapterWithAssets(t, server.URL, store)
+	response, err := a.GenerateImage(context.Background(), provider.ImageGenerationRequest{Credential: credential, Model: "grok-imagine-image-2.0", Prompt: "test", Count: 2, Quality: "low", ResponseFormat: "url"})
+	if err != nil || response == nil {
+		t.Fatalf("download failure discarded the successful image: response=%+v err=%v", response, err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(response.Body)
+	var body struct{ Data []map[string]any }
+	if err != nil || json.Unmarshal(raw, &body) != nil || len(body.Data) != 1 || response.QuotaUnits != 8 || len(store.Saved()) != 1 {
+		t.Fatalf("delivered output and native cents conflated: response=%+v body=%s err=%v", response, raw, err)
 	}
 }
 
@@ -1819,7 +1853,7 @@ func TestConsoleImageEditForwardsMultipleImages(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK || response.QuotaUnits != 2 {
+	if response.StatusCode != http.StatusOK || response.QuotaUnits != 0 {
 		t.Fatalf("edit response = %#v", response)
 	}
 	body, err := io.ReadAll(response.Body)

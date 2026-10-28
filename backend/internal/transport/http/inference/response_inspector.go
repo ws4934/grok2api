@@ -3,6 +3,8 @@ package inference
 import (
 	"bytes"
 	"encoding/json"
+
+	"github.com/chenyme/grok2api/backend/internal/pkg/imagejson"
 	"unicode/utf8"
 
 	"github.com/chenyme/grok2api/backend/internal/application/gateway"
@@ -11,7 +13,7 @@ import (
 type responseInspector struct {
 	protocol        streamProtocol
 	pending         []byte
-	imageProjection imageEventProjection
+	imageProjection imagejson.Projection
 	droppingLine    bool
 	metadata        responseMetadata
 	onFirstToken    func()
@@ -40,8 +42,8 @@ func (i *responseInspector) Inspect(chunk []byte) {
 		}
 		if !i.droppingLine {
 			if i.protocol == streamProtocolImage {
-				i.pending = i.imageProjection.append(i.pending, fragment)
-				if i.imageProjection.payloadObserved && bytes.HasPrefix(bytes.TrimSpace(i.pending), []byte("data:")) {
+				i.pending = i.imageProjection.Append(i.pending, fragment)
+				if i.imageProjection.PayloadObserved() && bytes.HasPrefix(bytes.TrimSpace(i.pending), []byte("data:")) {
 					i.metadata.Usage.OutputObserved = true
 				}
 			} else {
@@ -62,12 +64,12 @@ func (i *responseInspector) Inspect(chunk []byte) {
 		if index < 0 {
 			return
 		}
-		if !i.droppingLine && !i.imageProjection.invalid {
+		if !i.droppingLine && !i.imageProjection.Invalid() {
 			i.inspectLine(i.pending)
 		}
 		i.pending = i.pending[:0]
 		i.droppingLine = false
-		i.imageProjection = imageEventProjection{}
+		i.imageProjection = imagejson.Projection{}
 		chunk = chunk[index+1:]
 	}
 }
@@ -466,10 +468,10 @@ func projectSafeScalar(raw json.RawMessage) json.RawMessage {
 }
 
 func (i *responseInspector) Finish() {
-	if !i.droppingLine && !i.imageProjection.invalid && len(i.pending) > 0 {
+	if !i.droppingLine && !i.imageProjection.Invalid() && len(i.pending) > 0 {
 		i.inspectLine(i.pending)
 	}
 	i.pending = nil
 	i.droppingLine = false
-	i.imageProjection = imageEventProjection{}
+	i.imageProjection = imagejson.Projection{}
 }

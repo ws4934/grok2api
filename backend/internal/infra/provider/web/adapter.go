@@ -117,6 +117,16 @@ func (a *Adapter) QuotaMode(upstreamModel string) string {
 	return ""
 }
 
+// ImageQuotaMode distinguishes two operations sharing the 2.0 public model.
+// Basic edits still use image_pro through CandidateQuotaMode; paid edits use
+// their separate image_edit window.
+func (a *Adapter) ImageQuotaMode(upstreamModel string, edit bool) string {
+	if edit && upstreamModel == "grok-imagine-image-2.0" {
+		return account.QuotaModeWebImageEdit
+	}
+	return a.QuotaMode(upstreamModel)
+}
+
 func (a *Adapter) QuotaRefreshGroup(upstreamModel string) string {
 	if spec, ok := Resolve(upstreamModel); ok && account.IsWebImagineQuotaMode(spec.Mode) {
 		return account.QuotaGroupWebImagine
@@ -187,9 +197,11 @@ func (a *Adapter) ListModels(_ context.Context, credential account.Credential) (
 		tier = account.WebTierBasic
 	}
 	values := make([]string, 0, len(catalog))
+	seen := make(map[string]bool, len(catalog))
 	for _, spec := range catalog {
-		if TierSupports(tier, spec.MinimumTier) {
+		if TierSupports(tier, spec.MinimumTier) && !seen[spec.UpstreamModel] {
 			values = append(values, spec.UpstreamModel)
+			seen[spec.UpstreamModel] = true
 		}
 	}
 	return values, nil

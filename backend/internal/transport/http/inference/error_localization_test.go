@@ -93,6 +93,30 @@ func TestHTTPErrorLocalizationPreservesMachineFieldsAndStatus(t *testing.T) {
 	}
 }
 
+func TestClientErrorOmitsChannelsWithoutChangingProtocolOrDiagnostics(t *testing.T) {
+	for _, raw := range []string{
+		`{"error":{"message":"Grok Web 图片编辑不支持 mask","type":"invalid_request_error","code":"mask_unsupported","param":"mask"}}`,
+		`{"error":{"message":"Grok Console 图片编辑不支持 mask","type":"invalid_request_error","code":"mask_unsupported","param":"mask"}}`,
+	} {
+		diagnostic := []byte(raw)
+		localized := preserveHTTPErrorEnvelope(diagnostic, http.StatusBadRequest, false)
+		var body struct {
+			Error struct{ Message, Type, Code, Param string }
+		}
+		if err := json.Unmarshal(localized, &body); err != nil || body.Error.Message != "图片编辑不支持 mask" || body.Error.Type != "invalid_request_error" || body.Error.Code != "mask_unsupported" || body.Error.Param != "mask" {
+			t.Fatalf("invalid protocol envelope: %s err=%v", localized, err)
+		}
+		// The raw diagnostic input is unchanged; only error.message is localized.
+		if string(diagnostic) != raw {
+			t.Fatal("diagnostic source was rewritten")
+		}
+	}
+	generated := `{"data":[{"revised_prompt":"Grok Web 图片编辑不支持 mask","b64_json":"R3JvayBXZWI="}]}`
+	if string(localizeErrorJSON([]byte(generated), http.StatusOK)) != generated {
+		t.Fatal("successful image content was modified")
+	}
+}
+
 func TestImageCallErrorLocalizationDoesNotRewriteOtherOutputItems(t *testing.T) {
 	call := `{"type":"image_generation_call","id":"ig_test","status":"failed","result":null,"error":{"code":"moderation_blocked","type":"invalid_request_error","param":null,"message":"may violate our content policies"}}`
 	for _, raw := range []string{

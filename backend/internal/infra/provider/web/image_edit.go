@@ -39,15 +39,23 @@ func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditReque
 }
 
 func (a *Adapter) editImageAttempt(ctx context.Context, request provider.ImageEditRequest) (*provider.Response, error) {
-	if len(request.ImageURLs) == 0 || len(request.ImageURLs) > 8 {
-		return jsonProviderResponse(http.StatusBadRequest, map[string]any{"error": map[string]any{"message": "image 数量必须在 1 到 8 之间", "type": "invalid_request_error"}}), nil
+	if request.MaskURL != "" {
+		return invalidImageRequest("当前模型不支持蒙版（mask），请选择支持蒙版的模型")
+	}
+	isImage20 := request.Model == "grok-imagine-image-2.0"
+	limit := 8
+	if isImage20 {
+		limit = 5
+	}
+	if len(request.ImageURLs) == 0 || len(request.ImageURLs) > limit {
+		return invalidImageRequest(fmt.Sprintf("image 数量必须在 1 到 %d 之间", limit))
 	}
 	count := request.Count
 	if count <= 0 {
 		count = 1
 	}
 	if count != 1 {
-		return invalidImageRequest("Grok Web 图片编辑当前仅支持 n=1")
+		return invalidImageRequest("图片编辑单批仅支持 n=1")
 	}
 	if request.PartialImages < 0 || request.PartialImages > 3 {
 		return invalidImageRequest("partial_images 必须在 0 到 3 之间")
@@ -63,6 +71,12 @@ func (a *Adapter) editImageAttempt(ctx context.Context, request provider.ImageEd
 		return invalidImageRequest("response_format 必须是 url 或 b64_json")
 	}
 	ratio := resolveImageEditAspectRatio(request.AspectRatio, request.Size)
+	if isImage20 && (request.AspectRatio != "" || request.Size != "") {
+		ratio = resolveImage20AspectRatio(request.AspectRatio, request.Size)
+		if ratio == "auto" {
+			ratio = ""
+		}
+	}
 	cfg := a.config()
 	token, err := a.cipher.Decrypt(request.Credential.EncryptedAccessToken)
 	if err != nil {
@@ -97,7 +111,12 @@ func (a *Adapter) editImageAttempt(ctx context.Context, request provider.ImageEd
 		}
 		assets = append(assets, uploaded.MetadataID)
 	}
-	payload := buildImageEditPayload(request.Prompt, assets, ratio)
+	var payload map[string]any
+	if isImage20 {
+		payload = buildImage20EditPayload(request.Prompt, assets, ratio)
+	} else {
+		payload = buildImageEditPayload(request.Prompt, assets, ratio)
+	}
 	response, err := a.postJSONWithReferer(ctx, cfg, lease, token, cfg.BaseURL+"/rest/app-chat/conversations/new", payload, time.Duration(cfg.ImageTimeoutSeconds)*time.Second, cfg.BaseURL+"/imagine")
 	if err != nil {
 		return nil, err
@@ -153,6 +172,20 @@ func buildImageEditPayload(prompt string, assets []string, aspectRatio string) m
 		"enableImageStreaming": true, "enableSideBySide": true, "sendFinalMetadata": true,
 		"mediaGenInput": map[string]any{"imageToImage": imageToImage},
 	}
+}
+
+// Source: the current official Imagine eS/er.k edit builder. 2.0 keeps the
+// imagine-image-edit endpoint model and selects the engine in responseMetadata.
+// No API quality tier or gated 2K field is injected for the free-account path.
+func buildImage20EditPayload(prompt string, assets []string, aspectRatio string) map[string]any {
+	payload := buildImageEditPayload(prompt, assets, aspectRatio)
+	delete(payload, "enableImageStreaming")
+	payload["enableSideBySide"] = false
+	payload["mediaGenInput"].(map[string]any)["imageToImage"].(map[string]any)["numOfImages"] = 1
+	payload["responseMetadata"] = map[string]any{
+		"modelConfigOverride": map[string]any{"modelMap": map[string]any{"imageEditModel": "imagine"}},
+	}
+	return payload
 }
 
 // resolveImageEditAspectRatio keeps the source image's shape unless the client

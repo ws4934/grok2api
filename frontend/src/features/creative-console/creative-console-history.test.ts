@@ -34,6 +34,12 @@ describe("image job request IDs", () => {
 });
 
 describe("image history", () => {
+  it("keeps reference URLs so reuse and regeneration remain edits after reload", () => {
+    const storage = memoryStorage();
+    const imageURLs = ["https://example.com/one.png", "https://example.com/two.png"];
+    persistImageHistory("k", [{ id: "edit", createdAt: 1, prompt: "combine", model: "renamed-image", basicProtocol: false, params: { count: 1 }, imageURLs, status: "completed", images: [] }], storage);
+    assert.deepEqual(loadImageHistory("k", storage)[0]?.imageURLs, imageURLs);
+  });
   it("drops malformed records and interrupts generations left running", () => {
     const storage = memoryStorage();
     storage.setItem(historyStorageKey("image", "k"), JSON.stringify([

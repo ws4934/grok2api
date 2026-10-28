@@ -1,15 +1,15 @@
-package inference
+package imagejson
 
 import (
 	"bytes"
 	"encoding/json"
 )
 
-// imageEventProjection removes image string contents from the inspection copy,
+// Projection replaces nonempty image strings with a one-byte marker in an inspection copy,
 // not from the forwarded bytes. Metadata can precede or follow the image. The
 // compact JSON still goes through the normal decoder, and skipped strings must
 // have valid JSON escapes too; a truncated/invalid image never becomes success.
-type imageEventProjection struct {
+type Projection struct {
 	inString        bool
 	escaped         bool
 	unicodeDigits   int
@@ -19,9 +19,13 @@ type imageEventProjection struct {
 	lastString      []byte
 	invalid         bool
 	payloadObserved bool
+	skipFilled      bool
 }
 
-func (p *imageEventProjection) append(dst, data []byte) []byte {
+func (p *Projection) Invalid() bool         { return p.invalid }
+func (p *Projection) PayloadObserved() bool { return p.payloadObserved }
+
+func (p *Projection) Append(dst, data []byte) []byte {
 	for len(data) > 0 {
 		if p.inString && p.skipping && !p.escaped && p.unicodeDigits == 0 {
 			// Base64 takes this path: scan in place without copying or retaining
@@ -32,6 +36,10 @@ func (p *imageEventProjection) append(dst, data []byte) []byte {
 			}
 			data = data[n:]
 			p.payloadObserved = p.payloadObserved || n > 0
+			if n > 0 && !p.skipFilled {
+				dst = append(dst, 'x')
+				p.skipFilled = true
+			}
 			if len(data) == 0 {
 				break
 			}
@@ -41,6 +49,10 @@ func (p *imageEventProjection) append(dst, data []byte) []byte {
 		if p.inString {
 			if p.skipping && (c != '"' || p.escaped || p.unicodeDigits > 0) {
 				p.payloadObserved = true
+				if !p.skipFilled {
+					dst = append(dst, 'x')
+					p.skipFilled = true
+				}
 			}
 			if !p.skipping {
 				dst = append(dst, c)
@@ -77,6 +89,7 @@ func (p *imageEventProjection) append(dst, data []byte) []byte {
 		switch c {
 		case '"':
 			p.inString, p.skipping = true, p.skipValue
+			p.skipFilled = false
 			p.stringStart = len(dst) - 1
 			p.skipValue = false
 		case ':':

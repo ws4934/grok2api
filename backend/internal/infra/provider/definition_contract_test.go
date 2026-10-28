@@ -71,7 +71,7 @@ func TestProductionProviderDefinitionsMatchImplementedCapabilities(t *testing.T)
 			capabilities: []modeldomain.Capability{modeldomain.CapabilityChat, modeldomain.CapabilityImage, modeldomain.CapabilityImageEdit, modeldomain.CapabilityVideo},
 			credential:   provider.CredentialSurface{AuthType: account.AuthTypeSSO, Import: true},
 			conversation: provider.ConversationSurface{Responses: true, ChatCompletions: true, Messages: true, StoredResponses: true},
-			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true},
+			media:        provider.MediaSurface{ImageGeneration: true, ImageEdit: true, VideoGeneration: true, ImageGenerationModelPriced: true, ImageEditModelPriced: true},
 			inference:    provider.InferencePolicy{Usage: provider.UsageEstimated, RetryForbiddenAsEgress: true},
 		},
 		{

@@ -2713,7 +2713,8 @@ func TestImageStreamPropagatesWithoutTouchingChatQuota(t *testing.T) {
 	editResult.Finalize(Usage{OutputImages: 3}, "", "")
 	_ = editResult.Body.Close()
 	logs, total, err = auditRepo.List(ctx, 0, 10)
-	if err != nil || total != 4 || logs[0].RequestID != "req-image-edit" || logs[0].MediaInputImages != 2 || logs[0].MediaOutputImages != 3 || logs[0].PricingModel != "grok-imagine-image-edit-2k" || logs[0].EstimatedCostInUSDTicks != 2_300_000_000 {
+	// Web ignores the compatibility resolution; bill its actual 1k product.
+	if err != nil || total != 4 || logs[0].RequestID != "req-image-edit" || logs[0].MediaInputImages != 2 || logs[0].MediaOutputImages != 3 || logs[0].PricingModel != "grok-imagine-image-edit-1k" || logs[0].EstimatedCostInUSDTicks != 1_700_000_000 {
 		t.Fatalf("image edit pricing audit = %#v, total=%d, err=%v", logs, total, err)
 	}
 	editRequest := adapter.EditRequest()
@@ -4799,7 +4800,12 @@ func (a *webImageStreamAdapter) GenerateImage(ctx context.Context, request provi
 		return nil, errors.New("simulated image transport failure")
 	}
 	body := "event: image_generation.completed\ndata: {}\n\ndata: [DONE]\n\n"
-	return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(body)), QuotaUnits: 1}, nil
+	contentType := "text/event-stream"
+	if !request.Streaming {
+		body = `{"created":1,"data":[{"url":"https://example.com/generated.png"}]}`
+		contentType = "application/json"
+	}
+	return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{"Content-Type": {contentType}}, Body: io.NopCloser(strings.NewReader(body)), QuotaUnits: 1}, nil
 }
 func (a *webImageStreamAdapter) ForwardResponse(context.Context, provider.ResponseResourceRequest) (*provider.Response, error) {
 	return &provider.Response{

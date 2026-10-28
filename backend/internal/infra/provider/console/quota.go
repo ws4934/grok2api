@@ -21,6 +21,9 @@ const (
 	consoleWeeklyWindow = 7 * 24 * time.Hour
 )
 
+// All Console modes are mirrors of the same included-usage snapshot.
+func (*Adapter) QuotaModeSyncReadsSnapshot() {}
+
 func (a *Adapter) SyncQuota(ctx context.Context, credential account.Credential) (provider.QuotaSnapshot, error) {
 	windows, syncedAt, err := a.syncConsoleQuotas(ctx, credential)
 	if err != nil {

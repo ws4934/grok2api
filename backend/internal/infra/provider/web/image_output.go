@@ -18,6 +18,7 @@ import (
 
 func (a *Adapter) imageResponse(ctx context.Context, credential account.Credential, urls, blobs []string, count int, format string) (*provider.Response, error) {
 	data := make([]any, 0, min(count, len(urls)))
+	var firstError error
 	for index := 0; index < count && index < len(urls); index++ {
 		blob := ""
 		if index < len(blobs) {
@@ -25,9 +26,18 @@ func (a *Adapter) imageResponse(ctx context.Context, credential account.Credenti
 		}
 		item, err := a.imageDataItem(ctx, credential, imagineImageValue{URL: urls[index], Blob: blob}, format)
 		if err != nil {
-			return nil, err
+			if firstError == nil {
+				firstError = err
+			}
+			continue
 		}
 		data = append(data, item)
+	}
+	if len(data) == 0 && firstError != nil {
+		return nil, firstError
+	}
+	if len(data) < count {
+		a.log().Warn("web_image_result_partial", "requested", count, "delivered", len(data))
 	}
 	return jsonProviderResponse(http.StatusOK, map[string]any{"created": time.Now().Unix(), "data": data}), nil
 }

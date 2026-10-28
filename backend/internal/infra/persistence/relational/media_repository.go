@@ -552,9 +552,10 @@ func (r *MediaJobRepository) ListMediaJobs(ctx context.Context, input repository
 		"completedAt": {expression: "completed_at", nullsLast: true, defaultDirection: repository.SortDescending},
 	}, sortSpec{expression: "created_at", defaultDirection: repository.SortDescending}, "id")
 	// account_id and checkpoint_json tell whether a failed image job can resume.
+	// usage_recorded_at distinguishes settled jobs from pending audit recovery.
 	if err := query.Select(
 		"id", "kind", "provider", "client_key_name", "account_id", "account_name", "model", "operation", "prompt", "seconds", "size", "quality",
-		"status", "progress", "result_asset_id", "checkpoint_json", "submitted", "error_code", "error_message", "created_at", "completed_at",
+		"status", "progress", "result_asset_id", "checkpoint_json", "submitted", "error_code", "error_message", "created_at", "completed_at", "usage_recorded_at",
 	).Offset(input.Page.Offset).Limit(input.Page.Limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}

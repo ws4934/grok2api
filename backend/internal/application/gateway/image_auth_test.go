@@ -181,12 +181,12 @@ func TestImageSSORejectionFailsOver(t *testing.T) {
 	service, model := consoleSSOPairService(t, modeldomain.CapabilityImage)
 	result, err := service.executeImage(context.Background(), "req-image-sso", clientkey.Key{ID: 1}, model, "draw", audit.OperationImage, modeldomain.CapabilityImage,
 		func(account.Provider) bool { return true },
-		func(_ context.Context, _ account.Provider, credential account.Credential, _ string) (*provider.Response, error) {
+		func(_ context.Context, _ account.Provider, credential account.Credential, _ string, _ provider.ImageRequestOptions) (*provider.Response, error) {
 			calls[credential.ID]++
 			if len(calls) == 1 {
 				return nil, fmt.Errorf("image: %w", provider.ErrUnauthorized)
 			}
-			return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"data":[]}`))}, nil
+			return &provider.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{"data":[{"url":"https://example.com/image.png"}]}`))}, nil
 		}, provider.ImageRequestOptions{Count: 1}, "", "", nil, false)
 	if err != nil || len(calls) != 2 {
 		t.Fatalf("no failover after an SSO rejection: calls = %v, err = %v", calls, err)

@@ -364,6 +364,7 @@ func (session *selectionSession) completeNormalLease(ctx context.Context, lease 
 	}
 	lease.Billing = candidate.Billing
 	lease.QuotaMode = session.selector.effectiveQuotaMode(candidate, session.quotaMode)
+	lease.routingCandidate = &candidate
 	return lease, nil
 }
 

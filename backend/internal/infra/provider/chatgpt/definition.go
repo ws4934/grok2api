@@ -80,6 +80,11 @@ func Routes() []modeldomain.Route {
 	return values
 }
 
+// Only the Web image window counts images; Codex windows count usage percentages.
+func (*Adapter) ImageQuotaUnits(mode string, o provider.ImageRequestOptions) (int, bool) {
+	return max(0, o.Count), mode == quotaModeImage
+}
+
 // QuotaMode follows the Web limits: every chat consumes "reason", every image
 // "image_gen"; dictation and speech, answered by speechModel, use neither.
 // Codex images draw on the Codex usage windows instead.

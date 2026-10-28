@@ -96,8 +96,12 @@ func (s *Selector) ConsumeQuota(provider account.Provider, accountID uint64, mod
 	if s.quotaConsumed == nil {
 		s.quotaConsumed = make(map[quotaConsumptionKey]int)
 	}
-	key := quotaConsumptionKey{provider: provider, accountID: accountID, mode: mode}
+	key := quotaConsumptionKey{provider: provider, accountID: accountID, mode: s.quotaPoolMode(provider, mode)}
 	s.quotaConsumed[key] += amount
+	if budget, ok := s.imageBudgets[key]; ok {
+		budget.remaining = max(0, budget.remaining-amount)
+		s.imageBudgets[key] = budget
+	}
 	s.quotaMu.Unlock()
 }
 
@@ -105,11 +109,23 @@ func (s *Selector) ConsumeQuota(provider account.Provider, accountID uint64, mod
 // copying the whole map per request. Hold quotaMu for reading while using it.
 type quotaConsumption struct {
 	values   map[quotaConsumptionKey]int
+	reserved map[quotaConsumptionKey]int
+	budgets  map[quotaConsumptionKey]imageQuotaBudget
+	poolMode func(account.Provider, string) string
 	provider account.Provider
 }
 
 func (s *Selector) quotaConsumptionSnapshot(provider account.Provider) quotaConsumption {
-	return quotaConsumption{values: s.quotaConsumed, provider: provider}
+	return quotaConsumption{values: s.quotaConsumed, reserved: s.quotaReserved, budgets: s.imageBudgets, provider: provider, poolMode: s.quotaPoolMode}
+}
+
+func (s *Selector) quotaPoolMode(value account.Provider, mode string) string {
+	if pools, ok := s.tierOrders.(interface {
+		QuotaPoolMode(account.Provider, string) string
+	}); ok {
+		return pools.QuotaPoolMode(value, mode)
+	}
+	return mode
 }
 
 // quotaSnapshotProvider reports a provider whose last complete quota snapshot
@@ -133,7 +149,16 @@ func quotaWindowExhausted(candidate account.RoutingCandidate, consumed quotaCons
 	if candidate.QuotaWindow == nil {
 		return false
 	}
-	remaining := candidate.QuotaWindow.Remaining - consumed.values[quotaConsumptionKey{provider: consumed.provider, accountID: candidate.Credential.ID, mode: candidate.QuotaWindow.Mode}]
+	mode := candidate.QuotaWindow.Mode
+	if consumed.poolMode != nil {
+		mode = consumed.poolMode(consumed.provider, mode)
+	}
+	key := quotaConsumptionKey{provider: consumed.provider, accountID: candidate.Credential.ID, mode: mode}
+	remaining := candidate.QuotaWindow.Remaining - consumed.values[key]
+	if budget, ok := consumed.budgets[key]; ok && !quotaWindowSyncedAt(candidate.QuotaWindow).After(budget.syncedAt) {
+		remaining = budget.remaining
+	}
+	remaining -= consumed.reserved[key]
 	return remaining <= 0
 }
 

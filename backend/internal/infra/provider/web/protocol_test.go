@@ -39,7 +39,7 @@ import (
 func TestCatalogMatchesSupportedSurface(t *testing.T) {
 	values := Catalog()
 	requiredModels := []string{"grok-chat-fast", "grok-chat-auto", "grok-chat-expert", "grok-chat-heavy", "grok-imagine-image-lite", "grok-imagine-image", "grok-imagine-image-2.0", "grok-imagine-image-edit", "grok-imagine-video"}
-	if len(values) != len(requiredModels) {
+	if len(values) != len(requiredModels)+1 {
 		t.Fatalf("catalog size = %d", len(values))
 	}
 	publicIDs := make(map[string]struct{}, len(values))
@@ -61,6 +61,7 @@ func TestCatalogMatchesSupportedSurface(t *testing.T) {
 		"grok-imagine-image-lite|image",
 		"grok-imagine-image|image",
 		"grok-imagine-image-2.0|image",
+		"grok-imagine-image-2.0|image_edit",
 		"grok-imagine-image-edit|image_edit",
 	} {
 		if _, exists := routeKeys[required]; !exists {
@@ -1277,7 +1278,7 @@ func TestImagineRequestContainsOnlyProtocolProperties(t *testing.T) {
 		item := message["item"].(map[string]any)
 		content := item["content"].([]any)[0].(map[string]any)
 		properties := content["properties"].(map[string]any)
-		if properties["aspect_ratio"] != "16:9" || properties["enable_pro"] != pro || properties["enable_nsfw"] != false || properties["num_generations"] != 2 {
+		if properties["aspect_ratio"] != "16:9" || properties["enable_pro"] != pro || properties["skip_upsampler"] != pro || properties["enable_nsfw"] != false || properties["num_generations"] != 2 {
 			t.Fatalf("pro=%v properties=%#v", pro, properties)
 		}
 		encoded := string(MarshalJSONBytes(message))

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 )
 
@@ -13,8 +14,8 @@ import (
 // free account; a later round draws it.
 var errImageAccountsBusy = errors.New("no free account for an extra image")
 
-// maxFannedImageBody bounds one single-image response held in memory.
-const maxFannedImageBody = 64 << 20
+// Match the public JSON transfer limit, including native multi-image batches.
+const maxFannedImageBody = 128 << 20
 
 // fansOutImages reports whether a multi-image request is drawn as single
 // images on separate accounts: it does not stream and every route of the
@@ -36,41 +37,53 @@ func (s *Service) fansOutImages(ctx context.Context, publicModel string, count i
 }
 
 type fannedImage struct {
-	result *Result
-	body   []byte
-	err    error
+	result    *Result
+	body      []byte
+	err       error
+	submitted int
+	outputs   int
 }
 
-// fanOutImages draws count images as single-image requests, in rounds. A
-// round starts one request per missing image at once; a request that finds
-// no free account gives up quietly and is drawn in the next round, once this
-// round's accounts are released, so a sibling holding the only free account
-// never makes it fail. When a whole round finds no free account, the next
-// round is one plain request: it fails as the request would without fan-out
-// (same error and audit), or delivers an image and drawing goes on. Drawing
-// stops at the first failure; the delivered images are returned as one
-// response, each audited and billed on its own account when drawn.
-func (s *Service) fanOutImages(ctx context.Context, count int, draw func(ctx context.Context, extra bool) (*Result, error)) (*Result, error) {
+// drawImageBatches preserves parallel single-image products and native batches.
+// Each native draw fits its selected account's budget. Only unsubmitted work
+// advances to another round; partial/uncertain batches stop without replay.
+// Already generated results survive a later failure or exhausted account pool.
+func (s *Service) drawImageBatches(ctx context.Context, count int, parallel bool, draw func(ctx context.Context, count int, extra bool) (*Result, error)) (*Result, error) {
 	var delivered, failed []fannedImage
-	for extra := true; len(delivered) < count && len(failed) == 0; {
-		outcomes := make([]fannedImage, count-len(delivered))
-		if !extra {
+	submitted := 0
+	stop := false
+	for extra := parallel; submitted < count && len(failed) == 0 && !stop; {
+		outcomes := make([]fannedImage, count-submitted)
+		batchCount := count - submitted
+		if parallel {
+			batchCount = 1
+		}
+		if !parallel || !extra {
 			outcomes = outcomes[:1]
 		}
 		var wait sync.WaitGroup
 		for index := range outcomes {
 			wait.Go(func() {
 				outcome := &outcomes[index]
-				outcome.result, outcome.err = draw(ctx, extra)
+				outcome.result, outcome.err = draw(ctx, batchCount, extra)
 				if outcome.err == nil && auditRequestSucceeded(outcome.result.StatusCode, "") {
-					outcome.body, outcome.err = io.ReadAll(io.LimitReader(outcome.result.Body, maxFannedImageBody))
-					if outcome.err == nil && !json.Valid(outcome.body) {
-						outcome.err = errors.New("image response is not JSON")
+					outcome.body, outcome.err = io.ReadAll(io.LimitReader(outcome.result.Body, maxFannedImageBody+1))
+					if outcome.err == nil && len(outcome.body) > maxFannedImageBody {
+						outcome.err = invalidImageResult{}
 					}
 					if outcome.err == nil {
-						// The image exists (also in the gallery): settle it now, so
-						// the next round sees the account free and its quota spent.
-						outcome.result.Finalize(Usage{}, "", "")
+						outcome.submitted = outcome.result.imageBatchSize
+						outcome.outputs = outcome.result.imageOutputCount()
+						if outcome.outputs == 0 {
+							outcome.err = invalidImageResult{}
+						}
+					}
+					if outcome.err == nil {
+						// Free the account and commit upstream spend before the next
+						// round, but settle client fees only after response delivery.
+						if outcome.result.completeImage != nil {
+							outcome.result.completeImage()
+						}
 					}
 				}
 			})
@@ -82,7 +95,9 @@ func (s *Service) fanOutImages(ctx context.Context, count int, draw func(ctx con
 			case errors.Is(outcome.err, errImageAccountsBusy):
 			case outcome.err == nil && outcome.body != nil:
 				delivered = append(delivered, outcome)
-				extra = true
+				submitted += outcome.submitted
+				stop = stop || outcome.outputs < outcome.submitted
+				extra = parallel
 			default:
 				failed = append(failed, outcome)
 			}
@@ -116,7 +131,15 @@ func (s *Service) fanOutImages(ctx context.Context, count int, draw func(ctx con
 	}
 	header := results[0].Header.Clone()
 	header.Del("Content-Length")
-	return &Result{StatusCode: results[0].StatusCode, Status: results[0].Status, Header: header, Body: &fannedBody{Reader: bytes.NewReader(body), results: results}, Finalize: func(Usage, string, string) {}}, nil
+	return &Result{
+		StatusCode: results[0].StatusCode, Status: results[0].Status, Header: header,
+		Body: &fannedBody{Reader: body, results: results},
+		Finalize: func(usage Usage, responseID, errorCode string) {
+			for _, result := range results {
+				result.Finalize(usage, responseID, errorCode)
+			}
+		},
+	}, nil
 }
 
 // settleFannedImage finalizes an image that is not returned to the client:
@@ -136,7 +159,7 @@ func settleFannedImage(image fannedImage) {
 
 // fannedBody serves the merged response and closes every image's body.
 type fannedBody struct {
-	*bytes.Reader
+	io.Reader
 	results []*Result
 }
 
@@ -147,44 +170,77 @@ func (b *fannedBody) Close() error {
 	return nil
 }
 
-// mergeImageBodies joins single-image responses: data in order, usage with
-// the first request's input and every image's output.
-func mergeImageBodies(bodies [][]byte) ([]byte, error) {
-	var merged map[string]any
+// mergeImageBodies streams the original encoded image items rather than
+// decoding Base64 strings and allocating a second full encoded response.
+// Metadata retains exact JSON numbers; usage keeps the original input and
+// adds the output tokens of every batch.
+func mergeImageBodies(bodies [][]byte) (io.Reader, error) {
+	if len(bodies) == 1 {
+		return bytes.NewReader(bodies[0]), nil
+	}
+	var merged map[string]json.RawMessage
 	if err := json.Unmarshal(bodies[0], &merged); err != nil {
 		return nil, err
 	}
-	data, _ := merged["data"].([]any)
-	usage, _ := merged["usage"].(map[string]any)
+	var usage map[string]json.RawMessage
+	_ = json.Unmarshal(merged["usage"], &usage)
+	data := []json.RawMessage{merged["data"]}
+	delete(merged, "data")
 	for _, body := range bodies[1:] {
 		var next struct {
-			Data  []any          `json:"data"`
-			Usage map[string]any `json:"usage"`
+			Data  json.RawMessage            `json:"data"`
+			Usage map[string]json.RawMessage `json:"usage"`
 		}
 		if err := json.Unmarshal(body, &next); err != nil {
 			return nil, err
 		}
-		data = append(data, next.Data...)
+		data = append(data, next.Data)
 		if usage != nil && next.Usage != nil {
 			addImageOutputUsage(usage, next.Usage)
 		}
 	}
-	merged["data"] = data
-	return json.Marshal(merged)
+	if usage != nil {
+		merged["usage"], _ = json.Marshal(usage)
+	}
+	metadata, err := json.Marshal(merged)
+	if err != nil {
+		return nil, err
+	}
+	readers := []io.Reader{bytes.NewReader(metadata[:len(metadata)-1])}
+	if len(merged) > 0 {
+		readers = append(readers, strings.NewReader(","))
+	}
+	readers = append(readers, strings.NewReader(`"data":[`))
+	for index, items := range data {
+		items = bytes.TrimSpace(items)
+		if index > 0 {
+			readers = append(readers, strings.NewReader(","))
+		}
+		readers = append(readers, bytes.NewReader(items[1:len(items)-1]))
+	}
+	readers = append(readers, strings.NewReader("]}"))
+	return io.MultiReader(readers...), nil
 }
 
-func addImageOutputUsage(usage, next map[string]any) {
-	number := func(values map[string]any, key string) float64 {
-		value, _ := values[key].(float64)
+func addImageOutputUsage(usage, next map[string]json.RawMessage) {
+	number := func(values map[string]json.RawMessage, key string) int64 {
+		var value int64
+		_ = json.Unmarshal(values[key], &value)
 		return value
 	}
-	usage["output_tokens"] = number(usage, "output_tokens") + number(next, "output_tokens")
-	usage["total_tokens"] = number(usage, "input_tokens") + number(usage, "output_tokens")
-	details, _ := usage["output_tokens_details"].(map[string]any)
-	nextDetails, _ := next["output_tokens_details"].(map[string]any)
+	outputs := number(usage, "output_tokens") + number(next, "output_tokens")
+	usage["output_tokens"], _ = json.Marshal(outputs)
+	usage["total_tokens"], _ = json.Marshal(number(usage, "input_tokens") + outputs)
+	var details, nextDetails map[string]json.RawMessage
+	_ = json.Unmarshal(usage["output_tokens_details"], &details)
+	_ = json.Unmarshal(next["output_tokens_details"], &nextDetails)
 	for key, value := range nextDetails {
-		if amount, ok := value.(float64); ok && details != nil {
-			details[key] = number(details, key) + amount
+		var amount int64
+		if details != nil && json.Unmarshal(value, &amount) == nil {
+			details[key], _ = json.Marshal(number(details, key) + amount)
 		}
+	}
+	if details != nil {
+		usage["output_tokens_details"], _ = json.Marshal(details)
 	}
 }

@@ -123,6 +123,13 @@ func TestAdminMediaJobsListStatsActionsAndDelete(t *testing.T) {
 	if videos := items(envelope); code != 200 || len(videos) != 1 || videos[0]["assetId"] != "vid_jobs_result_0000001" || videos[0]["cancellable"] != false {
 		t.Fatalf("video jobs: %d %v", code, envelope)
 	}
+	if err := jobs.MarkMediaJobUsageRecorded(ctx, "video_jobs_done", now); err != nil {
+		t.Fatal(err)
+	}
+	code, envelope = call("GET", "/media/jobs?kind=video&status=completed", "")
+	if videos := items(envelope); code != 200 || len(videos) != 1 || videos[0]["usagePending"] != false {
+		t.Fatalf("settled video jobs: %d %v", code, envelope)
+	}
 	for _, path := range []string{"/media/jobs?kind=audio", "/media/jobs?provider=Bad%20Provider", "/media/jobs?status=paused", "/media/jobs/stats?kind=audio"} {
 		if code, envelope := call("GET", path, ""); code != http.StatusBadRequest {
 			t.Errorf("GET %s = %d %v", path, code, envelope)
@@ -175,6 +182,13 @@ func TestAdminMediaJobsListStatsActionsAndDelete(t *testing.T) {
 	code, envelope = call("GET", "/media/jobs?kind=image&status=failed&sortBy=createdAt&sortOrder=desc", "")
 	if failed := items(envelope); code != 200 || len(failed) != 2 || failed[0]["id"] != resumable.ID || failed[0]["retryable"] != true || failed[1]["retryable"] != false {
 		t.Fatalf("failed image jobs: %d %v", code, envelope)
+	}
+	if err := jobs.MarkMediaJobUsageRecorded(ctx, "resp_img_jobs_failed", now); err != nil {
+		t.Fatal(err)
+	}
+	code, envelope = call("GET", "/media/jobs?kind=image&status=failed&sortBy=createdAt&sortOrder=desc", "")
+	if failed := items(envelope); code != 200 || len(failed) != 2 || failed[0]["usagePending"] != true || failed[1]["usagePending"] != false {
+		t.Fatalf("mixed image settlement states: %d %v", code, envelope)
 	}
 	control.err, control.job = nil, resumable
 	control.job.Status = mediadomain.StatusInProgress

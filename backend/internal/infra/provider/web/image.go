@@ -101,6 +101,9 @@ func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGener
 		return a.generateLiteImage(ctx, request, count, format)
 	}
 	ratio := resolveImageAspectRatio(request.AspectRatio, request.Size)
+	if spec.ImaginePro {
+		ratio = resolveImage20AspectRatio(request.AspectRatio, request.Size)
+	}
 	modelConfig, ok := resolveImagineModel(protocolModel, spec.ImaginePro, count)
 	if !ok {
 		return invalidImageRequest("模型不支持图片生成")
@@ -114,10 +117,22 @@ func (a *Adapter) GenerateImage(ctx context.Context, request provider.ImageGener
 // webImageRatios are the aspect ratios Grok Imagine draws.
 var webImageRatios = []string{"1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "2:1", "1:2", "19.5:9", "9:19.5", "20:9", "9:20"}
 
+// Current Web Quality 2.0 ratios, observed in the official v2 toolbar. Other
+// Web products retain their established ratio mapping.
+var webImage20Ratios = []string{"1:1", "16:9", "9:16", "4:3", "3:2", "2:3", "21:9", "5:2"}
+
 // resolveImageAspectRatio reads aspect_ratio, else size, as the closest ratio
 // Grok Imagine draws; "auto" without a shape. The OpenAI sizes keep their
 // established ratios.
 func resolveImageAspectRatio(aspectRatio, size string) string {
+	return resolveImageRatio(aspectRatio, size, webImageRatios)
+}
+
+func resolveImage20AspectRatio(aspectRatio, size string) string {
+	return resolveImageRatio(aspectRatio, size, webImage20Ratios)
+}
+
+func resolveImageRatio(aspectRatio, size string, ratios []string) string {
 	value := strings.ToLower(strings.TrimSpace(aspectRatio))
 	if value == "" {
 		value = strings.ToLower(strings.TrimSpace(size))
@@ -126,7 +141,7 @@ func resolveImageAspectRatio(aspectRatio, size string) string {
 	if ratio := aliases[value]; ratio != "" {
 		return ratio
 	}
-	if ratio := provider.ClosestImageRatio(value, webImageRatios); ratio != "" {
+	if ratio := provider.ClosestImageRatio(value, ratios); ratio != "" {
 		return ratio
 	}
 	return "auto"

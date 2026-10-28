@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { apiErrorFromResponse, createVideo, describeError, getImageJob, imageGenerationBody, imageJobState, imageJobsRefetchInterval, refreshImageJobs } from "./creative-console-api.ts";
+import { apiErrorFromResponse, createVideo, describeError, generateImage, getImageJob, imageGenerationBody, imageJobState, imageJobsRefetchInterval, refreshImageJobs, submitImageJob } from "./creative-console-api.ts";
 
 describe("video generation inputs", () => {
   it("sends a pinned first frame, all 14 ordered references, and a voice together", async (t) => {
@@ -21,6 +21,29 @@ describe("video generation inputs", () => {
 });
 
 describe("image generation body", () => {
+  it("uses the same model and switches to edits with five ordered references", async (t) => {
+    const imageURLs = Array.from({ length: 5 }, (_, index) => `https://example.com/${index}.png`);
+    t.mock.method(globalThis, "fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      assert.equal(url, "/v1/images/edits");
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.model, "renamed-web-image");
+      assert.deepEqual(body.images, imageURLs.map((url) => ({ url, type: "image_url" })));
+      assert.equal("quality" in body, false);
+      assert.equal("resolution" in body, false);
+      assert.equal(new Headers(init?.headers).get("X-Request-ID"), "req-edit");
+      return Response.json({ data: [{ url: "https://example.com/result.png" }] });
+    });
+    assert.deepEqual(await generateImage({ apiKey: "qa", basicProtocol: false, model: "renamed-web-image", prompt: "combine", params: { count: 1, aspectRatio: "21:9" }, imageURLs, requestId: "req-edit" }), [{ url: "https://example.com/result.png", revisedPrompt: undefined }]);
+  });
+
+  it("retains reference images in durable ChatGPT image submissions", async (t) => {
+    t.mock.method(globalThis, "fetch", async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      assert.deepEqual(body.input, [{ role: "user", content: [{ type: "input_text", text: "edit" }, { type: "input_image", image_url: "https://example.com/source.png" }] }]);
+      return Response.json({ id: "resp_img_edit" });
+    });
+    assert.equal(await submitImageJob({ apiKey: "qa", model: "gpt-image-2.5", prompt: "edit", params: { count: 1 }, imageURLs: ["https://example.com/source.png"] }), "resp_img_edit");
+  });
   it("sends size and quality on basic routes, defaulting both to auto", () => {
     assert.deepEqual(
       imageGenerationBody({ basicProtocol: true, model: "gpt-image-2.5", prompt: "cat", params: { count: 2, size: "1536x1024", quality: "high", aspectRatio: "16:9" } }),

@@ -40,6 +40,7 @@ func TestPostgresMediaJobChecksAndLifecycle(t *testing.T) {
 	verifyMediaJobChecks(t, database)
 	verifyMediaJobLifecycle(t, database)
 	verifyMediaJobDeleteSettlement(t, database)
+	verifyMediaJobReadSettlement(t, database)
 }
 
 func TestMediaJobModelTagsAllowAllVideoProvidersAndPrimaryScopes(t *testing.T) {

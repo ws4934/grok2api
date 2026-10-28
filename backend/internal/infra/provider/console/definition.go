@@ -14,7 +14,7 @@ import (
 func (a *Adapter) Definition() provider.Definition {
 	return provider.Definition{
 		Provider:       account.ProviderConsole,
-		Profile:        provider.ProfileSurface{Name: "Grok Console", OfficialPricing: true, ShortName: "Console", TierExempt: true, EgressScopes: []egressdomain.Scope{egressdomain.ScopeConsole, egressdomain.ScopeConsoleAsset}},
+		Profile:        provider.ProfileSurface{Name: "Grok Console", OfficialPricing: true, ShortName: "Console", TierExempt: true, EgressScopes: []egressdomain.Scope{egressdomain.ScopeConsole, egressdomain.ScopeConsoleAsset}, QuotaModes: []string{QuotaMode, QuotaModeImage, QuotaModeVideo}},
 		ModelNamespace: account.ProviderConsole.ModelNamespace(),
 		ModelCatalog:   provider.ModelCatalogStatic,
 		ModelCapabilities: []modeldomain.Capability{

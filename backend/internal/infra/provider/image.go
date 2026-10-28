@@ -50,6 +50,18 @@ type ImageEditRequest struct {
 	MaskURL string
 }
 
+func (r ImageGenerationRequest) Options() ImageRequestOptions {
+	return ImageRequestOptions{UpstreamModel: r.Model, Count: r.Count, Size: r.Size, AspectRatio: r.AspectRatio,
+		Resolution: r.Resolution, Quality: r.Quality, ResponseFormat: r.ResponseFormat,
+		OutputFormat: r.OutputFormat, Background: r.Background, Streaming: r.Streaming, PartialImages: r.PartialImages}
+}
+
+func (r ImageEditRequest) Options() ImageRequestOptions {
+	return ImageRequestOptions{UpstreamModel: r.Model, Edit: true, InputImages: len(r.ImageURLs), HasMask: r.MaskURL != "",
+		Count: r.Count, Size: r.Size, AspectRatio: r.AspectRatio, Resolution: r.Resolution, Quality: r.Quality,
+		ResponseFormat: r.ResponseFormat, OutputFormat: r.OutputFormat, Background: r.Background, Streaming: r.Streaming, PartialImages: r.PartialImages}
+}
+
 // ImageGenerationAdapter defines an optional Provider image-generation capability.
 type ImageGenerationAdapter interface {
 	Adapter
@@ -102,6 +114,7 @@ type AsyncImageAdapter interface {
 // ImageRequestOptions are the client image parameters checked against a
 // provider before routing; empty strings mean "not specified".
 type ImageRequestOptions struct {
+	UpstreamModel  string
 	Edit           bool
 	Count          int
 	InputImages    int
@@ -127,6 +140,60 @@ type ImageRequestValidator interface {
 	ValidateImageRequest(options ImageRequestOptions) error
 }
 
+// ImageRequestNormalizer resolves the actual model parameters before account
+// selection, forwarding and pricing. Count is the native per-request limit;
+// the gateway schedules any remaining outputs as separate batches.
+type ImageRequestNormalizer interface {
+	Adapter
+	NormalizeImageRequest(ImageRequestOptions) (ImageRequestOptions, error)
+}
+
+// ImageQuotaEstimator prices a batch in the account window's native units.
+// Console uses cents, Web/ChatGPT image windows use image counts. False means
+// this window cannot be translated into an image budget (e.g. weekly tokens).
+type ImageQuotaEstimator interface {
+	Adapter
+	ImageQuotaUnits(mode string, options ImageRequestOptions) (int, bool)
+}
+
+func (r *Registry) NormalizeImageRequest(value account.Provider, options ImageRequestOptions) (ImageRequestOptions, error) {
+	if options.Count <= 0 {
+		options.Count = 1
+	}
+	if definition, ok := r.Definition(value); ok && definition.Media.SingleImagePerRequest {
+		options.Count = 1
+	}
+	if normalizer, ok := adapterAs[ImageRequestNormalizer](r, value); ok {
+		var err error
+		options, err = normalizer.NormalizeImageRequest(options)
+		if err != nil {
+			return options, err
+		}
+	}
+	if validator, ok := r.ImageRequestValidator(value); ok {
+		return options, validator.ValidateImageRequest(options)
+	}
+	return options, nil
+}
+
+func (r *Registry) ImageQuotaUnits(value account.Provider, mode string, options ImageRequestOptions) (int, bool) {
+	if estimator, ok := adapterAs[ImageQuotaEstimator](r, value); ok {
+		return estimator.ImageQuotaUnits(mode, options)
+	}
+	return 0, false
+}
+
+// QuotaPoolMode identifies windows which share one account budget.
+func (r *Registry) QuotaPoolMode(value account.Provider, mode string) string {
+	if pooled, ok := adapterAs[interface {
+		Adapter
+		QuotaPoolMode(string) string
+	}](r, value); ok {
+		return pooled.QuotaPoolMode(mode)
+	}
+	return mode
+}
+
 // ImageAssetStore archives generated images as local resources that the backend can read reliably.
 type ImageAssetStore interface {
 	SaveImage(ctx context.Context, data []byte) (media.Asset, error)
@@ -135,6 +202,18 @@ type ImageAssetStore interface {
 
 func (r *Registry) ImageRequestValidator(value account.Provider) (ImageRequestValidator, bool) {
 	return adapterAs[ImageRequestValidator](r, value)
+}
+
+// ImageQuotaMode preserves ordinary model routing while allowing generation
+// and editing under one model name to consume distinct provider products.
+func (r *Registry) ImageQuotaMode(value account.Provider, upstreamModel string, edit bool) string {
+	if metadata, ok := adapterAs[interface {
+		Adapter
+		ImageQuotaMode(string, bool) string
+	}](r, value); ok {
+		return metadata.ImageQuotaMode(upstreamModel, edit)
+	}
+	return r.QuotaMode(value, upstreamModel)
 }
 
 // ImageGeneration returns the image-generation capability registered by the Provider.

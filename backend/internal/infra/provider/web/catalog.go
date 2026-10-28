@@ -27,6 +27,7 @@ var catalog = []ModelSpec{
 	{PublicID: "grok-imagine-image-lite", UpstreamModel: "grok-imagine-image", ProtocolModel: "imagine-lite", Capability: modeldomain.CapabilityImage, Mode: "fast", MinimumTier: account.WebTierBasic},
 	{PublicID: "grok-imagine-image", UpstreamModel: "grok-imagine-image-quality", ProtocolModel: "imagine", Capability: modeldomain.CapabilityImage, Mode: "image_pro", MinimumTier: account.WebTierBasic},
 	{PublicID: "grok-imagine-image-2.0", UpstreamModel: "grok-imagine-image-2.0", ProtocolModel: "imagine", ImaginePro: true, Capability: modeldomain.CapabilityImage, Mode: "image_pro", MinimumTier: account.WebTierBasic},
+	{PublicID: "grok-imagine-image-2.0", UpstreamModel: "grok-imagine-image-2.0", ProtocolModel: "imagine-image-edit", ImaginePro: true, Capability: modeldomain.CapabilityImageEdit, Mode: "image_edit", MinimumTier: account.WebTierBasic},
 	{PublicID: "grok-imagine-image-edit", UpstreamModel: "imagine-image-edit", Capability: modeldomain.CapabilityImageEdit, Mode: "image_edit", MinimumTier: account.WebTierBasic},
 	{PublicID: "grok-imagine-video", UpstreamModel: "grok-imagine-video", ProtocolModel: "imagine-video-gen", Capability: modeldomain.CapabilityVideo, Mode: "video", MinimumTier: account.WebTierBasic},
 }

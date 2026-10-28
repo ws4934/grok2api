@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -73,14 +74,14 @@ func (e *ImageRequestRejectedError) Unwrap() error { return e.Err }
 
 type imageProviderSupport func(accountdomain.Provider) bool
 
-type imageExecution func(context.Context, accountdomain.Provider, accountdomain.Credential, string) (*provider.Response, error)
+type imageExecution func(context.Context, accountdomain.Provider, accountdomain.Credential, string, provider.ImageRequestOptions) (*provider.Response, error)
 
 // GenerateImage 选择支持图片生成的路由和账号，并返回可统一审计的上游响应。
 func (s *Service) GenerateImage(ctx context.Context, input ImageGenerationInput) (*Result, error) {
-	if s.fansOutImages(ctx, input.PublicModel, input.Count, input.Streaming) {
-		return s.fanOutImages(ctx, input.Count, func(ctx context.Context, extra bool) (*Result, error) {
+	if input.Count > 1 && !input.Streaming {
+		return s.drawImageBatches(ctx, input.Count, s.fansOutImages(ctx, input.PublicModel, input.Count, false), func(ctx context.Context, count int, extra bool) (*Result, error) {
 			single := input
-			single.Count = 1
+			single.Count = count
 			return s.generateImage(ctx, single, extra)
 		})
 	}
@@ -96,26 +97,26 @@ func (s *Service) generateImage(ctx context.Context, input ImageGenerationInput,
 	return s.executeImage(ctx, input.RequestID, input.ClientKey, input.PublicModel, input.Prompt, audit.OperationImage, modeldomain.CapabilityImage, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.ImageGeneration(providerValue)
 		return ok
-	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, upstream string) (*provider.Response, error) {
+	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, upstream string, effective provider.ImageRequestOptions) (*provider.Response, error) {
 		adapter, ok := s.providers.ImageGeneration(providerValue)
 		if !ok {
 			return nil, ErrNoAvailableAccount
 		}
 		return adapter.GenerateImage(executionCtx, provider.ImageGenerationRequest{
-			Credential: credential, Model: upstream, Prompt: input.Prompt, Count: input.Count,
-			Size: input.Size, AspectRatio: input.AspectRatio, Resolution: input.Resolution, Quality: input.Quality,
-			ResponseFormat: input.ResponseFormat, Streaming: input.Streaming, PartialImages: input.PartialImages,
-			OutputFormat: input.OutputFormat, Background: input.Background,
+			Credential: credential, Model: upstream, Prompt: input.Prompt, Count: effective.Count,
+			Size: effective.Size, AspectRatio: effective.AspectRatio, Resolution: effective.Resolution, Quality: effective.Quality,
+			ResponseFormat: effective.ResponseFormat, Streaming: effective.Streaming, PartialImages: effective.PartialImages,
+			OutputFormat: effective.OutputFormat, Background: effective.Background,
 		})
 	}, options, input.Method, input.Path, input.Headers, extra)
 }
 
 // EditImage 选择支持图片编辑的路由和账号，并返回可统一审计的上游响应。
 func (s *Service) EditImage(ctx context.Context, input ImageEditInput) (*Result, error) {
-	if s.fansOutImages(ctx, input.PublicModel, input.Count, input.Streaming) {
-		return s.fanOutImages(ctx, input.Count, func(ctx context.Context, extra bool) (*Result, error) {
+	if input.Count > 1 && !input.Streaming {
+		return s.drawImageBatches(ctx, input.Count, s.fansOutImages(ctx, input.PublicModel, input.Count, false), func(ctx context.Context, count int, extra bool) (*Result, error) {
 			single := input
-			single.Count = 1
+			single.Count = count
 			return s.editImage(ctx, single, extra)
 		})
 	}
@@ -132,17 +133,17 @@ func (s *Service) editImage(ctx context.Context, input ImageEditInput, extra boo
 	return s.executeImage(ctx, input.RequestID, input.ClientKey, input.PublicModel, input.Prompt, audit.OperationImageEdit, modeldomain.CapabilityImageEdit, func(providerValue accountdomain.Provider) bool {
 		_, ok := s.providers.ImageEdit(providerValue)
 		return ok
-	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, upstream string) (*provider.Response, error) {
+	}, func(executionCtx context.Context, providerValue accountdomain.Provider, credential accountdomain.Credential, upstream string, effective provider.ImageRequestOptions) (*provider.Response, error) {
 		adapter, ok := s.providers.ImageEdit(providerValue)
 		if !ok {
 			return nil, ErrNoAvailableAccount
 		}
 		return adapter.EditImage(executionCtx, provider.ImageEditRequest{
 			Credential: credential, Model: upstream, Prompt: input.Prompt,
-			ImageURLs: input.ImageURLs, Count: input.Count, Size: input.Size, AspectRatio: input.AspectRatio,
-			Resolution: input.Resolution, Quality: input.Quality, ResponseFormat: input.ResponseFormat,
-			Streaming: input.Streaming, PartialImages: input.PartialImages,
-			OutputFormat: input.OutputFormat, Background: input.Background, MaskURL: input.MaskURL,
+			ImageURLs: input.ImageURLs[:effective.InputImages], Count: effective.Count, Size: effective.Size, AspectRatio: effective.AspectRatio,
+			Resolution: effective.Resolution, Quality: effective.Quality, ResponseFormat: effective.ResponseFormat,
+			Streaming: effective.Streaming, PartialImages: effective.PartialImages,
+			OutputFormat: effective.OutputFormat, Background: effective.Background, MaskURL: input.MaskURL,
 		})
 	}, options, input.Method, input.Path, input.Headers, extra)
 }
@@ -161,16 +162,15 @@ func (s *Service) executeImage(
 	method string,
 	path string,
 	headers map[string][]string,
-	// extra marks an image drawn by fanOutImages next to its siblings: it
+	// extra marks an image drawn next to its siblings: it
 	// gives up without an audit when no account is free
-	// (errImageAccountsBusy), so fanOutImages can draw it again later.
+	// (errImageAccountsBusy), so the next round can draw it later.
 	extra bool,
 ) (*Result, error) {
 	ctx, egressTrace := infraegress.WithTrace(ctx)
 	startedAt := time.Now()
 	eventID := newAuditEventID()
-	streaming, resolution, quality := options.Streaming, options.Resolution, options.Quality
-	requestedCount, inputImageCount := options.Count, options.InputImages
+	streaming := options.Streaming
 	routes, err := s.models.GetByPublicIDCandidates(ctx, publicModel)
 	if err != nil {
 		return nil, ErrModelNotFound
@@ -178,21 +178,31 @@ func (s *Service) executeImage(
 	// Routes whose provider rejects the parameters are dropped; the first
 	// rejection surfaces only when no other target remains.
 	var rejection error
-	supportsRequest := func(providerValue accountdomain.Provider) bool {
-		if !supports(providerValue) {
-			return false
+	effectiveOptions := make(map[uint64]provider.ImageRequestOptions, len(routes))
+	eligible := make([]modeldomain.Route, 0, len(routes))
+	for _, candidate := range routes {
+		if candidate.Capability != capability || !supports(candidate.Provider) {
+			continue
 		}
-		validator, ok := s.providers.ImageRequestValidator(providerValue)
-		if !ok {
-			return true
+		candidateOptions := options
+		candidateOptions.UpstreamModel = candidate.UpstreamModel
+		normalized, normalizeErr := s.providers.NormalizeImageRequest(candidate.Provider, candidateOptions)
+		if normalizeErr != nil {
+			if rejection == nil {
+				rejection = &ImageRequestRejectedError{Err: normalizeErr}
+			}
+			continue
 		}
-		err := validator.ValidateImageRequest(options)
-		if err != nil && rejection == nil {
-			rejection = &ImageRequestRejectedError{Err: err}
-		}
-		return err == nil
+		eligible = append(eligible, candidate)
+		effectiveOptions[candidate.ID] = normalized
 	}
-	route, preselectedSession, err := s.selectSchedulableMediaRoute(ctx, routes, key, capability, true, supportsRequest)
+	if len(eligible) == 0 && rejection != nil {
+		return nil, rejection
+	}
+	routes = eligible
+	route, preselectedSession, err := s.selectSchedulableMediaRouteWithQuotaMode(ctx, routes, key, capability, true, supports, func(route modeldomain.Route) string {
+		return s.providers.ImageQuotaMode(route.Provider, route.UpstreamModel, options.Edit)
+	})
 	if err != nil && extra {
 		return nil, errImageAccountsBusy
 	}
@@ -200,7 +210,7 @@ func (s *Service) executeImage(
 		// Preserve the established failure-audit path when every eligible target
 		// is currently unschedulable. The request loop will reproduce the
 		// selection error for the representative route after auditBase exists.
-		route, err = s.selectMediaRoute(routes, key, capability, supportsRequest)
+		route, err = s.selectMediaRoute(routes, key, capability, supports)
 		if err != nil {
 			if rejection != nil && errors.Is(err, ErrNoAvailableAccount) {
 				return nil, rejection
@@ -209,6 +219,9 @@ func (s *Service) executeImage(
 		}
 		preselectedSession = nil
 	}
+	options = effectiveOptions[route.ID]
+	resolution, quality := options.Resolution, options.Quality
+	requestedCount, inputImageCount := options.Count, options.InputImages
 	externalModel := modeldomain.ExternalPublicID(route.Provider, route.PublicID)
 	auditBase := audit.Record{
 		EventID: eventID, RequestID: requestID, ClientKeyID: key.ID, ClientKeyName: key.Name,
@@ -233,34 +246,55 @@ func (s *Service) executeImage(
 	}
 	pricingModel := s.providers.PricingModel(route.Provider, route.UpstreamModel)
 	pricingResolution, pricingQuality := resolution, quality
-	if definition, _ := s.providers.Definition(route.Provider); definition.Media.ImageGenerationModelPriced && operation == audit.OperationImage {
+	if definition, _ := s.providers.Definition(route.Provider); (definition.Media.ImageGenerationModelPriced && operation == audit.OperationImage) || (definition.Media.ImageEditModelPriced && operation == audit.OperationImageEdit) {
 		// The product is selected through the catalog model and only
-		// aspect_ratio/n are forwarded. Do not reserve or record a price tier
+		// effective image shape/count are forwarded. Do not reserve or record a price tier
 		// derived from resolution/quality compatibility fields.
 		pricingResolution, pricingQuality = "", ""
 	}
-	var reservation audit.PricingResult
-	var priced bool
-	switch operation {
-	case audit.OperationImage:
-		reservation, priced = s.pricing.QuoteImage(route.Provider, pricingModel, pricingResolution, pricingQuality, requestedCount)
-	case audit.OperationImageEdit:
-		reservation, priced = s.pricing.QuoteImageEdit(route.Provider, pricingModel, pricingResolution, pricingQuality, requestedCount, inputImageCount)
-	}
 	reserved := false
-	if priced {
-		reserved, err = s.clientKeys.ReserveBilling(ctx, key, eventID, reservation.CostInUSDTicks, mediaBillingReservationTTL)
-		if err != nil {
-			return nil, err
+	reservationCount := 0
+	reserveBatch := func(count int) error {
+		if count == reservationCount {
+			return nil
 		}
+		if reserved {
+			// Only pre-submission retries can resize this batch. Release its
+			// previous hold before reserving the newly selected account's count.
+			if err := s.clientKeys.CancelBilling(ctx, eventID); err != nil {
+				return err
+			}
+			reserved = false
+		}
+		var reservation audit.PricingResult
+		var priced bool
+		switch operation {
+		case audit.OperationImage:
+			reservation, priced = s.pricing.QuoteImage(route.Provider, pricingModel, pricingResolution, pricingQuality, count)
+		case audit.OperationImageEdit:
+			reservation, priced = s.pricing.QuoteImageEdit(route.Provider, pricingModel, pricingResolution, pricingQuality, count, inputImageCount)
+		}
+		if priced {
+			var err error
+			reserved, err = s.clientKeys.ReserveBilling(ctx, key, eventID, reservation.CostInUSDTicks, mediaBillingReservationTTL)
+			if err != nil {
+				return err
+			}
+		}
+		reservationCount = count
+		return nil
 	}
 	finalizationOwnsReservation := false
+	releaseQuota := func() {}
 	defer func() {
+		if !finalizationOwnsReservation {
+			releaseQuota()
+		}
 		if reserved && !finalizationOwnsReservation {
 			s.cancelBillingReservation(eventID)
 		}
 	}()
-	quotaMode := s.providers.QuotaMode(route.Provider, route.UpstreamModel)
+	quotaMode := s.providers.ImageQuotaMode(route.Provider, route.UpstreamModel, options.Edit)
 	quotaRefreshGroup := s.providers.QuotaRefreshGroup(route.Provider, route.UpstreamModel)
 	attemptPolicy := newRoutingAttemptPolicy(int(s.maxAttempts.Load()))
 	excluded := make(map[uint64]bool)
@@ -272,6 +306,14 @@ func (s *Service) executeImage(
 	var lastCredentialFailure *accountdomain.Credential
 	var lastCredentialError error
 	var lastUpstreamFailure *UpstreamFailure
+	var lastQuotaFailure error
+	var imageBody *imageResultBody
+	batchOptions := options
+	releaseAttempt := func() {
+		releaseQuota()
+		releaseQuota = func() {}
+		lease.Release()
+	}
 	for attempt := 0; attemptPolicy.allows(attempt); attempt++ {
 		// A skipped attempt must not leave its error or response to the next one.
 		err, response = nil, nil
@@ -289,15 +331,33 @@ func (s *Service) executeImage(
 				writeFailureAudit(lastUpstreamFailure.HTTPStatus, lastUpstreamFailure.Code, lastCredentialFailure)
 				return nil, lastUpstreamFailure
 			}
+			if lastQuotaFailure != nil && lastUpstreamFailure == nil && lastCredentialError == nil {
+				writeFailureAudit(http.StatusTooManyRequests, "upstream_quota_exhausted", lastCredentialFailure)
+				return nil, lastQuotaFailure
+			}
 			errorCode := "upstream_unavailable"
+			statusCode := http.StatusServiceUnavailable
 			var selectionFailure *SelectionUnavailableError
 			if errors.As(err, &selectionFailure) {
 				errorCode = selectionFailure.Code()
+				statusCode = selectionFailure.HTTPStatus()
 			}
-			writeFailureAudit(http.StatusServiceUnavailable, errorCode, lastCredentialFailure)
+			writeFailureAudit(statusCode, errorCode, lastCredentialFailure)
 			return nil, fmt.Errorf("%w: %w", ErrNoAvailableAccount, err)
 		}
 		excluded[lease.Credential.ID] = true
+		batchOptions, releaseQuota, err = s.reserveImageQuota(lease, options)
+		if err != nil {
+			lastQuotaFailure = err
+			releaseAttempt()
+			attempt-- // A local budget check did not contact the upstream.
+			continue
+		}
+		requestedCount = batchOptions.Count
+		if err := reserveBatch(requestedCount); err != nil {
+			releaseAttempt()
+			return nil, err
+		}
 		attemptStarted := time.Now()
 		credential, err = s.accounts.EnsureCredential(ctx, lease.Credential, false)
 		if err != nil {
@@ -306,7 +366,7 @@ func (s *Service) executeImage(
 			failedCredential := lease.Credential
 			lastCredentialFailure = &failedCredential
 			lastCredentialError = err
-			lease.Release()
+			releaseAttempt()
 			continue
 		}
 		lease.markSelectorUpstreamStarted()
@@ -317,7 +377,17 @@ func (s *Service) executeImage(
 			Operation: string(operation), RequestID: requestID, Prompt: prompt,
 		})
 		attemptStarted = time.Now()
-		response, err = execute(originCtx, route.Provider, credential, route.UpstreamModel)
+		response, err = execute(originCtx, route.Provider, credential, route.UpstreamModel, batchOptions)
+		if err == nil && !streaming && response.StatusCode >= 200 && response.StatusCode < 300 {
+			var prepared io.ReadCloser
+			prepared, imageBody, err = prefetchImageResult(response.Body)
+			if err == nil {
+				response.Body = prepared
+			} else {
+				_ = response.Body.Close()
+				err = invalidImageResult{cause: err}
+			}
+		}
 		// Failed attempts (errors and non-2xx responses) appear in the request diagnostics.
 		_ = failureAttempts.captureResponse(credential, attemptStarted, response, err)
 		if err != nil {
@@ -327,7 +397,7 @@ func (s *Service) executeImage(
 				failedCredential := credential
 				lastCredentialFailure = &failedCredential
 				lastCredentialError = provider.ErrUnauthorized
-				lease.Release()
+				releaseAttempt()
 				continue
 			}
 			failure := ProviderUpstreamFailure(err, credential.ID, credential.Name)
@@ -341,7 +411,7 @@ func (s *Service) executeImage(
 					s.selector.MarkFailure(ctx, credential, 0, 0)
 				}
 			}
-			lease.Release()
+			releaseAttempt()
 			errorCode := "upstream_unavailable"
 			if provider.IsMediaPostProcessingError(err) {
 				errorCode = "media_postprocessing_failed"
@@ -360,7 +430,7 @@ func (s *Service) executeImage(
 			lastCredentialFailure = &failedCredential
 			lastCredentialError = provider.ErrUnauthorized
 			response = nil
-			lease.Release()
+			releaseAttempt()
 			continue
 		}
 		if response.StatusCode == http.StatusUnauthorized && s.providers.SupportsCredentialRefresh(credential.Provider) {
@@ -369,7 +439,7 @@ func (s *Service) executeImage(
 			failedCredential := credential
 			lastCredentialFailure = &failedCredential
 			lastCredentialError = provider.ErrUnauthorized
-			lease.Release()
+			releaseAttempt()
 			// Image 401s arrive before submission, so one retry on the same account after a forced refresh is safe.
 			if s.markPermanentlyUnrefreshableCredentialRejected(ctx, credential) || authRetried[credential.ID] {
 				continue
@@ -394,7 +464,7 @@ func (s *Service) executeImage(
 			lastCredentialFailure = &failedCredential
 			lastCredentialError = fmt.Errorf("%s", consoleNoCreditsReason)
 			response = nil
-			lease.Release()
+			releaseAttempt()
 			continue
 		}
 		if s.providers.RetryForbiddenAsEgress(credential.Provider) && response.StatusCode == http.StatusForbidden && attempt == 0 && attemptPolicy.hasNext(attempt) {
@@ -403,7 +473,7 @@ func (s *Service) executeImage(
 			if selection != nil {
 				selection.RetryAccount(credential.ID)
 			}
-			lease.Release()
+			releaseAttempt()
 			continue
 		}
 		if quotaKind, _ := s.providers.QuotaKind(credential.Provider); quotaKind == provider.QuotaRemoteWindow && response.StatusCode == http.StatusTooManyRequests && lease.QuotaMode != "" {
@@ -417,7 +487,7 @@ func (s *Service) executeImage(
 				failedCredential := credential
 				lastCredentialFailure, lastCredentialError = &failedCredential, nil
 				response = nil
-				lease.Release()
+				releaseAttempt()
 				continue
 			}
 		}
@@ -432,12 +502,73 @@ func (s *Service) executeImage(
 	}
 	effectiveQuotaMode := lease.QuotaMode
 	accountID := credential.ID
+	deliveredImages := func(usage Usage) int {
+		if streaming {
+			return min(requestedCount, max(0, int(usage.OutputImages)))
+		}
+		if imageBody != nil {
+			return min(requestedCount, imageBody.outputCount())
+		}
+		return 0
+	}
+	var upstreamOnce sync.Once
+	finishUpstream := func(usage Usage, errorCode string) {
+		upstreamOnce.Do(func() {
+			defer releaseQuota()
+			deliveredCount := deliveredImages(usage)
+			if !streaming {
+				// Reading EOF does not release every adapter's egress lease.
+				// Close it before the next batch needs that same exit/account.
+				_ = response.Body.Close()
+			}
+			successful := auditRequestSucceeded(response.StatusCode, errorCode)
+			// A fully read JSON batch completed upstream even if its later
+			// transfer to the client fails. It still spent the native allowance.
+			if !streaming && deliveredCount > 0 {
+				successful = auditRequestSucceeded(response.StatusCode, "")
+			}
+			lease.completeSelectorObservation(successful)
+			lease.Release()
+			quotaKind, _ := s.providers.QuotaKind(route.Provider)
+			refreshMode, decrementMode, availabilityMode := quotaFinalizationModes(effectiveQuotaMode, quotaRefreshGroup)
+			if !auditRequestSucceeded(response.StatusCode, "") || quotaKind != provider.QuotaRemoteWindow || refreshMode == "" {
+				return
+			}
+			quotaUnits := response.QuotaUnits
+			if streaming {
+				quotaUnits = deliveredCount
+			}
+			quotaOptions := batchOptions
+			quotaOptions.Count = deliveredCount
+			if actualQuota, known := s.providers.ImageQuotaUnits(route.Provider, effectiveQuotaMode, quotaOptions); known && quotaUnits == 0 {
+				quotaUnits = actualQuota
+			}
+			if decrementMode != "" && decrementMode != "weekly" && quotaUnits > 0 {
+				budget := newFinalizationBudget(string(operation), string(route.Provider))
+				var updated bool
+				err := budget.run("quota_decrement", finalizationQuotaBudget, func(stageCtx context.Context) error {
+					var decrementErr error
+					updated, decrementErr = s.decrementImageQuota(stageCtx, route.Provider, accountID, decrementMode, quotaUnits)
+					return decrementErr
+				})
+				if err != nil {
+					s.logger.Warn("image_quota_decrement_failed", "account_id", accountID, "mode", decrementMode, "units", quotaUnits, "error", err)
+				}
+				if updated || err != nil {
+					s.selector.ConsumeQuota(route.Provider, accountID, decrementMode, quotaUnits)
+				}
+			}
+			s.accounts.QueueQuotaRefresh(accountID, refreshMode)
+			if availabilityMode != "" && availabilityMode != refreshMode {
+				s.accounts.QueueQuotaRefresh(accountID, availabilityMode)
+			}
+		})
+	}
 	var once sync.Once
 	finalize := func(usage Usage, _ string, errorCode string) {
 		once.Do(func() {
+			finishUpstream(usage, errorCode)
 			successful := auditRequestSucceeded(response.StatusCode, errorCode)
-			lease.completeSelectorObservation(successful)
-			lease.Release()
 			budget := newFinalizationBudget(string(operation), string(route.Provider))
 			record := auditBase
 			record.AccountID, record.AccountName, record.StatusCode = &accountID, credential.Name, response.StatusCode
@@ -446,16 +577,12 @@ func (s *Service) executeImage(
 			record.Attempts = failureAttempts.snapshot()
 			record.DurationMS, record.CreatedAt = time.Since(startedAt).Milliseconds(), time.Now().UTC()
 			applyAuditEgress(&record, egressTrace, route.Provider)
-			deliveredCount, quotaUnits, billed := requestedCount, response.QuotaUnits, successful
+			deliveredCount := deliveredImages(usage)
+			billed := successful && deliveredCount > 0
 			if streaming {
 				// A stream bills the images it forwarded, also when it failed
 				// after them: the client and the gallery already have them.
-				deliveredCount = min(requestedCount, int(usage.OutputImages))
-				quotaUnits, billed = deliveredCount, deliveredCount > 0
-			} else if response.QuotaUnits > 0 {
-				// A provider that delivers fewer images than requested reports the
-				// delivered count in QuotaUnits; only those are billed.
-				deliveredCount = min(requestedCount, response.QuotaUnits)
+				billed = deliveredCount > 0
 			}
 			if billed {
 				record.MediaOutputImages = int64(max(0, deliveredCount))
@@ -471,28 +598,6 @@ func (s *Service) executeImage(
 					pricing.Apply(&record)
 				}
 			}
-			quotaKind, _ := s.providers.QuotaKind(route.Provider)
-			refreshMode, decrementMode, availabilityMode := quotaFinalizationModes(effectiveQuotaMode, quotaRefreshGroup)
-			if successful && quotaKind == provider.QuotaRemoteWindow && refreshMode != "" {
-				if decrementMode != "" && decrementMode != "weekly" {
-					units := max(1, quotaUnits)
-					var updated bool
-					err := budget.run("quota_decrement", finalizationQuotaBudget, func(stageCtx context.Context) error {
-						var decrementErr error
-						updated, decrementErr = s.accounts.DecrementQuota(stageCtx, accountID, decrementMode, units)
-						return decrementErr
-					})
-					if err != nil {
-						s.logger.Warn("web_quota_decrement_failed", "account_id", accountID, "mode", decrementMode, "units", units, "error", err)
-					} else if updated {
-						s.selector.ConsumeQuota(route.Provider, accountID, decrementMode, units)
-					}
-				}
-				s.accounts.QueueQuotaRefresh(accountID, refreshMode)
-				if availabilityMode != "" && availabilityMode != refreshMode {
-					s.accounts.QueueQuotaRefresh(accountID, availabilityMode)
-				}
-			}
 			if err := budget.run("audit", finalizationAuditBudget, func(stageCtx context.Context) error {
 				return s.audits.Create(stageCtx, record)
 			}); err != nil {
@@ -501,7 +606,22 @@ func (s *Service) executeImage(
 		})
 	}
 	finalizationOwnsReservation = true
-	return &Result{StatusCode: response.StatusCode, Status: response.Status, Header: response.Header, Body: &finalizingBody{ReadCloser: response.Body, finalize: func() { finalize(Usage{}, "", "stream_closed") }}, Finalize: finalize}, nil
+	return &Result{
+		StatusCode: response.StatusCode, Status: response.Status, Header: response.Header,
+		Body: &finalizingBody{ReadCloser: response.Body, finalize: func() { finalize(Usage{}, "", "stream_closed") }},
+		RecordStreamFailure: func(diagnostic StreamFailureDiagnostic) {
+			failureAttempts.captureStreamFailure(credential, startedAt, response, diagnostic)
+		},
+		Finalize:       finalize,
+		imageBatchSize: requestedCount,
+		completeImage:  func() { finishUpstream(Usage{}, "") },
+		imageOutputCount: func() int {
+			if imageBody != nil {
+				return imageBody.outputCount()
+			}
+			return 0
+		},
+	}, nil
 }
 
 // quotaFinalizationModes separates the immediate local consumption fence from
