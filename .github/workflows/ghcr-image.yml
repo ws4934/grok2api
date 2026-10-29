@@ -127,7 +127,9 @@ jobs:
         id: image
         shell: bash
         run: |
-          image_name=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          # Keep the published package stable when the repository is renamed.
+          # Existing Compose deployments pull this package, not the repo name.
+          image_name=$(printf '%s/grok2api' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
           echo "name=ghcr.io/$image_name" >> "$GITHUB_OUTPUT"
 
       - name: Docker metadata

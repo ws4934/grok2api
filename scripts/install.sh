@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install or upgrade grok2api with Docker Compose.
 #
-#   curl -fsSL https://raw.githubusercontent.com/ws4934/grok2api/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/ws4934/many2api/main/scripts/install.sh | sh
 #
 # Optional environment variables:
 #   GROK2API_DIR             install directory (default /opt/grok2api as root, ~/grok2api otherwise)
@@ -12,7 +12,7 @@
 # config.yaml and docker-compose.yml are kept.
 set -eu
 
-REPO_RAW="https://raw.githubusercontent.com/ws4934/grok2api/main"
+REPO_RAW="https://raw.githubusercontent.com/ws4934/many2api/main"
 
 fail() {
 	printf '错误：%s\n' "$*" >&2

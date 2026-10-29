@@ -18,7 +18,7 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 
 func TestCheckFindsLatestRelease(t *testing.T) {
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		if request.URL.String() != latestReleaseAPI || request.Header.Get("User-Agent") != "grok2api/v3.0.0" {
+		if request.URL.String() != "https://api.github.com/repos/ws4934/many2api/releases/latest" || request.Header.Get("User-Agent") != "grok2api/v3.0.0" {
 			t.Fatalf("request = %#v", request)
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"tag_name":"v3.0.1","body":"Release notes"}`)), Header: make(http.Header)}, nil
@@ -30,7 +30,7 @@ func TestCheckFindsLatestRelease(t *testing.T) {
 	if snapshot.Status != StatusUpdateAvailable || !snapshot.UpdateAvailable || snapshot.LatestVersion != "v3.0.1" || snapshot.CheckedAt == nil || !snapshot.CheckedAt.Equal(now) {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
-	if snapshot.ReleaseURL != "https://github.com/ws4934/grok2api/releases/tag/v3.0.1" || snapshot.ReleaseNotes != "Release notes" {
+	if snapshot.ReleaseURL != "https://github.com/ws4934/many2api/releases/tag/v3.0.1" || snapshot.ReleaseNotes != "Release notes" {
 		t.Fatalf("release = %#v", snapshot)
 	}
 }

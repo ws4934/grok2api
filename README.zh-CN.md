@@ -13,7 +13,7 @@
 <p align="center">
   <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
   <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
+  <a href="https://github.com/ws4934/many2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
 > [!NOTE]
@@ -135,12 +135,14 @@ flowchart LR
 
 镜像发布 `linux/amd64` 和 `linux/arm64`。
 
+仓库现名为 `ws4934/many2api`。镜像继续使用 `ghcr.io/ws4934/grok2api`；程序名、发行包名、环境变量和数据路径不变，现有部署无需搬迁数据即可继续更新。
+
 ### 一键安装
 
 服务器已安装 Docker（含 Compose v2 插件）时，执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ws4934/grok2api/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ws4934/many2api/main/scripts/install.sh | sh
 ```
 
 脚本会下载 `docker-compose.yml` 与配置模板，生成 `jwtSecret`、`credentialEncryptionKey` 和管理员密码，拉取镜像并启动，就绪后打印访问地址和管理员账号。默认安装到 `/opt/grok2api`（root）或 `~/grok2api`。
@@ -158,8 +160,8 @@ curl -fsSL https://raw.githubusercontent.com/ws4934/grok2api/main/scripts/instal
 ### 手动部署
 
 ```bash
-git clone https://github.com/ws4934/grok2api.git
-cd grok2api
+git clone https://github.com/ws4934/many2api.git
+cd many2api
 cp config.example.yaml config.yaml
 ```
 

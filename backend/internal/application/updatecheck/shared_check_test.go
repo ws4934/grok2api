@@ -17,7 +17,7 @@ func TestCheckOutlivesTheCallerThatStartedIt(t *testing.T) {
 			return
 		case <-time.After(200 * time.Millisecond):
 		}
-		_, _ = w.Write([]byte(`{"tag_name":"v9.9.9","html_url":"https://github.com/ws4934/grok2api/releases/tag/v9.9.9"}`))
+		_, _ = w.Write([]byte(`{"tag_name":"v9.9.9","html_url":"https://github.com/ws4934/many2api/releases/tag/v9.9.9"}`))
 	}))
 	defer server.Close()
 	service := NewService("v1.0.0", "", server.Client())

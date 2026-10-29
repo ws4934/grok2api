@@ -13,7 +13,7 @@
 <p align="center">
   <a href="./backend/go.mod"><img alt="Go" src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white" /></a>
   <a href="./frontend/package.json"><img alt="React" src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" /></a>
-  <a href="https://github.com/ws4934/grok2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
+  <a href="https://github.com/ws4934/many2api/pkgs/container/grok2api"><img alt="Docker" src="https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white" /></a>
 </p>
 
 > [!NOTE]
@@ -143,12 +143,14 @@ Each Provider keeps its own credentials, quota, health, cooldown, concurrency, a
 
 Images are published for `linux/amd64` and `linux/arm64`.
 
+The repository is now `ws4934/many2api`. The image stays at `ghcr.io/ws4934/grok2api`; executable names, release archive names, environment variables, and data paths are unchanged, so existing deployments can keep updating without moving their data.
+
 ### One-command install
 
 On a server with Docker (including the Compose v2 plugin), run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ws4934/grok2api/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ws4934/many2api/main/scripts/install.sh | sh
 ```
 
 The script downloads `docker-compose.yml` and the config template, generates `jwtSecret`, `credentialEncryptionKey`, and an admin password, pulls the image, starts it, and prints the URL and admin account once it is ready. It installs to `/opt/grok2api` as root, `~/grok2api` otherwise.
@@ -166,8 +168,8 @@ Running the script again upgrades: it pulls the latest image and restarts, keepi
 ### Manual deployment
 
 ```bash
-git clone https://github.com/ws4934/grok2api.git
-cd grok2api
+git clone https://github.com/ws4934/many2api.git
+cd many2api
 cp config.example.yaml config.yaml
 ```
 

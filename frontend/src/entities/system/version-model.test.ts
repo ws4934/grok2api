@@ -9,7 +9,7 @@ const snapshot = {
   updateAvailable: true,
   status: "update_available",
   checkedAt: null,
-  releaseUrl: "https://github.com/ws4934/grok2api/releases/tag/v1.3.0",
+  releaseUrl: "https://github.com/ws4934/many2api/releases/tag/v1.3.0",
   releaseNotes: "",
   error: "",
   canUpdate: false,

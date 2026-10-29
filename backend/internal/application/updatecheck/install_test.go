@@ -39,7 +39,7 @@ func (f *fakeGitHub) client(t *testing.T) *http.Client {
 		case "api.github.com":
 			assets := []map[string]string{}
 			for asset := range f.assets {
-				assets = append(assets, map[string]string{"name": asset, "browser_download_url": "https://github.com/ws4934/grok2api/releases/download/" + f.tag + "/" + asset})
+				assets = append(assets, map[string]string{"name": asset, "browser_download_url": "https://github.com/ws4934/many2api/releases/download/" + f.tag + "/" + asset})
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": f.tag, "html_url": releasesPage + "/tag/" + f.tag, "assets": assets})
 		case "github.com":

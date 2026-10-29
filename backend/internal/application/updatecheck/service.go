@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	githubRepository = "ws4934/grok2api"
+	githubRepository = "ws4934/many2api"
 	latestReleaseAPI = "https://api.github.com/repos/" + githubRepository + "/releases/latest"
 	releasesPage     = "https://github.com/" + githubRepository + "/releases"
 	maxReleaseBytes  = 1 << 20
