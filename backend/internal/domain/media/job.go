@@ -43,8 +43,17 @@ const MaxInputImages = 8
 // MaxVideoReferenceImages admits the largest supported video reference set.
 const MaxVideoReferenceImages = 14
 
-// MaxVideoInputImages includes a pinned first frame alongside all references.
-const MaxVideoInputImages = MaxVideoReferenceImages + 1
+const MaxVideoKeyframes = 4
+
+// MaxVideoInputImages includes references, first/last frames and interior pins.
+const MaxVideoInputImages = MaxVideoReferenceImages + 2 + MaxVideoKeyframes
+
+// VideoKeyframe pins an image at a time inside a generated clip. ImageURL can
+// be an HTTPS/data URL or a staged input reference, like the endpoint frames.
+type VideoKeyframe struct {
+	ImageURL         string  `json:"image_url"`
+	TimestampSeconds float64 `json:"timestamp_s"`
+}
 
 // MaxReferenceVideos is the maximum number of reference videos accepted for a video job.
 const MaxReferenceVideos = 10

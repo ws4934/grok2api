@@ -71,6 +71,9 @@ func parseImportedCredentials(data []byte) ([]provider.CredentialSeed, error) {
 		seen[token] = struct{}{}
 		name := strings.TrimSpace(entry.Name)
 		if name == "" {
+			name = strings.TrimSpace(entry.Email)
+		}
+		if name == "" {
 			name = "Grok Console " + security.HashToken(token)[:8]
 		}
 		seed := credentialSeed(name, token)

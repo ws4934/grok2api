@@ -4,6 +4,24 @@ import { describe, it } from "node:test";
 import { apiErrorFromResponse, createVideo, describeError, generateImage, getImageJob, imageGenerationBody, imageJobState, imageJobsRefetchInterval, refreshImageJobs, submitImageJob } from "./creative-console-api.ts";
 
 describe("video generation inputs", () => {
+  it("preserves last frames, ordered keyframes and all three audio states", async (t) => {
+    for (const generateAudio of [undefined, false, true]) {
+      const mock = t.mock.method(globalThis, "fetch", async (_url: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body));
+        assert.deepEqual(body.last_frame, { url: "https://example.com/last.png" });
+        assert.deepEqual(body.keyframes, [
+          { image: { file_id: "file_key" }, timestamp_s: 1 / 3 },
+          { image: { url: "https://example.com/key.png" }, timestamp_s: 4 },
+        ]);
+        assert.equal("generate_audio" in body, generateAudio !== undefined);
+        assert.equal(body.generate_audio, generateAudio);
+        return Response.json({ request_id: "video_pinned" });
+      });
+      await createVideo({ apiKey: "test", model: "video15", prompt: "", duration: 6, aspectRatio: "16:9", resolution: "720p",
+        lastFrame: { url: "https://example.com/last.png" }, keyframes: [{ fileId: "file_key", timestampSeconds: 1 / 3 }, { url: "https://example.com/key.png", timestampSeconds: 4 }], generateAudio });
+      mock.mock.restore();
+    }
+  });
   it("sends a pinned first frame, all 14 ordered references, and a voice together", async (t) => {
     const references = Array.from({ length: 14 }, (_, index) => index % 2 ? { fileId: `file_${index}` } : { url: `https://example.com/${index}.png` });
     t.mock.method(globalThis, "fetch", async (_url: string | URL | Request, init?: RequestInit) => {

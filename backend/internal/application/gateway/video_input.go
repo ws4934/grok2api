@@ -64,6 +64,8 @@ type videoInputs struct {
 	imageURL, lastFrameURL, videoURL  string
 	referenceURLs, referenceVideoURLs []string
 	referenceAudios                   []string
+	keyframes                         []media.VideoKeyframe
+	generateAudio                     *bool
 }
 
 // fittedTo keeps the references the route's provider takes, as its
@@ -75,12 +77,17 @@ func (in videoInputs) fittedTo(options provider.VideoRequestOptions) videoInputs
 	return in
 }
 
-// imageRefs 按 首帧、尾帧、参考图 的顺序列出图像输入。
+// imageRefs includes every pinned image as well as content references.
 func (in videoInputs) imageRefs() []string {
-	values := make([]string, 0, 2+len(in.referenceURLs))
+	values := make([]string, 0, 2+len(in.referenceURLs)+len(in.keyframes))
 	for _, raw := range append([]string{in.imageURL, in.lastFrameURL}, in.referenceURLs...) {
 		if v := strings.TrimSpace(raw); v != "" {
 			values = append(values, v)
+		}
+	}
+	for _, frame := range in.keyframes {
+		if value := strings.TrimSpace(frame.ImageURL); value != "" {
+			values = append(values, value)
 		}
 	}
 	return values
@@ -103,6 +110,12 @@ func encodeVideoInputs(in videoInputs) (string, error) {
 	}
 	if value := strings.TrimSpace(in.lastFrameURL); value != "" {
 		payload["last_frame_url"] = value
+	}
+	if len(in.keyframes) > 0 {
+		payload["keyframes"] = in.keyframes
+	}
+	if in.generateAudio != nil {
+		payload["generate_audio"] = *in.generateAudio
 	}
 	if refs := trimmedValues(in.referenceURLs); len(refs) > 0 {
 		payload["reference_urls"] = refs
@@ -136,23 +149,26 @@ func trimmedValues(values []string) []string {
 	return out
 }
 
-// decodeVideoInput 返回任务引用的全部输入（首帧、尾帧、参考图、参考视频、视频）。
+// decodeVideoInput 返回任务引用的全部输入（固定帧、参考图、参考视频、视频）。
 func decodeVideoInput(value string) []string { return decodeVideoInputs(value).all() }
 
 func decodeVideoInputs(value string) videoInputs {
 	var input struct {
-		ImageURL           string   `json:"image_url"`
-		LastFrameURL       string   `json:"last_frame_url"`
-		ReferenceURLs      []string `json:"reference_urls"`
-		ReferenceVideoURLs []string `json:"reference_video_urls"`
-		ReferenceAudios    []string `json:"reference_audios"`
-		VideoURL           string   `json:"video_url"`
+		ImageURL           string                `json:"image_url"`
+		LastFrameURL       string                `json:"last_frame_url"`
+		ReferenceURLs      []string              `json:"reference_urls"`
+		ReferenceVideoURLs []string              `json:"reference_video_urls"`
+		ReferenceAudios    []string              `json:"reference_audios"`
+		VideoURL           string                `json:"video_url"`
+		Keyframes          []media.VideoKeyframe `json:"keyframes"`
+		GenerateAudio      *bool                 `json:"generate_audio"`
 	}
 	_ = json.Unmarshal([]byte(value), &input)
 	return videoInputs{
 		imageURL: strings.TrimSpace(input.ImageURL), lastFrameURL: strings.TrimSpace(input.LastFrameURL),
 		videoURL: strings.TrimSpace(input.VideoURL), referenceURLs: trimmedValues(input.ReferenceURLs),
 		referenceVideoURLs: trimmedValues(input.ReferenceVideoURLs), referenceAudios: normalizeVideoReferenceAudios(input.ReferenceAudios),
+		keyframes: input.Keyframes, generateAudio: input.GenerateAudio,
 	}
 }
 

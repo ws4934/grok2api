@@ -10,6 +10,7 @@ func videoJobQuotaOptions(job media.Job, upstreamModel string, inputs videoInput
 	return provider.VideoRequestOptions{
 		Operation: job.Operation, UpstreamModel: upstreamModel, Duration: job.Seconds, Resolution: job.Quality,
 		HasImage: inputs.imageURL != "", HasLastFrame: inputs.lastFrameURL != "",
+		Keyframes: len(inputs.keyframes), GenerateAudio: inputs.generateAudio,
 		ReferenceImages: len(inputs.referenceURLs), ReferenceAudios: len(inputs.referenceAudios), ReferenceVideos: len(inputs.referenceVideoURLs),
 	}
 }

@@ -25,7 +25,12 @@ export type VideoHistoryRecord = {
   action: VideoAction;
   prompt: string;
   model: string;
-  params: { duration?: number; aspectRatio?: string; resolution?: string };
+  params: {
+    duration?: number; aspectRatio?: string; resolution?: string;
+    lastFrame?: { url?: string; name?: string };
+    keyframes?: Array<{ url?: string; name?: string; timestampSeconds: number }>;
+    generateAudio?: boolean;
+  };
   status: "submitting" | "generating" | "completed" | "failed" | "interrupted";
   requestId?: string;
   video?: { url: string; duration?: number };
@@ -99,7 +104,8 @@ export function loadVideoHistory(scope: string, storage = browserStorage()): Vid
 }
 
 export function persistVideoHistory(scope: string, records: VideoHistoryRecord[], storage = browserStorage()): void {
-  persistStoredList(historyStorageKey("video", scope), records, mediaHistoryMaxEntries, mediaHistoryMaxBytes, storage);
+  const storable = records.map((record) => ({ ...record, params: parseVideoParams(record.params) }));
+  persistStoredList(historyStorageKey("video", scope), storable, mediaHistoryMaxEntries, mediaHistoryMaxBytes, storage);
 }
 
 // A sync request still "generating" when the page loads can no longer deliver its result here;
@@ -143,12 +149,34 @@ export function parseVideoRecord(value: unknown): VideoHistoryRecord[] {
     action: value.action,
     prompt: value.prompt,
     model: value.model,
-    params: { duration: finiteNumber(params.duration), aspectRatio: optionalString(params.aspectRatio), resolution: optionalString(params.resolution) },
+    params: parseVideoParams(params),
     status,
     requestId,
     video,
     error: parseErrorDetail(value.error),
   }];
+}
+
+function parseVideoParams(params: Record<string, unknown>): VideoHistoryRecord["params"] {
+  const lastFrame = storedVideoFrame(params.lastFrame);
+  const keyframes = Array.isArray(params.keyframes) ? params.keyframes.flatMap((frame) => {
+    if (!isLocalRecord(frame)) return [];
+    const timestampSeconds = finiteNumber(frame.timestampSeconds);
+    return timestampSeconds !== undefined ? [{ ...storedVideoFrame(frame), timestampSeconds }] : [];
+  }).slice(0, 4) : undefined;
+  return {
+    duration: finiteNumber(params.duration), aspectRatio: optionalString(params.aspectRatio), resolution: optionalString(params.resolution),
+    ...(lastFrame ? { lastFrame } : {}), ...(keyframes?.length ? { keyframes } : {}),
+    ...(typeof params.generateAudio === "boolean" ? { generateAudio: params.generateAudio } : {}),
+  };
+}
+
+function storedVideoFrame(value: unknown): { url?: string; name?: string } | undefined {
+  if (!isLocalRecord(value)) return undefined;
+  const url = optionalString(value.url)?.trim();
+  const name = optionalString(value.name);
+  // Retain missing-image placeholders for re-upload, not binary data, File objects or expired IDs.
+  return { ...(url && /^https?:\/\//i.test(url) ? { url } : {}), ...(name ? { name } : {}) };
 }
 
 export function finiteTimestamp(value: unknown): number | null {

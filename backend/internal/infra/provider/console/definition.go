@@ -1,10 +1,12 @@
 package console
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	egressdomain "github.com/chenyme/grok2api/backend/internal/domain/egress"
+	mediadomain "github.com/chenyme/grok2api/backend/internal/domain/media"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
@@ -35,6 +37,7 @@ func (a *Adapter) Definition() provider.Definition {
 		},
 		Media: provider.MediaSurface{
 			ImageGeneration: true, ImageEdit: true, VideoGeneration: true,
+			VideoLastFrame: true, VideoKeyframes: true, VideoGenerateAudio: true,
 			TTS: true, STT: true, Realtime: true,
 		},
 		// Console shares the browser/clearance surface with Web. A 403 is
@@ -82,6 +85,15 @@ func consoleVideoReferenceImageLimit(model string) int {
 
 // ValidateVideoRequest: edit and extension exist for grok-imagine-video only.
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
+	if (options.HasLastFrame || options.Keyframes > 0) && (options.Operation != provider.VideoOperationGenerate || !consoleVideoSupportsReferenceAudio(options.UpstreamModel)) {
+		return fmt.Errorf("%w: 该模型不支持 last_frame 或 keyframes", provider.ErrVideoParameterInvalid)
+	}
+	if options.Keyframes > mediadomain.MaxVideoKeyframes {
+		return fmt.Errorf("%w: keyframes 最多 %d 个", provider.ErrVideoParameterInvalid, mediadomain.MaxVideoKeyframes)
+	}
+	if options.GenerateAudio != nil && options.Operation != provider.VideoOperationGenerate {
+		return fmt.Errorf("%w: 视频编辑/延长不支持 generate_audio", provider.ErrVideoParameterInvalid)
+	}
 	if options.Operation != provider.VideoOperationGenerate && strings.TrimSpace(options.UpstreamModel) != "grok-imagine-video" {
 		return provider.ErrVideoOperationUnsupported
 	}

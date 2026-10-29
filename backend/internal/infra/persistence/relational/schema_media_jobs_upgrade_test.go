@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,11 +26,28 @@ type eightImageMediaJobModel struct {
 
 func (eightImageMediaJobModel) TableName() string { return "media_jobs" }
 
+type fifteenImageMediaJobModel struct {
+	mediaJobModel
+	InputImageCount int `gorm:"not null;default:0;check:chk_media_jobs_input_image_count,input_image_count BETWEEN 0 AND 15 AND (kind <> 'image' OR input_image_count <= 8)"`
+}
+
+func (fifteenImageMediaJobModel) TableName() string { return "media_jobs" }
+
 func TestSQLiteMediaJobInputConstraintUpgradePreservesData(t *testing.T) {
-	verifyMediaJobInputConstraintUpgrade(t, openTestDatabase(t))
+	for _, limit := range []int{8, 15} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			verifyMediaJobInputConstraintUpgrade(t, openTestDatabase(t), limit)
+		})
+	}
 }
 
 func TestPostgresMediaJobInputConstraintUpgradePreservesData(t *testing.T) {
+	for _, limit := range []int{8, 15} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) { verifyPostgresMediaJobInputConstraintUpgrade(t, limit) })
+	}
+}
+
+func verifyPostgresMediaJobInputConstraintUpgrade(t *testing.T, limit int) {
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("TEST_POSTGRES_DSN is not configured")
@@ -56,7 +74,7 @@ func TestPostgresMediaJobInputConstraintUpgradePreservesData(t *testing.T) {
 		if err := scoped.InitializeSchema(ctx); err != nil {
 			return err
 		}
-		verifyMediaJobInputConstraintUpgrade(t, scoped)
+		verifyMediaJobInputConstraintUpgrade(t, scoped, limit)
 		return rollback
 	})
 	if !errors.Is(err, rollback) {
@@ -64,7 +82,7 @@ func TestPostgresMediaJobInputConstraintUpgradePreservesData(t *testing.T) {
 	}
 }
 
-func verifyMediaJobInputConstraintUpgrade(t *testing.T, database *Database) {
+func verifyMediaJobInputConstraintUpgrade(t *testing.T, database *Database, oldLimit int) {
 	t.Helper()
 	ctx := context.Background()
 	db := database.db.WithContext(ctx)
@@ -74,7 +92,11 @@ func verifyMediaJobInputConstraintUpgrade(t *testing.T, database *Database) {
 				return err
 			}
 		}
-		return db.Migrator().CreateConstraint(&eightImageMediaJobModel{}, mediaJobInputImageConstraint)
+		var oldModel any = &eightImageMediaJobModel{}
+		if oldLimit == 15 {
+			oldModel = &fifteenImageMediaJobModel{}
+		}
+		return db.Migrator().CreateConstraint(oldModel, mediaJobInputImageConstraint)
 	}
 	if database.dialect == "sqlite" {
 		if err := database.withSQLiteForeignKeysDisabled(ctx, installOld); err != nil {
@@ -106,8 +128,8 @@ func verifyMediaJobInputConstraintUpgrade(t *testing.T, database *Database) {
 			return tx.Model(&mediaJobModel{}).Where("id = ?", job.ID).Updates(map[string]any{"input_image_count": count, "kind": kind}).Error
 		})
 	}
-	if err := setCount(9, media.KindVideo); err == nil {
-		t.Fatal("fixture did not install the former eight-image ceiling")
+	if err := setCount(oldLimit+1, media.KindVideo); err == nil {
+		t.Fatal("fixture did not install the former image ceiling")
 	}
 	if err := NewAuditRepository(database).Create(ctx, audit.Record{
 		EventID: "usage_input_upgrade_1", RequestID: job.RequestID, ClientKeyID: keyID, ModelRouteID: 1,
@@ -161,11 +183,11 @@ func verifyMediaJobInputConstraintUpgrade(t *testing.T, database *Database) {
 			t.Errorf("%s rows=%d want=%d", table, got, count)
 		}
 	}
-	if err := setCount(15, media.KindVideo); err != nil {
+	if err := setCount(media.MaxVideoInputImages, media.KindVideo); err != nil {
 		t.Fatalf("upgraded video ceiling: %v", err)
 	}
-	if err := setCount(16, media.KindVideo); err == nil {
-		t.Fatal("video accepted sixteen inputs")
+	if err := setCount(media.MaxVideoInputImages+1, media.KindVideo); err == nil {
+		t.Fatal("video accepted inputs beyond its ceiling")
 	}
 	if err := setCount(9, media.KindImage); err == nil {
 		t.Fatal("image accepted nine inputs")

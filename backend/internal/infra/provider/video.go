@@ -151,6 +151,8 @@ type VideoRequestOptions struct {
 	Resolution      string
 	HasImage        bool
 	HasLastFrame    bool
+	Keyframes       int
+	GenerateAudio   *bool
 	ReferenceImages int
 	ReferenceVideos int
 	ReferenceAudios int
@@ -210,8 +212,10 @@ type VideoRequest struct {
 	Resolution  string
 	// ImageURL is the optional first-frame image (official "image" field).
 	ImageURL string
-	// LastFrameURL is the optional last-frame image; it requires ImageURL.
-	LastFrameURL string
+	// LastFrameURL is the optional last-frame image; pairing rules are provider-specific.
+	LastFrameURL  string
+	Keyframes     []media.VideoKeyframe
+	GenerateAudio *bool
 	// ReferenceVideoURLs are optional reference videos (data URIs or https URLs).
 	ReferenceVideoURLs []string
 	// ReferenceURLs are style/content references (official "reference_images").
@@ -278,13 +282,19 @@ type VideoContentDownloader interface {
 }
 
 // ValidateVideoRequest applies the provider's video validation; providers
-// without a validator accept generation only. A last frame or reference videos
-// need a provider that declares Media.VideoLastFrame / VideoReferenceVideos.
+// without a validator accept generation only. Optional input types and the audio
+// switch need the corresponding capability declared by the provider.
 func (r *Registry) ValidateVideoRequest(value account.Provider, options VideoRequestOptions) error {
-	if options.HasLastFrame || options.ReferenceVideos > 0 {
+	if options.HasLastFrame || options.Keyframes > 0 || options.GenerateAudio != nil || options.ReferenceVideos > 0 {
 		definition, _ := r.Definition(value)
 		if options.HasLastFrame && !definition.Media.VideoLastFrame {
 			return fmt.Errorf("%w: 该模型不支持 last_frame", ErrVideoParameterInvalid)
+		}
+		if options.Keyframes > 0 && !definition.Media.VideoKeyframes {
+			return fmt.Errorf("%w: 该模型不支持 keyframes", ErrVideoParameterInvalid)
+		}
+		if options.GenerateAudio != nil && !definition.Media.VideoGenerateAudio {
+			return fmt.Errorf("%w: 该模型不支持 generate_audio", ErrVideoParameterInvalid)
 		}
 		if options.ReferenceVideos > 0 && !definition.Media.VideoReferenceVideos {
 			return fmt.Errorf("%w: 该模型不支持 reference_videos", ErrVideoParameterInvalid)
@@ -337,7 +347,7 @@ func NormalizeGrokVideoRequest(options VideoRequestOptions) (VideoRequestOptions
 	options.AspectRatio = cmp.Or(ClosestImageRatio(options.AspectRatio, grokVideoRatios), "16:9")
 	options.Duration = min(max(cmp.Or(options.Duration, 8), 1), 15)
 	tiers := []string{"480p", "720p"}
-	if strings.TrimSpace(options.UpstreamModel) == "grok-imagine-video-1.5" && options.ReferenceImages == 0 && options.ReferenceAudios == 0 {
+	if strings.TrimSpace(options.UpstreamModel) == "grok-imagine-video-1.5" && options.ReferenceImages == 0 && options.ReferenceAudios == 0 && !options.HasLastFrame && options.Keyframes == 0 {
 		tiers = append(tiers, "1080p")
 	}
 	options.Resolution = cmp.Or(ClosestImageTier(options.Resolution, tiers), "720p")

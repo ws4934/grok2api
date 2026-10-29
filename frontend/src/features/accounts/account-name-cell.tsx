@@ -6,6 +6,7 @@ import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api
 import { providerIcon } from "@/entities/provider/provider-icon";
 import { providerColor, providerLabel, providerRank } from "@/entities/provider/provider-presentation";
 import type { AccountDTO, LinkedAccountDTO } from "@/features/accounts/accounts-api";
+import { accountDisplayName } from "@/features/accounts/account-identity";
 import { cn } from "@/shared/lib/cn";
 import { formatDateTime } from "@/shared/lib/format";
 
@@ -32,6 +33,7 @@ export function AccountNameCell({ account }: { account: AccountDTO }) {
   const { t, i18n } = useTranslation();
   const providers = useProviders().data;
   const links = accountLinks(account, providers);
+  const displayName = accountDisplayName(account);
   const connections = [
     { id: account.id, provider: account.provider, details: identityDetails(account.name, account.email, account.userId) },
     ...links.filter((linked) => linked.provider !== account.provider).map((linked) => ({ id: linked.id, provider: linked.provider, details: identityDetails(linked.name, linked.email, linked.userId) })),
@@ -42,9 +44,9 @@ export function AccountNameCell({ account }: { account: AccountDTO }) {
       <div className="flex min-w-0 items-center gap-1.5">
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="min-w-0 truncate text-xs font-medium">{account.name}</span>
+            <span className="min-w-0 truncate text-xs font-medium">{displayName}</span>
           </TooltipTrigger>
-          <TooltipContent>{account.name}</TooltipContent>
+          <TooltipContent>{displayName}</TooltipContent>
         </Tooltip>
       </div>
       <div className="flex min-h-4 w-fit min-w-0 items-center">

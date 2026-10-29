@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { historyStorageKey, imageJobRequestId, loadImageHistory, loadVideoHistory, persistImageHistory, persistStoredList, type ImageHistoryRecord } from "./creative-console-history.ts";
+import { historyStorageKey, imageJobRequestId, loadImageHistory, loadVideoHistory, persistImageHistory, persistStoredList, persistVideoHistory, type ImageHistoryRecord, type VideoHistoryRecord } from "./creative-console-history.ts";
 
 function memoryStorage(quotaChars = Number.POSITIVE_INFINITY) {
   const values = new Map<string, string>();
@@ -88,6 +88,21 @@ describe("image history", () => {
 });
 
 describe("video history", () => {
+  it("retains keyframe times and explicit silence without storing expired IDs or inline images", () => {
+    const storage = memoryStorage();
+    const record: VideoHistoryRecord = {
+      id: "pinned", createdAt: 1, action: "generate", prompt: "", model: "video15", status: "completed",
+      params: { duration: 6, generateAudio: false, lastFrame: { url: "https://example.com/last.png" },
+        keyframes: [{ url: "data:image/png;base64,AAAA", name: "key.png", timestampSeconds: 1 / 3 }] },
+    };
+    persistVideoHistory("pins", [record], storage);
+    const params = loadVideoHistory("pins", storage)[0]?.params;
+    assert.equal(params?.generateAudio, false);
+    assert.deepEqual(params?.lastFrame, { url: "https://example.com/last.png" });
+    assert.deepEqual(params?.keyframes, [{ name: "key.png", timestampSeconds: 1 / 3 }]);
+    assert.ok(!storage.getItem(historyStorageKey("video", "pins"))?.includes("base64"));
+    assert.equal(record.params.keyframes?.[0].url, "data:image/png;base64,AAAA");
+  });
   it("keeps polling jobs that have a request ID and interrupts unconfirmed submissions", () => {
     const storage = memoryStorage();
     const base = { prompt: "waves", model: "grok-imagine-video", action: "generate", params: { duration: 6, aspectRatio: "16:9", resolution: "720p" } };

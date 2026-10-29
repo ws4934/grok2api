@@ -22,7 +22,14 @@ func editedImageParameters(input ImageEditInput) map[string]any {
 }
 
 func videoParameters(input VideoInput) map[string]any {
-	return map[string]any{"model": input.PublicModel, "prompt": input.Prompt, "operation": input.Operation, "duration": input.Duration, "aspect_ratio": input.AspectRatio, "resolution": input.Resolution, "image": input.ImageURL, "last_frame": input.LastFrameURL, "reference_images": input.ReferenceURLs, "reference_videos": input.ReferenceVideoURLs, "reference_audios": input.ReferenceAudios, "video": input.VideoURL}
+	values := map[string]any{"model": input.PublicModel, "prompt": input.Prompt, "operation": input.Operation, "duration": input.Duration, "aspect_ratio": input.AspectRatio, "resolution": input.Resolution, "image": input.ImageURL, "last_frame": input.LastFrameURL, "reference_images": input.ReferenceURLs, "reference_videos": input.ReferenceVideoURLs, "reference_audios": input.ReferenceAudios, "video": input.VideoURL}
+	if len(input.Keyframes) > 0 {
+		values["keyframes"] = input.Keyframes
+	}
+	if input.GenerateAudio != nil {
+		values["generate_audio"] = *input.GenerateAudio
+	}
+	return values
 }
 
 func imageJobParameters(input ImageJobInput) map[string]any {

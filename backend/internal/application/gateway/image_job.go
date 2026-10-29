@@ -983,6 +983,7 @@ func (s *Service) RetryMediaJob(ctx context.Context, id, idempotencyKey string) 
 		RequestID: job.RequestID, ClientKey: key, PublicModel: job.Model, Operation: job.Operation, Prompt: job.Prompt,
 		Duration: job.Seconds, AspectRatio: job.Size, Resolution: job.Quality, ImageURL: inputs.imageURL, LastFrameURL: inputs.lastFrameURL,
 		ReferenceURLs: inputs.referenceURLs, ReferenceVideoURLs: inputs.referenceVideoURLs, ReferenceAudios: inputs.referenceAudios,
+		Keyframes: inputs.keyframes, GenerateAudio: inputs.generateAudio,
 		VideoURL: inputs.videoURL, IdempotencyKey: idempotencyKey,
 	})
 }

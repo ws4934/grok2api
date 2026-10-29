@@ -108,6 +108,9 @@ func (v *modelVersion) fitVideoInputs(options provider.VideoRequestOptions) prov
 // checkVideoInputs 按表里的上限检查首帧、尾帧、参考图与参考视频。首尾帧共用 frame
 // 用途，上限 2 的模型才收尾帧；所有素材另受总数上限约束。
 func (v *modelVersion) checkVideoInputs(hasFrame, hasLastFrame bool, references, videos int) error {
+	if hasLastFrame && !hasFrame {
+		return &requestError{msg: "last_frame（尾帧）必须同时提供 image（首帧）"}
+	}
 	frame, frameOK := v.refs["image:frame"]
 	frameLimit := frame.max
 	if limit := v.maxBlobs; limit > 0 && (frameLimit == 0 || limit < frameLimit) {

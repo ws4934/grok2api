@@ -52,19 +52,26 @@ type videoGenerationAudio struct {
 	VoiceID string `json:"voice_id"`
 }
 
+type videoGenerationKeyframe struct {
+	Image            *videoGenerationImage `json:"image"`
+	TimestampSeconds float64               `json:"timestamp_s"`
+}
+
 type videoGenerationRequest struct {
-	Model           string                 `json:"model"`
-	Prompt          string                 `json:"prompt"`
-	User            *string                `json:"user"`
-	Duration        json.RawMessage        `json:"duration"`
-	AspectRatio     string                 `json:"aspect_ratio"`
-	Resolution      string                 `json:"resolution"`
-	Image           *videoGenerationImage  `json:"image"`
-	LastFrame       *videoGenerationImage  `json:"last_frame"`
-	ReferenceImages []videoGenerationImage `json:"reference_images"`
-	ReferenceAudios []videoGenerationAudio `json:"reference_audios"`
-	ReferenceVideos []videoGenerationImage `json:"reference_videos"`
-	Video           *videoGenerationImage  `json:"video"`
+	Model           string                    `json:"model"`
+	Prompt          string                    `json:"prompt"`
+	User            *string                   `json:"user"`
+	Duration        json.RawMessage           `json:"duration"`
+	AspectRatio     string                    `json:"aspect_ratio"`
+	Resolution      string                    `json:"resolution"`
+	Image           *videoGenerationImage     `json:"image"`
+	LastFrame       *videoGenerationImage     `json:"last_frame"`
+	Keyframes       []videoGenerationKeyframe `json:"keyframes"`
+	GenerateAudio   *bool                     `json:"generate_audio"`
+	ReferenceImages []videoGenerationImage    `json:"reference_images"`
+	ReferenceAudios []videoGenerationAudio    `json:"reference_audios"`
+	ReferenceVideos []videoGenerationImage    `json:"reference_videos"`
+	Video           *videoGenerationImage     `json:"video"`
 	// Other video APIs' names, mapped onto the xAI fields: seconds (duration),
 	// size (aspect ratio and resolution), quality (resolution) and
 	// input_reference (first frame).
@@ -153,6 +160,7 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 
 	imageURL := ""
 	lastFrameURL := ""
+	var keyframes []mediadomain.VideoKeyframe
 	referenceURLs := []string{}
 	referenceAudios := []string{}
 	referenceVideoURLs := []string{}
@@ -187,15 +195,26 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 			imageURL = value
 		}
 		if request.LastFrame != nil {
-			if request.Image == nil {
-				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "last_frame（尾帧）必须同时提供 image（首帧）")
-				return
-			}
 			value, ok := parseVideoImage(*request.LastFrame, "last_frame")
 			if !ok {
 				return
 			}
 			lastFrameURL = value
+		}
+		if len(request.Keyframes) > mediadomain.MaxVideoKeyframes {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("keyframes 最多 %d 个", mediadomain.MaxVideoKeyframes))
+			return
+		}
+		for i, frame := range request.Keyframes {
+			if frame.Image == nil {
+				writeOpenAIError(c, http.StatusBadRequest, "invalid_request", fmt.Sprintf("keyframes[%d].image 不能为空", i))
+				return
+			}
+			value, ok := parseVideoImage(*frame.Image, fmt.Sprintf("keyframes[%d].image", i))
+			if !ok {
+				return
+			}
+			keyframes = append(keyframes, mediadomain.VideoKeyframe{ImageURL: value, TimestampSeconds: frame.TimestampSeconds})
 		}
 		// Inputs beyond the gateway's limits are dropped, the first ones kept;
 		// the route's provider then keeps what its upstream takes.
@@ -231,11 +250,12 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 			return
 		}
 		hasReferenceMode := len(referenceURLs) > 0 || len(referenceAudios) > 0
-		if hasReferenceMode && prompt == "" {
+		hasPinnedFrame := imageURL != "" || lastFrameURL != "" || len(keyframes) > 0
+		if hasReferenceMode && prompt == "" && !hasPinnedFrame {
 			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "参考图/参考音频视频必须提供 prompt")
 			return
 		}
-		if prompt == "" && imageURL == "" && !hasReferenceMode {
+		if prompt == "" && !hasPinnedFrame && !hasReferenceMode {
 			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "文本生视频必须提供 prompt；图片生视频可以省略 prompt")
 			return
 		}
@@ -257,8 +277,8 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 			return
 		}
 		videoURL = value
-		if request.Image != nil || request.LastFrame != nil || len(request.ReferenceImages) > 0 || len(request.ReferenceAudios) > 0 || len(request.ReferenceVideos) > 0 {
-			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"不支持 image、last_frame、reference_images、reference_videos 或 reference_audios")
+		if request.Image != nil || request.LastFrame != nil || len(request.Keyframes) > 0 || request.GenerateAudio != nil || len(request.ReferenceImages) > 0 || len(request.ReferenceAudios) > 0 || len(request.ReferenceVideos) > 0 {
+			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+"不支持 image、last_frame、keyframes、generate_audio、reference_images、reference_videos 或 reference_audios")
 			return
 		}
 	}
@@ -281,6 +301,7 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 		Operation: op,
 		Prompt:    prompt, Duration: duration, AspectRatio: aspectRatio, Resolution: resolution,
 		ImageURL: imageURL, LastFrameURL: lastFrameURL, ReferenceURLs: referenceURLs, ReferenceVideoURLs: referenceVideoURLs,
+		Keyframes: keyframes, GenerateAudio: request.GenerateAudio,
 		ReferenceAudios: referenceAudios, VideoURL: videoURL,
 	})
 	if err != nil {

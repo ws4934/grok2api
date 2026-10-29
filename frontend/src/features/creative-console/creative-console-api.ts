@@ -181,6 +181,9 @@ export async function createVideo(input: {
   prompt: string;
   imageURL?: string;
   imageFileID?: string;
+  lastFrame?: { url?: string; fileId?: string };
+  keyframes?: Array<{ url?: string; fileId?: string; timestampSeconds: number }>;
+  generateAudio?: boolean;
   referenceImages?: Array<{ url?: string; fileId?: string }>;
   referenceVoiceIds?: string[];
   duration: number;
@@ -197,6 +200,11 @@ export async function createVideo(input: {
   };
   if (input.imageFileID) body.image = { file_id: input.imageFileID };
   else if (input.imageURL) body.image = { url: input.imageURL };
+  if (input.lastFrame) body.last_frame = input.lastFrame.fileId ? { file_id: input.lastFrame.fileId } : { url: input.lastFrame.url };
+  if (input.keyframes?.length) body.keyframes = input.keyframes.map((frame) => ({
+    image: frame.fileId ? { file_id: frame.fileId } : { url: frame.url }, timestamp_s: frame.timestampSeconds,
+  }));
+  if (input.generateAudio !== undefined) body.generate_audio = input.generateAudio;
   if (input.referenceImages && input.referenceImages.length > 0) {
     body.reference_images = input.referenceImages.map((item) => {
       if (item.fileId) return { file_id: item.fileId };

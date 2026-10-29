@@ -66,6 +66,7 @@ import {
 } from "@/features/accounts/accounts-api";
 import { AccountAuthDialog } from "@/features/accounts/account-auth-dialog";
 import { AccountNameCell } from "@/features/accounts/account-name-cell";
+import { accountDisplayName, accountIdentityEmail } from "@/features/accounts/account-identity";
 import { accountEditSchema, accountEgressScopes, accountTaskKey, connectMethods, type AccountEditForm, type AccountFilterId, type AccountTask, type AccountUIContext } from "@/features/accounts/account-ui";
 import { accountUI } from "@/features/accounts/providers";
 import { assignEgressAccounts, listAllEgressNodes, listEgressNodes, listEgressSources, unassignEgressAccounts } from "@/features/settings/settings-api";
@@ -1105,7 +1106,7 @@ export function AccountsPage() {
                 rowHeight={56}
                 renderRow={(account) => (
                   <TableRow className="group h-14 [&>td]:py-1.5" key={account.id} data-state={selected.has(account.id) ? "selected" : undefined}>
-                    <TableCell className="px-2"><Checkbox checked={selected.has(account.id)} onCheckedChange={(checked) => toggleAccount(account.id, checked === true)} aria-label={t("common.selectItem", { name: account.name })} /></TableCell>
+                    <TableCell className="px-2"><Checkbox checked={selected.has(account.id)} onCheckedChange={(checked) => toggleAccount(account.id, checked === true)} aria-label={t("common.selectItem", { name: accountDisplayName(account) })} /></TableCell>
                     <TableCell className="min-w-0"><AccountNameCell account={account} /></TableCell>
                     <TableCell className="text-center whitespace-nowrap"><TypeCell account={account} /></TableCell>
                     <TableCell className="text-center whitespace-nowrap"><AccountStatus account={account} blockingQuotaMode={ui.blockingQuotaMode} /></TableCell>
@@ -1268,8 +1269,8 @@ export function AccountsPage() {
       <Dialog open={Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("common.edit")} {editing?.name}</DialogTitle>
-            <DialogDescription>{editing?.email ?? editing?.userId}</DialogDescription>
+            <DialogTitle>{t("common.edit")} {editing && accountDisplayName(editing)}</DialogTitle>
+            <DialogDescription>{editing && (accountIdentityEmail(editing) ?? editing.userId)}</DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={form.handleSubmit((values) => updateMutation.mutate(values))}>
             <div className="space-y-2"><Label htmlFor="account-name">{t("accounts.name")}</Label><Input id="account-name" {...form.register("name")} />{form.formState.errors.name ? <p className="text-xs text-destructive">{form.formState.errors.name.message}</p> : null}</div>

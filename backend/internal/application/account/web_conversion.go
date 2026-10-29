@@ -162,7 +162,8 @@ func (s *Service) syncWebCredentialsToConsole(ctx context.Context, values []acco
 		seed := parsed[0]
 		seed.Provider = accountdomain.ProviderConsole
 		seed.AuthType = accountdomain.AuthTypeSSO
-		seed.Name = webConsoleAccountName(value.Name, seed.Name)
+		seed.Name = webConsoleAccountName(value.Name, value.Email, seed.Name)
+		seed.Email = strings.TrimSpace(value.Email)
 		if strings.TrimSpace(value.EncryptedCloudflareCookie) != "" {
 			cookies, decryptErr := s.cipher.Decrypt(value.EncryptedCloudflareCookie)
 			if decryptErr != nil {
@@ -175,13 +176,16 @@ func (s *Service) syncWebCredentialsToConsole(ctx context.Context, values []acco
 	return s.persistImportedSeeds(ctx, seeds, observer, progress)
 }
 
-func webConsoleAccountName(webName, fallback string) string {
+func webConsoleAccountName(webName, email, fallback string) string {
 	name := strings.TrimSpace(webName)
+	if suffix, ok := strings.CutPrefix(name, "Grok Web "); ok {
+		name = "Grok Console " + suffix
+	}
+	if (name == "" || name == fallback) && strings.TrimSpace(email) != "" {
+		return strings.TrimSpace(email)
+	}
 	if name == "" {
 		return fallback
-	}
-	if suffix, ok := strings.CutPrefix(name, "Grok Web "); ok {
-		return "Grok Console " + suffix
 	}
 	return name
 }

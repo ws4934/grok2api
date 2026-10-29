@@ -64,7 +64,8 @@ import {
 } from "@/features/creative-console/creative-console-history";
 import { resolveVoice } from "@/features/creative-console/creative-console-voice";
 import { imageGenerationParams, imageGenerationPolicy, imageReferencePolicy, parseImageReferenceURLs } from "@/features/creative-console/creative-console-image";
-import { parseVideoReferenceURL, videoInputPolicy, type VideoReferenceImage } from "@/features/creative-console/creative-console-video";
+import { parseVideoReferenceURL, snapshotVideoFrame, videoFrameIssue, videoInputPolicy, type VideoFrameInput, type VideoKeyframeInput, type VideoReferenceImage } from "@/features/creative-console/creative-console-video";
+import { VideoFrameControls } from "@/features/creative-console/creative-console-video-frames";
 import { getClientKeySecret, listClientKeys, type ClientKeyDTO } from "@/features/client-keys/client-keys-api";
 import { importVideoInputFromURL, listMediaAssets, uploadMediaInput } from "@/features/media/media-api";
 import { mediaAssetPath } from "@/features/media/media-model";
@@ -1185,6 +1186,9 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const [referenceImages, setReferenceImages] = useState<VideoReferenceImage[]>([]);
   const [referenceError, setReferenceError] = useState("");
   const [referenceVoiceId, setReferenceVoiceId] = useState("");
+  const [lastFrame, setLastFrame] = useState<VideoFrameInput>();
+  const [keyframes, setKeyframes] = useState<VideoKeyframeInput[]>([]);
+  const [generateAudio, setGenerateAudio] = useState<boolean>();
   const [sourceVideoURL, setSourceVideoURL] = useState("");
   const [sourceVideoFileID, setSourceVideoFileID] = useState("");
   const [duration, setDuration] = useState("6");
@@ -1247,13 +1251,18 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   const referenceVoices = inputPolicy.canReferenceVoices
     ? (voices.length > 0 ? voices : [{ voiceId: "eve", name: "Eve" }, { voiceId: "ara", name: "Ara" }])
     : hasReferenceAudio ? [{ voiceId: referenceVoiceId, name: voices.find((voice) => voice.voiceId === referenceVoiceId)?.name || referenceVoiceId }] : [];
-  const isReferenceMode = hasReferenceImage || hasReferenceAudio;
+  const hasExtraFrames = Boolean(lastFrame) || keyframes.length > 0;
+  const hasPinnedFrame = hasFirstFrame || hasExtraFrames;
+  const isReferenceMode = hasReferenceImage || hasReferenceAudio || hasExtraFrames;
   const generateResolutions = isReferenceMode ? videoResolutions.filter((item) => item !== "1080p") : videoResolutions;
   const selectedVideoResolution = isReferenceMode && resolution === "1080p" ? "720p" : resolution;
   const generateDurations: readonly string[] = isReferenceMode ? videoDurations.filter((value) => Number(value) <= inputPolicy.referenceDurationLimit) : videoDurations;
   const selectedVideoDuration = generateDurations.includes(duration) ? duration : generateDurations.at(-1) ?? "6";
   const inputConflict = hasFirstFrame && isReferenceMode && !inputPolicy.canCombineFirstFrame;
   const tooManyReferences = referenceImages.length > inputPolicy.maxReferenceImages;
+  const frameIssue = videoFrameIssue(lastFrame, keyframes, Number(selectedVideoDuration), inputPolicy.canPinFrames);
+  const unsupportedAudio = generateAudio !== undefined && !inputPolicy.canGenerateAudio;
+  const frameError = frameIssue ? t(`creativeConsole.videoFrameIssues.${frameIssue}`, { duration: selectedVideoDuration }) : unsupportedAudio ? t("creativeConsole.videoAudioUnsupported") : "";
 
   // Variables are the history record ID; the request itself reads the composer state captured at submit.
   const createMutation = useMutation<string, Error, string>({
@@ -1261,6 +1270,15 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       if (!apiKey || !activeModel) throw new Error(t("creativeConsole.errors.noModels"));
       if (action === "generate") {
         if (unsupportedVoice) throw new Error(t("creativeConsole.videoVoiceUnsupported"));
+        if (frameError) throw new Error(frameError);
+        const stageFrame = async (frame: VideoFrameInput): Promise<{ url?: string; fileId?: string }> => {
+          if (frame.file) return { fileId: (await uploadMediaInput(frame.file)).fileId };
+          if (frame.url && /^https?:\/\//i.test(frame.url.trim())) return { fileId: (await importVideoInputFromURL(frame.url.trim())).fileId };
+          return { url: frame.url?.trim() };
+        };
+        const stagedLastFrame = lastFrame ? await stageFrame(lastFrame) : undefined;
+        const stagedKeyframes = [];
+        for (const frame of keyframes) stagedKeyframes.push({ ...await stageFrame(frame), timestampSeconds: Number(frame.timestamp) });
         let nextImageURL = imageURL.trim() || undefined;
         let nextImageFileID = imageFileID || undefined;
         const nextReferenceVoice = referenceVoiceId.trim() || undefined;
@@ -1284,6 +1302,9 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
           prompt: prompt.trim(),
           imageURL: nextImageURL,
           imageFileID: nextImageFileID,
+          lastFrame: stagedLastFrame,
+          keyframes: stagedKeyframes,
+          generateAudio,
           referenceImages: stagedReferences,
           referenceVoiceIds: nextReferenceVoice ? [nextReferenceVoice] : undefined,
           duration: Number(selectedVideoDuration),
@@ -1338,6 +1359,9 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
     if (params.aspectRatio) setAspectRatio(params.aspectRatio);
     if (params.resolution) setResolution(params.resolution);
     if (record.action === "extend" && params.duration) setExtendDuration(String(params.duration));
+    setLastFrame(params.lastFrame);
+    setKeyframes(params.keyframes?.map(({ timestampSeconds, ...frame }) => ({ ...frame, id: createCreativeMessageId(), timestamp: String(timestampSeconds) })) ?? []);
+    setGenerateAudio(params.generateAudio);
     if (modelOptions.some((option) => option.publicId === record.model)) onModelChange(record.model);
   }
 
@@ -1402,9 +1426,8 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
     event.preventDefault();
     if (!apiKey || !activeModel || createMutation.isPending || uploadMutation.isPending || videoUploadMutation.isPending) return;
     if (action === "generate") {
-      if (inputConflict || unsupportedVoice || tooManyReferences || referenceURL.trim()) return;
-      if ((!prompt.trim() && !hasFirstFrame && !isReferenceMode) || !validDuration(selectedVideoDuration)) return;
-      if (isReferenceMode && !prompt.trim()) return;
+      if (inputConflict || unsupportedVoice || tooManyReferences || referenceURL.trim() || frameError) return;
+      if ((!prompt.trim() && !hasPinnedFrame) || !validDuration(selectedVideoDuration)) return;
     } else {
       if (!prompt.trim() || (!sourceVideoURL.trim() && !sourceVideoFileID)) return;
     }
@@ -1415,7 +1438,11 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       prompt: prompt.trim(),
       model: activeModel,
       params: action === "generate"
-        ? { duration: Number(selectedVideoDuration), aspectRatio, resolution: selectedVideoResolution }
+        ? { duration: Number(selectedVideoDuration), aspectRatio, resolution: selectedVideoResolution,
+          ...(lastFrame ? { lastFrame: snapshotVideoFrame(lastFrame) } : {}),
+          ...(keyframes.length ? { keyframes: keyframes.map((frame) => ({ ...snapshotVideoFrame(frame), timestampSeconds: Number(frame.timestamp) })) } : {}),
+          ...(generateAudio !== undefined ? { generateAudio } : {}),
+        }
         : { ...(action === "extend" ? { duration: Number(selectedExtendDuration) } : {}), ...operationParams },
       status: "submitting",
     };
@@ -1441,7 +1468,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       : t("creativeConsole.extendVideo");
   const canSubmit = Boolean(apiKey && activeModel && !createMutation.isPending && !uploadMutation.isPending && !videoUploadMutation.isPending
     && (action === "generate"
-      ? ((prompt.trim() || hasFirstFrame || isReferenceMode) && (!isReferenceMode || prompt.trim()) && validDuration(selectedVideoDuration) && !inputConflict && !unsupportedVoice && !tooManyReferences && !referenceURL.trim())
+      ? ((prompt.trim() || hasPinnedFrame) && validDuration(selectedVideoDuration) && !inputConflict && !unsupportedVoice && !tooManyReferences && !referenceURL.trim() && !frameError)
       : prompt.trim() && (sourceVideoURL.trim() || sourceVideoFileID)));
 
   return (
@@ -1457,7 +1484,12 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                   <VideoRecordItem
                     record={record}
                     apiKey={apiKey}
-                    meta={[record.model, videoParamsLabel(record, t(`creativeConsole.videoActions.${record.action}`)), formatChatSessionTime(record.createdAt, i18n.language)].join(" · ")}
+                    meta={[record.model, videoParamsLabel(record, t(`creativeConsole.videoActions.${record.action}`)),
+                      record.params.lastFrame && t("creativeConsole.videoLastFrame"),
+                      record.params.keyframes?.length && `${t("creativeConsole.videoKeyframes")} ${record.params.keyframes.length}`,
+                      record.params.generateAudio !== undefined && t(record.params.generateAudio ? "creativeConsole.videoAudioOn" : "creativeConsole.videoAudioOff"),
+                      formatChatSessionTime(record.createdAt, i18n.language),
+                    ].filter(Boolean).join(" · ")}
                     onSettle={settleRecord}
                     actions={<>
                       <HistoryAction label={t("creativeConsole.reusePrompt")} icon={<CornerDownLeft />} onClick={() => reuse(record)} />
@@ -1494,8 +1526,9 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
           </div>
           <Textarea id="video-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder={placeholder} className="min-h-24 resize-none border-0 bg-transparent px-4 py-3 text-sm focus-visible:ring-0" />
           {action === "generate" && (unsupportedVoice || inputConflict || tooManyReferences) ? <p role="alert" className="px-4 pb-3 text-sm text-destructive">{unsupportedVoice ? t("creativeConsole.videoVoiceUnsupported") : inputConflict ? t("creativeConsole.videoInputConflict") : t("creativeConsole.referenceImageLimit", { count: inputPolicy.maxReferenceImages })}</p> : null}
+          {action === "generate" && frameError ? <p role="alert" className="px-4 pb-3 text-sm text-destructive">{frameError}</p> : null}
           <div className="flex items-center justify-between gap-3 px-3 pb-3">
-            <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
+            <div className="flex min-w-0 flex-wrap items-center gap-1">
               <CompactModelSelect value={activeModel} models={activeModels} onChange={onModelChange} />
               {action === "generate" ? (
                 <>
@@ -1583,6 +1616,11 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                     {referenceError ? <p role="alert" className="mt-2 text-sm text-destructive">{referenceError}</p> : null}
                   </PopoverContent>
                 </Popover>
+                {inputPolicy.canPinFrames || hasExtraFrames ? <VideoFrameControls lastFrame={lastFrame} keyframes={keyframes} onLastFrameChange={setLastFrame} onKeyframesChange={setKeyframes} disabled={createMutation.isPending} /> : null}
+                {inputPolicy.canGenerateAudio || generateAudio !== undefined ? <Select value={generateAudio === undefined ? "auto" : String(generateAudio)} onValueChange={(value) => setGenerateAudio(value === "auto" ? undefined : value === "true")} disabled={createMutation.isPending}>
+                  <SelectTrigger className={cn("h-8 w-auto gap-1.5 border-0 bg-transparent px-2 shadow-none", generateAudio === false && "bg-secondary/70")} aria-label={t("creativeConsole.videoAudio")}><AudioLines className="size-3.5" /><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="auto">{t("creativeConsole.videoAudioAuto")}</SelectItem><SelectItem value="true" disabled={!inputPolicy.canGenerateAudio}>{t("creativeConsole.videoAudioOn")}</SelectItem><SelectItem value="false" disabled={!inputPolicy.canGenerateAudio}>{t("creativeConsole.videoAudioOff")}</SelectItem></SelectContent>
+                </Select> : null}
                 <Select value={referenceVoiceId || "__none__"} onValueChange={(value) => setReferenceVoiceId(value === "__none__" ? "" : value)} disabled={!inputPolicy.canReferenceVoices && !hasReferenceAudio}>
                   <SelectTrigger className={cn("h-8 w-auto gap-1.5 border-0 bg-transparent px-2 shadow-none", hasReferenceAudio && "bg-secondary/70")} aria-label={t("creativeConsole.referenceVoice")}>
                     <AudioLines className="size-3.5" />

@@ -962,6 +962,9 @@ func TestVideoLastFrame(t *testing.T) {
 		if err := mustVersion(t, slug).checkVideoInputs(true, true, 0, 0); err != nil {
 			t.Errorf("%s rejected a last frame: %v", slug, err)
 		}
+		if err := mustVersion(t, slug).checkVideoInputs(false, true, 0, 0); err == nil || !strings.Contains(err.Error(), "首帧") {
+			t.Errorf("%s accepted a last frame without a first: %v", slug, err)
+		}
 	}
 	veo := mustVersion(t, "veo-3.1")
 	in := veo.videoPlan("x", "16:9", "720p", 8, true, false)

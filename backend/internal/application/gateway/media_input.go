@@ -79,6 +79,12 @@ func (st *inputStager) stageVideoInputs(ctx context.Context, in videoInputs) (vi
 	if in.lastFrameURL, err = st.stage(ctx, in.lastFrameURL, "image"); err != nil {
 		return in, err
 	}
+	in.keyframes = slices.Clone(in.keyframes)
+	for i := range in.keyframes {
+		if in.keyframes[i].ImageURL, err = st.stage(ctx, in.keyframes[i].ImageURL, "image"); err != nil {
+			return in, err
+		}
+	}
 	if in.referenceURLs, err = st.stageAll(ctx, in.referenceURLs, "image"); err != nil {
 		return in, err
 	}

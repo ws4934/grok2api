@@ -47,8 +47,10 @@ type VideoInput struct {
 	Resolution  string
 	// ImageURL is the optional first-frame image (official "image").
 	ImageURL string
-	// LastFrameURL is the optional last-frame image; it requires ImageURL.
-	LastFrameURL string
+	// Last-frame pairing is determined by the selected provider/model.
+	LastFrameURL  string
+	Keyframes     []media.VideoKeyframe
+	GenerateAudio *bool
 	// ReferenceVideoURLs are optional reference videos for generation.
 	ReferenceVideoURLs []string
 	// ReferenceURLs are style/content references (official "reference_images").
@@ -100,7 +102,8 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	options := provider.VideoRequestOptions{
 		Operation: operation, AspectRatio: input.AspectRatio, Resolution: input.Resolution, HasImage: strings.TrimSpace(input.ImageURL) != "", HasLastFrame: hasLastFrame,
 		ReferenceImages: len(input.ReferenceURLs), ReferenceVideos: len(input.ReferenceVideoURLs), ReferenceAudios: len(input.ReferenceAudios),
-		Duration: input.Duration,
+		Duration:  input.Duration,
+		Keyframes: len(input.Keyframes), GenerateAudio: input.GenerateAudio,
 	}
 	routes, err = s.routesForVideoParameters(routes, options)
 	if err != nil {
@@ -109,6 +112,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	inputs := videoInputs{
 		imageURL: input.ImageURL, lastFrameURL: input.LastFrameURL, referenceURLs: input.ReferenceURLs,
 		referenceVideoURLs: input.ReferenceVideoURLs, referenceAudios: input.ReferenceAudios, videoURL: input.VideoURL,
+		keyframes: input.Keyframes, generateAudio: input.GenerateAudio,
 	}
 	// 图像与视频输入共用一个预算。
 	budget := videoInputJSONBaseBytes
@@ -147,6 +151,9 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		return media.Job{}, err
 	}
 	input.Duration, input.AspectRatio, input.Resolution = effective.Duration, effective.AspectRatio, effective.Resolution
+	if err := provider.ValidateVideoKeyframes(inputs.keyframes, effective.Duration); err != nil {
+		return media.Job{}, err
+	}
 	inputs = inputs.fittedTo(effective)
 	effectiveParameters := videoParameters(input)
 	effectiveParameters["image"], effectiveParameters["last_frame"], effectiveParameters["reference_images"], effectiveParameters["reference_videos"], effectiveParameters["reference_audios"] = inputs.imageURL, inputs.lastFrameURL, inputs.referenceURLs, inputs.referenceVideoURLs, inputs.referenceAudios

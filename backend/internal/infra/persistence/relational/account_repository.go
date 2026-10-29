@@ -65,7 +65,15 @@ func (r *AccountRepository) List(ctx context.Context, input repository.AccountLi
 			query = query.Where("provider_accounts.id = ?", id)
 		} else {
 			pattern := "%" + strings.ToLower(search) + "%"
-			query = query.Where("LOWER(name) LIKE ? OR LOWER(email) LIKE ? OR LOWER(user_id) LIKE ? OR LOWER(team_id) LIKE ?", pattern, pattern, pattern, pattern)
+			query = query.Where(`LOWER(provider_accounts.name) LIKE ? OR LOWER(provider_accounts.email) LIKE ? OR LOWER(provider_accounts.user_id) LIKE ? OR LOWER(provider_accounts.team_id) LIKE ?
+				OR EXISTS (SELECT 1 FROM account_provider_links link JOIN provider_accounts peer
+					ON (link.web_account_id = provider_accounts.id AND peer.id = link.build_account_id)
+					OR (link.build_account_id = provider_accounts.id AND peer.id = link.web_account_id)
+					WHERE LOWER(peer.email) LIKE ?)
+				OR EXISTS (SELECT 1 FROM web_console_account_links link JOIN provider_accounts peer
+					ON (link.web_account_id = provider_accounts.id AND peer.id = link.console_account_id)
+					OR (link.console_account_id = provider_accounts.id AND peer.id = link.web_account_id)
+					WHERE LOWER(peer.email) LIKE ?)`, pattern, pattern, pattern, pattern, pattern, pattern)
 		}
 	}
 	switch input.Filter.QuotaType {

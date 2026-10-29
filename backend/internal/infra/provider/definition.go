@@ -76,9 +76,10 @@ type MediaSurface struct {
 	// SingleImagePerRequest: one upstream request draws one image, so the
 	// gateway spreads a multi-image request over accounts.
 	SingleImagePerRequest bool
-	// VideoLastFrame: video generation accepts a last-frame image next to the
-	// first frame; the registry rejects last frames for every other provider.
-	VideoLastFrame bool
+	// Provider-specific validators decide whether the last frame needs a first.
+	VideoLastFrame     bool
+	VideoKeyframes     bool
+	VideoGenerateAudio bool
 	// VideoReferenceVideos: video generation accepts reference videos; the
 	// registry rejects them for every other provider.
 	VideoReferenceVideos bool

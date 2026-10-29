@@ -407,6 +407,12 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	if operation != provider.VideoOperationGenerate && modelName != "grok-imagine-video" {
 		return provider.VideoResult{}, fmt.Errorf("%s 仅支持 grok-imagine-video", operation)
 	}
+	if err := a.ValidateVideoRequest(provider.VideoRequestOptions{
+		Operation: operation, UpstreamModel: modelName, HasLastFrame: strings.TrimSpace(request.LastFrameURL) != "",
+		Keyframes: len(request.Keyframes), GenerateAudio: request.GenerateAudio,
+	}); err != nil {
+		return provider.VideoResult{}, err
+	}
 	firstFrames, referenceImages := consoleVideoImageCounts(request)
 	if firstFrames > consoleMaxVideoFirstFrames {
 		return provider.VideoResult{}, fmt.Errorf("Console %s 最多支持 %d 张首帧图，当前为 %d 张", modelName, consoleMaxVideoFirstFrames, firstFrames)
@@ -422,6 +428,9 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		}
 		if request.Duration < 1 || request.Duration > 15 {
 			return provider.VideoResult{}, errors.New("duration 必须在 1 到 15 秒之间")
+		}
+		if err := provider.ValidateVideoKeyframes(request.Keyframes, request.Duration); err != nil {
+			return provider.VideoResult{}, err
 		}
 		// reference-to-video on the base model caps at 10s upstream; measured:
 		//   grok-imagine-video + reference_images + duration=15
@@ -446,7 +455,7 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		if modelName != "grok-imagine-video-1.5" {
 			return provider.VideoResult{}, fmt.Errorf("%s 不支持 1080p", modelName)
 		}
-		if len(request.ReferenceURLs) > 0 {
+		if len(request.ReferenceURLs) > 0 || request.LastFrameURL != "" || len(request.Keyframes) > 0 {
 			return provider.VideoResult{}, errors.New("reference_images 模式最高支持 720p")
 		}
 	} else if request.Resolution != "" && request.Resolution != "480p" && request.Resolution != "720p" {
@@ -471,6 +480,26 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 				return provider.VideoResult{}, errors.New("视频首图必须是 HTTPS URL 或 image data URL")
 			}
 			payload["image"] = map[string]any{"url": imageURL}
+		}
+		if lastFrame := strings.TrimSpace(request.LastFrameURL); lastFrame != "" {
+			if !validConsoleMediaInputURL(lastFrame, "image") {
+				return provider.VideoResult{}, errors.New("last_frame 必须是 HTTPS URL 或 image data URL")
+			}
+			payload["last_frame"] = map[string]any{"url": lastFrame}
+		}
+		if len(request.Keyframes) > 0 {
+			frames := make([]map[string]any, 0, len(request.Keyframes))
+			for i, frame := range request.Keyframes {
+				imageURL := strings.TrimSpace(frame.ImageURL)
+				if !validConsoleMediaInputURL(imageURL, "image") {
+					return provider.VideoResult{}, fmt.Errorf("keyframes[%d].image 必须是 HTTPS URL 或 image data URL", i)
+				}
+				frames = append(frames, map[string]any{"image": map[string]any{"url": imageURL}, "timestamp_s": frame.TimestampSeconds})
+			}
+			payload["keyframes"] = frames
+		}
+		if request.GenerateAudio != nil {
+			payload["generate_audio"] = *request.GenerateAudio
 		}
 		if modelName != "grok-imagine-video-1.5" && strings.TrimSpace(request.ImageURL) != "" && (len(request.ReferenceURLs) > 0 || len(request.ReferenceAudios) > 0) {
 			return provider.VideoResult{}, errors.New("image 不能与 reference_images/reference_audios 同时使用")
@@ -501,9 +530,10 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 			}
 			payload["reference_audios"] = audios
 		}
-		hasReferenceMode := len(request.ReferenceURLs) > 0 || len(request.ReferenceAudios) > 0
+		hasPinnedFrame := strings.TrimSpace(request.ImageURL) != "" || strings.TrimSpace(request.LastFrameURL) != "" || len(request.Keyframes) > 0
+		hasReferenceMode := len(request.ReferenceURLs) > 0 || len(request.ReferenceAudios) > 0 || strings.TrimSpace(request.LastFrameURL) != "" || len(request.Keyframes) > 0
 		if hasReferenceMode {
-			if strings.TrimSpace(request.Prompt) == "" {
+			if strings.TrimSpace(request.Prompt) == "" && !hasPinnedFrame {
 				return provider.VideoResult{}, errors.New("参考图/参考音频视频必须提供 prompt")
 			}
 			if strings.EqualFold(strings.TrimSpace(request.Resolution), "1080p") {

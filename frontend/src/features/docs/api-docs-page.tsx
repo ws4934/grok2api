@@ -189,6 +189,8 @@ const endpoints: Record<string, EndpointDefinition> = {
       { name: "resolution", descriptionKey: "docs.reference.fieldVideoResolution" },
       { name: "image", descriptionKey: "docs.reference.fieldVideoImage" },
       { name: "last_frame", descriptionKey: "docs.reference.fieldVideoLastFrame" },
+      { name: "keyframes", descriptionKey: "docs.reference.fieldVideoKeyframes" },
+      { name: "generate_audio", descriptionKey: "docs.reference.fieldVideoGenerateAudio" },
       { name: "reference_images", descriptionKey: "docs.reference.fieldReferenceImages" },
       { name: "reference_audios", descriptionKey: "docs.reference.fieldReferenceAudios" },
       { name: "reference_videos", descriptionKey: "docs.reference.fieldReferenceVideos" },

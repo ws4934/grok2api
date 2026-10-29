@@ -2009,7 +2009,9 @@ func TestLastFrameRequestValidation(t *testing.T) {
 		router.ServeHTTP(recorder, request)
 		return recorder
 	}
-	if rec := post("/v1/videos/generations", `{"model":"adobe/veo-3.1","prompt":"x","last_frame":{"url":"https://example.com/b.png"}}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "首帧") {
+	// A last frame alone is valid input for 1.5; pairing is checked after
+	// authentication against the actual selected model, not globally here.
+	if rec := post("/v1/videos/generations", `{"model":"Console/grok-imagine-video-1.5","last_frame":{"url":"https://example.com/b.png"}}`); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("last frame without image status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if rec := post("/v1/videos/edits", `{"model":"grok-imagine-video","prompt":"x","video":{"url":"https://example.com/v.mp4"},"last_frame":{"url":"https://example.com/b.png"}}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "last_frame") {

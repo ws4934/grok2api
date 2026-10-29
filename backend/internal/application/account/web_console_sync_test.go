@@ -47,7 +47,7 @@ func TestSyncWebAccountsToConsoleIsIdempotentAndPreservesBuildLink(t *testing.T)
 	cloudflareCookie := "cf_clearance=shared-clearance; __cf_bm=shared-bm"
 	webAccount, _, err := accounts.UpsertByIdentity(ctx, accountdomain.Credential{
 		Provider: accountdomain.ProviderWeb, AuthType: accountdomain.AuthTypeSSO,
-		Name: "Grok Web primary", SourceKey: "sso:" + security.HashToken(token),
+		Name: "Grok Web primary", Email: "owner@example.test", SourceKey: "sso:" + security.HashToken(token),
 		EncryptedAccessToken: encrypt(token), EncryptedCloudflareCookie: encrypt(cloudflareCookie),
 		Enabled: true, AuthStatus: accountdomain.AuthStatusActive,
 	})
@@ -93,7 +93,7 @@ func TestSyncWebAccountsToConsoleIsIdempotentAndPreservesBuildLink(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if consoleAccount.Provider != accountdomain.ProviderConsole || consoleAccount.Name != "Grok Console primary" || decrypted != token {
+	if consoleAccount.Provider != accountdomain.ProviderConsole || consoleAccount.Name != "Grok Console primary" || consoleAccount.Email != "owner@example.test" || decrypted != token {
 		t.Fatalf("console account = %#v, token = %q", consoleAccount, decrypted)
 	}
 	consoleCookie, err := cipher.Decrypt(consoleAccount.EncryptedCloudflareCookie)
@@ -159,6 +159,20 @@ func TestSyncWebAccountsToConsoleIsIdempotentAndPreservesBuildLink(t *testing.T)
 	}
 	if total != 2 {
 		t.Fatalf("console account count = %d", total)
+	}
+}
+
+func TestWebConsoleAccountNameUsesKnownEmailForGeneratedNames(t *testing.T) {
+	for _, tc := range []struct{ webName, email, want string }{
+		{"Grok Web cbb90abd", " owner@example.test ", "owner@example.test"},
+		{"", "owner@example.test", "owner@example.test"},
+		{"Grok Web cbb90abd", "", "Grok Console cbb90abd"},
+		{"Grok Web primary", "owner@example.test", "Grok Console primary"},
+		{"Production", "owner@example.test", "Production"},
+	} {
+		if name := webConsoleAccountName(tc.webName, tc.email, "Grok Console cbb90abd"); name != tc.want {
+			t.Fatalf("web=%q email=%q name=%q want=%q", tc.webName, tc.email, name, tc.want)
+		}
 	}
 }
 

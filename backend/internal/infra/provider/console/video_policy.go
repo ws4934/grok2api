@@ -9,7 +9,7 @@ func (*Adapter) VideoQuotaUnits(mode string, o provider.VideoRequestOptions) (in
 	if mode != QuotaModeVideo || o.Operation != provider.VideoOperationGenerate {
 		return 0, false
 	}
-	images := o.ReferenceImages
+	images := o.ReferenceImages + o.Keyframes
 	if o.HasImage {
 		images++
 	}

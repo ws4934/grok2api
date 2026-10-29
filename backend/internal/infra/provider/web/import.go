@@ -77,6 +77,9 @@ func (a *Adapter) ParseImportedCredentials(data []byte) ([]provider.CredentialSe
 		}
 		name := strings.TrimSpace(entry.Name)
 		if name == "" {
+			name = strings.TrimSpace(entry.Email)
+		}
+		if name == "" {
 			name = fmt.Sprintf("Grok Web %s", security.HashToken(token)[:8])
 		}
 		result = append(result, provider.CredentialSeed{

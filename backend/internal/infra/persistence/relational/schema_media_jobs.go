@@ -4,28 +4,27 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/chenyme/grok2api/backend/internal/domain/media"
 )
 
 const mediaJobInputImageConstraint = "chk_media_jobs_input_image_count"
 
-// updateMediaJobInputImageConstraint replaces the former shared eight-image
-// ceiling. AutoMigrate creates missing named CHECKs but does not update their
+// updateMediaJobInputImageConstraint updates this one authorized image ceiling.
+// AutoMigrate creates missing named CHECKs but does not update their
 // expressions. Run inside initialization's PostgreSQL transaction / SQLite
 // foreign-key guard so existing jobs and their dependents remain intact.
 func (d *Database) updateMediaJobInputImageConstraint(ctx context.Context) error {
 	db := d.db.WithContext(ctx)
 	if d.dialect == "postgres" {
-		// The current CHECK references kind; the former shared limit did not.
-		// Catalog dependencies avoid comparing PostgreSQL's reformatted SQL.
-		var current bool
-		if err := db.Raw(`SELECT EXISTS (
-			SELECT 1 FROM pg_constraint c JOIN pg_attribute a
-			ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
-			WHERE c.conrelid = to_regclass('media_jobs') AND c.conname = ? AND a.attname = 'kind'
-		)`, mediaJobInputImageConstraint).Scan(&current).Error; err != nil {
+		// Both the fifteen- and twenty-image CHECKs reference kind; inspect
+		// their numeric ceiling instead of treating that dependency as current.
+		var definition string
+		if err := db.Raw(`SELECT pg_get_constraintdef(oid) FROM pg_constraint
+			WHERE conrelid = to_regclass('media_jobs') AND conname = ?`, mediaJobInputImageConstraint).Scan(&definition).Error; err != nil {
 			return err
 		}
-		if current {
+		if strings.Contains(strings.Join(strings.Fields(definition), " "), fmt.Sprintf("input_image_count <= %d", media.MaxVideoInputImages)) {
 			return nil
 		}
 		if err := db.Migrator().DropConstraint(&mediaJobModel{}, mediaJobInputImageConstraint); err != nil {
@@ -36,7 +35,7 @@ func (d *Database) updateMediaJobInputImageConstraint(ctx context.Context) error
 		if err := db.Raw("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'media_jobs'").Scan(&ddl).Error; err != nil {
 			return err
 		}
-		if !strings.Contains(strings.Join(strings.Fields(ddl), " "), "input_image_count BETWEEN 0 AND 8") {
+		if strings.Contains(strings.Join(strings.Fields(ddl), " "), fmt.Sprintf("input_image_count BETWEEN 0 AND %d", media.MaxVideoInputImages)) {
 			return nil
 		}
 		// The SQLite migrator replaces an existing named CHECK in one table

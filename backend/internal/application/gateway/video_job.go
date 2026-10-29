@@ -187,6 +187,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			Operation: operation,
 			Prompt:    job.Prompt, Duration: job.Seconds, AspectRatio: job.Size, Resolution: job.Quality,
 			ImageURL: inputs.imageURL, LastFrameURL: inputs.lastFrameURL, ReferenceURLs: inputs.referenceURLs,
+			Keyframes: inputs.keyframes, GenerateAudio: inputs.generateAudio,
 			ReferenceVideoURLs: inputs.referenceVideoURLs, ReferenceAudios: inputs.referenceAudios, VideoURL: inputs.videoURL,
 			Checkpoint: job.Checkpoint,
 			SaveCheckpoint: func(value string) error {
