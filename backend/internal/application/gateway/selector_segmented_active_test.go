@@ -37,7 +37,7 @@ func TestSegmentedCandidateCohortsRetainOnlyBoundedRotatingWindows(t *testing.T)
 			ID: uint64(index + 1), Provider: account.ProviderBuild, Priority: account.DefaultPriority,
 		}}
 	}
-	buckets := segmentedCandidateCohorts(values, nil, time.Now().UTC(), nil, false, false, nil, 9980, 64, segmentedWindowsBeforeFullFallback)
+	buckets := segmentedCandidateCohorts(values, nil, time.Now().UTC(), nil, false, false, nil, nil, 9980, 64, segmentedWindowsBeforeFullFallback)
 	if len(buckets) != 1 || len(buckets[0].indexes) != 256 {
 		t.Fatalf("bounded cohorts = %#v", buckets)
 	}
@@ -276,7 +276,7 @@ func TestSegmentedCohortsUseEffectiveWebCatalogCapability(t *testing.T) {
 	}
 	cohorts := segmentedCandidateCohorts(values, nil, time.Now().UTC(), []account.WebTier{
 		account.WebTierBasic, account.WebTierSuper, account.WebTierHeavy,
-	}, grokTestRegistry.StaticCatalog(account.ProviderWeb), false, nil, 0, 1, 2)
+	}, grokTestRegistry.StaticCatalog(account.ProviderWeb), false, nil, nil, 0, 1, 2)
 	if len(cohorts) != 2 || len(cohorts[0].indexes) != 1 || cohorts[0].indexes[0] != 0 {
 		t.Fatalf("segmented Web cohorts = %#v, want Basic account first", cohorts)
 	}
@@ -296,7 +296,7 @@ func TestSegmentedPlannerUsesOnePreferFreeBuildSnapshot(t *testing.T) {
 	}
 	selector := NewSelector(nil, memory.NewConcurrencyLimiter(), nil, nil, time.Hour, time.Second, time.Minute)
 	selector.UpdatePreferFreeBuild(true)
-	plan, err := selector.planCandidateIndexesWithHints(context.Background(), values, nil, now, nil, nil, false)
+	plan, err := selector.planCandidateIndexesWithHints(context.Background(), values, nil, now, nil, candidatePlanHints{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestSegmentedPlannerUsesOnePreferFreeBuildSnapshot(t *testing.T) {
 	}
 
 	selector.UpdatePreferFreeBuild(false)
-	plan, err = selector.planCandidateIndexesWithHints(context.Background(), values, nil, now, nil, nil, true)
+	plan, err = selector.planCandidateIndexesWithHints(context.Background(), values, nil, now, nil, candidatePlanHints{preferFreeBuild: true})
 	if err != nil {
 		t.Fatal(err)
 	}

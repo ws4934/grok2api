@@ -553,7 +553,7 @@ func (s *Service) drawImage(ctx context.Context, job *media.Job, route modeldoma
 		return imageOutcome{err: err}
 	}
 	succeeded = true
-	s.consumeMediaQuota(route, job.AccountID, quotaMode)
+	s.consumeMediaQuota(route, job.AccountID, quotaMode, 1)
 	if err := s.recordImageAudit(context.WithoutCancel(ctx), *job, http.StatusOK, "", time.Since(startedAt).Milliseconds()); err != nil {
 		s.logger.Error("image_usage_record_failed", "job_id", job.ID, "event_id", imageEventID(*job), "error", err)
 	}
@@ -715,9 +715,9 @@ func (s *Service) submitImage(ctx context.Context, job *media.Job, route modeldo
 	return stop(media.StatusFailed, "generation_failed", lastErr)
 }
 
-// consumeMediaQuota charges one delivered image or video to the account's remote
-// quota window and queues a refresh, like the synchronous image path.
-func (s *Service) consumeMediaQuota(route modeldomain.Route, accountID uint64, quotaMode string) {
+// consumeMediaQuota applies native units to every mirror of the account's
+// remote budget, then queues an authoritative refresh.
+func (s *Service) consumeMediaQuota(route modeldomain.Route, accountID uint64, quotaMode string, units int) {
 	quotaKind, _ := s.providers.QuotaKind(route.Provider)
 	refreshMode, decrementMode, availabilityMode := quotaFinalizationModes(quotaMode, s.providers.QuotaRefreshGroup(route.Provider, route.UpstreamModel))
 	if quotaKind != provider.QuotaRemoteWindow || refreshMode == "" || accountID == 0 {
@@ -725,12 +725,13 @@ func (s *Service) consumeMediaQuota(route modeldomain.Route, accountID uint64, q
 	}
 	if decrementMode != "" && decrementMode != "weekly" {
 		ctx, cancel := context.WithTimeout(context.Background(), accountStateWriteTimeout)
-		updated, err := s.accounts.DecrementQuota(ctx, accountID, decrementMode, 1)
+		updated, err := s.decrementMediaQuota(ctx, route.Provider, accountID, decrementMode, units)
 		cancel()
 		if err != nil {
 			s.logger.Warn("media_quota_decrement_failed", "provider", route.Provider, "account_id", accountID, "mode", decrementMode, "error", err)
-		} else if updated {
-			s.selector.ConsumeQuota(route.Provider, accountID, decrementMode, 1)
+		}
+		if updated || err != nil {
+			s.selector.ConsumeQuota(route.Provider, accountID, decrementMode, units)
 		}
 	}
 	s.accounts.QueueQuotaRefresh(accountID, refreshMode)

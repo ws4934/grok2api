@@ -80,6 +80,7 @@ type nativeImageFixture struct {
 	service  *Service
 	accounts *relational.AccountRepository
 	audits   *relational.AuditRepository
+	jobs     *relational.MediaJobRepository
 	keys     *relational.ClientKeyRepository
 	key      clientkey.Key
 	ids      []uint64
@@ -98,6 +99,7 @@ func newNativeImageFixture(t *testing.T, balances ...int) nativeImageFixture {
 		t.Fatal(err)
 	}
 	f := nativeImageFixture{accounts: relational.NewAccountRepository(db), audits: relational.NewAuditRepository(db), keys: relational.NewClientKeyRepository(db), adapter: &nativeConsoleImageStub{Adapter: console.NewAdapter(console.Config{}, nil, nil, nil)}}
+	f.jobs = relational.NewMediaJobRepository(db)
 	models := relational.NewModelRepository(db)
 	routes := console.Routes()
 	for i := range routes {

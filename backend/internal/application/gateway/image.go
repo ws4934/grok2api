@@ -555,7 +555,7 @@ func (s *Service) executeImage(
 				var updated bool
 				err := budget.run("quota_decrement", finalizationQuotaBudget, func(stageCtx context.Context) error {
 					var decrementErr error
-					updated, decrementErr = s.decrementImageQuota(stageCtx, route.Provider, accountID, decrementMode, quotaUnits)
+					updated, decrementErr = s.decrementMediaQuota(stageCtx, route.Provider, accountID, decrementMode, quotaUnits)
 					return decrementErr
 				})
 				if err != nil {

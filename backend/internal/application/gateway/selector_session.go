@@ -18,6 +18,7 @@ type selectionSession struct {
 	modelRouteID     uint64
 	upstreamModel    string
 	quotaMode        string
+	quotaUnits       int
 	stickyKey        string
 	values           []account.RoutingCandidate
 	normalCandidates []int
@@ -273,6 +274,7 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 	indexes := session.unexcludedNormalIndexes(excluded)
 	activeRequest := session.selector.nextSegmentedActiveRequest(session.provider, session.upstreamModel, session.quotaMode, len(indexes))
 	if activeRequest != nil {
+		activeRequest.quotaUnits = session.quotaUnits
 		lease, err := session.selector.acquireSegmentedCandidates(ctx, session.values, indexes, session.quotaMode, session.selector.resolveTierOrder(session.provider, session.upstreamModel, session.quotaMode), *activeRequest, &session.materialFailures)
 		if err != nil || lease == nil || session.stickyKey == "" {
 			return lease, err
@@ -287,7 +289,7 @@ func (session *selectionSession) acquireNormal(ctx context.Context, excluded map
 	deadline := time.Now().Add(capacityWait)
 	for {
 		if session.normalPlan == nil {
-			plan, err := session.selector.planCandidateIndexes(ctx, session.values, session.normalCandidates, time.Now().UTC(), session.selector.resolveTierOrder(session.provider, session.upstreamModel, session.quotaMode))
+			plan, err := session.selector.planCandidateIndexesWithHints(ctx, session.values, session.normalCandidates, time.Now().UTC(), session.selector.resolveTierOrder(session.provider, session.upstreamModel, session.quotaMode), candidatePlanHints{preferFreeBuild: session.selector.preferFreeBuildEnabled(), quotaUnits: session.quotaUnits})
 			if err != nil {
 				return nil, err
 			}

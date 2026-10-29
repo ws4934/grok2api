@@ -155,6 +155,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		return media.Job{}, err
 	}
 	pricing, priced := s.resolveVideoPricing(operation, route.Provider, route.UpstreamModel, input.Resolution, input.Duration, len(inputs.imageRefs()))
+	selection.quotaUnits, _ = s.providers.VideoQuotaUnits(route.Provider, selection.quotaMode, effective)
 	externalModel := model.ExternalPublicID(route.Provider, route.PublicID)
 	lease, err := selection.Acquire(ctx, nil, false)
 	if err != nil {

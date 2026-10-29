@@ -98,9 +98,9 @@ func (s *Selector) ConsumeQuota(provider account.Provider, accountID uint64, mod
 	}
 	key := quotaConsumptionKey{provider: provider, accountID: accountID, mode: s.quotaPoolMode(provider, mode)}
 	s.quotaConsumed[key] += amount
-	if budget, ok := s.imageBudgets[key]; ok {
+	if budget, ok := s.quotaBudgets[key]; ok {
 		budget.remaining = max(0, budget.remaining-amount)
-		s.imageBudgets[key] = budget
+		s.quotaBudgets[key] = budget
 	}
 	s.quotaMu.Unlock()
 }
@@ -110,13 +110,13 @@ func (s *Selector) ConsumeQuota(provider account.Provider, accountID uint64, mod
 type quotaConsumption struct {
 	values   map[quotaConsumptionKey]int
 	reserved map[quotaConsumptionKey]int
-	budgets  map[quotaConsumptionKey]imageQuotaBudget
+	budgets  map[quotaConsumptionKey]nativeQuotaBudget
 	poolMode func(account.Provider, string) string
 	provider account.Provider
 }
 
 func (s *Selector) quotaConsumptionSnapshot(provider account.Provider) quotaConsumption {
-	return quotaConsumption{values: s.quotaConsumed, reserved: s.quotaReserved, budgets: s.imageBudgets, provider: provider, poolMode: s.quotaPoolMode}
+	return quotaConsumption{values: s.quotaConsumed, reserved: s.quotaReserved, budgets: s.quotaBudgets, provider: provider, poolMode: s.quotaPoolMode}
 }
 
 func (s *Selector) quotaPoolMode(value account.Provider, mode string) string {
@@ -149,6 +149,10 @@ func quotaWindowExhausted(candidate account.RoutingCandidate, consumed quotaCons
 	if candidate.QuotaWindow == nil {
 		return false
 	}
+	return consumed.remaining(candidate) <= 0
+}
+
+func (consumed quotaConsumption) remaining(candidate account.RoutingCandidate) int {
 	mode := candidate.QuotaWindow.Mode
 	if consumed.poolMode != nil {
 		mode = consumed.poolMode(consumed.provider, mode)
@@ -159,7 +163,21 @@ func quotaWindowExhausted(candidate account.RoutingCandidate, consumed quotaCons
 		remaining = budget.remaining
 	}
 	remaining -= consumed.reserved[key]
-	return remaining <= 0
+	return remaining
+}
+
+// A large video may be accepted against a pristine included-usage budget even
+// when its estimate exceeds the whole window. Prefer that account without
+// turning a price estimate into an upstream eligibility rule.
+func (consumed quotaConsumption) fits(candidate account.RoutingCandidate, units int) bool {
+	window := candidate.QuotaWindow
+	if units <= 0 || window == nil || window.Source != account.QuotaSourceUpstream {
+		return false
+	}
+	if window.Total > 0 {
+		units = min(units, window.Total)
+	}
+	return consumed.remaining(candidate) >= units
 }
 
 func (s *Selector) clearQuotaConsumption(provider account.Provider) {

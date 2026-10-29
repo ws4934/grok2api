@@ -148,7 +148,7 @@ type Selector struct {
 	healthOverrides        map[uint64]routingHealthOverride
 	quotaConsumed          map[quotaConsumptionKey]int
 	quotaReserved          map[quotaConsumptionKey]int
-	imageBudgets           map[quotaConsumptionKey]imageQuotaBudget
+	quotaBudgets           map[quotaConsumptionKey]nativeQuotaBudget
 	staleFallbackLoggedAt  map[string]time.Time
 	candidates             map[candidateCacheKey]candidateSnapshot
 	routingBases           map[routingBaseCacheKey]routingBaseSnapshot

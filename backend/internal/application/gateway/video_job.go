@@ -52,6 +52,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	}
 
 	quotaMode := s.providers.VideoQuotaMode(route.Provider, s.providers.QuotaMode(route.Provider, route.UpstreamModel), job.Quality)
+	quotaUnits, _ := s.providers.VideoQuotaUnits(route.Provider, quotaMode, videoJobQuotaOptions(job, route.UpstreamModel, inputs))
 	// The initial creation path (selectSchedulableEligibleMediaRouteWithQuotaMode,
 	// called from CreateVideoJob) always scopes account selection to the
 	// requesting client key's AccountScope. A retry here must not silently
@@ -79,23 +80,35 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 	failureAttempts := newFailureAttemptRecorder(http.MethodPost, "/videos/generations")
 	var selection *selectionSession
 	var lease *accountLease
+	var releaseQuota func()
+	nativeQuotaConsumed := false
 	// Every return gives the account's concurrency slot back.
-	defer func() { lease.Release() }()
+	defer func() {
+		if releaseQuota != nil {
+			releaseQuota()
+		}
+		lease.Release()
+	}()
 	var result provider.VideoResult
 	var lastErr error
 
 	for attempt := 0; attemptPolicy.allows(attempt); attempt++ {
 		attemptStarted := time.Now()
 		err = nil
+		if releaseQuota != nil {
+			releaseQuota()
+			releaseQuota = nil
+		}
 		if lease != nil {
 			lease.Release()
 			lease = nil
 		}
-		// First try stays on the account chosen when the local job was created.
-		// Create-stage failures may switch accounts; poll failures never reach here as retries.
+		// Budget-priced videos reselect just before submission: queued jobs do
+		// not own their initial account's balance. Accepted jobs always resume on
+		// their submitting account, irrespective of current quota or preference.
 		pinnedAccountID := retryPinnedAccountID
 		retryPinnedAccountID = 0
-		if attempt == 0 {
+		if attempt == 0 && (quotaUnits == 0 || job.Submitted) {
 			pinnedAccountID = job.AccountID
 		}
 		if attempt == 0 && job.Submitted {
@@ -121,6 +134,9 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		if lease == nil {
 			if selection == nil {
 				selection, err = s.selector.beginSelectionSessionForKey(ctx, route.Provider, route.ID, route.UpstreamModel, quotaMode, "", excluded, false, accountScope)
+				if err == nil {
+					selection.quotaUnits = quotaUnits
+				}
 			}
 			if err == nil {
 				lease, err = selection.Acquire(ctx, excluded, false)
@@ -149,6 +165,16 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			return
 		}
 		lease.Credential = credential
+		if !job.Submitted && quotaUnits > 0 {
+			releaseQuota, err = s.selector.reserveVideoQuota(lease, quotaUnits)
+			if err != nil {
+				lastErr = err
+				// This was a local selection race, not an upstream attempt. The
+				// excluded set bounds retries without consuming the API attempt limit.
+				attempt--
+				continue
+			}
+		}
 		if job.AccountID != credential.ID || job.AccountName != credential.Name {
 			job.AccountID, job.AccountName = credential.ID, credential.Name
 			_ = s.saveMediaJob(ctx, &job)
@@ -177,6 +203,22 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 				_ = s.saveMediaJob(ctx, &job)
 			},
 		})
+		if err == nil && quotaUnits > 0 {
+			if result.Seconds > 0 && result.Seconds != job.Seconds {
+				actual := videoJobQuotaOptions(job, route.UpstreamModel, inputs)
+				actual.Duration = result.Seconds
+				if units, known := s.providers.VideoQuotaUnits(route.Provider, lease.QuotaMode, actual); known {
+					quotaUnits = units
+				}
+			}
+			// Upstream generation spent quota even if saving its output fails.
+			s.consumeMediaQuota(route, lease.Credential.ID, lease.QuotaMode, quotaUnits)
+			nativeQuotaConsumed = true
+			if releaseQuota != nil {
+				releaseQuota()
+				releaseQuota = nil
+			}
+		}
 		if err == nil && result.AssetID == "" && result.URL != "" {
 			result, err = s.persistRemoteVideo(originCtx, job.ID, adapter, lease.Credential, result)
 		}
@@ -189,6 +231,13 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		}
 		lastErr = err
 		captureVideoAttempt(failureAttempts, lease.Credential, attemptStarted, err)
+		if quotaUnits > 0 && job.Submitted && !nativeQuotaConsumed {
+			// Keep an accepted/uncertain submission's estimated spend until the
+			// queued authoritative quota refresh reconciles it. Client billing is
+			// still determined solely by the final delivered result.
+			s.consumeMediaQuota(route, lease.Credential.ID, lease.QuotaMode, quotaUnits)
+			nativeQuotaConsumed = true
+		}
 		if parent.Err() != nil {
 			s.deferVideoJob(parent, job)
 			return
@@ -316,7 +365,9 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		return
 	}
 	s.selector.markSuccess(context.Background(), lease.Credential, lease.QuotaProbe)
-	s.consumeMediaQuota(route, job.AccountID, lease.QuotaMode)
+	if !nativeQuotaConsumed {
+		s.consumeMediaQuota(route, job.AccountID, lease.QuotaMode, 1)
+	}
 	if err := s.recordVideoAudit(context.Background(), job, time.Since(startedAt).Milliseconds(), http.StatusOK, failureAttempts.snapshot()); err != nil {
 		s.logger.Error("video_usage_record_failed", "job_id", job.ID, "event_id", "video_usage_"+job.ID, "error", err)
 	}

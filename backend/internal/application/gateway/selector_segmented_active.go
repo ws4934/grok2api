@@ -12,6 +12,7 @@ import (
 
 type segmentedSelectorActiveRequest struct {
 	provider   account.Provider
+	quotaUnits int
 	windowSize int
 	cursor     uint64
 }
@@ -57,6 +58,7 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 	candidatesScanned := 0
 	fullPlannerOnly := false
 	preferFreeBuild := s.preferFreeBuildEnabled()
+	hints := candidatePlanHints{preferFreeBuild: preferFreeBuild, quotaUnits: request.quotaUnits}
 	var unlimited func(*account.RoutingCandidate) bool
 	if s.quotaSnapshotProvider(request.provider) {
 		unlimited = quotaSyncedWithoutWindow
@@ -69,7 +71,8 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 				length = len(values)
 			}
 			candidatesScanned += length
-			plan, err := s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, nil, preferFreeBuild)
+			hints.concurrency = nil
+			plan, err := s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, hints)
 			if err != nil {
 				observeSegmentedActive(request.provider, "error", "full_fallback", startedAt, windowsScanned, candidatesScanned)
 				return nil, err
@@ -89,7 +92,15 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 			}
 		} else {
 			concurrencyHints := make(map[int]int, min(len(indexes), request.windowSize*segmentedWindowsBeforeFullFallback))
-			cohorts := segmentedCandidateCohorts(values, indexes, now, tierOrder, s.staticCatalog(request.provider), preferFreeBuild, unlimited, request.cursor, request.windowSize, segmentedWindowsBeforeFullFallback)
+			hints.concurrency = concurrencyHints
+			s.quotaMu.RLock()
+			consumed := s.quotaConsumptionSnapshot(request.provider)
+			var fits func(account.RoutingCandidate) bool
+			if request.quotaUnits > 0 {
+				fits = func(candidate account.RoutingCandidate) bool { return consumed.fits(candidate, request.quotaUnits) }
+			}
+			cohorts := segmentedCandidateCohorts(values, indexes, now, tierOrder, s.staticCatalog(request.provider), preferFreeBuild, unlimited, fits, request.cursor, request.windowSize, segmentedWindowsBeforeFullFallback)
+			s.quotaMu.RUnlock()
 			roundWindows := 0
 			fallbackToFull := false
 			for cohortIndex, bucket := range cohorts {
@@ -98,7 +109,7 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 					windowsScanned++
 					roundWindows++
 					candidatesScanned += len(windowIndexes)
-					plan, err := s.planCandidateIndexesWithHints(ctx, values, windowIndexes, now, tierOrder, concurrencyHints, preferFreeBuild)
+					plan, err := s.planCandidateIndexesWithHints(ctx, values, windowIndexes, now, tierOrder, hints)
 					if err != nil {
 						observeSegmentedActive(request.provider, "error", "planning", startedAt, windowsScanned, candidatesScanned)
 						return nil, err
@@ -128,7 +139,7 @@ func (s *Selector) acquireSegmentedCandidates(ctx context.Context, values []acco
 					length = len(values)
 				}
 				candidatesScanned += length
-				plan, err := s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, concurrencyHints, preferFreeBuild)
+				plan, err := s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, hints)
 				if err != nil {
 					observeSegmentedActive(request.provider, "error", "full_fallback", startedAt, windowsScanned, candidatesScanned)
 					return nil, err
@@ -194,7 +205,7 @@ func (s *Selector) claimSegmentedPlan(ctx context.Context, plan *candidatePlan, 
 // catalogTiers marks tierOrder as a static-catalog entitlement (see candidateSupportsModel).
 // unlimited, when set, reports an account whose synced snapshot does not limit
 // the requested mode.
-func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, catalogTiers, preferFreeBuild bool, unlimited func(*account.RoutingCandidate) bool, cursor uint64, windowSize, maxWindows int) []segmentedSelectorCohortBucket {
+func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, catalogTiers, preferFreeBuild bool, unlimited func(*account.RoutingCandidate) bool, fits func(account.RoutingCandidate) bool, cursor uint64, windowSize, maxWindows int) []segmentedSelectorCohortBucket {
 	if windowSize <= 0 || maxWindows <= 0 {
 		return nil
 	}
@@ -217,6 +228,9 @@ func segmentedCandidateCohorts(values []account.RoutingCandidate, indexes []int,
 		}
 		if candidate.Billing != nil {
 			cohort.billingFresh = now.Sub(candidate.Billing.SyncedAt) <= 30*time.Minute
+		}
+		if fits != nil {
+			cohort.quotaFits = fits(*candidate)
 		}
 		return cohort
 	}

@@ -180,6 +180,20 @@ type VideoQuotaModeAdapter interface {
 	VideoQuotaMode(quotaMode, resolution string) string
 }
 
+// VideoQuotaEstimator expresses a video in the account window's native units,
+// independently of client-facing prices. Unknown costs leave routing unchanged.
+type VideoQuotaEstimator interface {
+	Adapter
+	VideoQuotaUnits(mode string, options VideoRequestOptions) (int, bool)
+}
+
+func (r *Registry) VideoQuotaUnits(value account.Provider, mode string, options VideoRequestOptions) (int, bool) {
+	if estimator, ok := adapterAs[VideoQuotaEstimator](r, value); ok {
+		return estimator.VideoQuotaUnits(mode, options)
+	}
+	return 0, false
+}
+
 type VideoRequest struct {
 	Credential account.Credential
 	// Billing is used only to determine XAI eligibility in Build auto mode; nil means the account tier is unknown.

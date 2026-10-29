@@ -18,6 +18,7 @@ type candidateScore struct {
 	preferFreeBuild   bool
 	quotaKnown        bool
 	quotaAvailable    bool
+	quotaFits         bool
 	billingFresh      bool
 	inFlight          int
 	remaining         float64
@@ -85,6 +86,9 @@ func candidateScoreBetter(values []account.RoutingCandidate, leftScore, rightSco
 	if leftScore.quotaKnown != rightScore.quotaKnown {
 		return leftScore.quotaKnown
 	}
+	if leftScore.quotaFits != rightScore.quotaFits {
+		return leftScore.quotaFits
+	}
 	if leftScore.preferFreeBuild != rightScore.preferFreeBuild {
 		return leftScore.preferFreeBuild
 	}
@@ -117,10 +121,17 @@ func (s *Selector) planCandidates(ctx context.Context, values []account.RoutingC
 // planCandidateIndexes 在不可变候选快照上按下标规划，避免过滤阶段复制完整账号结构。
 // indexes 为 nil 时表示使用 values 的全部元素。
 func (s *Selector) planCandidateIndexes(ctx context.Context, values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier) (*candidatePlan, error) {
-	return s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, nil, s.preferFreeBuildEnabled())
+	return s.planCandidateIndexesWithHints(ctx, values, indexes, now, tierOrder, candidatePlanHints{preferFreeBuild: s.preferFreeBuildEnabled()})
 }
 
-func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, concurrencyHints map[int]int, preferFreeBuild bool) (*candidatePlan, error) {
+type candidatePlanHints struct {
+	concurrency     map[int]int
+	preferFreeBuild bool
+	quotaUnits      int
+}
+
+func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []account.RoutingCandidate, indexes []int, now time.Time, tierOrder []account.WebTier, hints candidatePlanHints) (*candidatePlan, error) {
+	concurrencyHints := hints.concurrency
 	length := len(indexes)
 	if indexes == nil {
 		length = len(values)
@@ -196,7 +207,7 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 		score := candidateScore{
 			index: index, tier: tierOrderRank(tierOrder, candidate.Credential.WebTier),
 			webCatalogSupport: catalogTiers && webTierInOrder(tierOrder, candidate.Credential.WebTier),
-			preferFreeBuild:   preferFreeBuild && candidate.IsKnownFreeBuild(),
+			preferFreeBuild:   hints.preferFreeBuild && candidate.IsKnownFreeBuild(),
 			inFlight:          inFlight[position],
 		}
 		// 只有真实上游快照能够证明账号具备该模式额度。历史默认值和
@@ -212,6 +223,14 @@ func (s *Selector) planCandidateIndexesWithHints(ctx context.Context, values []a
 			score.billingFresh = now.Sub(candidate.Billing.SyncedAt) <= 30*time.Minute
 		}
 		scores = append(scores, score)
+	}
+	if hints.quotaUnits > 0 && len(values) > 0 {
+		s.quotaMu.RLock()
+		consumed := s.quotaConsumptionSnapshot(values[0].Credential.Provider)
+		for i := range scores {
+			scores[i].quotaFits = consumed.fits(values[scores[i].index], hints.quotaUnits)
+		}
+		s.quotaMu.RUnlock()
 	}
 	// Claims write lastSelectedAt under selectionMu, so hold it only for the reads.
 	s.selectionMu.RLock()
