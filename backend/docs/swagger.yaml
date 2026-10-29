@@ -246,10 +246,22 @@ definitions:
       duration:
         example: 8
         type: integer
+      generate_audio:
+        description: 仅 Console 生成视频：false 静音、true 有声；省略使用上游默认。编辑与延长不接受。
+        example: false
+        type: boolean
       image:
         $ref: '#/definitions/httpserver.SwaggerVideoMediaInput'
+      keyframes:
+        description: 仅 Console 1.5 生成视频：最多 4 个，时间严格在 (0, 实际 duration) 内，且不能落在同一 1/3
+          秒槽。
+        items:
+          $ref: '#/definitions/httpserver.SwaggerVideoKeyframe'
+        type: array
       last_frame:
-        $ref: '#/definitions/httpserver.SwaggerVideoMediaInput'
+        allOf:
+        - $ref: '#/definitions/httpserver.SwaggerVideoMediaInput'
+        description: Console 1.5 可单独提供尾帧；Adobe 支持尾帧的模型需同时提供 image。
       model:
         example: grok-imagine-video
         type: string
@@ -276,6 +288,14 @@ definitions:
         type: string
       video:
         $ref: '#/definitions/httpserver.SwaggerVideoMediaInput'
+    type: object
+  httpserver.SwaggerVideoKeyframe:
+    properties:
+      image:
+        $ref: '#/definitions/httpserver.SwaggerVideoMediaInput'
+      timestamp_s:
+        example: 2
+        type: number
     type: object
   httpserver.SwaggerVideoMediaInput:
     properties:

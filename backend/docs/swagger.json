@@ -1726,11 +1726,28 @@
                     "type": "integer",
                     "example": 8
                 },
+                "generate_audio": {
+                    "description": "仅 Console 生成视频：false 静音、true 有声；省略使用上游默认。编辑与延长不接受。",
+                    "type": "boolean",
+                    "example": false
+                },
                 "image": {
                     "$ref": "#/definitions/httpserver.SwaggerVideoMediaInput"
                 },
+                "keyframes": {
+                    "description": "仅 Console 1.5 生成视频：最多 4 个，时间严格在 (0, 实际 duration) 内，且不能落在同一 1/3 秒槽。",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/httpserver.SwaggerVideoKeyframe"
+                    }
+                },
                 "last_frame": {
-                    "$ref": "#/definitions/httpserver.SwaggerVideoMediaInput"
+                    "description": "Console 1.5 可单独提供尾帧；Adobe 支持尾帧的模型需同时提供 image。",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/httpserver.SwaggerVideoMediaInput"
+                        }
+                    ]
                 },
                 "model": {
                     "type": "string",
@@ -1765,6 +1782,18 @@
                 },
                 "video": {
                     "$ref": "#/definitions/httpserver.SwaggerVideoMediaInput"
+                }
+            }
+        },
+        "httpserver.SwaggerVideoKeyframe": {
+            "type": "object",
+            "properties": {
+                "image": {
+                    "$ref": "#/definitions/httpserver.SwaggerVideoMediaInput"
+                },
+                "timestamp_s": {
+                    "type": "number",
+                    "example": 2
                 }
             }
         },

@@ -78,10 +78,11 @@ type SwaggerImageEditRequest struct {
 
 // SwaggerVideoGenerationRequest 表示视频生成请求。
 // duration / aspect_ratio / resolution 不传时用模型默认值（Grok：8 秒、16:9、720p）。
-// Grok 路由限 1–15 秒、7 种比例与 480p/720p/1080p，参考图模式最高 720p；Adobe 模型按
-// 自身范围，不支持的值就近对齐，实际时长见结果的 video.duration。
-// image 能否与 reference_images 同时使用由模型决定：Muse 与 Adobe kling-3.0-omni 可以，Grok 不行。
-// last_frame（尾帧）必须同时提供 image，目前仅 Adobe 支持首尾帧的模型接受。
+// Grok 路由限 1–15 秒、7 种比例与 480p/720p；仅 Console 1.5 在纯文本或仅首帧模式支持 1080p。
+// 参考图、音色、尾帧或关键帧模式最高 720p；Adobe 按自身范围对齐，实际时长见 video.duration。
+// Console 1.5 可同时使用 image、14 张 reference_images、last_frame 与 4 张 keyframes，总输入图最多 20 张。
+// Console 1.5 的 last_frame 可单独使用，有首帧、尾帧或关键帧时 prompt 可省略；Adobe 尾帧要求同时提供 image。
+// Muse 与 Adobe kling-3.0-omni 也支持首帧与参考图组合，经典 Console / Build 保留首帧。
 // reference_videos（参考视频，url 或 file_id，MP4/QuickTime，最多 10 个）需提供 prompt，
 // 目前仅 Adobe 的 Seedance 接受（不能与首尾帧同用）。
 // 编辑与延长（/v1/videos/edits、/v1/videos/extensions）需 prompt 与 video：Grok 走 Console
@@ -94,12 +95,23 @@ type SwaggerVideoGenerationRequest struct {
 	AspectRatio string                  `json:"aspect_ratio,omitempty" example:"16:9"`
 	Resolution  string                  `json:"resolution,omitempty" example:"720p"`
 	Image       *SwaggerVideoMediaInput `json:"image,omitempty"`
-	LastFrame   *SwaggerVideoMediaInput `json:"last_frame,omitempty"`
+	// Console 1.5 可单独提供尾帧；Adobe 支持尾帧的模型需同时提供 image。
+	LastFrame *SwaggerVideoMediaInput `json:"last_frame,omitempty"`
+	// 仅 Console 1.5 生成视频：最多 4 个，时间严格在 (0, 实际 duration) 内，且不能落在同一 1/3 秒槽。
+	Keyframes []SwaggerVideoKeyframe `json:"keyframes,omitempty"`
+	// 仅 Console 生成视频：false 静音、true 有声；省略使用上游默认。编辑与延长不接受。
+	GenerateAudio *bool `json:"generate_audio,omitempty" example:"false"`
 	// Reference images: Console 1.5 accepts 14 alongside image; classic Console accepts 7, Build 8, both exclusive with image. Extra inputs are trimmed.
 	ReferenceImages []SwaggerVideoMediaInput `json:"reference_images,omitempty"`
 	ReferenceAudios []SwaggerVideoAudioInput `json:"reference_audios,omitempty"`
 	ReferenceVideos []SwaggerVideoMediaInput `json:"reference_videos,omitempty"`
 	Video           *SwaggerVideoMediaInput  `json:"video,omitempty"`
+}
+
+// SwaggerVideoKeyframe 表示指定视频内部时刻的固定图片。
+type SwaggerVideoKeyframe struct {
+	Image            SwaggerVideoMediaInput `json:"image"`
+	TimestampSeconds float64                `json:"timestamp_s" example:"2"`
 }
 
 // SwaggerVideoMediaInput 表示视频相关的图片/视频输入。

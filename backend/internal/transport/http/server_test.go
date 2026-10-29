@@ -209,11 +209,27 @@ func TestSwaggerRegistrationFollowsStartupConfig(t *testing.T) {
 		Info struct {
 			Title string `json:"title"`
 		} `json:"info"`
+		Definitions map[string]struct {
+			Properties map[string]struct {
+				Type  string `json:"type"`
+				Items struct {
+					Ref string `json:"$ref"`
+				} `json:"items"`
+			} `json:"properties"`
+		} `json:"definitions"`
 	}
 	if err := json.Unmarshal(enabledRecorder.Body.Bytes(), &document); err != nil {
 		t.Fatalf("decode swagger document: %v", err)
 	}
 	if document.Info.Title != "Grok2API" {
 		t.Fatalf("swagger title = %q, want %q", document.Info.Title, "Grok2API")
+	}
+	video := document.Definitions["httpserver.SwaggerVideoGenerationRequest"].Properties
+	if video["generate_audio"].Type != "boolean" || video["keyframes"].Items.Ref != "#/definitions/httpserver.SwaggerVideoKeyframe" {
+		t.Fatalf("video audio/keyframe fields missing from served Swagger: %+v", video)
+	}
+	frame := document.Definitions["httpserver.SwaggerVideoKeyframe"].Properties
+	if frame["timestamp_s"].Type != "number" {
+		t.Fatalf("keyframe timestamp missing from served Swagger: %+v", frame)
 	}
 }
