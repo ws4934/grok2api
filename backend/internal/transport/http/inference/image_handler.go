@@ -58,6 +58,7 @@ func (h *Handler) generateImage(c *gin.Context) {
 		writeOpenAIError(c, http.StatusRequestEntityTooLarge, "request_too_large", "请求体超过限制")
 		return
 	}
+	captureRequestParameters(c, body)
 	var request imageGenerationRequest
 	if decodeSingleJSON(bytes.NewReader(body), &request, false) != nil || strings.TrimSpace(request.Model) == "" || strings.TrimSpace(request.Prompt) == "" {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "图片请求缺少有效 model 或 prompt")

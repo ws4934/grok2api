@@ -287,6 +287,7 @@ func (s *Service) createAcknowledged(ctx context.Context, value auditdomain.Reco
 }
 
 func sanitizeRequestMetadata(value auditdomain.Record) auditdomain.Record {
+	value.RequestParameters = value.RequestParameters.Freeze()
 	// Query strings can contain credentials or signed resource URLs. Endpoint
 	// identity only needs the path.
 	value.RequestMethod = truncateRequestMetadata(strings.ToUpper(strings.TrimSpace(value.RequestMethod)), requestMethodLimit)
@@ -346,6 +347,9 @@ func truncateRequestMetadata(value string, limit int) string {
 
 func isSensitiveRequestHeader(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "sec-websocket-protocol" {
+		return true
+	}
 	for _, marker := range []string{
 		"auth", "cookie", "credential", "dpop", "jwt", "key", "password", "secret", "session", "signature", "token",
 	} {

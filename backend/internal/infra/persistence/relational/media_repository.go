@@ -10,6 +10,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -359,7 +360,15 @@ func (r *MediaJobRepository) CreateMediaJob(ctx context.Context, value media.Job
 		// Grok job may run on another Grok provider's egress scope.
 		return errors.New("unsupported video provider or primary egress scope")
 	}
-	result := r.db.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(mediaJobFromDomain(value))
+	row := mediaJobFromDomain(value)
+	if parameters := value.RequestParameters.Freeze(); parameters != nil {
+		raw, err := json.Marshal(parameters)
+		if err != nil {
+			return err
+		}
+		row.RequestParametersJSON = string(raw)
+	}
+	result := r.db.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(row)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -404,7 +413,7 @@ func (r *MediaJobRepository) GetMediaJobsByIDs(ctx context.Context, ids []string
 		return []media.Job{}, nil
 	}
 	var rows []mediaJobModel
-	if err := r.db.db.WithContext(ctx).Omit("input_json").Where("id IN ?", ids).Find(&rows).Error; err != nil {
+	if err := r.db.db.WithContext(ctx).Omit("input_json", "request_parameters_json").Where("id IN ?", ids).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	values := make([]media.Job, 0, len(rows))
@@ -693,8 +702,9 @@ func mediaJobFromDomain(value media.Job) *mediaJobModel {
 		Status: string(value.Status), Progress: value.Progress, InputJSON: value.InputJSON, InputImageCount: value.InputImageCount, UpstreamURL: value.UpstreamURL,
 		ResultAssetID: value.ResultAssetID, CheckpointJSON: checkpoint, Submitted: value.Submitted,
 		ParamsJSON: string(params), IdempotencyKey: value.IdempotencyKey, PayloadHash: value.PayloadHash, Generation: value.Generation,
-		ResumeGeneration: value.ResumeGeneration,
-		ContentType:      value.ContentType, ErrorCode: value.ErrorCode,
+		RequestParametersJSON: "{}",
+		ResumeGeneration:      value.ResumeGeneration,
+		ContentType:           value.ContentType, ErrorCode: value.ErrorCode,
 		// Upstream error text may carry invalid UTF-8 or NUL, which PostgreSQL
 		// rejects: the terminal write would fail and leave the job running.
 		ErrorMessage: strings.ToValidUTF8(strings.ReplaceAll(value.ErrorMessage, "\x00", ""), "�"),
@@ -733,8 +743,9 @@ func mediaJobToDomain(row mediaJobModel) media.Job {
 		Status: media.Status(row.Status), Progress: row.Progress, InputJSON: row.InputJSON, InputImageCount: row.InputImageCount, UpstreamURL: row.UpstreamURL,
 		ResultAssetID: row.ResultAssetID, Checkpoint: row.CheckpointJSON, Submitted: row.Submitted,
 		Params: params, IdempotencyKey: row.IdempotencyKey, PayloadHash: row.PayloadHash, Generation: row.Generation,
-		ResumeGeneration: row.ResumeGeneration,
-		ContentType:      row.ContentType, ErrorCode: row.ErrorCode, ErrorMessage: row.ErrorMessage,
+		RequestParameters: requestparams.Parse(row.RequestParametersJSON),
+		ResumeGeneration:  row.ResumeGeneration,
+		ContentType:       row.ContentType, ErrorCode: row.ErrorCode, ErrorMessage: row.ErrorMessage,
 		LeaseUntil: row.LeaseUntil, ClaimToken: row.ClaimToken, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		CompletedAt: row.CompletedAt, UsageRecordedAt: row.UsageRecordedAt,
 	}

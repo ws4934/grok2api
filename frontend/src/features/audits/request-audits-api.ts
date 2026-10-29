@@ -72,9 +72,16 @@ export type AuditDTO = {
   requestMethod?: string;
   requestPath?: string;
   requestHeaders?: Record<string, string[]>;
+  requestParameters?: {
+    client?: AuditParameterSnapshotDTO;
+    effective?: AuditParameterSnapshotDTO;
+    upstream?: AuditParameterSnapshotDTO;
+  };
   attemptCount: number;
   createdAt: string;
 };
+
+export type AuditParameterSnapshotDTO = { json: string; truncated: boolean };
 
 export type AuditAttemptDTO = {
   id: string;
@@ -149,6 +156,7 @@ const auditBillingValidator = hasShape({
   model: isOptional(isString), version: isOptional(isString), tier: isOptional(isOneOf("standard", "long_context", "media")),
   components: isArrayOf(auditBillingComponentValidator), totalInUsdTicks: isNumber,
 });
+const parameterSnapshotValidator = hasShape({ json: isString, truncated: isBoolean });
 const auditValidator = hasShape({
   id: isString, requestId: isString, clientKeyId: isString, clientKeyName: isOptional(isString), clientIp: isOptional(isString), modelRouteId: isString,
   modelPublicId: isOptional(isString), modelUpstreamModel: isOptional(isString), provider: isString,
@@ -165,6 +173,7 @@ const auditValidator = hasShape({
   firstTokenMs: isOptional(isNumber), outputTokensPerSecond: isOptional(isNumber),
   durationMs: isNumber, errorCode: isOptional(isString), requestMethod: isOptional(isString), requestPath: isOptional(isString),
   requestHeaders: isOptional(isRecordOf(isArrayOf(isString))), attemptCount: isNumber, createdAt: isString,
+  requestParameters: isOptional(hasShape({ client: isOptional(parameterSnapshotValidator), effective: isOptional(parameterSnapshotValidator), upstream: isOptional(parameterSnapshotValidator) })),
 });
 const auditAttemptValidator = hasShape({
   id: isString, number: isNumber, source: isOneOf("upstream_http", "gateway_transport", "credential"), stage: isString,

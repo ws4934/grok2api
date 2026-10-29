@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { auditCustomPriced } from "@/features/audits/audit-usage";
-import { getRequestAudit, type AuditAttemptDTO, type AuditDTO } from "@/features/audits/request-audits-api";
+import { getRequestAudit, type AuditAttemptDTO, type AuditDTO, type AuditParameterSnapshotDTO } from "@/features/audits/request-audits-api";
 import { CopyButton } from "@/shared/components/copy-button";
 import { ErrorState, LoadingState } from "@/shared/components/data-state";
 import { cn } from "@/shared/lib/cn";
@@ -250,13 +250,15 @@ function RequestOverviewPanel({ audit }: { audit: AuditDTO }) {
 function RequestMetadataPanel({ audit }: { audit: AuditDTO }) {
   const { t } = useTranslation();
   const headers = useMemo(() => audit.requestHeaders ?? {}, [audit.requestHeaders]);
+  const parameters = audit.requestParameters;
+  const snapshots = (["client", "effective", "upstream"] as const).filter((key) => parameters?.[key]);
 
-  if (!audit.requestMethod && !audit.requestPath && Object.keys(headers).length === 0) {
+  if (!audit.requestMethod && !audit.requestPath && Object.keys(headers).length === 0 && snapshots.length === 0) {
     return <EmptyPanel icon={<FileText />} message={t("audits.noRequestMetadata")} />;
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto pr-1">
       <section className="shrink-0">
         <p className="mb-2 px-1 text-[11px] font-medium text-muted-foreground">{t("audits.requestPath")}</p>
         <div className="flex h-10 min-w-0 items-center gap-3 rounded-lg bg-muted/15 px-3">
@@ -269,11 +271,31 @@ function RequestMetadataPanel({ audit }: { audit: AuditDTO }) {
           {audit.requestPath ? <CopyButton value={audit.requestPath} /> : null}
         </div>
       </section>
-      <section className="min-h-0 flex-1">
-        <HeadersPanel title={t("audits.requestHeaders")} headers={headers} emptyMessage={t("audits.noRequestHeaders")} />
-      </section>
+      {snapshots.length ? (
+        <Tabs key={audit.id} defaultValue={snapshots[0]} className="shrink-0 gap-3">
+          <TabsList className="h-auto flex-wrap">
+            {snapshots.map((key) => <TabsTrigger key={key} value={key}>{t(`audits.parameterSources.${key}`)}</TabsTrigger>)}
+          </TabsList>
+          {snapshots.map((key) => <TabsContent key={key} value={key}><RequestParametersPanel snapshot={parameters![key]!} /></TabsContent>)}
+        </Tabs>
+      ) : <p className="px-1 text-sm text-muted-foreground">{t("audits.noRequestParameters")}</p>}
+      <details className="shrink-0 rounded-lg border px-3 py-2">
+        <summary className="cursor-pointer text-sm font-medium">{t("audits.requestHeaders")} · {Object.keys(headers).length}</summary>
+        <div className="mt-3 max-h-72 overflow-y-auto"><HeadersPanel title={t("audits.requestHeaders")} headers={headers} emptyMessage={t("audits.noRequestHeaders")} /></div>
+      </details>
     </div>
   );
+}
+
+function RequestParametersPanel({ snapshot }: { snapshot: AuditParameterSnapshotDTO }) {
+  const { t } = useTranslation();
+  return <section className="relative rounded-lg bg-muted/20 p-3">
+    <div className="mb-2 flex min-h-6 items-center justify-between gap-2">
+      <span className="text-sm text-muted-foreground">{snapshot.truncated ? t("audits.parametersTruncated") : t("audits.parametersSanitized")}</span>
+      <CopyButton value={snapshot.json} />
+    </div>
+    <pre className="whitespace-pre-wrap break-words font-mono text-sm leading-6">{snapshot.json}</pre>
+  </section>;
 }
 
 function UpstreamAttemptsPanel({

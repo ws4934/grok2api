@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 )
 
 type Status string
@@ -71,32 +72,33 @@ type ImageParams struct {
 
 // Job 表示可跨进程重启恢复的异步媒体任务（视频或图片）。
 type Job struct {
-	ID              string
-	Kind            Kind
-	RequestID       string
-	ClientKeyID     uint64
-	ClientKeyName   string
-	ClientIP        string
-	AccountID       uint64
-	AccountName     string
-	EgressNodeID    *uint64
-	EgressNodeName  string
-	EgressScope     string
-	EgressMode      string
-	Provider        string
-	Model           string
-	ModelRouteID    uint64
-	UpstreamModel   string
-	Operation       VideoOperation
-	Prompt          string
-	Seconds         int
-	Size            string
-	Quality         string
-	Status          Status
-	Progress        int
-	InputJSON       string
-	InputImageCount int
-	UpstreamURL     string
+	ID                string
+	Kind              Kind
+	RequestID         string
+	ClientKeyID       uint64
+	ClientKeyName     string
+	ClientIP          string
+	AccountID         uint64
+	AccountName       string
+	EgressNodeID      *uint64
+	EgressNodeName    string
+	EgressScope       string
+	EgressMode        string
+	Provider          string
+	Model             string
+	ModelRouteID      uint64
+	UpstreamModel     string
+	Operation         VideoOperation
+	Prompt            string
+	Seconds           int
+	Size              string
+	Quality           string
+	Status            Status
+	Progress          int
+	InputJSON         string
+	InputImageCount   int
+	RequestParameters *requestparams.Parameters
+	UpstreamURL       string
 	// ResultAssetID is the job's result in local media storage: the video, or
 	// the image once delivered.
 	ResultAssetID string

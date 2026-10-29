@@ -119,53 +119,54 @@ func (h *Handler) listQualityGuard(c *gin.Context) {
 }
 
 type auditResponse struct {
-	ID                      uint64                    `json:"id,string"`
-	RequestID               string                    `json:"requestId"`
-	ClientKeyID             uint64                    `json:"clientKeyId,string"`
-	ClientKeyName           string                    `json:"clientKeyName,omitempty"`
-	ClientIP                string                    `json:"clientIp,omitempty"`
-	ModelRouteID            uint64                    `json:"modelRouteId,string"`
-	ModelPublicID           string                    `json:"modelPublicId,omitempty"`
-	ModelUpstreamModel      string                    `json:"modelUpstreamModel,omitempty"`
-	Provider                string                    `json:"provider"`
-	Operation               string                    `json:"operation"`
-	UsageSource             string                    `json:"usageSource"`
-	ReasoningEffort         string                    `json:"reasoningEffort,omitempty"`
-	AccountID               *uint64                   `json:"accountId,string,omitempty"`
-	AccountName             string                    `json:"accountName,omitempty"`
-	EgressNodeID            *uint64                   `json:"egressNodeId,string,omitempty"`
-	EgressNodeName          string                    `json:"egressNodeName,omitempty"`
-	EgressScope             string                    `json:"egressScope,omitempty"`
-	EgressMode              string                    `json:"egressMode,omitempty"`
-	StatusCode              int                       `json:"statusCode"`
-	Streaming               bool                      `json:"streaming"`
-	MediaInputImages        int64                     `json:"mediaInputImages"`
-	MediaOutputImages       int64                     `json:"mediaOutputImages"`
-	MediaOutputSeconds      int64                     `json:"mediaOutputSeconds"`
-	InputTokens             int64                     `json:"inputTokens"`
-	CachedInputTokens       int64                     `json:"cachedInputTokens"`
-	OutputTokens            int64                     `json:"outputTokens"`
-	ReasoningTokens         int64                     `json:"reasoningTokens"`
-	TotalTokens             int64                     `json:"totalTokens"`
-	CostInUSDTicks          int64                     `json:"costInUsdTicks"`
-	EstimatedCostInUSDTicks int64                     `json:"estimatedCostInUsdTicks"`
-	PricingModel            string                    `json:"pricingModel,omitempty"`
-	PricingVersion          string                    `json:"pricingVersion,omitempty"`
-	PriceID                 uint64                    `json:"priceId,string,omitempty"`
-	Billing                 *billingBreakdownResponse `json:"billing,omitempty"`
-	NumSourcesUsed          int64                     `json:"numSourcesUsed"`
-	NumServerSideToolsUsed  int64                     `json:"numServerSideToolsUsed"`
-	ContextInputTokens      int64                     `json:"contextInputTokens"`
-	ContextOutputTokens     int64                     `json:"contextOutputTokens"`
-	FirstTokenMS            *int64                    `json:"firstTokenMs,omitempty"`
-	OutputTokensPerSecond   *float64                  `json:"outputTokensPerSecond,omitempty"`
-	DurationMS              int64                     `json:"durationMs"`
-	ErrorCode               string                    `json:"errorCode,omitempty"`
-	RequestMethod           string                    `json:"requestMethod,omitempty"`
-	RequestPath             string                    `json:"requestPath,omitempty"`
-	RequestHeaders          map[string][]string       `json:"requestHeaders,omitempty"`
-	AttemptCount            int                       `json:"attemptCount"`
-	CreatedAt               time.Time                 `json:"createdAt"`
+	ID                      uint64                     `json:"id,string"`
+	RequestID               string                     `json:"requestId"`
+	ClientKeyID             uint64                     `json:"clientKeyId,string"`
+	ClientKeyName           string                     `json:"clientKeyName,omitempty"`
+	ClientIP                string                     `json:"clientIp,omitempty"`
+	ModelRouteID            uint64                     `json:"modelRouteId,string"`
+	ModelPublicID           string                     `json:"modelPublicId,omitempty"`
+	ModelUpstreamModel      string                     `json:"modelUpstreamModel,omitempty"`
+	Provider                string                     `json:"provider"`
+	Operation               string                     `json:"operation"`
+	UsageSource             string                     `json:"usageSource"`
+	ReasoningEffort         string                     `json:"reasoningEffort,omitempty"`
+	AccountID               *uint64                    `json:"accountId,string,omitempty"`
+	AccountName             string                     `json:"accountName,omitempty"`
+	EgressNodeID            *uint64                    `json:"egressNodeId,string,omitempty"`
+	EgressNodeName          string                     `json:"egressNodeName,omitempty"`
+	EgressScope             string                     `json:"egressScope,omitempty"`
+	EgressMode              string                     `json:"egressMode,omitempty"`
+	StatusCode              int                        `json:"statusCode"`
+	Streaming               bool                       `json:"streaming"`
+	MediaInputImages        int64                      `json:"mediaInputImages"`
+	MediaOutputImages       int64                      `json:"mediaOutputImages"`
+	MediaOutputSeconds      int64                      `json:"mediaOutputSeconds"`
+	InputTokens             int64                      `json:"inputTokens"`
+	CachedInputTokens       int64                      `json:"cachedInputTokens"`
+	OutputTokens            int64                      `json:"outputTokens"`
+	ReasoningTokens         int64                      `json:"reasoningTokens"`
+	TotalTokens             int64                      `json:"totalTokens"`
+	CostInUSDTicks          int64                      `json:"costInUsdTicks"`
+	EstimatedCostInUSDTicks int64                      `json:"estimatedCostInUsdTicks"`
+	PricingModel            string                     `json:"pricingModel,omitempty"`
+	PricingVersion          string                     `json:"pricingVersion,omitempty"`
+	PriceID                 uint64                     `json:"priceId,string,omitempty"`
+	Billing                 *billingBreakdownResponse  `json:"billing,omitempty"`
+	NumSourcesUsed          int64                      `json:"numSourcesUsed"`
+	NumServerSideToolsUsed  int64                      `json:"numServerSideToolsUsed"`
+	ContextInputTokens      int64                      `json:"contextInputTokens"`
+	ContextOutputTokens     int64                      `json:"contextOutputTokens"`
+	FirstTokenMS            *int64                     `json:"firstTokenMs,omitempty"`
+	OutputTokensPerSecond   *float64                   `json:"outputTokensPerSecond,omitempty"`
+	DurationMS              int64                      `json:"durationMs"`
+	ErrorCode               string                     `json:"errorCode,omitempty"`
+	RequestMethod           string                     `json:"requestMethod,omitempty"`
+	RequestPath             string                     `json:"requestPath,omitempty"`
+	RequestHeaders          map[string][]string        `json:"requestHeaders,omitempty"`
+	RequestParameters       *requestParametersResponse `json:"requestParameters,omitempty"`
+	AttemptCount            int                        `json:"attemptCount"`
+	CreatedAt               time.Time                  `json:"createdAt"`
 
 	Estimation *auditdomain.EstimationDetails `json:"estimation,omitempty"`
 }
@@ -559,8 +560,9 @@ func newAuditResponse(value auditdomain.Record, prices map[uint64]pricingdomain.
 		ContextInputTokens: value.ContextInputTokens, ContextOutputTokens: value.ContextOutputTokens,
 		FirstTokenMS: value.FirstTokenMS, OutputTokensPerSecond: auditOutputTokensPerSecond(value), DurationMS: value.DurationMS,
 		ErrorCode: value.ErrorCode, RequestMethod: value.RequestMethod, RequestPath: value.RequestPath, RequestHeaders: value.RequestHeaders,
-		AttemptCount: value.AttemptCount,
-		CreatedAt:    value.CreatedAt,
+		RequestParameters: newRequestParametersResponse(value.RequestParameters),
+		AttemptCount:      value.AttemptCount,
+		CreatedAt:         value.CreatedAt,
 	}
 	return result
 }

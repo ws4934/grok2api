@@ -16,6 +16,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 )
 
 type VoiceWebSocketInput struct {
@@ -23,7 +24,10 @@ type VoiceWebSocketInput struct {
 	ClientKey   clientkey.Key
 	PublicModel string
 	// Path is one of /realtime or /stt.
-	Path string
+	Path          string
+	RequestMethod string
+	RequestPath   string
+	Headers       map[string][]string
 }
 
 type VoiceWebSocketSession struct {
@@ -56,6 +60,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 		publicModel = defaultModel
 	}
 
+	ctx, parameters := requestparams.Start(ctx, map[string]any{"model": publicModel})
 	ctx, egressTrace := infraegress.WithTrace(ctx)
 	startedAt := time.Now()
 	eventID := newAuditEventID()
@@ -79,11 +84,13 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 		preselectedSession = nil
 	}
 	externalModel := modeldomain.ExternalPublicID(route.Provider, route.PublicID)
+	parameters.SetEffective(map[string]any{"model": route.UpstreamModel})
 	auditBase := audit.Record{
 		EventID: eventID, RequestID: input.RequestID, ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name,
 		ClientIP:     requestmeta.ClientIP(ctx),
 		ModelRouteID: route.ID, ModelPublicID: externalModel, ModelUpstreamModel: modeldomain.DisplayUpstreamModel(route.Provider, route.UpstreamModel),
 		Provider: string(route.Provider), Operation: operation, UsageSource: audit.UsageSourceNone, Streaming: true,
+		RequestMethod: input.RequestMethod, RequestPath: input.RequestPath, RequestHeaders: input.Headers, RequestParameters: parameters,
 	}
 	if err := s.checkLedgerReady(); err != nil {
 		return nil, err

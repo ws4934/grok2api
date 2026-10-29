@@ -18,16 +18,18 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 )
 
 // responseAttempt carries one Responses-family request through route
 // resolution, the account attempt loop and the hand-off of the delivered
 // upstream response. Its fields are the state those phases share.
 type responseAttempt struct {
-	s     *Service
-	ctx   context.Context
-	input Input
-	path  string
+	parameters *requestparams.Parameters
+	s          *Service
+	ctx        context.Context
+	input      Input
+	path       string
 
 	egressTrace *infraegress.Trace
 	startedAt   time.Time
@@ -83,8 +85,10 @@ type responseAttempt struct {
 // the public model. modelNotAllowed reports a route the client key may not
 // use; prepare audits and rejects it once generation timing is running.
 func (s *Service) newResponseAttempt(ctx context.Context, input Input, path string) (*responseAttempt, bool, error) {
+	ctx, parameters := requestparams.Start(ctx, input.Body)
 	ctx, egressTrace := infraegress.WithTrace(ctx)
 	a := &responseAttempt{s: s, ctx: ctx, input: input, path: path, egressTrace: egressTrace, startedAt: time.Now(), anchors: &messageAnchors{body: input.Body}}
+	a.parameters = parameters
 	if input.Streaming {
 		a.firstToken = newFirstTokenTimer(a.startedAt)
 	}
@@ -205,6 +209,7 @@ func (a *responseAttempt) selectRoute(routes []modeldomain.Route) error {
 // prepare builds the audit base, session identity and attempt policies and
 // reserves billing. It rejects a model the client key may not use.
 func (a *responseAttempt) prepare(modelNotAllowed bool) error {
+	a.parameters.SetEffectiveModel(a.input.Body, a.route.UpstreamModel)
 	s, ctx, route := a.s, a.ctx, a.route
 	a.usageSource = audit.UsageSourceUpstream
 	if usageKind, _ := s.providers.UsageKind(route.Provider); usageKind == provider.UsageEstimated {
@@ -224,6 +229,7 @@ func (a *responseAttempt) prepare(modelNotAllowed bool) error {
 		Provider: string(route.Provider), Operation: a.auditOperation, UsageSource: audit.UsageSourceNone, Streaming: a.input.Streaming,
 		MediaInputImages: mediaSummary.InputImages,
 		RequestMethod:    a.input.Method, RequestPath: a.input.Path, RequestHeaders: a.input.Headers,
+		RequestParameters: a.parameters,
 	}
 	if modelNotAllowed {
 		record := a.auditBase
@@ -347,6 +353,7 @@ func (a *responseAttempt) ensureCredential(credential accountdomain.Credential, 
 // forward sends the request upstream on the leased account.
 func (a *responseAttempt) forward(lease *accountLease, credential accountdomain.Credential, billing *accountdomain.Billing) (*provider.Response, error) {
 	input, route := a.input, a.route
+	a.parameters.SetEffectiveModel(input.Body, route.UpstreamModel)
 	started := time.Now()
 	a.responseStartedAt = started
 	lease.markSelectorUpstreamStarted()

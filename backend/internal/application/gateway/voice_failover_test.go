@@ -30,7 +30,7 @@ func TestVoiceTransportFailureRetriesTheAccountOnce(t *testing.T) {
 	calls := 0
 	accounts := map[uint64]int{}
 	started := time.Now()
-	_, err := service.executeVoice(context.Background(), "req-voice-loop", clientkey.Key{ID: 1}, model, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, "", "", nil, func(account.Provider) bool {
+	_, err := service.executeVoice(context.Background(), "req-voice-loop", clientkey.Key{ID: 1}, model, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, "", "", nil, nil, func(account.Provider) bool {
 		return true
 	}, func(_ context.Context, _ account.Provider, credential account.Credential, _ string) (voiceExecutionResult, error) {
 		calls++
@@ -98,7 +98,7 @@ func TestVoiceReturnsTheRetriedFailureAfterACredentialFailure(t *testing.T) {
 	recorder := &recordingAudits{}
 	service := NewService(modelRepo, recorder, accountService, clientkeyapp.NewService(nil, nil, nil, 60, 4, nil), registry, selector, nil, 2)
 	calls := 0
-	result, err := service.executeVoice(ctx, "req-voice-stale", clientkey.Key{ID: 1}, voiceModel, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, "", "", nil, func(account.Provider) bool {
+	result, err := service.executeVoice(ctx, "req-voice-stale", clientkey.Key{ID: 1}, voiceModel, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, "", "", nil, nil, func(account.Provider) bool {
 		return true
 	}, func(_ context.Context, _ account.Provider, credential account.Credential, _ string) (voiceExecutionResult, error) {
 		calls++
@@ -129,7 +129,7 @@ func (r *recordingAudits) Create(_ context.Context, value audit.Record) error {
 func TestVoiceSSORejectionFailsOver(t *testing.T) {
 	calls := map[uint64]int{}
 	service, model := consoleSSOPairService(t, modeldomain.CapabilitySTT)
-	result, err := service.executeVoice(context.Background(), "req-voice-sso", clientkey.Key{ID: 1}, model, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, "", "", nil, func(account.Provider) bool {
+	result, err := service.executeVoice(context.Background(), "req-voice-sso", clientkey.Key{ID: 1}, model, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, "", "", nil, nil, func(account.Provider) bool {
 		return true
 	}, func(_ context.Context, _ account.Provider, credential account.Credential, _ string) (voiceExecutionResult, error) {
 		calls[credential.ID]++

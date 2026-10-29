@@ -241,6 +241,7 @@ func (h *Handler) createChatCompletion(c *gin.Context) {
 		writeOpenAIError(c, http.StatusRequestEntityTooLarge, "request_too_large", "请求体超过限制")
 		return
 	}
+	captureRequestParameters(c, body)
 	var request chatCompletionRequest
 	if json.Unmarshal(body, &request) != nil || strings.TrimSpace(request.Model) == "" {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "Chat Completions 请求缺少有效 model")
@@ -282,6 +283,7 @@ func (h *Handler) createMessage(c *gin.Context) {
 		writeAnthropicError(c, http.StatusRequestEntityTooLarge, "invalid_request_error", "request body exceeds the configured limit")
 		return
 	}
+	captureRequestParameters(c, body)
 	var request messagesRequest
 	if json.Unmarshal(body, &request) != nil || strings.TrimSpace(request.Model) == "" || request.MaxTokens == nil || *request.MaxTokens <= 0 || len(bytes.TrimSpace(request.Messages)) == 0 {
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", "model, max_tokens, and messages are required")
@@ -335,6 +337,7 @@ func (h *Handler) handleCreate(c *gin.Context, compact bool) {
 		writeOpenAIError(c, http.StatusRequestEntityTooLarge, "request_too_large", "请求体超过限制")
 		return
 	}
+	captureRequestParameters(c, body)
 	var request responsesRequest
 	if err := json.Unmarshal(body, &request); err != nil || strings.TrimSpace(request.Model) == "" {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "Responses 请求缺少有效 model")

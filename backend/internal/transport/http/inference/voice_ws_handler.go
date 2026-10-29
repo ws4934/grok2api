@@ -47,9 +47,11 @@ func (h *Handler) proxyVoiceWebSocket(c *gin.Context, pathValue string) {
 	if !ok {
 		return
 	}
+	captureRequestParameters(c, map[string]any{"query": c.Request.URL.Query()})
 	model := strings.TrimSpace(c.Query("model"))
 	session, err := h.gateway.OpenVoiceWebSocket(c.Request.Context(), gateway.VoiceWebSocketInput{
 		RequestID: requestID, ClientKey: clientKey, PublicModel: model, Path: pathValue,
+		RequestMethod: c.Request.Method, RequestPath: c.Request.URL.Path, Headers: c.Request.Header.Clone(),
 	})
 	if err != nil {
 		writeGatewayError(c, err)

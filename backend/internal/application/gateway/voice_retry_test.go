@@ -75,7 +75,7 @@ func runVoiceRetry(t *testing.T, execute func() (voiceExecutionResult, error)) (
 	t.Helper()
 	service, model := consoleSSOPairService(t, modeldomain.CapabilitySTT)
 	calls := 0
-	result, err := service.executeVoice(context.Background(), "req-voice-retry", clientkey.Key{ID: 1}, model, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, "", "", nil, func(account.Provider) bool {
+	result, err := service.executeVoice(context.Background(), "req-voice-retry", clientkey.Key{ID: 1}, model, audit.OperationSTT, modeldomain.CapabilitySTT, true, nil, "", "", nil, nil, func(account.Provider) bool {
 		return true
 	}, func(context.Context, account.Provider, account.Credential, string) (voiceExecutionResult, error) {
 		calls++

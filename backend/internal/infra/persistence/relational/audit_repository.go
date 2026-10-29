@@ -58,7 +58,7 @@ func (r *AuditRepository) List(ctx context.Context, offset, limit int) ([]audit.
 		return nil, 0, err
 	}
 	var rows []requestAuditModel
-	if err := query.Omit("request_headers_json").Order("created_at DESC, id DESC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
+	if err := query.Omit("request_headers_json", "request_parameters_json").Order("created_at DESC, id DESC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	out := make([]audit.Record, 0, len(rows))
@@ -114,7 +114,7 @@ func (r *AuditRepository) ListCursor(ctx context.Context, input repository.Audit
 	}
 	var rows []requestAuditModel
 	query = applyStableSort(query, input.Sort, fields, fallback, "request_audits.id")
-	if err := query.Omit("request_headers_json").Limit(input.Limit + 1).Find(&rows).Error; err != nil {
+	if err := query.Omit("request_headers_json", "request_parameters_json").Limit(input.Limit + 1).Find(&rows).Error; err != nil {
 		return nil, false, err
 	}
 	hasMore := len(rows) > input.Limit

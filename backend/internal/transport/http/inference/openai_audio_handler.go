@@ -50,6 +50,7 @@ func (h *Handler) handleOpenAISpeech(c *gin.Context) {
 		writeOpenAIError(c, http.StatusRequestEntityTooLarge, "request_too_large", "请求体超过限制")
 		return
 	}
+	captureRequestParameters(c, body)
 	var request openAISpeechRequest
 	if err := decodeSingleJSON(bytes.NewReader(body), &request, false); err != nil {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "audio speech 请求无效")

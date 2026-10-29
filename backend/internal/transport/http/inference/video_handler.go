@@ -123,7 +123,7 @@ func (h *Handler) handleVideoCreate(c *gin.Context, operation, label string) {
 	// Fields the gateway does not use (output.upload_url, storage_options,
 	// seeds, watermarks…) are ignored, not refused.
 	var request videoGenerationRequest
-	if err := decodeSingleJSON(c.Request.Body, &request, false); err != nil {
+	if err := decodeRequestJSON(c, &request); err != nil {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", label+" JSON 请求无效: "+err.Error())
 		return
 	}

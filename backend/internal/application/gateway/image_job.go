@@ -29,6 +29,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	_ "golang.org/x/image/webp"
 )
@@ -325,6 +326,8 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 		return media.Job{}, err
 	}
 	now := time.Now().UTC()
+	_, parameters := requestparams.Start(ctx, imageJobParameters(input))
+	parameters.SetEffectiveModel(imageJobParameters(input), route.UpstreamModel)
 	job := media.Job{
 		ID: ImageJobIDPrefix + token, Kind: media.KindImage, RequestID: input.RequestID,
 		ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name, ClientIP: requestmeta.ClientIP(ctx),
@@ -332,7 +335,8 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 		Provider: string(route.Provider), Model: modeldomain.ExternalPublicID(route.Provider, route.PublicID), ModelRouteID: route.ID,
 		UpstreamModel: modeldomain.DisplayUpstreamModel(route.Provider, route.UpstreamModel), Operation: operation, Prompt: input.Prompt,
 		Size: input.Size, Quality: input.Quality, Status: media.StatusQueued, InputJSON: string(inputJSON), InputImageCount: len(input.ImageURLs),
-		Params: params, IdempotencyKey: input.IdempotencyKey, PayloadHash: hash, Price: &price, CreatedAt: now, UpdatedAt: now,
+		RequestParameters: parameters.Freeze(),
+		Params:            params, IdempotencyKey: input.IdempotencyKey, PayloadHash: hash, Price: &price, CreatedAt: now, UpdatedAt: now,
 	}
 	if job.RequestID == "" {
 		job.RequestID = job.ID
@@ -812,7 +816,8 @@ func (s *Service) recordImageAudit(ctx context.Context, job media.Job, statusCod
 		AccountID: auditAccountID(job.AccountID), AccountName: job.AccountName, StatusCode: statusCode, ErrorCode: errorCode,
 		EgressNodeID: job.EgressNodeID, EgressNodeName: job.EgressNodeName, EgressScope: job.EgressScope, EgressMode: audit.EgressMode(job.EgressMode),
 		DurationMS: durationMS, CreatedAt: createdAt, RequestMethod: http.MethodPost, RequestPath: "/v1/responses",
-		Attempts: attempts,
+		Attempts:          attempts,
+		RequestParameters: job.RequestParameters,
 	}
 	if job.Operation == media.VideoOperationEdit {
 		record.MediaInputImages = int64(job.InputImageCount)

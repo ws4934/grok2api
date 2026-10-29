@@ -59,6 +59,7 @@ func (s *Service) recordVideoAudit(ctx context.Context, job media.Job, durationM
 		MediaInputImages: int64(job.InputImageCount),
 		DurationMS:       durationMS, AttemptCount: len(attempts), Attempts: append([]audit.Attempt(nil), attempts...), CreatedAt: createdAt,
 		RequestMethod: http.MethodPost, RequestPath: "/v1/videos/generations",
+		RequestParameters: job.RequestParameters,
 	}
 	if job.Status == media.StatusCompleted && job.Seconds > 0 {
 		record.MediaOutputSeconds = int64(max(0, job.Seconds))

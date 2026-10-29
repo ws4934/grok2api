@@ -18,6 +18,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 )
 
 // ImageGenerationInput 表示图片生成用例已经完成协议校验后的输入。
@@ -78,6 +79,7 @@ type imageExecution func(context.Context, accountdomain.Provider, accountdomain.
 
 // GenerateImage 选择支持图片生成的路由和账号，并返回可统一审计的上游响应。
 func (s *Service) GenerateImage(ctx context.Context, input ImageGenerationInput) (*Result, error) {
+	ctx = requestparams.WithClient(ctx, generatedImageParameters(input))
 	if input.Count > 1 && !input.Streaming {
 		return s.drawImageBatches(ctx, input.Count, s.fansOutImages(ctx, input.PublicModel, input.Count, false), func(ctx context.Context, count int, extra bool) (*Result, error) {
 			single := input
@@ -113,6 +115,7 @@ func (s *Service) generateImage(ctx context.Context, input ImageGenerationInput,
 
 // EditImage 选择支持图片编辑的路由和账号，并返回可统一审计的上游响应。
 func (s *Service) EditImage(ctx context.Context, input ImageEditInput) (*Result, error) {
+	ctx = requestparams.WithClient(ctx, editedImageParameters(input))
 	if input.Count > 1 && !input.Streaming {
 		return s.drawImageBatches(ctx, input.Count, s.fansOutImages(ctx, input.PublicModel, input.Count, false), func(ctx context.Context, count int, extra bool) (*Result, error) {
 			single := input
@@ -167,6 +170,7 @@ func (s *Service) executeImage(
 	// (errImageAccountsBusy), so the next round can draw it later.
 	extra bool,
 ) (*Result, error) {
+	ctx, parameters := requestparams.Start(ctx, imageParameters(publicModel, prompt, options))
 	ctx, egressTrace := infraegress.WithTrace(ctx)
 	startedAt := time.Now()
 	eventID := newAuditEventID()
@@ -220,6 +224,7 @@ func (s *Service) executeImage(
 		preselectedSession = nil
 	}
 	options = effectiveOptions[route.ID]
+	parameters.SetEffective(imageParameters(route.UpstreamModel, prompt, options))
 	resolution, quality := options.Resolution, options.Quality
 	requestedCount, inputImageCount := options.Count, options.InputImages
 	externalModel := modeldomain.ExternalPublicID(route.Provider, route.PublicID)
@@ -229,6 +234,7 @@ func (s *Service) executeImage(
 		ModelRouteID: route.ID, ModelPublicID: externalModel, ModelUpstreamModel: modeldomain.DisplayUpstreamModel(route.Provider, route.UpstreamModel),
 		Provider: string(route.Provider), Operation: operation, UsageSource: audit.UsageSourceNone, Streaming: streaming,
 		RequestMethod: method, RequestPath: path, RequestHeaders: headers,
+		RequestParameters: parameters,
 	}
 	if operation == audit.OperationImageEdit {
 		auditBase.MediaInputImages = int64(max(0, inputImageCount))
@@ -354,6 +360,7 @@ func (s *Service) executeImage(
 			continue
 		}
 		requestedCount = batchOptions.Count
+		parameters.SetEffective(imageParameters(route.UpstreamModel, prompt, batchOptions))
 		if err := reserveBatch(requestedCount); err != nil {
 			releaseAttempt()
 			return nil, err

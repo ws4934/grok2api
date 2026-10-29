@@ -1,6 +1,10 @@
 package audit
 
-import "time"
+import (
+	"time"
+
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
+)
 
 type Operation string
 
@@ -69,7 +73,7 @@ const (
 	EgressModeProxy  EgressMode = "proxy"
 )
 
-// Record 表示推理请求审计；成功请求通常不保存正文，仅允许保留 adapter 内部恢复失败的受限脱敏诊断。
+// Record 保存推理用量、受限脱敏参数及失败诊断；不保存媒体内容或完整响应正文。
 type Record struct {
 	ID                      uint64
 	EventID                 string
@@ -118,6 +122,7 @@ type Record struct {
 	RequestMethod          string
 	RequestPath            string
 	RequestHeaders         map[string][]string
+	RequestParameters      *requestparams.Parameters
 	AttemptCount           int
 	Attempts               []Attempt
 	CreatedAt              time.Time

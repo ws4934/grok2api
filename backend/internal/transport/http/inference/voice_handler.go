@@ -39,6 +39,7 @@ func (h *Handler) synthesizeSpeech(c *gin.Context) {
 		writeOpenAIError(c, http.StatusRequestEntityTooLarge, "request_too_large", "请求体超过限制")
 		return
 	}
+	captureRequestParameters(c, body)
 	var request ttsRequest
 	if err := decodeSingleJSON(bytes.NewReader(body), &request, false); err != nil {
 		writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "TTS 请求无效")
@@ -146,6 +147,9 @@ func (h *Handler) transcribeSpeechRequest(c *gin.Context, openAICompatible bool)
 			return
 		}
 		form := c.Request.MultipartForm
+		if form != nil {
+			captureFormParameters(c, form)
+		}
 		get := func(name string) string {
 			if form == nil {
 				return ""
@@ -229,7 +233,7 @@ func (h *Handler) transcribeSpeechRequest(c *gin.Context, openAICompatible bool)
 			Temperature            *float64 `json:"temperature"`
 			TimestampGranularities []string `json:"timestamp_granularities"`
 		}
-		if err := decodeSingleJSON(c.Request.Body, &payload, false); err != nil {
+		if err := decodeRequestJSON(c, &payload); err != nil {
 			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "STT JSON 请求无效")
 			return
 		}

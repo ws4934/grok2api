@@ -20,6 +20,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/grokimage"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 )
 
 const (
@@ -143,6 +144,7 @@ func (a *Adapter) EditImage(ctx context.Context, request provider.ImageEditReque
 }
 
 func (a *Adapter) forwardConsoleMedia(ctx context.Context, credential account.Credential, path string, payload any, format string, options provider.ImageRequestOptions) (*provider.Response, error) {
+	requestparams.RecordUpstream(ctx, payload)
 	token, err := a.cipher.Decrypt(credential.EncryptedAccessToken)
 	if err != nil {
 		return nil, err

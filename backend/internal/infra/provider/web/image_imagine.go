@@ -20,6 +20,7 @@ import (
 	domainegress "github.com/chenyme/grok2api/backend/internal/domain/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 )
 
 type imagineModelConfig struct {
@@ -334,7 +335,9 @@ func (a *Adapter) generateWSImageAttempt(ctx context.Context, request provider.I
 		return nil, err
 	}
 	reqID := newWebID("img")
-	if err := connection.WriteJSON(imagineRequestMessage(reqID, request.Prompt, ratio, cfg.AllowNSFW, modelConfig.Pro, modelConfig.ExpectedCount)); err != nil {
+	message := imagineRequestMessage(reqID, request.Prompt, ratio, cfg.AllowNSFW, modelConfig.Pro, modelConfig.ExpectedCount)
+	requestparams.RecordUpstream(ctx, message)
+	if err := connection.WriteJSON(message); err != nil {
 		a.egress.Feedback(context.WithoutCancel(ctx), lease.NodeID, 0, err)
 		return nil, err
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -113,6 +114,9 @@ func validatePreparedAudit(value preparedAudit) error {
 	}
 	if utf8.RuneCountInString(row.RequestHeadersJSON) > 65536 {
 		return errors.New("request headers exceed the storage limit")
+	}
+	if len(row.RequestParametersJSON) > requestparams.MaxStoredBytes {
+		return errors.New("request parameters exceed the storage limit")
 	}
 	attemptNumbers := make(map[int]struct{}, len(value.attempts))
 	for index, attempt := range value.attempts {
@@ -294,6 +298,14 @@ func toAuditModels(value audit.Record) (requestAuditModel, []requestAuditAttempt
 			requestHeadersJSON = string(raw)
 		}
 	}
+	parametersJSON := "{}"
+	if parameters := value.RequestParameters.Freeze(); parameters != nil {
+		raw, err := json.Marshal(parameters)
+		if err != nil {
+			return requestAuditModel{}, nil, err
+		}
+		parametersJSON = string(raw)
+	}
 	row := requestAuditModel{
 		EstimationJSON: estimationJSON,
 		EventID:        truncate(eventID, 64), RequestID: truncate(value.RequestID, 64), ClientKeyID: value.ClientKeyID, ClientKeyName: truncate(value.ClientKeyName, 160), ClientIP: strings.TrimSpace(value.ClientIP),
@@ -309,11 +321,12 @@ func toAuditModels(value audit.Record) (requestAuditModel, []requestAuditAttempt
 		EstimatedCostInUSDTicks: nonNegative(value.EstimatedCostInUSDTicks), PricingModel: truncate(value.PricingModel, 100), PricingVersion: truncate(value.PricingVersion, 20), PriceID: value.PriceID,
 		NumSourcesUsed: nonNegative(value.NumSourcesUsed), NumServerSideToolsUsed: nonNegative(value.NumServerSideToolsUsed),
 		ContextInputTokens: nonNegative(value.ContextInputTokens), ContextOutputTokens: nonNegative(value.ContextOutputTokens), FirstTokenMS: normalizedFirstToken(value), DurationMS: nonNegative(value.DurationMS),
-		ErrorCode:          truncate(value.ErrorCode, 100),
-		RequestMethod:      truncate(value.RequestMethod, 16),
-		RequestPath:        truncate(value.RequestPath, 2048),
-		RequestHeadersJSON: truncate(requestHeadersJSON, 65536),
-		AttemptCount:       len(value.Attempts), CreatedAt: value.CreatedAt,
+		ErrorCode:             truncate(value.ErrorCode, 100),
+		RequestMethod:         truncate(value.RequestMethod, 16),
+		RequestPath:           truncate(value.RequestPath, 2048),
+		RequestHeadersJSON:    truncate(requestHeadersJSON, 65536),
+		RequestParametersJSON: parametersJSON,
+		AttemptCount:          len(value.Attempts), CreatedAt: value.CreatedAt,
 	}
 	attempts := make([]requestAuditAttemptModel, 0, len(value.Attempts))
 	for _, attempt := range value.Attempts {

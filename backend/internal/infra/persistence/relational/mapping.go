@@ -12,6 +12,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/domain/model"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 )
 
 func toAdminDomain(value adminModel) admin.Admin {
@@ -288,6 +289,7 @@ func toAuditDomain(value requestAuditModel) audit.Record {
 		NumSourcesUsed: value.NumSourcesUsed, NumServerSideToolsUsed: value.NumServerSideToolsUsed,
 		ContextInputTokens: value.ContextInputTokens, ContextOutputTokens: value.ContextOutputTokens, FirstTokenMS: value.FirstTokenMS, DurationMS: value.DurationMS,
 		ErrorCode: value.ErrorCode, RequestMethod: value.RequestMethod, RequestPath: value.RequestPath, RequestHeaders: requestHeaders, AttemptCount: value.AttemptCount, CreatedAt: value.CreatedAt,
+		RequestParameters: requestparams.Parse(value.RequestParametersJSON),
 	}
 }
 

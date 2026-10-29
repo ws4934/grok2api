@@ -367,6 +367,7 @@ type requestAuditModel struct {
 	RequestMethod           string    `gorm:"size:16;not null;default:'';check:chk_request_audits_request_method,length(request_method) <= 16"`
 	RequestPath             string    `gorm:"type:text;not null;default:'';check:chk_request_audits_request_path,length(request_path) <= 2048"`
 	RequestHeadersJSON      string    `gorm:"type:text;not null;default:'{}';check:chk_request_audits_request_headers,length(request_headers_json) <= 65536"`
+	RequestParametersJSON   string    `gorm:"type:text;not null;default:'{}';check:chk_request_audits_request_parameters,length(request_parameters_json) <= 65536"`
 	AttemptCount            int       `gorm:"not null;default:0;check:chk_request_audits_attempt_count,attempt_count >= 0"`
 	CreatedAt               time.Time `gorm:"not null"`
 }
@@ -457,14 +458,15 @@ type mediaJobModel struct {
 	// InputJSON limit 33554432 must stay equal to media.MaxInputJSONBytes (GORM tags require literals).
 	InputJSON string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_input_json,length(input_json) <= 33554432"`
 	// Bounds match media.MaxInputImages (image) and media.MaxVideoInputImages (video).
-	InputImageCount int    `gorm:"not null;default:0;check:chk_media_jobs_input_image_count,input_image_count BETWEEN 0 AND 15 AND (kind <> 'image' OR input_image_count <= 8)"`
-	UpstreamURL     string `gorm:"type:text;not null;default:'';check:chk_media_jobs_upstream_url,length(upstream_url) <= 8192"`
-	ResultAssetID   string `gorm:"size:64;not null;default:'';check:chk_media_jobs_result_asset_id,result_asset_id = '' OR length(trim(result_asset_id)) BETWEEN 16 AND 64"`
-	CheckpointJSON  string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_checkpoint_json,length(checkpoint_json) <= 65536"`
-	Submitted       bool   `gorm:"not null;default:false"`
-	ParamsJSON      string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_params_json,length(params_json) <= 65536"`
-	IdempotencyKey  string `gorm:"size:160;not null;default:''"`
-	PayloadHash     string `gorm:"size:64;not null;default:''"`
+	InputImageCount       int    `gorm:"not null;default:0;check:chk_media_jobs_input_image_count,input_image_count BETWEEN 0 AND 15 AND (kind <> 'image' OR input_image_count <= 8)"`
+	UpstreamURL           string `gorm:"type:text;not null;default:'';check:chk_media_jobs_upstream_url,length(upstream_url) <= 8192"`
+	ResultAssetID         string `gorm:"size:64;not null;default:'';check:chk_media_jobs_result_asset_id,result_asset_id = '' OR length(trim(result_asset_id)) BETWEEN 16 AND 64"`
+	CheckpointJSON        string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_checkpoint_json,length(checkpoint_json) <= 65536"`
+	Submitted             bool   `gorm:"not null;default:false"`
+	ParamsJSON            string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_params_json,length(params_json) <= 65536"`
+	RequestParametersJSON string `gorm:"type:text;not null;default:'{}';check:chk_media_jobs_request_parameters,length(request_parameters_json) <= 65536"`
+	IdempotencyKey        string `gorm:"size:160;not null;default:''"`
+	PayloadHash           string `gorm:"size:64;not null;default:''"`
 	// PriceID/PricingModel/PriceTicks snapshot the reserved quote; NULL ticks = no snapshot.
 	PriceID         uint64 `gorm:"not null;default:0"`
 	PricingModel    string `gorm:"size:255;not null;default:''"`

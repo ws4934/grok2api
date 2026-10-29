@@ -17,6 +17,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
@@ -61,6 +62,7 @@ type VideoInput struct {
 }
 
 func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job, error) {
+	ctx, parameters := requestparams.Start(ctx, videoParameters(input))
 	if s.mediaJobs == nil || s.mediaQueue == nil {
 		return media.Job{}, fmt.Errorf("视频任务服务未配置")
 	}
@@ -146,6 +148,9 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 	}
 	input.Duration, input.AspectRatio, input.Resolution = effective.Duration, effective.AspectRatio, effective.Resolution
 	inputs = inputs.fittedTo(effective)
+	effectiveParameters := videoParameters(input)
+	effectiveParameters["image"], effectiveParameters["last_frame"], effectiveParameters["reference_images"], effectiveParameters["reference_videos"], effectiveParameters["reference_audios"] = inputs.imageURL, inputs.lastFrameURL, inputs.referenceURLs, inputs.referenceVideoURLs, inputs.referenceAudios
+	parameters.SetEffectiveModel(effectiveParameters, route.UpstreamModel)
 	if err := s.checkLedgerReady(); err != nil {
 		return media.Job{}, err
 	}
@@ -185,6 +190,7 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		Seconds: input.Duration, Size: input.AspectRatio, Quality: input.Resolution,
 		Status: media.StatusQueued, Progress: 0, InputJSON: inputJSON, InputImageCount: len(inputs.imageRefs()), CreatedAt: now, UpdatedAt: now,
 		Price: &pricing, IdempotencyKey: input.IdempotencyKey, PayloadHash: hash,
+		RequestParameters: parameters.Freeze(),
 	}
 	reserved := false
 	if priced {

@@ -10,6 +10,10 @@ import (
 // compact JSON still goes through the normal decoder, and skipped strings must
 // have valid JSON escapes too; a truncated/invalid image never becomes success.
 type Projection struct {
+	// MaxStringBytes bounds diagnostic request strings before decoding them.
+	// Zero keeps the response-inspection contract: only image payloads are skipped.
+	MaxStringBytes  int
+	Truncated       bool
 	inString        bool
 	escaped         bool
 	unicodeDigits   int
@@ -47,6 +51,11 @@ func (p *Projection) Append(dst, data []byte) []byte {
 		c := data[0]
 		data = data[1:]
 		if p.inString {
+			// Finish any JSON escape or UTF-8 rune before skipping the rest.
+			// The forwarded bytes are unaffected; this is an inspection copy.
+			if !p.skipping && p.MaxStringBytes > 0 && len(dst)-p.stringStart > p.MaxStringBytes && !p.escaped && p.unicodeDigits == 0 && c != '"' && (c < 0x80 || c >= 0xc0) {
+				p.skipping, p.skipFilled, p.Truncated = true, true, true
+			}
 			if p.skipping && (c != '"' || p.escaped || p.unicodeDigits > 0) {
 				p.payloadObserved = true
 				if !p.skipFilled {

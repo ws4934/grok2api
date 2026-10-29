@@ -35,6 +35,7 @@ func readImageEditRequest(c *gin.Context) (imageEditJSONRequest, []string, []str
 			writeOpenAIError(c, http.StatusRequestEntityTooLarge, "request_too_large", "请求体超过限制")
 			return request, nil, nil, false
 		}
+		captureRequestParameters(c, body)
 		if decodeSingleJSON(bytes.NewReader(body), &request, false) != nil {
 			writeOpenAIError(c, http.StatusBadRequest, "invalid_request", "图片编辑 JSON 请求无效")
 			return request, nil, nil, false
@@ -54,6 +55,7 @@ func readImageEditRequest(c *gin.Context) (imageEditJSONRequest, []string, []str
 			return request, nil, nil, false
 		}
 		defer form.RemoveAll()
+		captureFormParameters(c, form)
 		request, images, masks, err = readImageEditForm(form)
 	default:
 		writeOpenAIError(c, http.StatusUnsupportedMediaType, "invalid_request", "图片编辑仅支持 application/json 或 multipart/form-data")
