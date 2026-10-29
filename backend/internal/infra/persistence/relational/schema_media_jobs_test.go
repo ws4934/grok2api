@@ -136,7 +136,7 @@ func testImageJob(id string, accountID, keyID uint64, status mediadomain.Status)
 		Provider: string(accountdomain.ProviderChatGPT), Model: "gpt-image-2", ModelRouteID: 1, UpstreamModel: "chatgpt/gpt-image-2",
 		Operation: mediadomain.VideoOperationEdit, Prompt: "edit", Size: "1024x1024", Status: status,
 		InputJSON: `{"image_urls":["data:image/png;base64,AAAA"]}`, InputImageCount: 1,
-		Params:    mediadomain.ImageParams{OutputFormat: "webp", ResponseModel: "gpt-5", ResponseBackground: true},
+		Params:    mediadomain.JobParams{OutputFormat: "webp", ResponseModel: "gpt-5", ResponseBackground: true},
 		CreatedAt: now, UpdatedAt: now,
 	}
 }

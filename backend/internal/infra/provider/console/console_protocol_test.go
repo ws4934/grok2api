@@ -86,12 +86,12 @@ func TestParseConsoleHomeSkipsDisabledKeysAndReadsTeam(t *testing.T) {
 	t.Parallel()
 	disabledKey := "00000000-0000-4000-8000-000000000001"
 	html := consoleHomeHTML(testTeamID, consoleHomeKey(testTeamID, disabledKey, true), ",", consoleHomeKey(testTeamID, testNewKeyID, false))
-	home := parseConsoleHome([]byte(html))
-	if home.apiKeyID != testNewKeyID || home.teamID != testTeamID {
+	home := parseConsoleHome([]byte(html), "")
+	if home.availableAPIKey("") != testNewKeyID || home.teamID != testTeamID {
 		t.Fatalf("home = %#v", home)
 	}
-	empty := parseConsoleHome([]byte(consoleHomeHTML(testTeamID)))
-	if empty.apiKeyID != "" || empty.teamID != testTeamID {
+	empty := parseConsoleHome([]byte(consoleHomeHTML(testTeamID)), "")
+	if empty.availableAPIKey("") != "" || empty.teamID != testTeamID {
 		t.Fatalf("empty home = %#v", empty)
 	}
 }
@@ -523,8 +523,8 @@ func TestParseConsoleUsageStatusLiveShape(t *testing.T) {
 func TestParseConsoleHomeLiveEmptyKeyList(t *testing.T) {
 	t.Parallel()
 	html := `self.__next_f.push([1,"{\"state\":{\"data\":{\"$typeName\":\"auth_mgmt.ListApiKeysResponse\",\"apiKeys\":[]}},\"team\":{\"$typeName\":\"prod_auth.Team\",\"teamId\":\"` + testTeamID + `\",\"aclStrings\":[\"team:flag:cursor-legacy-cleared\"]}}"])`
-	home := parseConsoleHome([]byte(html))
-	if home.apiKeyID != "" || home.teamID != testTeamID {
+	home := parseConsoleHome([]byte(html), "")
+	if home.availableAPIKey("") != "" || home.teamID != testTeamID {
 		t.Fatalf("home = %#v", home)
 	}
 }
@@ -556,7 +556,7 @@ func TestReadConsoleHomeFollowsTeamRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if home.apiKeyID != testNewKeyID || home.teamID != testTeamID {
+	if home.availableAPIKey("") != testNewKeyID || home.teamID != testTeamID {
 		t.Fatalf("home = %#v", home)
 	}
 }

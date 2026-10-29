@@ -14,6 +14,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	"github.com/chenyme/grok2api/backend/internal/pkg/netguard"
 )
 
 var scope = egressdomain.Scope(account.ProviderAdobe)
@@ -31,12 +32,13 @@ type Adapter struct {
 	fetchRemote RemoteFetcher
 	sherlock    *sherlockService
 	logger      *slog.Logger
+	public      *http.Client
 }
 
 // NewAdapter 构造 Adobe Provider 适配器。assets 把生成的图像归档为网关可稳定
 // 读取的本地资源；fetchRemote 为 nil 时只接受 data URI 输入。
 func NewAdapter(cfg Config, egress *infraegress.Manager, cipher *security.Cipher, assets provider.ImageAssetStore, fetchRemote RemoteFetcher) *Adapter {
-	a := &Adapter{cfg: cfg, egress: egress, cipher: cipher, assets: assets, fetchRemote: fetchRemote}
+	a := &Adapter{cfg: cfg, egress: egress, cipher: cipher, assets: assets, fetchRemote: fetchRemote, public: netguard.NewPublicClient()}
 	a.sherlock = newSherlockService(a.config)
 	return a
 }
@@ -96,7 +98,7 @@ func (a *Adapter) withClientAs(ctx context.Context, credential account.Credentia
 		return err
 	}
 	rc.userAgent = lease.UserAgent // 出口按这个 UA 选了 TLS 指纹，请求头必须一致
-	runErr := fn(ctx, &client{do: lease, rc: rc})
+	runErr := fn(ctx, &client{do: lease, assets: a.public, rc: rc})
 	a.report(ctx, lease, runErr)
 	return runErr
 }
@@ -116,6 +118,9 @@ func (a *Adapter) userAgentOf(credential account.Credential) string {
 
 // report 把一次结果反馈给出口健康度：传输失败归咎于出口节点，上游状态码不算。
 func (a *Adapter) report(ctx context.Context, lease *infraegress.Lease, err error) {
+	if provider.IsMediaPostProcessingError(err) {
+		return // Local storage and direct CDN failures are not API-proxy failures.
+	}
 	ctx = context.WithoutCancel(ctx)
 	var transport *transportError
 	switch {

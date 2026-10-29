@@ -85,6 +85,10 @@ func (a *Adapter) lease(ctx context.Context, credential account.Credential) (con
 // report feeds one outcome back to egress health and reports whether the
 // failure belongs to the egress (transport or Cloudflare challenge).
 func (a *Adapter) report(ctx context.Context, lease *infraegress.Lease, err error) bool {
+	var download *publicDownloadError
+	if errors.As(err, &download) {
+		return false
+	}
 	ctx = context.WithoutCancel(ctx)
 	var transport *transportError
 	var upstream *upstreamError

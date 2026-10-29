@@ -15,6 +15,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useModelRoutes } from "@/entities/model/model-api";
 import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api";
 import { providerShortLabel } from "@/entities/provider/provider-presentation";
+import { accountDisplayName } from "@/features/accounts/account-identity";
 import { listAccounts } from "@/features/accounts/accounts-api";
 import { listClientKeys } from "@/features/client-keys/client-keys-api";
 import { deleteMediaAssets, getImageStats, getMediaAsset, listMediaAssets } from "@/features/media/media-api";
@@ -64,7 +65,7 @@ export function GalleryPage() {
   const modelsQuery = useModelRoutes();
   const modelOptions = useMemo(() => [...new Set((modelsQuery.data ?? []).filter((model) => mediaCapabilities.has(model.capability)).map((model) => model.publicId))].map((id) => ({ value: id, label: id })), [modelsQuery.data]);
   const keyFilter = useLookupFilter("client-keys", t("media.key"), t("audits.keyFilterPlaceholder"), listClientKeys, (key) => ({ value: key.id, label: key.name || key.prefix, description: `#${key.id} · ${key.prefix}` }));
-  const accountFilter = useLookupFilter("accounts", t("media.account"), t("audits.accountFilterPlaceholder"), listAccounts, (account) => ({ value: account.id, label: account.name || account.email || `#${account.id}`, description: `#${account.id}`, badge: providerShortLabel(account.provider, providers) }));
+  const accountFilter = useLookupFilter("accounts", t("media.account"), t("audits.accountFilterPlaceholder"), listAccounts, (account) => ({ value: account.id, label: accountDisplayName(account), description: `#${account.id}`, badge: providerShortLabel(account.provider, providers) }));
 
   const result = assetsQuery.data;
   const refreshing = assetsQuery.isFetching || statsQuery.isFetching;

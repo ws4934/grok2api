@@ -1,7 +1,68 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { apiErrorFromResponse, createVideo, describeError, generateImage, getImageJob, imageGenerationBody, imageJobState, imageJobsRefetchInterval, refreshImageJobs, submitImageJob } from "./creative-console-api.ts";
+import { apiErrorFromResponse, createChatResponse, createVideo, describeError, editVideo, extendVideo, generateImage, getImageJob, imageGenerationBody, imageJobState, imageJobsRefetchInterval, listVoices, refreshImageJobs, submitImageJob, synthesizeSpeech, transcribeSpeech } from "./creative-console-api.ts";
+import { setAccessToken } from "../../shared/api/client.ts";
+
+describe("administrator pinned-account requests", () => {
+  it("keeps the protocol body and uses separate administrator and client credentials", async (t) => {
+    setAccessToken("admin-test");
+    t.after(() => setAccessToken(null));
+    t.mock.method(globalThis, "fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      assert.equal(url, "/api/admin/v1/creative/images/generations");
+      const headers = new Headers(init?.headers);
+      assert.equal(headers.get("Authorization"), "Bearer admin-test");
+      assert.equal(headers.get("X-Client-Key"), "client-test");
+      assert.equal(headers.get("X-Creative-Account-ID"), "42");
+      assert.equal(init?.credentials, "include");
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.model, "image-test");
+      assert.equal(body.n, 3);
+      assert.equal("account_id" in body, false);
+      return Response.json({ data: [{ url: "https://example.test/image.png" }] });
+    });
+    await generateImage({ apiKey: "client-test", accountId: "42", basicProtocol: false, model: "image-test", prompt: "test", params: { count: 3 } });
+  });
+
+  it("carries the selected account through chat, queued images, video operations and voice", async (t) => {
+    const paths: string[] = [];
+    t.mock.method(globalThis, "fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      paths.push(String(url));
+      assert.equal(new Headers(init?.headers).get("X-Creative-Account-ID"), "42");
+      assert.equal(new Headers(init?.headers).get("X-Client-Key"), "client-test");
+      if (String(url).includes("tts/voices")) return Response.json({ voices: [] });
+      if (String(url).endsWith("/tts")) return Response.json({ audio: "dGVzdA==", content_type: "audio/mpeg" });
+      if (String(url).endsWith("/stt")) return Response.json({ text: "test" });
+      if (String(url).includes("/videos/")) return Response.json({ request_id: "video-test" });
+      const body = JSON.parse(String(init?.body));
+      return body.background ? Response.json({ id: "resp_img_test" }) : Response.json({ output: [{ type: "message", content: [{ type: "output_text", text: "test" }] }] });
+    });
+    const input = { apiKey: "client-test", accountId: "42", model: "model-test", prompt: "test" };
+    await createChatResponse({ ...input, messages: [{ role: "user", content: "test" }], reasoningEffort: "auto", webSearch: false, xSearch: false });
+    await submitImageJob({ ...input, params: { count: 1 } });
+    await createVideo({ ...input, duration: 6, aspectRatio: "16:9", resolution: "720p" });
+    await editVideo({ ...input, videoURL: "https://example.test/source.mp4" });
+    await extendVideo({ ...input, videoURL: "https://example.test/source.mp4" });
+    await listVoices(input);
+    await synthesizeSpeech({ ...input, text: "test", voiceId: "eve", language: "zh" });
+    await transcribeSpeech({ ...input, file: new File(["test"], "test.wav", { type: "audio/wav" }) });
+    assert.equal(paths.length, 8);
+    assert.ok(paths.every((path) => path.startsWith("/api/admin/v1/creative/")));
+  });
+
+  it("never replays pinned generation after authentication or upstream failures", async (t) => {
+    for (const status of [401, 402, 429, 502]) {
+      let requests = 0;
+      const mock = t.mock.method(globalThis, "fetch", async () => {
+        requests++;
+        return Response.json({ error: { message: "test failure", code: "test_failure" } }, { status });
+      });
+      await assert.rejects(generateImage({ apiKey: "client-test", accountId: "42", basicProtocol: true, model: "image-test", prompt: "test", params: { count: 1 } }));
+      assert.equal(requests, 1);
+      mock.mock.restore();
+    }
+  });
+});
 
 describe("video generation inputs", () => {
   it("preserves last frames, ordered keyframes and all three audio states", async (t) => {

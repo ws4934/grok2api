@@ -12,6 +12,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	diagnosticpkg "github.com/chenyme/grok2api/backend/internal/pkg/diagnostic"
 )
 
 func (s *Service) reconcileMediaUsage(ctx context.Context) error {
@@ -84,18 +85,18 @@ func resolveVideoAuditStatusCode(job media.Job, upstreamStatus int, attempts []a
 	if job.Status == media.StatusCompleted {
 		return http.StatusOK
 	}
-	if upstreamStatus >= 100 && upstreamStatus <= 599 {
+	if upstreamStatus >= 400 && upstreamStatus <= 599 {
 		return upstreamStatus
 	}
 	for i := len(attempts) - 1; i >= 0; i-- {
 		if attempts[i].UpstreamStatusCode != nil {
 			status := *attempts[i].UpstreamStatusCode
-			if status >= 100 && status <= 599 {
+			if status >= 400 && status <= 599 {
 				return status
 			}
 		}
 	}
-	if status := parseUpstreamStatusFromMessage(job.ErrorMessage); status > 0 {
+	if status := parseUpstreamStatusFromMessage(job.ErrorMessage); status >= 400 {
 		return status
 	}
 	switch job.ErrorCode {
@@ -153,25 +154,30 @@ func captureVideoAttempt(recorder *failureAttemptRecorder, credential account.Cr
 		Source:         audit.AttemptSourceUpstreamHTTP,
 		Stage:          stage,
 		AccountID:      auditAccountID(credential.ID),
-		AccountName:    credential.Name,
+		AccountName:    credential.DisplayName(),
 		Method:         recorder.method,
 		RequestPath:    recorder.path,
 		StartedAt:      startedAt.UTC(),
 		DurationMS:     time.Since(startedAt).Milliseconds(),
-		TransportError: sanitizeDiagnosticText(err.Error(), diagnosticTextLimit),
+		TransportError: diagnosticpkg.Text(err.Error(), diagnosticTextLimit),
 		ErrorChain:     errorFrames(err),
 	}
 	if hasStatus {
 		value := status
 		attempt.UpstreamStatusCode = &value
 		attempt.UpstreamStatus = http.StatusText(status)
-		body := []byte(sanitizeDiagnosticText(err.Error(), diagnosticTextLimit))
+		body := []byte(diagnosticpkg.Text(err.Error(), diagnosticTextLimit))
 		attempt.ResponseBody = body
 	}
 	var diagnosticError provider.UpstreamDiagnosticError
 	if errors.As(err, &diagnosticError) {
 		url, response := diagnosticError.UpstreamDiagnostic()
-		attempt.UpstreamURL = sanitizeUpstreamURL(url)
+		if response.StatusCode > 0 {
+			value := response.StatusCode
+			attempt.UpstreamStatusCode = &value
+			attempt.UpstreamStatus = response.Status
+		}
+		attempt.UpstreamURL = diagnosticpkg.URL(url)
 		attempt.ResponseHeaders = sanitizeDiagnosticHeaders(response.Header)
 		attempt.ResponseBody, attempt.ResponseBodyTruncated = recorder.captureBody(response.Body, response.BodyTruncated)
 	}

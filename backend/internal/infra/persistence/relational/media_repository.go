@@ -543,7 +543,7 @@ func (r *MediaJobRepository) ListMediaJobs(ctx context.Context, input repository
 	}
 	if search := strings.TrimSpace(input.Page.Search); search != "" {
 		pattern := "%" + strings.ToLower(search) + "%"
-		query = query.Where("LOWER(id) LIKE ? OR LOWER(prompt) LIKE ? OR LOWER(model) LIKE ? OR LOWER(account_name) LIKE ? OR LOWER(client_key_name) LIKE ?", pattern, pattern, pattern, pattern, pattern)
+		query = query.Where("LOWER(id) LIKE ? OR LOWER(prompt) LIKE ? OR LOWER(model) LIKE ? OR LOWER(account_name) LIKE ? OR LOWER(client_key_name) LIKE ? OR account_id IN (?)", pattern, pattern, pattern, pattern, pattern, accountIdentitySearchIDs(query, pattern))
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
@@ -556,7 +556,7 @@ func (r *MediaJobRepository) ListMediaJobs(ctx context.Context, input repository
 		"status":      {expression: "status"},
 		"progress":    {expression: "progress", defaultDirection: repository.SortDescending},
 		"spec":        {expression: "LOWER(size) || ' ' || LOWER(quality)"},
-		"account":     {expression: "LOWER(account_name)"},
+		"account":     {expression: mediaAccountNameSortSQL()},
 		"createdAt":   {expression: "created_at", defaultDirection: repository.SortDescending},
 		"completedAt": {expression: "completed_at", nullsLast: true, defaultDirection: repository.SortDescending},
 	}, sortSpec{expression: "created_at", defaultDirection: repository.SortDescending}, "id")
@@ -694,7 +694,7 @@ func mediaJobFromDomain(value media.Job) *mediaJobModel {
 	params, _ := json.Marshal(value.Params)
 	row := &mediaJobModel{
 		ID: value.ID, Kind: string(kind), RequestID: value.RequestID, ClientKeyID: value.ClientKeyID, ClientKeyName: value.ClientKeyName, ClientIP: value.ClientIP,
-		AccountID: mediaJobAccountID(value.AccountID), AccountName: value.AccountName,
+		AccountID: mediaJobAccountID(value.AccountID), AccountName: truncate(value.AccountName, 160),
 		EgressNodeID: value.EgressNodeID, EgressNodeName: value.EgressNodeName, EgressScope: value.EgressScope, EgressMode: value.EgressMode,
 		Provider: value.Provider,
 		Model:    value.Model, ModelRouteID: value.ModelRouteID, UpstreamModel: value.UpstreamModel, Operation: string(operation),
@@ -731,7 +731,7 @@ func mediaJobToDomain(row mediaJobModel) media.Job {
 	if kind == "" {
 		kind = media.KindVideo
 	}
-	var params media.ImageParams
+	var params media.JobParams
 	_ = json.Unmarshal([]byte(row.ParamsJSON), &params)
 	job := media.Job{
 		ID: row.ID, Kind: kind, RequestID: row.RequestID, ClientKeyID: row.ClientKeyID, ClientKeyName: row.ClientKeyName, ClientIP: row.ClientIP,

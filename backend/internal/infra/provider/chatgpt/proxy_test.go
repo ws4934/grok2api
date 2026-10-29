@@ -13,8 +13,37 @@ import (
 	"testing"
 	"time"
 
+	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/chatgpt/browserprofile"
 )
+
+func TestSignedDownloadDoesNotInheritAPIProxy(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		client, err := publicTransferClient(method, "http://user:pass@127.0.0.1:18080")
+		if err != nil {
+			t.Fatal(err)
+		}
+		transport := client.Transport.(*http.Transport)
+		if transport.Proxy != nil {
+			t.Fatalf("%s inherited the account's API proxy", method)
+		}
+		client.CloseIdleConnections()
+	}
+}
+
+func TestPublicDownloadErrorsDoNotCoolAPIProxyOrReplayGeneration(t *testing.T) {
+	a := &Adapter{} // No egress manager: feedback here would panic.
+	for _, cause := range []error{
+		&transportError{cause: errors.New("CDN unavailable")},
+		&upstreamError{Status: http.StatusForbidden, Challenge: true},
+	} {
+		err := provider.NewMediaPostProcessingError(provider.MediaPostProcessingDownload, &publicDownloadError{cause: cause})
+		if a.report(context.Background(), &infraegress.Lease{NodeID: 9}, err) {
+			t.Fatal("public CDN failure incorrectly requested an API egress retry")
+		}
+	}
+}
 
 func TestSignedTransfersReachPrivateProxies(t *testing.T) {
 	connects := make(chan string, 1)
@@ -23,11 +52,12 @@ func TestSignedTransfersReachPrivateProxies(t *testing.T) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer proxy.Close()
-	client, err := publicTransferClient(proxy.URL) // a loopback proxy, like a local sidecar
+	client, err := publicTransferClient(http.MethodPut, proxy.URL) // a loopback proxy, like a local sidecar
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Get("https://example.com/upload")
+	req, _ := http.NewRequest(http.MethodPut, "https://example.com/upload", strings.NewReader("image"))
+	_, err = client.Do(req)
 	if err == nil || strings.Contains(err.Error(), "non-public transfer address") {
 		t.Fatalf("private proxy hop was rejected: %v", err)
 	}

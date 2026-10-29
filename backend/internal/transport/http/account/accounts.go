@@ -83,13 +83,13 @@ func (h *Handler) get(c *gin.Context) {
 	response.Success(c, http.StatusOK, newAccountResponse(value))
 }
 
-func (h *Handler) refreshWebQuota(c *gin.Context) {
+func (h *Handler) refreshQuota(c *gin.Context) {
 	id, ok := params.PathID(c)
 	if !ok {
 		return
 	}
 	if _, err := h.service.RefreshQuota(c.Request.Context(), id); err != nil {
-		h.writeServiceError(c, "quotaRefreshFailed", err, http.StatusBadGateway, "同步 Provider 额度失败")
+		h.writeServiceError(c, "quotaRefreshFailed", err, http.StatusBadGateway, "同步账号额度失败")
 		return
 	}
 	value, err := h.service.Get(c.Request.Context(), id)

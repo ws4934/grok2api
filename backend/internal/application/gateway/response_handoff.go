@@ -40,7 +40,7 @@ func (a *responseAttempt) acceptSuccess(t *responseTry) attemptStep {
 		}
 	}
 	if diagnostic := t.response.RecoveredPrimaryFailure; diagnostic != nil {
-		recoveredFailure := newHTTPUpstreamFailure(diagnostic.StatusCode, diagnostic.Body, credential.ID, credential.Name)
+		recoveredFailure := newHTTPUpstreamFailure(diagnostic.StatusCode, diagnostic.Body, credential.ID, credential.DisplayName())
 		if recoveredFailure.AccountBlocked || (a.failurePolicy.AuthenticatedForbidden && s.shouldInvalidateBuildForbidden(recoveredFailure)) {
 			reason := fmt.Sprintf("%s primary endpoint denied account access", credential.Provider)
 			if !s.markReauthRequired(ctx, a.input.RequestID, credential, reason) {
@@ -125,7 +125,7 @@ func (a *responseAttempt) qualityPeekFailed(t *responseTry, replay io.ReadCloser
 		a.lastFailure = a.canceledFailure(credential, peekErr)
 		return attemptStop
 	}
-	a.lastFailure = newTransportUpstreamFailure(peekErr, credential.ID, credential.Name)
+	a.lastFailure = newTransportUpstreamFailure(peekErr, credential.ID, credential.DisplayName())
 	if neterrorpkg.IsUpstreamStreamIdleTimeout(peekErr) || neterrorpkg.IsUpstreamStreamIdleTimeout(context.Cause(ctx)) || errors.Is(peekErr, errQualityEmptyStream) {
 		logPrefix := "quality_peek_idle"
 		if errors.Is(peekErr, errQualityEmptyStream) {
@@ -152,7 +152,7 @@ func (a *responseAttempt) qualityPeekFailed(t *responseTry, replay io.ReadCloser
 func qualityDegradedFailure(credential accountdomain.Credential) *UpstreamFailure {
 	return &UpstreamFailure{
 		HTTPStatus: http.StatusServiceUnavailable, Code: ErrorQualityDegraded,
-		PublicMessage: "上游响应缺少推理", AccountID: credential.ID, AccountName: credential.Name,
+		PublicMessage: "上游响应缺少推理", AccountID: credential.ID, AccountName: credential.DisplayName(),
 		Cause: errQualityDegraded,
 	}
 }
@@ -282,7 +282,7 @@ func (h *responseHandoff) auditRecord(usage Usage, errorCode string, successful 
 		record.UsageSource = a.usageSource
 	}
 	record.AccountID = &h.accountID
-	record.AccountName = h.credential.Name
+	record.AccountName = h.credential.DisplayName()
 	record.StatusCode = response.StatusCode
 	record.InputTokens = usage.InputTokens
 	record.CachedInputTokens = usage.CachedInputTokens

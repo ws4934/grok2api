@@ -18,10 +18,11 @@ import (
 	"time"
 	"unicode/utf16"
 
+	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 )
 
-// doer 通过绑定的出口发起一次 HTTP 请求；egress 的 Lease 即实现了它。
+// doer 发起一次 HTTP 请求；API 使用出口租约，公开成品使用直连客户端。
 type doer interface {
 	Do(*http.Request) (*http.Response, error)
 }
@@ -58,8 +59,9 @@ type pollResult struct {
 }
 
 type client struct {
-	do doer
-	rc requestContext
+	do     doer
+	assets doer
+	rc     requestContext
 }
 
 var chromeVersion = regexp.MustCompile(`Chrome/(\d+)`)
@@ -118,6 +120,10 @@ func (c *client) pollHeaders() map[string]string {
 
 // send 在单次调用超时内发出请求并读完响应体（最多 limit 字节，超出报错）。
 func (c *client) send(ctx context.Context, method, rawURL string, body io.Reader, headers map[string]string, limit int64) (*http.Response, []byte, error) {
+	return c.sendUsing(ctx, c.do, method, rawURL, body, headers, limit)
+}
+
+func (c *client) sendUsing(ctx context.Context, transport doer, method, rawURL string, body io.Reader, headers map[string]string, limit int64) (*http.Response, []byte, error) {
 	if c.rc.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, c.rc.timeout)
@@ -136,7 +142,7 @@ func (c *client) send(ctx context.Context, method, rawURL string, body io.Reader
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := c.do.Do(req)
+	resp, err := transport.Do(req)
 	if err != nil {
 		return nil, nil, &transportError{err: withoutURL(err)}
 	}
@@ -307,7 +313,8 @@ func (c *client) upload(ctx context.Context, uploadURL string, data io.Reader, m
 
 // download 读取 Adobe 的预签名结果链接。
 func (c *client) download(ctx context.Context, outputURL string) ([]byte, error) {
-	resp, raw, err := c.send(ctx, http.MethodGet, outputURL, nil, map[string]string{"Accept": "*/*"}, maxDownloadBytes)
+	resp, raw, err := c.sendUsing(ctx, c.assets, http.MethodGet, outputURL, nil, map[string]string{"Accept": "*/*"}, maxDownloadBytes)
+	infraegress.RecordDirectPhysicalCall(ctx, resp, err)
 	if err != nil {
 		return nil, err
 	}

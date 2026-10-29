@@ -1,5 +1,5 @@
-import { createObjectDecoder, createValidatedDecoder, hasShape, isString, type ApiDecoder } from "@/shared/api/decoder";
-import { i18n } from "@/shared/i18n";
+import { createObjectDecoder, createValidatedDecoder, hasShape, isString, type ApiDecoder } from "./decoder.ts";
+import { i18n } from "../i18n/index.ts";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -152,8 +152,9 @@ async function sendApiRequest(path: string, options: RequestOptions): Promise<Re
   });
 }
 
-// sendWithAuthRetry sends the request and, on a 401, refreshes the session and sends it once more.
-async function sendWithAuthRetry(path: string, options: RequestOptions): Promise<Response> {
+// apiFetch returns the raw authenticated response, including audio and streams.
+// Irreversible operations can disable authentication replay with retryAuth=false.
+export async function apiFetch(path: string, options: RequestOptions): Promise<Response> {
   const { authenticated = true, retryAuth = true } = options;
   const response = await sendApiRequest(path, options);
   if (response.status !== 401 || !authenticated || !retryAuth) return response;
@@ -166,7 +167,7 @@ async function sendWithAuthRetry(path: string, options: RequestOptions): Promise
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions, decode: ApiDecoder<T>): Promise<T> {
-  return parseResponse(await sendWithAuthRetry(path, options), decode);
+  return parseResponse(await apiFetch(path, options), decode);
 }
 
 export type ApiStreamEvent<T> = {
@@ -176,7 +177,7 @@ export type ApiStreamEvent<T> = {
 
 // apiEventStream 使用现有管理员鉴权发起 POST SSE，并正确处理任意分块边界。
 export async function apiEventStream<T>(path: string, options: RequestOptions, decode: ApiDecoder<T>, onEvent: (value: ApiStreamEvent<T>) => void): Promise<void> {
-  const response = await sendWithAuthRetry(path, options);
+  const response = await apiFetch(path, options);
   if (!response.ok) {
     await parseResponse(response, decodeNever);
   }
@@ -258,7 +259,7 @@ export type ApiDownloadResult = {
 };
 
 export async function apiDownloadResponse(path: string, options: RequestOptions = {}): Promise<ApiDownloadResult> {
-  const response = await sendWithAuthRetry(path, options);
+  const response = await apiFetch(path, options);
   if (!response.ok) {
     await parseResponse(response, decodeNever);
   }

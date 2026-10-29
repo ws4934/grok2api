@@ -1,7 +1,7 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 
 import { AnonymousBoundary, AuthBoundary } from "@/app/auth-boundary";
-import { DeferredAccountsPage, DeferredApiDocsPage, DeferredAppShell, DeferredClientKeysPage, DeferredCreativeConsolePage, DeferredDashboardPage, DeferredGalleryPage, DeferredMediaJobsPage, DeferredModelsPage, DeferredQualityGuardPage, DeferredRequestAuditsPage, DeferredSettingsPage } from "@/app/deferred-pages";
+import { DeferredAccountsPage, DeferredApiDocsPage, DeferredAppShell, DeferredClientKeysPage, DeferredCreativeConsolePage, DeferredDashboardPage, DeferredGalleryPage, DeferredMediaJobsPage, DeferredModelsPage, DeferredQualityGuardPage, DeferredRequestAuditsPage, DeferredSettingsPage, DeferredSystemLogsPage } from "@/app/deferred-pages";
 import { LoginPage } from "@/features/auth/login-page";
 
 export const router = createBrowserRouter([
@@ -26,6 +26,7 @@ export const router = createBrowserRouter([
           { path: "/video-gallery", element: <Navigate to="/media-jobs" replace /> },
           { path: "/request-audits", element: <DeferredRequestAuditsPage /> },
           { path: "/quality-guard", element: <DeferredQualityGuardPage /> },
+          { path: "/system-logs", element: <DeferredSystemLogsPage /> },
           { path: "/docs", element: <Navigate to="/docs/chat/completions" replace /> },
           { path: "/docs/:category/:endpoint", element: <DeferredApiDocsPage /> },
           { path: "/settings", element: <DeferredSettingsPage /> },

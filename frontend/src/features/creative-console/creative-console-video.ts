@@ -8,13 +8,20 @@ export function videoInputPolicy(routes: readonly VideoRoute[]) {
   const isConsole15 = (route: VideoRoute) => route.provider === "grok_console"
     && route.upstreamModel.replace(/^Console\//, "") === "grok-imagine-video-1.5";
   return {
-    maxReferenceImages: Math.max(1, ...routes.map((route) => route.provider === "grok_console" ? (isConsole15(route) ? 14 : 7) : route.provider === "grok_build" ? 8 : 1)),
-    canCombineFirstFrame: routes.some(isConsole15),
+    maxReferenceImages: Math.max(1, ...routes.map((route) => route.provider === "grok_console" ? (isConsole15(route) ? 14 : 7) : route.provider === "grok_build" ? 8 : route.provider === "grok_web" ? 7 : 1)),
+    canCombineFirstFrame: routes.some((route) => isConsole15(route) || route.provider === "grok_web"),
     canReferenceVoices: routes.some(isConsole15),
     canPinFrames: routes.some(isConsole15),
     canGenerateAudio: routes.some((route) => route.provider === "grok_console"),
-    referenceDurationLimit: routes.length > 0 && routes.every((route) => route.provider === "grok_console" && !isConsole15(route)) ? 10 : 15,
+    referenceDurationLimit: routes.length > 0 && routes.every((route) => route.provider === "grok_web" || route.provider === "grok_console" && !isConsole15(route)) ? 10 : 15,
   };
+}
+
+// Web uses asset roles, not the Console/API <IMAGE_n> prompt-token contract.
+export function videoReferenceLabel(routes: readonly VideoRoute[], index: number, hasFirstFrame: boolean): string {
+  return routes.some((route) => route.provider === "grok_web")
+    ? `#${index + 1}`
+    : `<IMAGE_${index + (hasFirstFrame ? 1 : 0)}>`;
 }
 
 // Files stay in memory until submit; history stores a name to request re-upload,

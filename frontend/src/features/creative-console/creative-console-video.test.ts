@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { parseVideoReferenceURL, snapshotVideoFrame, videoFrameIssue, videoInputPolicy } from "./creative-console-video.ts";
+import { parseVideoReferenceURL, snapshotVideoFrame, videoFrameIssue, videoInputPolicy, videoReferenceLabel } from "./creative-console-video.ts";
 
 describe("video reference input policy", () => {
   const console15 = { provider: "grok_console", upstreamModel: "Console/grok-imagine-video-1.5" };
@@ -18,9 +18,25 @@ describe("video reference input policy", () => {
     assert.deepEqual(videoInputPolicy([build15]), { maxReferenceImages: 8, canCombineFirstFrame: false, canReferenceVoices: false, canPinFrames: false, canGenerateAudio: false, referenceDurationLimit: 15 });
   });
 
+  it("supports Web references and an independent first frame without offering unconnected frame controls", () => {
+    assert.deepEqual(videoInputPolicy([{ provider: "grok_web", upstreamModel: "Web/grok-imagine-video" }]), {
+      maxReferenceImages: 7, canCombineFirstFrame: true, canReferenceVoices: false, canPinFrames: false,
+      canGenerateAudio: false, referenceDurationLimit: 10,
+    });
+    assert.equal(videoInputPolicy([classic, { provider: "grok_web", upstreamModel: "grok-imagine-video" }]).referenceDurationLimit, 10);
+  });
+
   it("uses every actual target of an alias, not the public name or first route", () => {
     assert.deepEqual(videoInputPolicy([build15, classic, console15]), videoInputPolicy([console15]));
     assert.equal(videoInputPolicy([{ ...build15, upstreamModel: console15.upstreamModel }]).canCombineFirstFrame, false);
+  });
+
+  it("does not present Console image tokens as a Web prompt contract", () => {
+    const web = { provider: "grok_web", upstreamModel: "Web/grok-imagine-video" };
+    assert.equal(videoReferenceLabel([web], 0, false), "#1");
+    assert.equal(videoReferenceLabel([web, console15], 0, true), "#1");
+    assert.equal(videoReferenceLabel([console15], 0, false), "<IMAGE_0>");
+    assert.equal(videoReferenceLabel([console15], 0, true), "<IMAGE_1>");
   });
 });
 

@@ -16,14 +16,16 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/pkg/mediafile"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/accountnames"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
 type Handler struct {
-	service     *mediaapp.Service
-	jobs        JobControl
-	ingestSlots chan struct{}
+	accountNames repository.AccountNameRepository
+	service      *mediaapp.Service
+	jobs         JobControl
+	ingestSlots  chan struct{}
 }
 
 // JobControl runs the job actions that need the gateway's billing and queue.
@@ -34,6 +36,11 @@ type JobControl interface {
 
 func NewHandler(service *mediaapp.Service) *Handler {
 	return &Handler{service: service, ingestSlots: make(chan struct{}, ingestConcurrency)}
+}
+
+func (h *Handler) WithAccountNames(reader repository.AccountNameRepository) *Handler {
+	h.accountNames = reader
+	return h
 }
 
 // WithJobControl enables the cancel and retry job actions.
@@ -185,6 +192,17 @@ func (h *Handler) listImages(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "mediaListImagesFailed", "读取图片列表失败")
 		return
 	}
+	ids := make([]uint64, 0, len(assets))
+	for _, asset := range assets {
+		ids = append(ids, asset.Origin.AccountID)
+	}
+	names, ok := accountnames.Load(c, h.accountNames, ids)
+	if !ok {
+		return
+	}
+	for i := range assets {
+		assets[i].Origin.AccountName = accountnames.Name(names, assets[i].Origin.AccountID, assets[i].Origin.AccountName)
+	}
 	items := make([]mediaAssetDTO, 0, len(assets))
 	for _, a := range assets {
 		items = append(items, h.assetDTO(a))
@@ -202,6 +220,11 @@ func (h *Handler) getAsset(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "mediaGetAssetFailed", "读取媒体资源失败")
 		return
 	}
+	names, ok := accountnames.Load(c, h.accountNames, []uint64{asset.Origin.AccountID})
+	if !ok {
+		return
+	}
+	asset.Origin.AccountName = accountnames.Name(names, asset.Origin.AccountID, asset.Origin.AccountName)
 	response.Success(c, http.StatusOK, h.assetDTO(asset))
 }
 
@@ -262,6 +285,17 @@ func (h *Handler) listJobs(c *gin.Context) {
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "mediaListJobsFailed", "读取媒体任务列表失败")
 		return
+	}
+	ids := make([]uint64, 0, len(jobs))
+	for _, job := range jobs {
+		ids = append(ids, job.AccountID)
+	}
+	names, ok := accountnames.Load(c, h.accountNames, ids)
+	if !ok {
+		return
+	}
+	for i := range jobs {
+		jobs[i].AccountName = accountnames.Name(names, jobs[i].AccountID, jobs[i].AccountName)
 	}
 	items := make([]mediaJobDTO, 0, len(jobs))
 	for _, job := range jobs {

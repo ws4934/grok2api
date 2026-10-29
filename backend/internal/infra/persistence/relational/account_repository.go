@@ -137,7 +137,7 @@ func (r *AccountRepository) List(ctx context.Context, input repository.AccountLi
 	var rows []accountModel
 	query = applyStableSort(query, input.Page.Sort, map[string]sortSpec{
 		"id":        {expression: "provider_accounts.id"},
-		"name":      {expression: "LOWER(provider_accounts.name)"},
+		"name":      {expression: accountNameSortSQL()},
 		"type":      {expression: accountTypeSortExpression},
 		"status":    {expression: accountStatusSortExpression},
 		"createdAt": {expression: "provider_accounts.created_at", defaultDirection: repository.SortDescending},

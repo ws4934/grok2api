@@ -60,7 +60,7 @@ func (s *Service) persistFailureAudit(record audit.Record, startedAt time.Time, 
 	if account != nil && account.ID != 0 {
 		accountID := account.ID
 		record.AccountID = &accountID
-		record.AccountName = account.Name
+		record.AccountName = account.DisplayName()
 	}
 	applyAuditEgress(&record, trace, accountdomain.Provider(record.Provider))
 	persistCtx, cancel := context.WithTimeout(context.Background(), finalizationTimeout)

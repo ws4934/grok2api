@@ -26,3 +26,11 @@ func TestVideoCreateFailureStageIsFailClosed(t *testing.T) {
 		t.Fatalf("explicit 500 stage = %q", stage)
 	}
 }
+
+func TestVideoCreateFailureNeverRetriesWhenCheckpointClearFails(t *testing.T) {
+	storageErr := errors.New("checkpoint storage unavailable")
+	err := VideoCreateFailed(VideoRequest{SaveCheckpoint: func(string) error { return storageErr }}, videoStageStatusError{status: http.StatusTooManyRequests})
+	if stage, _ := VideoErrorStage(err); stage != VideoStageSubmitted || !errors.Is(err, storageErr) {
+		t.Fatalf("failed durable clear must remain submitted: %v", err)
+	}
+}

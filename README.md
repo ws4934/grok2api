@@ -200,6 +200,15 @@ docker compose logs -f grok2api
 
 Open `http://127.0.0.1:8000`. The image already includes the frontend; SQLite data and local media are stored in the Compose volume.
 
+### View system logs
+
+Open **System logs** in the admin console to filter operational events by level, Provider, account ID, request ID, or error text. Quota-sync failure notifications link directly to the matching logs. Details include the failure stage, account, egress and retry delay when available. Cloudflare egress cooldowns return HTTP `503` with `Retry-After` rather than a generic sync error.
+
+The page reads redacted logs from the application database, retained for seven days and capped at 10,000 entries across instances. Writes are asynchronous and bounded; the page reports unsaved entries and storage errors for the current process. Collection starts with this feature—it does not import older Docker output. Docker stdout and the separate **Request audits** page remain available. No Docker socket or extra host permissions are required. Routine admin polling, page/static-asset loads, health checks, and successful session renewal are excluded from access logs; client API traffic, admin actions (including exports), and other failed requests remain visible.
+
+Media tasks, gallery entries, and request audits display the current account label: an explicit name, otherwise its own email, a directly linked account email, then its generated identifier. Account labels are resolved in batches on admin reads; saved snapshots remain available after account deletion.
+
+
 ### Run from source
 
 ```bash
@@ -227,6 +236,12 @@ pnpm dev
 6. Call a `/v1/*` endpoint with that key.
 
 After first sign-in, change the administrator password and remove `bootstrapAdmin` from the configuration. Never rotate `credentialEncryptionKey` after credentials have been stored.
+
+### Test a specific account
+
+In **Creative Console**, open **Request account** beside the client key and search by email, name, or account ID. Selecting an account filters models to its provider. Enabled, signed-in accounts remain testable while quota-limited or cooling; failures never switch accounts. Queued image/video jobs retain that account after recovery, too. Choose **Automatic account** to restore normal routing.
+
+Client-key permissions, billing limits, and account concurrency limits still apply.
 
 ### Account operations
 
@@ -287,10 +302,12 @@ Web uses a built-in catalog filtered by account tier; higher tiers inherit lower
 | `grok-imagine-image`      | Image        | Basic                          | Images Generations (`enable_pro=false`) |
 | `grok-imagine-image-2.0`  | Image        | Basic                          | Images Generations (`enable_pro=true`)  |
 | `grok-imagine-image-edit` | Image Edit   | Basic                          | Images Edits                            |
-| `grok-imagine-video`      | Video        | Basic for 720p; Super for 480p | Videos                                  |
+| `grok-imagine-video`      | Video        | Basic for 720p; Super for 480p | Videos; first frame, up to 7 references, or both |
 
 
 Web Imagine generation maps `aspect_ratio` and `n` to the browser protocol. `size` remains an OpenAI-compatible aspect-ratio alias, while generation-only `resolution` and `quality` are ignored on Web routes because the upstream product is selected by the model name rather than by those Console-oriented controls.
+
+Web video accepts `image` and `reference_images` through the existing Videos API, including staged `file_id` inputs. Reference mode is limited to 10 seconds, and free accounts retain the configured duration cap (6 seconds by default). Fresh video results returned within 10 seconds are rejected and retried on another eligible account within the same job's attempt budget; rejected outputs are not delivered or billed to the client. Saved-result downloads and idempotent replays do not run this timing check.
 
 ### Grok Console
 
@@ -402,7 +419,7 @@ curl http://127.0.0.1:8000/v1/responses \
 
 ## Egress and Cloudflare
 
-Egress nodes are scoped to Build, Web, Console, ChatGPT, Adobe, Muse, or Web assets. The admin console supports:
+Egress nodes are scoped to Build, Web, Console, ChatGPT, Adobe, Muse, or Web/Console assets. The admin console supports:
 
 - HTTP, HTTPS, SOCKS4/4A, SOCKS5/5H, Resin, Trojan, VLESS, Shadowsocks, and VMess
 - TCP, WebSocket, and TLS tunnel transports; unsupported variants are rejected during import
@@ -477,6 +494,13 @@ Then use `http://flaresolverr:8191` under **Runtime Settings → Media & Network
 The egress layer retries only connection failures known to occur before request submission. It does not replay submitted generation requests, authentication failures, exhausted quotas, or upstream rate limits.
 
 When a fixed proxy enters cooldown after a transport failure, grok2api starts an independent connectivity probe immediately. Concurrent failures share one probe. A later request bound to that node waits for at most five seconds, reloads persisted node state after a healthy probe, and continues without waiting for the full cooldown. An unhealthy probe preserves the cooldown. Proxy-pool leases use fresh tunnels, so one rotating exit failure never cools the whole pool. See [Immediate egress failure probe and bounded retry](./backend/internal/infra/egress/FAILURE_RETRY.md) for the design and safety invariants.
+
+### Media downloads without API-proxy traffic
+
+- Public Console images/videos, Build videos, ChatGPT external signed images, and Adobe signed images/videos download directly. Console honors explicitly configured **Console assets** nodes or fallbacks, but does not inherit the account's API proxy. Leave resource egress unconfigured for direct downloads.
+- Grok Web session downloads and ChatGPT same-origin authenticated downloads retain their account egress. API submission, reference uploads, and image bytes returned inline in an API response still use the API route. Muse browser/VM transfers are unchanged.
+- Anonymous downloads retain their HTTPS and destination-validation guards, omit session credentials, and keep existing streaming and body-size limits. A direct failure never silently falls back to the API proxy or triggers a new generation.
+- Saving and serving an archived local file do not contact the upstream proxy. Direct networking must be available on the host; a system-wide VPN/TUN can still route that traffic independently of many2api's proxy settings.
 
 ## Configuration and deployment
 

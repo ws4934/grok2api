@@ -87,6 +87,17 @@ func (m *Manager) AcquireIfConfigured(ctx context.Context, scope domain.Scope, a
 }
 
 func (m *Manager) acquire(ctx context.Context, scope domain.Scope, affinity string, allowDirect bool, encryptedCredentialCookies string, boundNodeID uint64) (*Lease, bool, error) {
+	return m.acquireScopes(ctx, scope, affinity, allowDirect, encryptedCredentialCookies, boundNodeID, fallbackScopes(scope))
+}
+
+// AcquireConsoleAssetIfConfigured honors an explicit public-resource pool or
+// fallback only. Anonymous CDN downloads do not inherit the API account's proxy
+// binding, Web/Console pools or cookies. No resource configuration means direct.
+func (m *Manager) AcquireConsoleAssetIfConfigured(ctx context.Context, affinity string) (*Lease, bool, error) {
+	return m.acquireScopes(ctx, domain.ScopeConsoleAsset, affinity, false, "", 0, []domain.Scope{domain.ScopeConsoleAsset})
+}
+
+func (m *Manager) acquireScopes(ctx context.Context, scope domain.Scope, affinity string, allowDirect bool, encryptedCredentialCookies string, boundNodeID uint64, scopes []domain.Scope) (*Lease, bool, error) {
 	now := time.Now().UTC()
 	m.clearanceMu.Lock()
 	_, managedClearance := m.clearanceForLocked(scope)
@@ -144,7 +155,7 @@ func (m *Manager) acquire(ctx context.Context, scope domain.Scope, affinity stri
 			}
 		}
 	}
-	for _, candidateScope := range fallbackScopes(scope) {
+	for _, candidateScope := range scopes {
 		nodes, err := m.listNodes(ctx, candidateScope, now)
 		if err != nil {
 			return nil, false, err

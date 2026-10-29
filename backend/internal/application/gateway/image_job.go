@@ -28,6 +28,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	diagnosticpkg "github.com/chenyme/grok2api/backend/internal/pkg/diagnostic"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
 	"github.com/chenyme/grok2api/backend/internal/pkg/requestparams"
 	"github.com/chenyme/grok2api/backend/internal/repository"
@@ -235,12 +236,12 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 	if len(inputJSON) > media.MaxInputJSONBytes {
 		return media.Job{}, ErrImageInputTooLarge
 	}
-	params := media.ImageParams{OutputFormat: input.OutputFormat, Background: input.Background, ResponseModel: input.ResponseModel, ResponseBackground: input.ResponseBackground}
+	params := media.JobParams{OutputFormat: input.OutputFormat, Background: input.Background, ResponseModel: input.ResponseModel, ResponseBackground: input.ResponseBackground, PinnedAccountID: creativeAccountID(ctx)}
 	// The inputs enter as a digest: they can be 32 MiB of data URIs.
 	hash := payloadHash(struct {
 		Model, Prompt, Size, Quality string
 		Input                        [sha256.Size]byte
-		Params                       media.ImageParams
+		Params                       media.JobParams
 	}{input.PublicModel, input.Prompt, input.Size, input.Quality, sha256.Sum256(inputJSON), params})
 	if existing, found, err := s.idempotentJob(ctx, input.ClientKey.ID, input.IdempotencyKey, hash); err != nil || found {
 		return existing, err
@@ -300,7 +301,7 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 	if err != nil {
 		return media.Job{}, fmt.Errorf("%w: %w", ErrNoAvailableAccount, err)
 	}
-	accountID, accountName := lease.Credential.ID, lease.Credential.Name
+	accountID, accountName := lease.Credential.ID, lease.Credential.DisplayName()
 	lease.Release()
 	token, err := security.NewHexToken(16)
 	if err != nil {
@@ -367,6 +368,7 @@ func (s *Service) CreateImageJob(ctx context.Context, input ImageJobInput) (medi
 // runImageJob draws the job's image, resuming it from its checkpoint after a
 // crash.
 func (s *Service) runImageJob(parent context.Context, job media.Job, route modeldomain.Route) {
+	parent = WithCreativeAccount(parent, job.Params.PinnedAccountID)
 	adapter, ok := s.providers.AsyncImages(route.Provider)
 	if !ok {
 		s.endImageJob(parent, &job, media.StatusFailed, "provider_unavailable", ErrNoAvailableAccount, 0)
@@ -589,7 +591,7 @@ func (s *Service) submitImage(ctx context.Context, job *media.Job, route modeldo
 		}
 		scope = key.AccountScope()
 	}
-	attemptPolicy := newRoutingAttemptPolicy(int(s.maxAttempts.Load()))
+	attemptPolicy := newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), creativeAccountID(ctx) != 0)
 	excluded := map[uint64]bool{}
 	retried := map[uint64]bool{}
 	pinned := job.AccountID
@@ -628,7 +630,7 @@ func (s *Service) submitImage(ctx context.Context, job *media.Job, route modeldo
 			continue
 		}
 		lease.Credential = credential
-		job.AccountID, job.AccountName = credential.ID, credential.Name
+		job.AccountID, job.AccountName = credential.ID, credential.DisplayName()
 		request.Credential = credential
 		lease.markSelectorUpstreamStarted()
 		attemptStarted = time.Now()
@@ -642,7 +644,7 @@ func (s *Service) submitImage(ctx context.Context, job *media.Job, route modeldo
 			lease.Release()
 			return stop("", "", err)
 		}
-		if failure := ProviderUpstreamFailure(err, credential.ID, credential.Name); failure != nil && failure.SafetyRejection {
+		if failure := ProviderUpstreamFailure(err, credential.ID, credential.DisplayName()); failure != nil && failure.SafetyRejection {
 			lease.completeSelectorObservation(false)
 			lease.Release()
 			return stop(media.StatusFailed, provider.ContentPolicyViolation, err)
@@ -776,7 +778,7 @@ func jobErrorMessage(err error) string {
 	if err == nil {
 		return ""
 	}
-	return truncateDiagnosticText(strings.ToValidUTF8(err.Error(), "�"), 512)
+	return diagnosticpkg.Truncate(strings.ToValidUTF8(err.Error(), "�"), 512)
 }
 
 // recordImageJobAudits writes the audit of the delivered image, or of the

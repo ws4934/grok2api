@@ -96,7 +96,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 		return nil, err
 	}
 	quotaMode := s.providers.QuotaMode(route.Provider, route.UpstreamModel)
-	attemptPolicy := newRoutingAttemptPolicy(int(s.maxAttempts.Load()))
+	attemptPolicy := newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), creativeAccountID(ctx) != 0)
 	excluded := make(map[uint64]bool)
 	selection := preselectedSession
 	var lease *accountLease
@@ -154,7 +154,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 				cleanup()
 			}
 			if status, ok := provider.ErrorHTTPStatus(dialErr); ok {
-				failure := newHTTPUpstreamFailure(status, nil, credential.ID, credential.Name)
+				failure := newHTTPUpstreamFailure(status, nil, credential.ID, credential.DisplayName())
 				failure.RequestScopedForbidden = provider.IsRequestScopedError(dialErr)
 				failure.RetryAfter = provider.ErrorRetryAfter(dialErr)
 				failure.Cause = dialErr
@@ -201,7 +201,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 				lease.Release()
 				continue
 			}
-			failure := newTransportUpstreamFailure(dialErr, credential.ID, credential.Name)
+			failure := newTransportUpstreamFailure(dialErr, credential.ID, credential.DisplayName())
 			lastErr = failure
 			if ctx.Err() == nil && isRetryableTransportFailure(s.providers.Failure(credential.Provider), dialErr) && attempt == 0 && attemptPolicy.hasNext(attempt) {
 				delete(excluded, credential.ID)
@@ -261,7 +261,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 				record.DurationMS = time.Since(startedAt).Milliseconds()
 				record.CreatedAt = time.Now().UTC()
 				record.AccountID = &accountID
-				record.AccountName = accountCredential.Name
+				record.AccountName = accountCredential.DisplayName()
 				applyAuditEgress(&record, egressTrace, route.Provider)
 				// Bill whenever the upstream returned a confirmed duration,
 				// independent of how the downstream client's connection later
@@ -284,7 +284,7 @@ func (s *Service) OpenVoiceWebSocket(ctx context.Context, input VoiceWebSocketIn
 		}
 		return &VoiceWebSocketSession{
 			Conn: conn, Finalize: finalize, RequestID: input.RequestID, PublicModel: externalModel,
-			Provider: route.Provider, AccountID: credential.ID, AccountName: credential.Name,
+			Provider: route.Provider, AccountID: credential.ID, AccountName: credential.DisplayName(),
 			Operation: operation, Capability: capability,
 		}, nil
 	}

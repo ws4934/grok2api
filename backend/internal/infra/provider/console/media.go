@@ -322,26 +322,11 @@ func (a *Adapter) downloadConsoleImage(ctx context.Context, credential account.C
 }
 
 func (a *Adapter) downloadConsoleImageAttempt(ctx context.Context, credential account.Credential, baseURL, rawURL string) ([]byte, bool, error) {
-	lease, err := a.egress.AcquireCredential(ctx, egressdomain.ScopeConsoleAsset, credential)
+	response, lease, err := a.openConsoleAsset(ctx, credential, rawURL, "image/*,*/*;q=0.8")
 	if err != nil {
-		return nil, true, err
+		return nil, ctx.Err() == nil, fmt.Errorf("下载图片: %w", err)
 	}
 	defer lease.Release()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, false, err
-	}
-	request.Header.Set("Accept", "image/*,*/*;q=0.8")
-	userAgent := strings.TrimSpace(lease.UserAgent)
-	if userAgent == "" {
-		userAgent = infraegress.DefaultUserAgent
-	}
-	request.Header.Set("User-Agent", userAgent)
-	response, err := lease.DoDeferredForbidden(request)
-	if err != nil {
-		a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsoleAsset, lease.NodeID, 0, err)
-		return nil, ctx.Err() == nil, fmt.Errorf("下载 Console 图片: %w", err)
-	}
 	defer response.Body.Close()
 	// 标准 net/http 响应会保留最终请求 URL；兼容不填充 Request 的自定义出口客户端时，
 	// 初始 URL 已在发起请求前完成校验。若存在最终 URL，则额外检查重定向目标。
@@ -352,7 +337,7 @@ func (a *Adapter) downloadConsoleImageAttempt(ctx context.Context, credential ac
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		retryable := response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooEarly || response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500
-		a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsoleAsset, lease.NodeID, response.StatusCode, nil)
+		a.feedbackConsoleAsset(ctx, lease, response.StatusCode, nil)
 		return nil, retryable, fmt.Errorf("下载 Console 图片返回 %d", response.StatusCode)
 	}
 	contentType := strings.ToLower(strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0]))
@@ -366,7 +351,7 @@ func (a *Adapter) downloadConsoleImageAttempt(ctx context.Context, credential ac
 	if len(raw) == 0 || len(raw) > consoleImageBodyLimit {
 		return nil, false, errors.New("Console 图片为空或超过 32 MiB")
 	}
-	a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsoleAsset, lease.NodeID, response.StatusCode, nil)
+	a.feedbackConsoleAsset(ctx, lease, response.StatusCode, nil)
 	return raw, false, nil
 }
 
@@ -688,25 +673,8 @@ func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credenti
 	if err != nil || parsed.Scheme != "https" || parsed.User != nil || !trustedConsoleVideoHost(parsed.Hostname()) {
 		return nil, "", 0, errors.New("Console 视频内容 URL 不受信任")
 	}
-	lease, err := a.egress.AcquireCredential(ctx, egressdomain.ScopeConsoleAsset, credential)
+	response, lease, err := a.openConsoleAsset(ctx, credential, parsed.String(), "video/*,*/*;q=0.8")
 	if err != nil {
-		return nil, "", 0, err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
-	if err != nil {
-		lease.Release()
-		return nil, "", 0, err
-	}
-	request.Header.Set("Accept", "video/*,*/*;q=0.8")
-	userAgent := strings.TrimSpace(lease.UserAgent)
-	if userAgent == "" {
-		userAgent = infraegress.DefaultUserAgent
-	}
-	request.Header.Set("User-Agent", userAgent)
-	response, err := lease.DoDeferredForbidden(request)
-	if err != nil {
-		a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsoleAsset, lease.NodeID, 0, err)
-		lease.Release()
 		return nil, "", 0, err
 	}
 	if response.Request != nil && response.Request.URL != nil {
@@ -719,7 +687,7 @@ func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credenti
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_ = response.Body.Close()
-		a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsoleAsset, lease.NodeID, response.StatusCode, nil)
+		a.feedbackConsoleAsset(ctx, lease, response.StatusCode, nil)
 		lease.Release()
 		return nil, "", 0, fmt.Errorf("下载 Console 视频返回 %d", response.StatusCode)
 	}
@@ -734,13 +702,66 @@ func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credenti
 	}
 	onFinished := func(readErr error, complete bool) {
 		if readErr != nil {
-			a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsoleAsset, lease.NodeID, 0, readErr)
+			a.feedbackConsoleAsset(ctx, lease, 0, readErr)
 		} else if complete {
-			a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsoleAsset, lease.NodeID, response.StatusCode, nil)
+			a.feedbackConsoleAsset(ctx, lease, response.StatusCode, nil)
 		}
 		lease.Release()
 	}
 	return provider.NewCompletionReadCloser(response.Body, onFinished), contentType, response.ContentLength, nil
+}
+
+func isPublicConsoleAssetHost(host string) bool {
+	return grokimage.TrustedAssetHost(host) || trustedConsoleVideoHost(host)
+}
+
+// CDN output is anonymous: only an explicitly configured resource pool may
+// proxy it. Custom API-origin image endpoints retain their original routing.
+func (a *Adapter) openConsoleAsset(ctx context.Context, credential account.Credential, rawURL, accept string) (*http.Response, *infraegress.Lease, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	public := parsed.Scheme == "https" && isPublicConsoleAssetHost(parsed.Hostname())
+	var lease *infraegress.Lease
+	if public {
+		lease, _, err = a.egress.AcquireConsoleAssetIfConfigured(ctx, strconv.FormatUint(credential.ID, 10))
+	} else {
+		lease, err = a.egress.AcquireCredential(ctx, egressdomain.ScopeConsoleAsset, credential)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		lease.Release()
+		return nil, nil, err
+	}
+	userAgent := infraegress.DefaultUserAgent
+	if lease != nil && strings.TrimSpace(lease.UserAgent) != "" {
+		userAgent = lease.UserAgent
+	}
+	request.Header.Set("User-Agent", userAgent)
+	request.Header.Set("Accept", accept)
+	var response *http.Response
+	if public && (lease == nil || lease.ProxyURL == "") {
+		response, err = a.public.Do(request)
+		infraegress.RecordDirectPhysicalCall(ctx, response, err)
+	} else {
+		response, err = lease.DoDeferredForbidden(request)
+	}
+	if err != nil {
+		a.feedbackConsoleAsset(ctx, lease, 0, err)
+		lease.Release()
+		return nil, nil, err
+	}
+	return response, lease, nil
+}
+
+func (a *Adapter) feedbackConsoleAsset(ctx context.Context, lease *infraegress.Lease, status int, err error) {
+	if lease != nil {
+		a.egress.FeedbackForScope(context.WithoutCancel(ctx), egressdomain.ScopeConsoleAsset, lease.NodeID, status, err)
+	}
 }
 
 func invalidConsoleMediaRequest(message string) *provider.Response {

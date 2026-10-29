@@ -58,7 +58,7 @@ func (a *Adapter) DialVoiceWebSocket(ctx context.Context, request provider.Voice
 		cleanup()
 		return nil, nil, err
 	}
-	apiKey, apiKeyErr := a.consoleAPIKey(requestCtx, request.Credential, token, lease, false)
+	apiKey, apiKeyErr := a.consoleAPIKey(requestCtx, request.Credential, token, lease, "")
 	if apiKeyErr != nil {
 		if requestCtx.Err() != nil {
 			cleanup()

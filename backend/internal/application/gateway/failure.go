@@ -42,9 +42,12 @@ type UpstreamFailure struct {
 	// same request with another credential cannot fix it.
 	RequestScopedForbidden bool
 	CredentialRejected     bool
-	Fingerprint            string
-	RetryAfter             time.Duration
-	Cause                  error
+	// APIKeyRejected is a repairable account-key failure, not an invalid SSO
+	// or a client parameter error. Keep the real upstream 400 for diagnostics.
+	APIKeyRejected bool
+	Fingerprint    string
+	RetryAfter     time.Duration
+	Cause          error
 }
 
 func (e *UpstreamFailure) Error() string {
@@ -114,6 +117,12 @@ func newHTTPUpstreamFailure(status int, body []byte, accountID uint64, accountNa
 		failure.Code, failure.PublicMessage = provider.ContentPolicyViolation, provider.ContentPolicyMessage
 		failure.SafetyRejection = true
 		failure.Fingerprint = fmt.Sprintf("%d:%s", status, provider.ContentPolicyViolation)
+		return failure
+	}
+	if provider.IsBadRequestAPIKeyRejection(status, upstreamCode, upstreamMessage) {
+		failure.Code, failure.PublicMessage = provider.APIKeyRejectedCode, provider.APIKeyRejectedMessage
+		failure.AccountScoped, failure.APIKeyRejected = true, true
+		failure.Fingerprint = "400:invalid_api_key"
 		return failure
 	}
 	switch status {

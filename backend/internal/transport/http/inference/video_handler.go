@@ -481,7 +481,7 @@ func videoGenerationResponse(job mediadomain.Job, contentURLs ...string) gin.H {
 
 func officialVideoErrorCode(value string) string {
 	switch value {
-	case "account_unavailable", "provider_unavailable":
+	case "account_unavailable", "provider_unavailable", provider.APIKeyRejectedCode:
 		return "service_unavailable"
 	case "model_not_found", "invalid_request", "invalid_argument", provider.ContentPolicyViolation:
 		return "invalid_argument"

@@ -609,10 +609,14 @@ func TestGenerateVideoFailedStatusAndDownloadTrustedURL(t *testing.T) {
 
 	const assetURL = "https://vidgen.x.ai/videos/done.mp4"
 	adapter.http.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		t.Fatal("public download used the API transport")
+		return nil, errors.New("unexpected API request")
+	})
+	adapter.public.Transport = roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		if request.Method != http.MethodGet || request.URL.String() != assetURL {
 			t.Fatalf("download request = %s %s", request.Method, request.URL)
 		}
-		if identity := infraegress.AccountFromContext(request.Context()); identity != "grok_build_99" {
+		if identity := infraegress.AccountFromContext(request.Context()); identity != "" {
 			t.Fatalf("download egress account identity = %q", identity)
 		}
 		for _, key := range []string{

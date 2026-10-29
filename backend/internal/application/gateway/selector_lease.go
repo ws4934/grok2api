@@ -16,6 +16,7 @@ type accountLease struct {
 	QuotaProbe          bool
 	QuotaProbeKind      account.QuotaRecoveryKind
 	QuotaMode           string
+	creativePinned      bool
 	routingCandidate    *account.RoutingCandidate
 	selectorObservation *selectorLeaseObservation
 	release             func()
@@ -112,7 +113,7 @@ func (l *accountLease) completeSelectorObservation(success bool) {
 func (s *Selector) claimAccountSlotTracked(ctx context.Context, value account.Credential, materialFailures *credentialMaterialFailureTracker) (*accountLease, error) {
 	now := time.Now().UTC()
 	value = s.applyRoutingHealth(value, now)
-	if value.CooldownUntil != nil && now.Before(*value.CooldownUntil) {
+	if value.CooldownUntil != nil && now.Before(*value.CooldownUntil) && creativeAccountID(ctx) != value.ID {
 		return nil, nil
 	}
 	limit := value.MaxConcurrent

@@ -354,7 +354,7 @@ func (s *Service) executeVoice(
 	if consumesQuota {
 		quotaMode = s.providers.QuotaMode(route.Provider, route.UpstreamModel)
 	}
-	attemptPolicy := newRoutingAttemptPolicy(int(s.maxAttempts.Load()))
+	attemptPolicy := newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), creativeAccountID(ctx) != 0)
 	excluded := make(map[uint64]bool)
 	selection := preselectedSession
 	var lease *accountLease
@@ -384,6 +384,10 @@ func (s *Service) executeVoice(
 		}
 		if err != nil {
 			errorCode := "upstream_unavailable"
+			if failure := ProviderUpstreamFailure(lastCredentialError, 0, ""); failure != nil && failure.APIKeyRejected {
+				writeFailureAudit(failure.HTTPStatus, failure.Code, lastCredentialFailure)
+				return nil, failure
+			}
 			var selectionFailure *SelectionUnavailableError
 			if errors.As(err, &selectionFailure) {
 				errorCode = selectionFailure.Code()
@@ -420,7 +424,7 @@ func (s *Service) executeVoice(
 				lease.Release()
 				continue
 			} else {
-				failure := newTransportUpstreamFailure(err, credential.ID, credential.Name)
+				failure := newTransportUpstreamFailure(err, credential.ID, credential.DisplayName())
 				lastCredentialError = failure
 				if ctx.Err() == nil && isRetryableTransportFailure(s.providers.Failure(credential.Provider), err) && attempt == 0 && attemptPolicy.hasNext(attempt) {
 					// Transport failures are normally tied to the selected egress. Retry the
@@ -442,6 +446,19 @@ func (s *Service) executeVoice(
 				writeFailureAudit(http.StatusBadGateway, "upstream_unavailable", &credential)
 				return nil, err
 			}
+		}
+		if failure := apiKeyRejectedResponse(response, credential); failure != nil {
+			s.selector.MarkFailure(ctx, credential, response.StatusCode, 0)
+			failedCredential := credential
+			lastCredentialFailure, lastCredentialError = &failedCredential, failure
+			_ = response.Body.Close()
+			response = nil
+			lease.Release()
+			if !attemptPolicy.hasNext(attempt) {
+				writeFailureAudit(failure.HTTPStatus, failure.Code, &credential)
+				return nil, failure
+			}
+			continue
 		}
 		if response.StatusCode == http.StatusUnauthorized && credential.AuthType == accountdomain.AuthTypeSSO {
 			_, _ = readRetryableBody(response.Body)
@@ -520,7 +537,7 @@ func (s *Service) executeVoice(
 				})
 			}
 			record := auditBase
-			record.AccountID, record.AccountName, record.StatusCode = &accountID, credential.Name, response.StatusCode
+			record.AccountID, record.AccountName, record.StatusCode = &accountID, credential.DisplayName(), response.StatusCode
 			record.ErrorCode = errorCode
 			record.DurationMS, record.CreatedAt = time.Since(startedAt).Milliseconds(), time.Now().UTC()
 			applyAuditEgress(&record, egressTrace, route.Provider)
@@ -594,6 +611,11 @@ func voiceErrorResponse(err error) (*provider.Response, error) {
 			message = "上游语音服务返回错误"
 		}
 		response := jsonVoiceResponse(status, map[string]any{"error": map[string]any{"type": "upstream_error", "message": message}})
+		var diagnostic provider.UpstreamDiagnosticError
+		if errors.As(err, &diagnostic) {
+			_, value := diagnostic.UpstreamDiagnostic()
+			response.Diagnostic = &value
+		}
 		if retryAfter := provider.ErrorRetryAfter(err); retryAfter > 0 {
 			seconds := max(int64(1), int64((retryAfter+time.Second-1)/time.Second))
 			response.Header.Set("Retry-After", strconv.FormatInt(seconds, 10))

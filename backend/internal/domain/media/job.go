@@ -70,10 +70,13 @@ const (
 	VideoOperationExtend   VideoOperation = "extend"
 )
 
-// ImageParams are the immutable options of an image job.
-type ImageParams struct {
-	OutputFormat string `json:"output_format,omitempty"`
-	Background   string `json:"background,omitempty"`
+// JobParams are immutable execution and image-output options.
+type JobParams struct {
+	// PinnedAccountID is set only by administrator creative-console requests.
+	// Persist it so a queued/recovered job never switches to another account.
+	PinnedAccountID uint64 `json:"pinned_account_id,omitempty"`
+	OutputFormat    string `json:"output_format,omitempty"`
+	Background      string `json:"background,omitempty"`
 	// ResponseModel and ResponseBackground echo the Responses request that created the job.
 	ResponseModel      string `json:"response_model,omitempty"`
 	ResponseBackground bool   `json:"response_background,omitempty"`
@@ -116,7 +119,7 @@ type Job struct {
 	Checkpoint string
 	// Submitted marks that the task in flight may have reached the upstream.
 	Submitted bool
-	Params    ImageParams
+	Params    JobParams
 	// IdempotencyKey and PayloadHash deduplicate client retries per client key.
 	IdempotencyKey string
 	PayloadHash    string

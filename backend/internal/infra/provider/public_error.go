@@ -36,6 +36,9 @@ func LocalizePublicErrorMessage(status int, code, message string) string {
 	if IsContentSafetyRejection(text) {
 		return ContentPolicyMessage
 	}
+	if code == APIKeyRejectedCode || IsBadRequestAPIKeyRejection(status, code, message) {
+		return APIKeyRejectedMessage
+	}
 	// Channel labels belong to diagnostics, not the client's failure reason.
 	// This runs only on error messages; model IDs, codes and generated text stay intact.
 	message = strings.TrimSpace(publicChannelLabel.ReplaceAllString(message, ""))

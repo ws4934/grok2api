@@ -85,6 +85,8 @@ func writeGatewayError(c *gin.Context, err error) {
 	case errors.As(err, &imageRejection):
 		status, code = http.StatusBadRequest, "invalid_parameter"
 		message = err.Error()
+	case upstreamFailure != nil && upstreamFailure.APIKeyRejected:
+		status, code, message = http.StatusServiceUnavailable, provider.APIKeyRejectedCode, provider.APIKeyRejectedMessage
 	case upstreamFailure != nil:
 		if isSanitizedUpstreamAvailabilityFailure(upstreamFailure) {
 			// Gateway mid-tier behavior: never expose upstream upgrade/billing prompts to clients.
@@ -130,6 +132,8 @@ func writeGatewayAnthropicError(c *gin.Context, err error) {
 	case errors.Is(err, gateway.ErrResponseStateUnsupported), errors.Is(err, gateway.ErrConversationUnsupported):
 		status, errorType = http.StatusBadRequest, "invalid_request_error"
 		message = err.Error()
+	case upstreamFailure != nil && upstreamFailure.APIKeyRejected:
+		status, errorType, clientCode, message = http.StatusServiceUnavailable, "overloaded_error", provider.APIKeyRejectedCode, provider.APIKeyRejectedMessage
 	case upstreamFailure != nil:
 		if isSanitizedUpstreamAvailabilityFailure(upstreamFailure) {
 			clientCode = upstreamFailure.ClientCredentialErrorCode()

@@ -1,3 +1,5 @@
+import { apiFetch } from "../../shared/api/client.ts";
+
 export type ChatMessage = {
   role: "system" | "user" | "assistant";
   content: string;
@@ -65,6 +67,7 @@ class CreativeApiError extends Error {
 }
 
 type RequestOptions = {
+  accountId?: string;
   method?: "GET" | "POST";
   body?: Record<string, unknown>;
   signal?: AbortSignal;
@@ -73,6 +76,7 @@ type RequestOptions = {
 };
 
 export async function createChatResponse(input: {
+  accountId?: string;
   basicProtocol?: boolean;
   apiKey: string;
   model: string;
@@ -100,10 +104,11 @@ export async function createChatResponse(input: {
   if (input.xSearch) tools.push({ type: "x_search" });
   if (tools.length > 0) body.tools = tools;
   }
-  return publicResponsesStream(input.apiKey, body, input.onUpdate, input.signal);
+  return publicResponsesStream(input.apiKey, body, input.onUpdate, input.signal, input.accountId);
 }
 
 export async function generateImage(input: {
+  accountId?: string;
   basicProtocol: boolean;
   apiKey: string;
   model: string;
@@ -116,7 +121,7 @@ export async function generateImage(input: {
   const sourceImages = input.imageURLs?.map((url) => ({ url, type: "image_url" }));
   const editing = Boolean(sourceImages?.length);
   const body = { ...imageGenerationBody(input), ...(editing ? { images: sourceImages } : {}) };
-  const payload = await publicApiRequest(input.apiKey, editing ? "/images/edits" : "/images/generations", { method: "POST", body, signal: input.signal, requestId: input.requestId });
+  const payload = await publicApiRequest(input.apiKey, editing ? "/images/edits" : "/images/generations", { method: "POST", body, signal: input.signal, requestId: input.requestId, accountId: input.accountId });
   const images = readImages(payload);
   if (images.length === 0) throw new CreativeApiError(200, "The image response did not contain any images", "invalid_response");
   return images.map((image) => ({ ...image, url: resolveMediaURL(image.url) }));
@@ -124,10 +129,10 @@ export async function generateImage(input: {
 
 // submitImageJob starts one image as a durable job through the Responses
 // image_generation tool in background mode, so it survives leaving the page.
-export async function submitImageJob(input: { apiKey: string; model: string; prompt: string; params: ImageParams; requestId?: string; imageURLs?: string[] }): Promise<string> {
+export async function submitImageJob(input: { apiKey: string; accountId?: string; model: string; prompt: string; params: ImageParams; requestId?: string; imageURLs?: string[] }): Promise<string> {
   const tool = { type: "image_generation", size: input.params.size || "auto", quality: input.params.quality || "auto" };
   const prompt = input.imageURLs?.length ? [{ role: "user", content: [{ type: "input_text", text: input.prompt }, ...input.imageURLs.map((url) => ({ type: "input_image", image_url: url }))] }] : input.prompt;
-  const payload = await publicApiRequest(input.apiKey, "/responses", { method: "POST", body: { model: input.model, input: prompt, background: true, tools: [tool] }, requestId: input.requestId });
+  const payload = await publicApiRequest(input.apiKey, "/responses", { method: "POST", body: { model: input.model, input: prompt, background: true, tools: [tool] }, requestId: input.requestId, accountId: input.accountId });
   const id = isRecord(payload) && typeof payload.id === "string" ? payload.id : "";
   if (!id) throw new CreativeApiError(200, "The image job response did not contain an id", "invalid_response");
   return id;
@@ -176,6 +181,7 @@ export function imageGenerationBody({ basicProtocol, model, prompt, params }: { 
 }
 
 export async function createVideo(input: {
+  accountId?: string;
   apiKey: string;
   model: string;
   prompt: string;
@@ -217,7 +223,7 @@ export async function createVideo(input: {
   const payload = await publicApiRequest(
     input.apiKey,
     "/videos/generations",
-    { method: "POST", body, signal: input.signal },
+    { method: "POST", body, signal: input.signal, accountId: input.accountId },
   );
   const requestId = readVideoRequestID(payload);
   if (!requestId) {
@@ -227,6 +233,7 @@ export async function createVideo(input: {
 }
 
 export async function editVideo(input: {
+  accountId?: string;
   apiKey: string;
   model: string;
   prompt: string;
@@ -249,6 +256,7 @@ export async function editVideo(input: {
         ...(input.resolution ? { resolution: input.resolution } : {}),
       },
       signal: input.signal,
+      accountId: input.accountId,
     },
   );
   const requestId = readVideoRequestID(payload);
@@ -259,6 +267,7 @@ export async function editVideo(input: {
 }
 
 export async function extendVideo(input: {
+  accountId?: string;
   apiKey: string;
   model: string;
   prompt: string;
@@ -278,7 +287,7 @@ export async function extendVideo(input: {
   const payload = await publicApiRequest(
     input.apiKey,
     "/videos/extensions",
-    { method: "POST", body, signal: input.signal },
+    { method: "POST", body, signal: input.signal, accountId: input.accountId },
   );
   const requestId = readVideoRequestID(payload);
   if (!requestId) {
@@ -322,12 +331,13 @@ export type STTResult = {
 };
 
 export async function listVoices(input: {
+  accountId?: string;
   apiKey: string;
   model?: string;
   signal?: AbortSignal;
 }): Promise<VoiceInfo[]> {
   const query = input.model ? `?model=${encodeURIComponent(input.model)}` : "";
-  const payload = await publicApiRequest(input.apiKey, `/tts/voices${query}`, { method: "GET", signal: input.signal });
+  const payload = await publicApiRequest(input.apiKey, `/tts/voices${query}`, { method: "GET", signal: input.signal, accountId: input.accountId });
   if (!isRecord(payload) || !Array.isArray(payload.voices)) {
     throw new CreativeApiError(200, "The voice list response was invalid", "invalid_response");
   }
@@ -344,6 +354,7 @@ export async function listVoices(input: {
 }
 
 export async function synthesizeSpeech(input: {
+  accountId?: string;
   apiKey: string;
   model: string;
   text: string;
@@ -352,7 +363,8 @@ export async function synthesizeSpeech(input: {
   speed?: number;
   signal?: AbortSignal;
 }): Promise<TTSResult> {
-  const response = await fetch("/v1/tts", {
+  const response = await creativeFetch(input.apiKey, "/tts", {
+    accountId: input.accountId,
     method: "POST",
     headers: new Headers({
       Accept: "application/json, audio/*",
@@ -390,6 +402,7 @@ export async function synthesizeSpeech(input: {
 }
 
 export async function transcribeSpeech(input: {
+  accountId?: string;
   apiKey: string;
   model: string;
   file: File;
@@ -401,7 +414,8 @@ export async function transcribeSpeech(input: {
   if (input.language) form.append("language", input.language);
   form.append("format", "true");
   form.append("file", input.file, input.file.name);
-  const response = await fetch("/v1/stt", {
+  const response = await creativeFetch(input.apiKey, "/stt", {
+    accountId: input.accountId,
     method: "POST",
     headers: new Headers({ Accept: "application/json", Authorization: `Bearer ${input.apiKey}` }),
     body: form,
@@ -432,6 +446,19 @@ export async function transcribeSpeech(input: {
   };
 }
 
+async function creativeFetch(apiKey: string, path: string, options: RequestInit & { accountId?: string }): Promise<Response> {
+  const { accountId, ...init } = options;
+  const headers = new Headers(init.headers);
+  if (accountId) {
+    headers.delete("Authorization");
+    headers.set("X-Client-Key", apiKey);
+    headers.set("X-Creative-Account-ID", accountId);
+    return apiFetch(`/api/admin/v1/creative${path}`, { ...init, body: init.body ?? undefined, headers, retryAuth: false });
+  }
+  headers.set("Authorization", `Bearer ${apiKey}`);
+  return fetch(`/v1${path}`, { ...init, headers });
+}
+
 async function publicApiRequest(apiKey: string, path: string, options: RequestOptions): Promise<unknown> {
   const headers = new Headers({ Accept: "application/json", Authorization: `Bearer ${apiKey}` });
   if (options.requestId) headers.set("X-Request-ID", options.requestId);
@@ -440,7 +467,8 @@ async function publicApiRequest(apiKey: string, path: string, options: RequestOp
     headers.set("Content-Type", "application/json");
     body = JSON.stringify(options.body);
   }
-  const response = await fetch(`/v1${path}`, {
+  const response = await creativeFetch(apiKey, path, {
+    accountId: options.accountId,
     method: options.method ?? "GET",
     headers,
     body,
@@ -453,8 +481,9 @@ async function publicApiRequest(apiKey: string, path: string, options: RequestOp
   return payload;
 }
 
-async function publicResponsesStream(apiKey: string, body: Record<string, unknown>, onUpdate?: (snapshot: ChatStreamSnapshot) => void, signal?: AbortSignal): Promise<ChatResponseResult> {
-  const response = await fetch("/v1/responses", {
+async function publicResponsesStream(apiKey: string, body: Record<string, unknown>, onUpdate?: (snapshot: ChatStreamSnapshot) => void, signal?: AbortSignal, accountId?: string): Promise<ChatResponseResult> {
+  const response = await creativeFetch(apiKey, "/responses", {
+    accountId,
     method: "POST",
     headers: new Headers({ Accept: "text/event-stream", Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }),
     body: JSON.stringify(body),

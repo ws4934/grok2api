@@ -27,6 +27,7 @@ func RequestID() gin.HandlerFunc {
 			}
 		}
 		c.Set(RequestIDKey, requestID)
+		c.Request = c.Request.WithContext(requestmeta.WithRequestID(c.Request.Context(), requestID))
 		c.Header("X-Request-ID", requestID)
 		c.Next()
 	}
@@ -127,6 +128,9 @@ func AccessLog(logger *slog.Logger) gin.HandlerFunc {
 				path = path[:200]
 			}
 		}
+		if skipAccessLog(c.Request.Method, path, c.Writer.Status(), c.FullPath() != "") {
+			return
+		}
 		attrs := []any{"request_id", requestID, "method", c.Request.Method, "path", path, "status", c.Writer.Status(), "duration_ms", time.Since(startedAt).Milliseconds()}
 		if value, ok := c.Get(errorNoteKey); ok {
 			note, _ := value.(errorNote)
@@ -136,6 +140,36 @@ func AccessLog(logger *slog.Logger) gin.HandlerFunc {
 			}
 			attrs = append(attrs, "error_code", note.code, "error", string(message))
 		}
-		logger.Info("http_request", attrs...)
+		level := slog.LevelInfo
+		if c.Writer.Status() >= 500 {
+			level = slog.LevelError
+		} else if c.Writer.Status() >= 400 {
+			level = slog.LevelWarn
+		}
+		logger.Log(c.Request.Context(), level, "http_request", attrs...)
 	}
+}
+
+// Routine admin reads, successful static page loads and session renewal are UI
+// plumbing. Keep real client API calls, administrative actions and failures.
+func skipAccessLog(method, path string, status int, matched bool) bool {
+	if path == "/api/admin/v1/system/logs" || path == "/healthz" || path == "/readyz" {
+		return true
+	}
+	if status >= 400 {
+		return false
+	}
+	if method == http.MethodOptions {
+		return true
+	}
+	if method == http.MethodPost && path == "/api/admin/v1/auth/refresh" {
+		return true
+	}
+	if method != http.MethodGet && method != http.MethodHead {
+		return false
+	}
+	if !matched {
+		return true
+	}
+	return strings.HasPrefix(path, "/api/admin/v1/") && !strings.Contains(path, "/export")
 }

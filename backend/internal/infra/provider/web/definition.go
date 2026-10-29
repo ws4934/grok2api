@@ -70,17 +70,39 @@ func (a *Adapter) CandidateQuotaMode(candidate account.RoutingCandidate, quotaMo
 
 // NormalizeVideoRequest applies the xAI video defaults and ranges.
 func (a *Adapter) NormalizeVideoRequest(options provider.VideoRequestOptions) (provider.VideoRequestOptions, error) {
-	return provider.NormalizeGrokVideoRequest(options)
+	options, err := provider.NormalizeGrokVideoRequest(options)
+	if err != nil {
+		return options, err
+	}
+	options.ReferenceImages = min(options.ReferenceImages, maxWebVideoReferences)
+	if options.ReferenceImages > 0 {
+		options.Duration = min(options.Duration, 10)
+	}
+	return options, nil
 }
 
-// ValidateVideoRequest: the Web protocol is captured for text-to-video only;
-// the removed media-post path must not come back for image or reference input.
+// ValidateVideoRequest matches the captured Imagine video input modes. Uploads
+// reference fileMetadataId directly; the retired media-post flow is not used.
 func (a *Adapter) ValidateVideoRequest(options provider.VideoRequestOptions) error {
 	if options.Operation != provider.VideoOperationGenerate {
 		return provider.ErrVideoOperationUnsupported
 	}
-	if options.HasImage || options.ReferenceImages > 0 {
-		return fmt.Errorf("%w: Grok Web 当前仅支持文本生视频；图片视频请使用 Build 或 Console Provider", provider.ErrVideoOperationUnsupported)
+	if options.ReferenceImages > maxWebVideoReferences {
+		return fmt.Errorf("%w: 最多支持 %d 张参考图", provider.ErrVideoParameterInvalid, maxWebVideoReferences)
+	}
+	unsupported := ""
+	switch {
+	case options.HasLastFrame:
+		unsupported = "last_frame"
+	case options.Keyframes > 0:
+		unsupported = "keyframes"
+	case options.GenerateAudio != nil:
+		unsupported = "generate_audio"
+	case options.ReferenceVideos > 0:
+		unsupported = "reference_videos"
+	}
+	if unsupported != "" {
+		return fmt.Errorf("%w: 当前模型不支持 %s", provider.ErrVideoParameterInvalid, unsupported)
 	}
 	return nil
 }

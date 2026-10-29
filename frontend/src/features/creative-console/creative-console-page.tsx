@@ -20,6 +20,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { listModels, uniqueModelsByPublicID } from "@/entities/model/model-api";
 import type { ModelRouteDTO } from "@/entities/model/types";
 import { isGrokProvider } from "@/entities/provider/provider-presentation";
+import type { AccountDTO } from "@/features/accounts/accounts-api";
+import { CreativeAccountPicker } from "@/features/creative-console/creative-account-picker";
 import {
   createChatResponse,
   createVideo,
@@ -64,7 +66,7 @@ import {
 } from "@/features/creative-console/creative-console-history";
 import { resolveVoice } from "@/features/creative-console/creative-console-voice";
 import { imageGenerationParams, imageGenerationPolicy, imageReferencePolicy, parseImageReferenceURLs } from "@/features/creative-console/creative-console-image";
-import { parseVideoReferenceURL, snapshotVideoFrame, videoFrameIssue, videoInputPolicy, type VideoFrameInput, type VideoKeyframeInput, type VideoReferenceImage } from "@/features/creative-console/creative-console-video";
+import { parseVideoReferenceURL, snapshotVideoFrame, videoFrameIssue, videoInputPolicy, videoReferenceLabel, type VideoFrameInput, type VideoKeyframeInput, type VideoReferenceImage } from "@/features/creative-console/creative-console-video";
 import { VideoFrameControls } from "@/features/creative-console/creative-console-video-frames";
 import { getClientKeySecret, listClientKeys, type ClientKeyDTO } from "@/features/client-keys/client-keys-api";
 import { importVideoInputFromURL, listMediaAssets, uploadMediaInput } from "@/features/media/media-api";
@@ -90,6 +92,7 @@ type SecretState = {
 };
 
 type ChatRequest = {
+  accountId?: string;
   messages: ChatMessage[];
   promptCacheKey: string;
   reasoningEffort: ReasoningEffort;
@@ -140,6 +143,7 @@ export function CreativeConsolePage() {
   const { t } = useTranslation();
   const [mode, setMode] = useState<CreativeMode>("chat");
   const [selectedKeyId, setSelectedKeyId] = useState("");
+  const [selectedAccount, setSelectedAccount] = useState<AccountDTO | null>(null);
   const [secretState, setSecretState] = useState<SecretState | null>(null);
   const [keyError, setKeyError] = useState("");
   const [selectedModels, setSelectedModels] = useState<Record<ModelMode, string>>({ chat: "", image: "", video: "" });
@@ -162,7 +166,7 @@ export function CreativeConsolePage() {
     enabled: Boolean(selectedKey),
     staleTime: 30_000,
   });
-  const availableModels = useMemo(() => (modelsQuery.data ?? []).filter((model) => model.enabled && model.available), [modelsQuery.data]);
+  const availableModels = useMemo(() => (modelsQuery.data ?? []).filter((model) => model.enabled && model.available && (!selectedAccount || model.provider === selectedAccount.provider)), [modelsQuery.data, selectedAccount]);
   const permittedModels = useMemo(() => {
     if (!selectedKey || selectedKey.modelScope === "all") return availableModels;
     const allowedModelIds = new Set(selectedKey.allowedModelIds);
@@ -217,6 +221,7 @@ export function CreativeConsolePage() {
   function panelProps(panelMode: ModelMode): CreativePanelProps {
     return {
       apiKey,
+      accountId: selectedAccount?.id,
       model: effectiveModels[panelMode],
       modelOptions: modelGroups[panelMode],
       onModelChange: (model) => setSelectedModels((current) => current[panelMode] === model ? current : { ...current, [panelMode]: model }),
@@ -244,7 +249,7 @@ export function CreativeConsolePage() {
       </aside>
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="flex min-h-9 shrink-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-h-9 shrink-0 flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:justify-between">
           <Tabs value={mode} onValueChange={(value) => setMode(value as CreativeMode)}>
             <TabsList className="h-9 w-full rounded-full bg-secondary/50 p-1 lg:w-auto">
               <TabsTrigger className="flex-1 gap-1.5 rounded-full px-3 lg:min-w-20 [&_svg]:size-3.5" value="chat"><MessageSquareText />{t("creativeConsole.modes.chat")}</TabsTrigger>
@@ -263,11 +268,13 @@ export function CreativeConsolePage() {
                 {activeKeys.map((key) => <SelectItem key={key.id} value={key.id}>{key.name} · {key.prefix}</SelectItem>)}
               </SelectContent>
             </Select>
+            <CreativeAccountPicker value={selectedAccount} onChange={setSelectedAccount} />
             <div ref={setToolbarElement} className={cn("items-center gap-1", mode === "voice" ? "hidden" : "flex")} />
           </div>
         </div>
 
         <div className="shrink-0 space-y-2 px-3">
+          {selectedAccount ? <p className="py-1 text-xs leading-5 text-amber-700 dark:text-amber-400">{t("creativeConsole.accountPinnedHint")}</p> : null}
           {keysQuery.isError ? <RetryableError message={keysQuery.error.message} onRetry={() => void keysQuery.refetch()} /> : null}
           {!keysQuery.isPending && !keysQuery.isError && activeKeys.length === 0 ? <InlineError message={t("creativeConsole.errors.noKeys")} /> : null}
           {keyError ? <InlineError message={keyError} /> : null}
@@ -278,7 +285,7 @@ export function CreativeConsolePage() {
           <div className="h-full" hidden={mode !== "chat"}><ChatPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "chat" ? toolbarElement : null} {...panelProps("chat")} /></div>
           <div className="h-full" hidden={mode !== "image"}><ImagePanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "image" ? toolbarElement : null} {...panelProps("image")} /></div>
           <div className="h-full" hidden={mode !== "video"}><VideoPanel key={storageScope} storageScope={storageScope} toolbarElement={mode === "video" ? toolbarElement : null} grokVoiceRoute={grokVoiceRoute} active={mode === "video"} {...panelProps("video")} /></div>
-          <div className="h-full" hidden={mode !== "voice"}><VoicePanel apiKey={apiKey} modelOptions={modelGroups.voice} active={mode === "voice"} /></div>
+          <div className="h-full" hidden={mode !== "voice"}><VoicePanel apiKey={apiKey} accountId={selectedAccount?.id} modelOptions={modelGroups.voice} active={mode === "voice"} /></div>
         </div>
       </section>
     </div>
@@ -286,6 +293,7 @@ export function CreativeConsolePage() {
 }
 
 type CreativePanelProps = {
+  accountId?: string;
   apiKey: string;
   model: string;
   modelOptions: ModelRouteDTO[];
@@ -298,7 +306,7 @@ type HistoryPanelProps = {
   toolbarElement: HTMLDivElement | null;
 };
 
-function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & HistoryPanelProps) {
+function ChatPanel({ apiKey, accountId, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & HistoryPanelProps) {
   const { t, i18n } = useTranslation();
   const [initialHistory] = useState(() => {
     const sessions = loadChatSessions(storageScope);
@@ -427,6 +435,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
       return createChatResponse({
         basicProtocol: !usesGrokDialect(modelOptions.find((option) => option.publicId === request.model)),
         apiKey: request.apiKey,
+        accountId: request.accountId,
         model: request.model,
         messages: request.messages,
         promptCacheKey: request.promptCacheKey || undefined,
@@ -480,6 +489,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
     const requestMessages = toRequestMessages(params.history);
     mutation.reset();
     mutation.mutate({
+      accountId,
       messages: requestMessages,
       promptCacheKey: params.cacheKey,
       reasoningEffort: effectiveReasoningEffort,
@@ -917,7 +927,7 @@ function ChatPanel({ apiKey, model, modelOptions, onModelChange, storageScope, t
   );
 }
 
-function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & HistoryPanelProps) {
+function ImagePanel({ apiKey, accountId, model, modelOptions, onModelChange, storageScope, toolbarElement }: CreativePanelProps & HistoryPanelProps) {
   const { t, i18n } = useTranslation();
   const [prompt, setPrompt] = useState("");
   const [count, setCount] = useState("1");
@@ -954,7 +964,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   }
 
   const mutation = useMutation({
-    mutationFn: ({ record, key }: { record: ImageHistoryRecord; key: string }) => generateImage({ apiKey: key, basicProtocol: record.basicProtocol, model: record.model, prompt: record.prompt, params: record.params, requestId: record.id, imageURLs: record.imageURLs }),
+    mutationFn: ({ record, key }: { record: ImageHistoryRecord; key: string }) => generateImage({ apiKey: key, accountId, basicProtocol: record.basicProtocol, model: record.model, prompt: record.prompt, params: record.params, requestId: record.id, imageURLs: record.imageURLs }),
     onSuccess: (images, { record }) => patchRecord(record.id, { status: "completed", images }),
     // The record ID doubles as the X-Request-ID, so even network failures stay traceable in the audit log.
     onError: (error, { record }) => {
@@ -985,7 +995,7 @@ function ImagePanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       for (let index = 0; index < record.params.count; index += 1) {
         const requestId = imageJobRequestId(record.id, index);
         try {
-          jobIds.push(await submitImageJob({ apiKey: key, model: record.model, prompt: record.prompt, params: record.params, requestId, imageURLs: record.imageURLs }));
+          jobIds.push(await submitImageJob({ apiKey: key, accountId, model: record.model, prompt: record.prompt, params: record.params, requestId, imageURLs: record.imageURLs }));
         } catch (error) {
           const detail = describeError(error);
           failure = { ...detail, requestId: detail.requestId ?? requestId };
@@ -1176,7 +1186,7 @@ function ImageJobPoller({ record, apiKey, onSettle }: { record: ImageHistoryReco
 }
 
 // Panels stay mounted while hidden; active gates their upstream lookups to the open tab.
-function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, toolbarElement, grokVoiceRoute, active }: CreativePanelProps & HistoryPanelProps & { grokVoiceRoute: boolean; active: boolean }) {
+function VideoPanel({ apiKey, accountId, model, modelOptions, onModelChange, storageScope, toolbarElement, grokVoiceRoute, active }: CreativePanelProps & HistoryPanelProps & { grokVoiceRoute: boolean; active: boolean }) {
   const { t, i18n } = useTranslation();
   const [action, setAction] = useState<VideoAction>("generate");
   const [prompt, setPrompt] = useState("");
@@ -1223,7 +1233,8 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
   // without a Grok target is served by Adobe: a resolution for edits and extensions,
   // an aspect ratio for Kling edits, and 4–30 s extensions.
   const activeTargets = modelOptions.filter((item) => item.publicId === activeModel).map((item) => item.upstreamModel);
-  const inputPolicy = videoInputPolicy(modelOptions.filter((item) => item.publicId === activeModel));
+  const activeModelRoutes = modelOptions.filter((item) => item.publicId === activeModel);
+  const inputPolicy = videoInputPolicy(activeModelRoutes);
   const grokTarget = activeTargets.includes("Console/grok-imagine-video");
   const extendDurations: readonly string[] = grokTarget ? videoExtendDurations : adobeVideoExtendDurations;
   const selectedExtendDuration = extendDurations.includes(extendDuration) ? extendDuration : "6";
@@ -1236,8 +1247,8 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
 
   const voicesQuery = useQuery({
     // Same key as the voice panel's grok-voice-latest list, so the two panels share one request.
-    queryKey: ["creative-console", "voices", apiKey, "grok-voice-latest"],
-    queryFn: ({ signal }) => listVoices({ apiKey, model: "grok-voice-latest", signal }),
+    queryKey: ["creative-console", "voices", apiKey, "grok-voice-latest", accountId],
+    queryFn: ({ signal }) => listVoices({ apiKey, accountId, model: "grok-voice-latest", signal }),
     // Reference voices come from the grok-voice-latest catalog; without that route the request can only 404.
     enabled: Boolean(active && apiKey && action === "generate" && grokVoiceRoute && inputPolicy.canReferenceVoices),
     retry: false,
@@ -1298,6 +1309,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
         }
         return createVideo({
           apiKey,
+          accountId,
           model: activeModel,
           prompt: prompt.trim(),
           imageURL: nextImageURL,
@@ -1316,10 +1328,11 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
       const videoFileID = sourceVideoFileID || undefined;
       if (!videoURL && !videoFileID) throw new Error(t("creativeConsole.errors.noSourceVideo"));
       if (action === "edit") {
-        return editVideo({ apiKey, model: activeModel, prompt: prompt.trim(), videoURL, videoFileID, ...operationParams });
+        return editVideo({ apiKey, accountId, model: activeModel, prompt: prompt.trim(), videoURL, videoFileID, ...operationParams });
       }
       return extendVideo({
         apiKey,
+        accountId,
         model: activeModel,
         prompt: prompt.trim(),
         videoURL,
@@ -1580,7 +1593,7 @@ function VideoPanel({ apiKey, model, modelOptions, onModelChange, storageScope, 
                     {inputPolicy.canCombineFirstFrame ? <p className="mb-3 text-sm text-muted-foreground">{t("creativeConsole.videoCombinedInputs")}</p> : null}
                     {hasReferenceImage ? <ol className="mb-3 max-h-56 space-y-1 overflow-y-auto">
                       {referenceImages.map((reference, index) => <li key={reference.id} className="flex items-center gap-2 rounded-md bg-secondary/50 py-1 pl-2 pr-1 text-sm">
-                        <code className="shrink-0 text-xs text-muted-foreground">{`<IMAGE_${index + (hasFirstFrame && inputPolicy.canCombineFirstFrame ? 1 : 0)}>`}</code>
+                        <code className="shrink-0 text-xs text-muted-foreground">{videoReferenceLabel(activeModelRoutes, index, hasFirstFrame && inputPolicy.canCombineFirstFrame)}</code>
                         <span className="min-w-0 flex-1 truncate" title={reference.name}>{reference.name}</span>
                         <Button type="button" variant="ghost" size="icon" className="size-7 shrink-0" aria-label={t("creativeConsole.removeReferenceImage", { index: index + 1 })} disabled={uploadMutation.isPending} onClick={() => { setReferenceImages((current) => current.filter((item) => item.id !== reference.id)); setReferenceError(""); }}><X /></Button>
                       </li>)}
@@ -1837,7 +1850,7 @@ function ClearHistoryButton({ disabled, onConfirm }: { disabled: boolean; onConf
   );
 }
 
-function VoicePanel({ apiKey, modelOptions, active }: Pick<CreativePanelProps, "apiKey" | "modelOptions"> & { active: boolean }) {
+function VoicePanel({ apiKey, accountId, modelOptions, active }: Pick<CreativePanelProps, "apiKey" | "accountId" | "modelOptions"> & { active: boolean }) {
   const { t } = useTranslation();
   const [subMode, setSubMode] = useState<"tts" | "stt">("tts");
   // Separate choices so switching sub-mode never overwrites the other mode's model.
@@ -1873,8 +1886,8 @@ function VoicePanel({ apiKey, modelOptions, active }: Pick<CreativePanelProps, "
   const chatgptTTS = subMode === "tts" && activeProvider === "chatgpt";
 
   const voicesQuery = useQuery({
-    queryKey: ["creative-console", "voices", apiKey, activeModel],
-    queryFn: ({ signal }) => listVoices({ apiKey, model: activeModel, signal }),
+    queryKey: ["creative-console", "voices", apiKey, activeModel, accountId],
+    queryFn: ({ signal }) => listVoices({ apiKey, accountId, model: activeModel, signal }),
     enabled: Boolean(active && apiKey && activeModel) && subMode === "tts",
     retry: false,
     staleTime: 60_000,
@@ -1884,7 +1897,7 @@ function VoicePanel({ apiKey, modelOptions, active }: Pick<CreativePanelProps, "
   const voicesLoading = subMode === "tts" && voicesQuery.isLoading;
 
   const ttsMutation = useMutation({
-    mutationFn: () => synthesizeSpeech({ apiKey, model: activeModel || "grok-voice-latest", text: prompt.trim(), voiceId: voice.voiceId, language, speed: Number(speed) }),
+    mutationFn: () => synthesizeSpeech({ apiKey, accountId, model: activeModel || "grok-voice-latest", text: prompt.trim(), voiceId: voice.voiceId, language, speed: Number(speed) }),
     onSuccess: (result) => {
       setTtsResult(result);
       setSttResult(null);
@@ -1893,7 +1906,7 @@ function VoicePanel({ apiKey, modelOptions, active }: Pick<CreativePanelProps, "
   const sttMutation = useMutation({
     mutationFn: async () => {
       if (!audioFile) throw new Error(t("creativeConsole.errors.noAudio"));
-      return transcribeSpeech({ apiKey, model: activeModel || "grok-stt", file: audioFile, language });
+      return transcribeSpeech({ apiKey, accountId, model: activeModel || "grok-stt", file: audioFile, language });
     },
     onSuccess: (result) => {
       setSttResult(result);

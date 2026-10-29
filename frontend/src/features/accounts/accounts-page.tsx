@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useInfiniteQuery, useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardPaste, Download, ExternalLink, FileUp, MoreHorizontal, Pencil, Plus, RefreshCw, RotateCw, Search, TimerOff, Trash2, TriangleAlert } from "lucide-react";
@@ -70,7 +71,7 @@ import { accountDisplayName, accountIdentityEmail } from "@/features/accounts/ac
 import { accountEditSchema, accountEgressScopes, accountTaskKey, connectMethods, type AccountEditForm, type AccountFilterId, type AccountTask, type AccountUIContext } from "@/features/accounts/account-ui";
 import { accountUI } from "@/features/accounts/providers";
 import { assignEgressAccounts, listAllEgressNodes, listEgressNodes, listEgressSources, unassignEgressAccounts } from "@/features/settings/settings-api";
-import { isAbortError } from "@/shared/api/client";
+import { ApiError, isAbortError } from "@/shared/api/client";
 
 type QuotaTask = "sync" | "reset";
 type EgressConfigurationTask = "bind" | "unbind";
@@ -84,6 +85,7 @@ type AccountSelection = {
 };
 
 export function AccountsPage() {
+  const navigate = useNavigate();
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const providers = useProviders().data;
@@ -397,7 +399,13 @@ export function AccountsPage() {
       invalidateAccountData();
       toast.success(t("accounts.billingRefreshed"));
     },
-    onError: showError,
+    onError: (error, id) => {
+      const params = new URLSearchParams({ accountId: id });
+      if (error instanceof ApiError && error.requestId) params.set("requestId", error.requestId);
+      toast.error(error instanceof Error ? error.message : t("errors.generic"), {
+        action: { label: t("systemLogs.viewLogs"), onClick: () => navigate(`/system-logs?${params}`) },
+      });
+    },
   });
 
   const allTokenMutation = useMutation({

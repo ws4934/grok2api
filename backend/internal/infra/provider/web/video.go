@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -251,8 +252,16 @@ func boundWebMediaDiagnostic(value string, limit int) string {
 }
 
 func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoRequest) (provider.VideoResult, error) {
-	if strings.TrimSpace(request.ImageURL) != "" || len(request.ReferenceURLs) > 0 {
-		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, fmt.Errorf("Grok Web 当前仅支持文本生视频；图片视频请使用 Build 或 Console Provider"))
+	operation := request.Operation
+	if operation == "" {
+		operation = provider.VideoOperationGenerate
+	}
+	if err := a.ValidateVideoRequest(provider.VideoRequestOptions{
+		Operation: operation, HasImage: strings.TrimSpace(request.ImageURL) != "", ReferenceImages: len(request.ReferenceURLs),
+		HasLastFrame: request.LastFrameURL != "", Keyframes: len(request.Keyframes), GenerateAudio: request.GenerateAudio,
+		ReferenceVideos: len(request.ReferenceVideoURLs), ReferenceAudios: len(request.ReferenceAudios),
+	}); err != nil {
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, http.StatusBadRequest, err)
 	}
 	var checkpoint webVideoCheckpoint
 	_ = json.Unmarshal([]byte(request.Checkpoint), &checkpoint)
@@ -277,16 +286,24 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, fmt.Errorf("duration 必须在 1 到 15 秒之间"))
 	}
 	seconds := applyFreeWebVideoDurationCap(request.Duration, cfg.FreeVideoDurationCap, request.Credential)
+	if len(request.ReferenceURLs) > 0 {
+		seconds = min(seconds, 10)
+	}
 	segments := videoSegments(seconds)
 	ratio := resolveAspectRatio(request.AspectRatio)
 	resolution := request.Resolution
 	if resolution == "" {
 		resolution = "720p"
 	}
-	payload := videoCreatePayload(request.Prompt, ratio, resolution, segments[0])
+	firstFrame, references, err := a.prepareVideoImages(ctx, cfg, lease, token, request.ImageURL, request.ReferenceURLs)
+	if err != nil {
+		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
+	}
+	payload := videoCreatePayload(request.Prompt, ratio, resolution, segments[0], firstFrame, references)
 	if err := provider.SaveVideoCheckpoint(request, webVideoCheckpoint{Submitting: true}); err != nil {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePrepare, 0, err)
 	}
+	startedAt := a.videoNow()
 	response, err := a.postJSON(ctx, cfg, lease, token, cfg.BaseURL+"/rest/app-chat/conversations/new", payload, time.Duration(cfg.VideoTimeoutSeconds)*time.Second)
 	if err != nil {
 		return provider.VideoResult{}, provider.VideoCreateFailed(request, err)
@@ -294,6 +311,15 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	result, _, parseErr := parseVideoStream(response, request.Progress)
 	_ = response.Body.Close()
 	if parseErr != nil {
+		var rejected *webVideoResultError
+		if errors.As(parseErr, &rejected) {
+			rejected.upstreamURL = cfg.BaseURL + "/rest/app-chat/conversations/new"
+			// An ended stream with a completed, invalid output can fail over.
+			// Incomplete long-running work stays bound to its submitting account.
+			if rejected.completed || a.videoNow().Sub(startedAt) <= minimumFreshWebVideoTime {
+				return provider.VideoResult{}, rejectWebVideoResult(request, parseErr)
+			}
+		}
 		if upstreamErr, ok := parseErr.(*webMediaUpstreamError); ok {
 			a.logWebMediaUpstreamRejection("video_generation", response, upstreamErr)
 		}
@@ -304,6 +330,10 @@ func (a *Adapter) GenerateVideo(ctx context.Context, request provider.VideoReque
 	}
 	if result.URL == "" {
 		return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStagePoll, 0, fmt.Errorf("视频生成完成但没有返回内容 URL"))
+	}
+	elapsed := a.videoNow().Sub(startedAt)
+	if elapsed <= minimumFreshWebVideoTime {
+		return provider.VideoResult{}, rejectWebVideoResult(request, &webVideoResultError{reason: "too_fast", elapsed: elapsed, upstreamURL: cfg.BaseURL + "/rest/app-chat/conversations/new"})
 	}
 	if seconds != request.Duration {
 		result.Seconds = seconds
@@ -395,6 +425,9 @@ func parseVideoStream(response *http.Response, progress func(int)) (provider.Vid
 	}
 	var result provider.VideoResult
 	var postID string
+	generationComplete := false
+	generationID := ""
+	sawUnconfirmedVideo := false
 	handle := func(root map[string]any) (bool, error) {
 		if errorValue, ok := root["error"].(map[string]any); ok {
 			return false, webMediaStreamError(errorValue)
@@ -404,8 +437,14 @@ func parseVideoStream(response *http.Response, progress func(int)) (provider.Vid
 		}
 		stream := nestedMap(root, "result", "response", "streamingVideoGenerationResponse")
 		if stream != nil {
-			if value, ok := numberAsInt(stream["progress"]); ok && progress != nil {
-				progress(value)
+			if value, ok := numberAsInt(stream["progress"]); ok {
+				generationComplete = value >= 100
+				if progress != nil {
+					progress(value)
+				}
+			}
+			if id := firstString(stream, "videoId", "assetId"); id != "" {
+				generationID = id
 			}
 			if value, _ := stream["videoPostId"].(string); value != "" {
 				postID = value
@@ -414,16 +453,43 @@ func parseVideoStream(response *http.Response, progress func(int)) (provider.Vid
 			}
 			moderated, _ := stream["moderated"].(bool)
 			if moderated {
-				return false, nil
+				return false, &webVideoModerationError{}
 			}
-			if setVideoResultURL(&result, firstString(stream, "videoUrl", "contentUrl", "contentURL", "assetUrl", "assetURL", "fileUri", "fileURL")) {
-				return true, nil
+			var candidate provider.VideoResult
+			if setVideoResultURL(&candidate, firstString(stream, "videoUrl", "contentUrl", "contentURL", "assetUrl", "assetURL", "fileUri", "fileURL")) {
+				if generationComplete {
+					result = candidate
+					return true, nil
+				}
+				sawUnconfirmedVideo = true
 			}
 		}
 		for _, attachment := range videoFileAttachments(root) {
-			if setVideoResultURL(&result, attachment) {
-				return true, nil
+			var candidate provider.VideoResult
+			if !setVideoResultURL(&candidate, attachment) {
+				continue
 			}
+			sawUnconfirmedVideo = true
+			if !generationComplete {
+				continue
+			}
+			if generationID != "" {
+				parsed, _ := url.Parse(candidate.URL)
+				matched := false
+				if parsed != nil {
+					for _, part := range strings.Split(parsed.Path, "/") {
+						if part == generationID {
+							matched = true
+							break
+						}
+					}
+				}
+				if !matched {
+					continue
+				}
+			}
+			result = candidate
+			return true, nil
 		}
 		return false, nil
 	}
@@ -439,6 +505,9 @@ func parseVideoStream(response *http.Response, progress func(int)) (provider.Vid
 	}
 	if err != nil {
 		return provider.VideoResult{}, "", err
+	}
+	if result.URL == "" && (sawUnconfirmedVideo || generationComplete) {
+		return provider.VideoResult{}, postID, &webVideoResultError{reason: "unconfirmed_video", completed: generationComplete}
 	}
 	return result, postID, nil
 }
@@ -570,7 +639,28 @@ func applyFreeWebVideoDurationCap(seconds, cap int, credential account.Credentia
 // In particular, the generation parameters belong in mediaGenInput rather
 // than the legacy modelConfigOverride map. Keeping this shape explicit also
 // prevents text-to-video from depending on a synthetic media post.
-func videoCreatePayload(prompt, ratio, resolution string, seconds int) map[string]any {
+func videoCreatePayload(prompt, ratio, resolution string, seconds int, firstFrame string, references []string) map[string]any {
+	parameters := map[string]any{
+		"prompt": prompt, "aspectRatio": ratio, "duration": seconds, "resolutionName": resolution,
+	}
+	kind := "textToVideo"
+	switch {
+	case len(references) > 1 || firstFrame != "" && len(references) > 0:
+		kind = "referenceToVideo"
+		parameters["inputAssets"] = references
+		if firstFrame != "" {
+			parameters["firstFrameAsset"] = firstFrame
+		}
+	case firstFrame != "" || len(references) == 1:
+		kind = "imageToVideo"
+		parameters["mode"] = "custom"
+		if firstFrame != "" {
+			parameters["inputAssets"] = []string{firstFrame}
+		} else {
+			parameters["inputAssets"] = references
+			parameters["useFirstFrame"] = false
+		}
+	}
 	return map[string]any{
 		"modelName":            "imagine-video-gen",
 		"message":              prompt + " --mode=custom",
@@ -583,14 +673,7 @@ func videoCreatePayload(prompt, ratio, resolution string, seconds int) map[strin
 				"modelMap": map[string]any{},
 			},
 		},
-		"mediaGenInput": map[string]any{
-			"textToVideo": map[string]any{
-				"prompt":         prompt,
-				"aspectRatio":    ratio,
-				"duration":       seconds,
-				"resolutionName": resolution,
-			},
-		},
-		"kind": "CONVERSATION_KIND_IMAGINE",
+		"mediaGenInput": map[string]any{kind: parameters},
+		"kind":          "CONVERSATION_KIND_IMAGINE",
 	}
 }

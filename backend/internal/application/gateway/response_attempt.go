@@ -258,10 +258,13 @@ func (a *responseAttempt) prepare(modelNotAllowed bool) error {
 	// identity. Retrying the same pinned account would provide neither failover
 	// nor new evidence and can multiply a slow/failing probe.
 	a.holdCfg = s.qualityRetryConfig()
+	if creativeAccountID(a.ctx) != 0 {
+		a.input.skipQualityHold = true
+	}
 	a.qualityHoldEnabled = s.providers.Inference(route.Provider).QualityHold && shouldHoldQualityStream(a.input, a.ownership, route, a.operation, a.holdCfg)
 	// Only the quality hold reads the replay verdict; skip its body parse otherwise.
 	a.qualityCrossAccountReplay = a.qualityHoldEnabled && canReplayQualityHoldAcrossAccounts(a.input, a.ownership)
-	a.attemptPolicy = newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), a.ownership != nil || a.input.ForcedAccountID != 0)
+	a.attemptPolicy = newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), a.ownership != nil || a.input.ForcedAccountID != 0 || creativeAccountID(a.ctx) != 0)
 	a.idempotencyID, _ = security.NewOpaqueToken(18)
 	a.pricingModel = s.providers.PricingModel(route.Provider, route.UpstreamModel)
 	if err := s.checkLedgerReady(); err != nil {
@@ -360,7 +363,7 @@ func (a *responseAttempt) forward(lease *accountLease, credential accountdomain.
 	// Assets the provider saves while answering (e.g. images drawn in chat) carry this request's provenance.
 	originCtx := mediadomain.WithOrigin(a.physicalCallCtx, mediadomain.Origin{
 		Provider: string(route.Provider), Model: a.publicModel, UpstreamModel: a.auditBase.ModelUpstreamModel,
-		ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name, AccountID: credential.ID, AccountName: credential.Name,
+		ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name, AccountID: credential.ID, AccountName: credential.DisplayName(),
 		Operation: string(a.auditOperation), RequestID: input.RequestID,
 	})
 	response, err := a.adapter.ForwardResponse(originCtx, provider.ResponseResourceRequest{Credential: credential, ForcedEgressNodeID: input.ForcedEgressNodeID, Billing: billing, Method: http.MethodPost, Path: a.path, Model: route.UpstreamModel, PromptCacheKey: input.PromptCacheKey, ReasoningReplayKey: a.reasoningReplayKey, AllowClientToolCacheRoute: input.AllowClientToolCacheRoute, GrokTurnIndex: input.GrokTurnIndex, TransientRetry: a.transientRetry, IdempotencyID: a.idempotencyID, Body: input.Body, Streaming: input.Streaming, NormalizeBody: true, Operation: string(a.operation), NormalizedMetadata: a.normalizedMetadata})
@@ -422,7 +425,7 @@ func (a *responseAttempt) try(attempt int) (*Result, attemptStep) {
 	if err != nil {
 		lease.Release()
 		a.lastErr = err
-		a.lastFailure = newCredentialUpstreamFailure(err, lease.Credential.ID, lease.Credential.Name)
+		a.lastFailure = newCredentialUpstreamFailure(err, lease.Credential.ID, lease.Credential.DisplayName())
 		return nil, attemptNext
 	}
 	if a.qualityHoldEnabled {
@@ -488,6 +491,9 @@ func (a *responseAttempt) acquireLease() (*accountLease, bool) {
 // skipTeamModelRateLimited releases a lease whose team and model are inside a
 // recorded rate-limit window and records the cached 429.
 func (a *responseAttempt) skipTeamModelRateLimited(lease *accountLease) attemptStep {
+	if creativeAccountID(a.ctx) != 0 {
+		return attemptProceed
+	}
 	s, route := a.s, a.route
 	limited, ok := s.activeTeamModelRateLimit(lease.Credential, route.UpstreamModel, time.Now().UTC())
 	if !ok {
@@ -496,7 +502,7 @@ func (a *responseAttempt) skipTeamModelRateLimited(lease *accountLease) attemptS
 	lease.Release()
 	a.lastFailure = &UpstreamFailure{
 		HTTPStatus: http.StatusTooManyRequests, Code: "upstream_rate_limited", PublicMessage: "上游请求频率受限",
-		AccountID: lease.Credential.ID, AccountName: lease.Credential.Name,
+		AccountID: lease.Credential.ID, AccountName: lease.Credential.DisplayName(),
 		Fingerprint: "429:team_model_rate_limit", RetryAfter: time.Until(limited.Until),
 	}
 	a.lastErr = fmt.Errorf("上游 Team 与模型请求频率受限")
@@ -539,6 +545,13 @@ func (a *responseAttempt) handleResponse(t *responseTry) (*Result, attemptStep) 
 		t.terminalForbidden = false
 		if t.response.ModelCatalogChanged {
 			s.queueAccountModelSync(t.credential.ID)
+		}
+		if failure := apiKeyRejectedResponse(t.response, t.credential); failure != nil {
+			a.lastFailure, a.lastErr = failure, failure
+			s.selector.MarkFailure(a.ctx, t.credential, t.response.StatusCode, 0)
+			_ = t.response.Body.Close()
+			t.lease.Release()
+			return nil, attemptNext
 		}
 		if t.response.StatusCode == http.StatusUnauthorized {
 			if step := a.recoverUnauthorized(t); step != attemptProceed {

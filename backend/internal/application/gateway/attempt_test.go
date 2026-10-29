@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -318,5 +319,17 @@ func TestFailureAttemptRecorderCapturesPinnedSelectionFailure(t *testing.T) {
 	}
 	if stored[0].AccountID == nil || *stored[0].AccountID != 42 || stored[0].AccountName != "bound-account" {
 		t.Fatalf("account = %#v", stored[0])
+	}
+}
+
+func TestFailureAttemptSensitiveJSONUsesSharedRedaction(t *testing.T) {
+	recorder := newFailureAttemptRecorder("POST", "/responses")
+	body, _ := recorder.captureBody([]byte(`{"api_key":123,"encryptedAccessToken":"secret-value","nested":{"workosSession":"secret-value with spaces"},"counts":{"input_tokens":14}}`), false)
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("invalid diagnostic JSON: %s: %v", body, err)
+	}
+	if strings.Contains(string(body), "secret-value") || parsed["api_key"] != "[REDACTED]" || parsed["counts"].(map[string]any)["input_tokens"] != float64(14) {
+		t.Fatalf("body=%s", body)
 	}
 }

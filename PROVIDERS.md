@@ -41,6 +41,7 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 
 - 客户端错误的 `message` 使用中文；HTTP 状态、`type`、`code`、`param` 和 SSE 事件名按对应 API 协议返回，不把机器字段翻译成中文。已符合协议的上游错误对象保留其机器字段。
 - 同步接口中的内容审核拒绝保留实际的 400／403／422 状态，不改成 502；网关生成的 OpenAI 风格错误使用 `content_policy_violation`。审核拒绝不自动重新生成、不切换账号，也不计入账号故障。
+- Console 的 HTTP 400 `Incorrect API key provided` 按账号 API 密钥失效处理，不归类为客户端参数错误；同步请求最终失败返回 HTTP 503 `upstream_api_key_invalid` 和中文原因，视频轮询使用 `service_unavailable`，上游原始 400 保留在诊断。凭据修复和冷却规则见下文。
 - Grok Web Imagine 全批结果被标记为 `moderated: true` 时，同步 Images 请求映射为 400 `content_policy_violation`；流式保留已发送的 200，通过 `error` 事件报告审核拒绝，不空断流。诊断保留 WebSocket 地址及拦截数量，不保存被拦截的图片内容；没有已交付图片时不扣客户端费用。
 - Responses 图片任务通过 `status: "failed"` 和 `error` 返回失败；审核拒绝使用 `image_content_policy_violation`，无效输入使用 `invalid_prompt`，其他生成故障使用 `server_error`。流式请求通过 `response.failed` 或对应协议的 `error` 事件报告，开始输出后不另写 HTTP 错误正文。
 - xAI 视频任务轮询仍返回 `status: "failed"` 和 `error: {code, message}`，审核拒绝使用 `invalid_argument`，不将内部错误码直接放入该字段。
@@ -74,6 +75,13 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 - 某个已提交批次少出图、审核拒绝、断流或结果不确定时，不自动补发缺失结果；之前成功的图片保留。上游已生成却下载失败的图片可能仍消耗账号额度，但不计入客户端的成功图片费用。流式仍固定 `n=1`。
 
 依据：[Imagine Image 2.0](https://x.ai/news/grok-imagine-image-2) 和 2026-10-28 登录后的官网前端 [请求构造及功能开关](https://cdn.grok.com/_next/static/chunks/01ovajz11efdy.js)。本次免费账号页面未开放 2K；尚未用付费账号验证其分辨率能力。
+
+## Console 密钥可修复，失败账号进入冷却
+
+- 生成请求使用该账号导入的 **SSO**，以及据此取得的团队 **`apiKeyId`（`x-apikey`）** 和 **DPoP 临时令牌**。换号时重新装载目标账号的凭据；API key 缓存按账号 ID 和 SSO 隔离，DPoP 缓存还区分接口地址和出口节点。
+- API key 只选当前团队的启用项，不从其他团队取 key。收到明确的密钥拒绝后，跳过被拒绝的 ID，优先复用该团队其他启用 key；没有可用项时调用一次 `CreateApiKey`，回读确认同一团队的新 ID 后重试。不删除旧 key，同账号并发修复合并执行，单次请求最多进行一次 key 修复。
+- 修复后仍被拒绝，账号按已有冷却配置暂时退出自动调度，自动模式在密钥授权范围和尝试预算内换号。指定账号测试不换号，仍可主动测试冷却账号。该错误不使有效 SSO 失效，也不把账号额度清零；参数错误和审核拒绝不因此换号。视频仅对创建阶段的明确拒绝换号，已受理任务的轮询、下载失败不重新生成。
+- DPoP 到期或被 401 拒绝时，会使用 SSO 和新生成的 P-256 密钥重新换取令牌；SSO 本身失效必须重新登录、导入。查询额度使用的 WorkOS 会话也可从 SSO 重取，但它不参与视频生成鉴权。
 
 ## Console 视频优先分配合适的周预算
 
@@ -109,7 +117,7 @@ Provider 的能力由 `Definition` 声明，再由可选接口实现：对话、
 
 ## 出口代理与 FlareSolverr
 
-- **出口节点**：ChatGPT 使用作用域 `chatgpt` 的出口节点。支持 HTTP(S)、SOCKS4/5 和 Trojan/VLESS/SS/VMess 隧道，节点可以在内网或本机。账号可以手动绑定节点，也可以自动分配。聊天、上传下载和 OAuth 续期都走同一个节点。
+- **出口节点**：ChatGPT 使用作用域 `chatgpt` 的出口节点。支持 HTTP(S)、SOCKS4/5 和 Trojan/VLESS/SS/VMess 隧道，节点可以在内网或本机。账号可以手动绑定节点，也可以自动分配。聊天、输入上传、同源会话下载和 OAuth 续期沿用账号出口；外部预签名 CDN 成品下载使用匿名直连，不消耗 API 代理流量。
 - **故障处理**：连接失败的节点进入冷却。请求在到达上游之前失败时，会立即换一个出口重试一次；已经发出的请求不会重放。
 - **备用出口**：在"设置 → 出口运维"里为 `chatgpt` 配置（不回退 / 直连 / 指定节点）。
 - **Cloudflare 挑战**：识别为 403（`cf-mitigated: challenge` 或挑战页面），按出口问题处理，换出口重试。
@@ -255,8 +263,10 @@ curl https://<host>/v1/responses/resp_img_… -H "Authorization: Bearer $KEY"
   - Console 1.5 的 `image` 固定开场，不会降为普通参考图；同时提供首帧时，提示词中的 `<IMAGE_0>` 指首帧，`reference_images` 从 `<IMAGE_1>` 开始编号；无首帧时从 `<IMAGE_0>` 开始。依据 [xAI Reference-to-Video](https://docs.x.ai/developers/model-capabilities/video/reference-to-video)。创作控制台按实际路由识别这些能力，支持批量上传、逐张移除和图片编号；切换到不兼容模型时提示移除冲突素材，不静默清空。
   - Console 1.5 的 `last_frame: {url 或 file_id}` 可单独使用；`keyframes` 最多 4 项，每项 `{image: {url 或 file_id}, timestamp_s: 秒}`，时间必须在 `(0, 实际 duration)` 内，且上游按 1/3 秒对齐后不能落在同一时间槽。有首帧、尾帧或关键帧时可不传 prompt。所有实际输入帧均计入输入图定价与原生额度成本，1080p 请求在这些参考模式下适配为 720p 后再计费。
   - Console 生成视频支持 `generate_audio: false` 静音、`true` 有声；省略时不注入参数，沿用上游有声默认。编辑、延长和未声明此能力的 Provider 会拒绝该字段，不静默忽略。创作台支持尾帧、四个带时间的关键帧及声音三态；历史可复用远程图片和声音选择，本地素材只保存名称，重载后明确要求重新上传，避免复用已释放的 file_id。
-  - 仍会拒绝的是模型做不到的输入：Web 的图生视频、不支持的尾帧或参考视频、Provider 不支持的编辑或延长。
-- **图片任务**：n 张图在同一账号上依次生成。租约 2 分钟、每 30 秒续租，任务期限 1 小时。每交付一张图，按下单时锁定的价格记一条审计。
+  - **Web 图片输入**：`Web/grok-imagine-video` 可传首帧 `image`、最多 7 张 `reference_images`，也可组合使用。素材通过当前 Imagine V2 direct upload 上传，首帧、单张参考、多张参考分别使用网页实际的 `imageToVideo` / `referenceToVideo` 字段，不经旧 media-post 接口。参考模式时长适配到最多 10 秒；免费账号仍受设置中的时长上限约束（默认 6 秒），任务和计费使用实际时长及保留的输入图数量。网关目前只开放这一个 Web 视频模型，不把 Console 的 1.5 或 API 的其他模型名当作 Web 免费模型。
+  - **Web 异常结果**：新的生成调用在 10 秒内（含 10 秒）返回的视频拒收，同一任务按现有重试预算换其他合规账号；只带任意视频附件、未完成生成或审核拦截的响应不能作为成功视频。异常结果不交付、不按成功向客户端计费；账号原生额度排队同步。恢复下载、任务查询和幂等重放不套用耗时判定；中断后无法确认是否已提交的生成也不自动重发。审核拒绝保持原错误，不通过换号重试。
+  - 仍会拒绝的是未接通或模型不接受的输入：不支持的尾帧、关键帧、音频开关或参考视频，以及 Provider 不支持的编辑、延长。
+- **图片任务**：n 张图按账号可用额度分批提交，保留成功结果。租约 2 分钟、每 30 秒续租，任务期限 1 小时。每交付一张图，按下单时锁定的价格记一条审计。
 - **图库来源**：每个资产记录生成它的 Provider、模型、密钥、账号、操作、任务和 prompt，管理端可以按这些条件筛选。
 - **删除保护**：活动任务正在使用的资产不能删除，返回 409 `mediaAssetInUse`。
   - 终态任务的用量或费用尚未持久化时也不能删除，返回 409 `mediaJobUsagePending`，以保留补账依据。管理端显示“结算中”并继续刷新，结算完成后恢复删除；未提交就取消的视频无需结算。
@@ -332,7 +342,7 @@ Adobe 是**纯媒体 Provider**（图像生成/编辑 + 视频生成），上游
 
 ### 出口
 
-使用作用域 `adobe` 的出口节点（HTTP/SOCKS/Trojan）。提交、上传下载、IMS 续期都走账号绑定的节点，连接用出口的浏览器 TLS 客户端（tls-client）；节点上配置的 UA 对 Adobe 不生效，用账号自己的浏览器身份。传输失败时按出口问题反馈健康度。
+使用作用域 `adobe` 的出口节点（HTTP/SOCKS/Trojan）。提交、轮询、输入上传、IMS 续期走账号绑定的节点，连接用出口的浏览器 TLS 客户端（tls-client）；节点上配置的 UA 对 Adobe 不生效，用账号自己的浏览器身份。预签名成品图片、视频使用匿名直连。成品下载或本地存储失败不影响 API 代理健康度，也不重新生成任务。
 
 ## Muse（muse.ai）接入
 

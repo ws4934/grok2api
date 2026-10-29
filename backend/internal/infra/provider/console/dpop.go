@@ -334,7 +334,7 @@ func (a *Adapter) doDPoPRequestWithOptions(
 	// upstream rejects the cached key.
 	apiKeyRepaired := false
 	if useAPIKey {
-		value, err := a.consoleAPIKey(ctx, credential, ssoToken, lease, false)
+		value, err := a.consoleAPIKey(ctx, credential, ssoToken, lease, "")
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, err
@@ -398,16 +398,23 @@ func (a *Adapter) doDPoPRequestWithOptions(
 		if response.StatusCode == http.StatusUnauthorized {
 			return normalizeConsoleTransientUnauthorized(response)
 		}
-		if useAPIKey && !apiKeyRepaired && (response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusForbidden) {
-			data, truncated, readErr := provider.ReadDiagnosticBody(response.Body)
-			_ = response.Body.Close()
+		if useAPIKey && !apiKeyRepaired && (response.StatusCode == http.StatusBadRequest || response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusForbidden) {
+			// Inspect a bounded prefix without discarding a larger parameter
+			// error. Only a successful repair consumes this rejected response.
+			data, readErr := io.ReadAll(io.LimitReader(response.Body, provider.MaxDiagnosticBodyBytes))
 			if readErr != nil {
+				_ = response.Body.Close()
 				return nil, readErr
 			}
-			if isConsoleMissingAPIKeyBody(data) {
+			response.Body = struct {
+				io.Reader
+				io.Closer
+			}{io.MultiReader(bytes.NewReader(data), response.Body), response.Body}
+			if isConsoleRepairableAPIKeyBody(response.StatusCode, data) {
 				apiKeyRepaired = true
 				a.invalidateConsoleAPIKey(credential, ssoToken, apiKey)
-				if repaired, repairErr := a.consoleAPIKey(ctx, credential, ssoToken, lease, true); repairErr == nil && repaired != "" {
+				if repaired, repairErr := a.consoleAPIKey(ctx, credential, ssoToken, lease, apiKey); repairErr == nil && repaired != "" {
+					_ = response.Body.Close()
 					a.logger().Info("console_api_key_repaired", "account_id", credential.ID, "status", response.StatusCode)
 					apiKey = repaired
 					continue
@@ -415,7 +422,6 @@ func (a *Adapter) doDPoPRequestWithOptions(
 					a.logger().Warn("console_api_key_repair_failed", "account_id", credential.ID, "status", response.StatusCode, "error", repairErr)
 				}
 			}
-			restoreResponseBody(response, data, truncated)
 			return response, nil
 		}
 		return response, nil

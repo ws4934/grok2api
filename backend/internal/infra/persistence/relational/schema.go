@@ -38,6 +38,7 @@ var schemaModels = []any{
 	&billingReservationModel{},
 	&modelPriceModel{},
 	&requestAuditModel{},
+	&systemLogModel{},
 	&requestAuditAttemptModel{},
 	&responseOwnershipModel{},
 	&webResponseStateModel{},
@@ -48,6 +49,10 @@ var schemaModels = []any{
 }
 
 var schemaIndexes = []string{
+	"CREATE INDEX IF NOT EXISTS idx_system_logs_created ON system_logs(created_at)",
+	"CREATE INDEX IF NOT EXISTS idx_system_logs_level_id ON system_logs(level, id DESC)",
+	"CREATE INDEX IF NOT EXISTS idx_system_logs_account_id ON system_logs(account_id, id DESC)",
+	"CREATE INDEX IF NOT EXISTS idx_system_logs_request_id ON system_logs(request_id, id DESC)",
 	"CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin_created ON admin_sessions(admin_id, created_at DESC, id DESC)",
 	"CREATE INDEX IF NOT EXISTS idx_admin_sessions_expires ON admin_sessions(expires_at)",
 	// SQLite 通过重建表修改 CHECK 约束，重建会删除独立存储的 GORM 唯一索引；

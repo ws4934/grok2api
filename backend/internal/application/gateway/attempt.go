@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,6 +19,7 @@ import (
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	diagnosticpkg "github.com/chenyme/grok2api/backend/internal/pkg/diagnostic"
 	neterrorpkg "github.com/chenyme/grok2api/backend/internal/pkg/neterror"
 )
 
@@ -43,14 +43,6 @@ const (
 	diagnosticErrorFrameLimit  = 8
 )
 
-var (
-	diagnosticAuthorizationPattern = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+`)
-	diagnosticCookiePattern        = regexp.MustCompile(`(?i)\b(cookie|set-cookie)\b\s*[:=]\s*[^\r\n]+`)
-	diagnosticSecretPattern        = regexp.MustCompile(`(?i)(["']?(?:authorization|proxy-authorization|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token)["']?\s*[:=]\s*["']?)[^"'\s,;}]+`)
-	diagnosticOpaqueFieldPattern   = regexp.MustCompile(`(?i)(["'](?:encrypted[_-]?content|compaction[_-]?(?:blob|state)|opaque[_-]?(?:state|data))["']\s*[:=]\s*["'])((?:\\.|[^"'\\])*)(["']|$)`)
-	diagnosticURLPattern           = regexp.MustCompile(`https?://[^\s"'<>]+`)
-)
-
 func (r *failureAttemptRecorder) captureCredentialFailure(credential accountdomain.Credential, startedAt time.Time, force bool, err error) {
 	if err == nil {
 		return
@@ -63,10 +55,10 @@ func (r *failureAttemptRecorder) captureCredentialFailure(credential accountdoma
 		Source:         audit.AttemptSourceCredential,
 		Stage:          stage,
 		AccountID:      auditAccountID(credential.ID),
-		AccountName:    credential.Name,
+		AccountName:    credential.DisplayName(),
 		StartedAt:      startedAt.UTC(),
 		DurationMS:     time.Since(startedAt).Milliseconds(),
-		TransportError: sanitizeDiagnosticText(err.Error(), diagnosticTextLimit),
+		TransportError: diagnosticpkg.Text(err.Error(), diagnosticTextLimit),
 		ErrorChain:     errorFrames(err),
 	})
 }
@@ -85,10 +77,10 @@ func (r *failureAttemptRecorder) captureResponse(credential accountdomain.Creden
 			Source:                audit.AttemptSourceUpstreamHTTP,
 			Stage:                 "upstream_response",
 			AccountID:             auditAccountID(credential.ID),
-			AccountName:           credential.Name,
+			AccountName:           credential.DisplayName(),
 			Method:                r.method,
 			RequestPath:           r.path,
-			UpstreamURL:           sanitizeUpstreamURL(upstreamURL),
+			UpstreamURL:           diagnosticpkg.URL(upstreamURL),
 			StartedAt:             startedAt.UTC(),
 			DurationMS:            time.Since(startedAt).Milliseconds(),
 			UpstreamStatusCode:    &statusCode,
@@ -105,13 +97,13 @@ func (r *failureAttemptRecorder) captureResponse(credential accountdomain.Creden
 			Source:         audit.AttemptSourceTransport,
 			Stage:          transportStage(requestErr),
 			AccountID:      auditAccountID(credential.ID),
-			AccountName:    credential.Name,
+			AccountName:    credential.DisplayName(),
 			Method:         r.method,
 			RequestPath:    r.path,
-			UpstreamURL:    sanitizeUpstreamURL(errorUpstreamURL(requestErr)),
+			UpstreamURL:    diagnosticpkg.URL(errorUpstreamURL(requestErr)),
 			StartedAt:      startedAt.UTC(),
 			DurationMS:     time.Since(startedAt).Milliseconds(),
-			TransportError: sanitizeDiagnosticText(requestErr.Error(), diagnosticTextLimit),
+			TransportError: diagnosticpkg.Text(requestErr.Error(), diagnosticTextLimit),
 			ErrorChain:     errorFrames(requestErr),
 		})
 		return requestErr
@@ -141,10 +133,10 @@ func (r *failureAttemptRecorder) captureResponse(credential accountdomain.Creden
 				Source:                audit.AttemptSourceUpstreamHTTP,
 				Stage:                 "response_body",
 				AccountID:             auditAccountID(credential.ID),
-				AccountName:           credential.Name,
+				AccountName:           credential.DisplayName(),
 				Method:                r.method,
 				RequestPath:           r.path,
-				UpstreamURL:           sanitizeUpstreamURL(response.UpstreamURL),
+				UpstreamURL:           diagnosticpkg.URL(response.UpstreamURL),
 				StartedAt:             startedAt.UTC(),
 				DurationMS:            time.Since(startedAt).Milliseconds(),
 				UpstreamStatusCode:    &statusCode,
@@ -152,7 +144,7 @@ func (r *failureAttemptRecorder) captureResponse(credential accountdomain.Creden
 				ResponseHeaders:       headers,
 				ResponseBody:          body,
 				ResponseBodyTruncated: bodyTruncated,
-				TransportError:        sanitizeDiagnosticText(err.Error(), diagnosticTextLimit),
+				TransportError:        diagnosticpkg.Text(err.Error(), diagnosticTextLimit),
 				ErrorChain:            errorFrames(err),
 			})
 			return err
@@ -162,10 +154,10 @@ func (r *failureAttemptRecorder) captureResponse(credential accountdomain.Creden
 		Source:                audit.AttemptSourceUpstreamHTTP,
 		Stage:                 "upstream_response",
 		AccountID:             auditAccountID(credential.ID),
-		AccountName:           credential.Name,
+		AccountName:           credential.DisplayName(),
 		Method:                r.method,
 		RequestPath:           r.path,
-		UpstreamURL:           sanitizeUpstreamURL(response.UpstreamURL),
+		UpstreamURL:           diagnosticpkg.URL(response.UpstreamURL),
 		StartedAt:             startedAt.UTC(),
 		DurationMS:            time.Since(startedAt).Milliseconds(),
 		UpstreamStatusCode:    &statusCode,
@@ -187,10 +179,10 @@ func (r *failureAttemptRecorder) captureStreamFailure(credential accountdomain.C
 		Source:                audit.AttemptSourceUpstreamHTTP,
 		Stage:                 "response_stream",
 		AccountID:             auditAccountID(credential.ID),
-		AccountName:           credential.Name,
+		AccountName:           credential.DisplayName(),
 		Method:                r.method,
 		RequestPath:           r.path,
-		UpstreamURL:           sanitizeUpstreamURL(response.UpstreamURL),
+		UpstreamURL:           diagnosticpkg.URL(response.UpstreamURL),
 		StartedAt:             startedAt.UTC(),
 		DurationMS:            time.Since(startedAt).Milliseconds(),
 		UpstreamStatusCode:    &statusCode,
@@ -236,14 +228,14 @@ func (r *failureAttemptRecorder) captureRecoveredAttempts(credential accountdoma
 		transportError := recovered.Result
 		errorChain := make([]audit.ErrorFrame, 0, 1)
 		if recovered.Result != "" {
-			errorChain = append(errorChain, audit.ErrorFrame{Type: stage, Message: sanitizeDiagnosticText(recovered.Result, 512)})
+			errorChain = append(errorChain, audit.ErrorFrame{Type: stage, Message: diagnosticpkg.Text(recovered.Result, 512)})
 		}
 		if recovered.Failure != nil {
-			failureText := sanitizeDiagnosticText(recovered.Failure.Error(), diagnosticTextLimit)
+			failureText := diagnosticpkg.Text(recovered.Failure.Error(), diagnosticTextLimit)
 			if transportError == "" {
 				transportError = failureText
 			} else {
-				transportError = sanitizeDiagnosticText(transportError+": "+failureText, diagnosticTextLimit)
+				transportError = diagnosticpkg.Text(transportError+": "+failureText, diagnosticTextLimit)
 			}
 			errorChain = append(errorChain, errorFrames(recovered.Failure)...)
 			if len(errorChain) > diagnosticErrorFrameLimit {
@@ -254,10 +246,10 @@ func (r *failureAttemptRecorder) captureRecoveredAttempts(credential accountdoma
 			Source:                source,
 			Stage:                 stage,
 			AccountID:             auditAccountID(credential.ID),
-			AccountName:           credential.Name,
+			AccountName:           credential.DisplayName(),
 			Method:                r.method,
 			RequestPath:           r.path,
-			UpstreamURL:           sanitizeUpstreamURL(upstreamURL),
+			UpstreamURL:           diagnosticpkg.URL(upstreamURL),
 			StartedAt:             attemptStartedAt.UTC(),
 			DurationMS:            durationMS,
 			UpstreamStatusCode:    statusCode,
@@ -265,7 +257,7 @@ func (r *failureAttemptRecorder) captureRecoveredAttempts(credential accountdoma
 			ResponseHeaders:       sanitizeDiagnosticHeaders(diagnostic.Header),
 			ResponseBody:          body,
 			ResponseBodyTruncated: truncated,
-			TransportError:        sanitizeDiagnosticText(transportError, diagnosticTextLimit),
+			TransportError:        diagnosticpkg.Text(transportError, diagnosticTextLimit),
 			ErrorChain:            errorChain,
 		})
 	}
@@ -296,7 +288,7 @@ func (r *failureAttemptRecorder) captureSelectionFailure(accountID uint64, accou
 		Method:         r.method,
 		RequestPath:    r.path,
 		StartedAt:      time.Now().UTC(),
-		TransportError: sanitizeDiagnosticText(err.Error(), diagnosticTextLimit),
+		TransportError: diagnosticpkg.Text(err.Error(), diagnosticTextLimit),
 		ErrorChain:     errorFrames(err),
 	})
 }
@@ -322,10 +314,10 @@ func (r *failureAttemptRecorder) ensureStreamFailureAttempt(credential accountdo
 		Source:             audit.AttemptSourceUpstreamHTTP,
 		Stage:              "response_stream",
 		AccountID:          auditAccountID(credential.ID),
-		AccountName:        credential.Name,
+		AccountName:        credential.DisplayName(),
 		Method:             r.method,
 		RequestPath:        r.path,
-		UpstreamURL:        sanitizeUpstreamURL(response.UpstreamURL),
+		UpstreamURL:        diagnosticpkg.URL(response.UpstreamURL),
 		StartedAt:          startedAt.UTC(),
 		DurationMS:         time.Since(startedAt).Milliseconds(),
 		UpstreamStatusCode: &statusCode,
@@ -341,7 +333,7 @@ func (r *failureAttemptRecorder) captureQualityDegraded(credential accountdomain
 		Source:             audit.AttemptSourceUpstreamHTTP,
 		Stage:              "quality_hold",
 		AccountID:          auditAccountID(credential.ID),
-		AccountName:        credential.Name,
+		AccountName:        credential.DisplayName(),
 		Method:             r.method,
 		RequestPath:        r.path,
 		StartedAt:          startedAt.UTC(),
@@ -374,7 +366,7 @@ func (r *failureAttemptRecorder) captureBody(body []byte, alreadyTruncated bool)
 	if len(body) > limit {
 		body = body[:limit]
 	}
-	result := []byte(sanitizeDiagnosticText(string(body), limit))
+	result := []byte(diagnosticpkg.Text(string(body), limit))
 	r.remainingBodyBudget -= len(result)
 	return result, truncated
 }
@@ -398,7 +390,7 @@ func redactSensitiveDiagnosticValue(value any) bool {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, nested := range typed {
-			if isSensitiveDiagnosticField(key) {
+			if diagnosticpkg.SensitiveKey(key) {
 				typed[key] = "[REDACTED]"
 				changed = true
 				continue
@@ -413,7 +405,6 @@ func redactSensitiveDiagnosticValue(value any) bool {
 	return changed
 }
 
-// isSensitiveDiagnosticField 统一识别上游可能使用的密文与压缩状态字段名。
 func isSensitiveDiagnosticField(value string) bool {
 	value = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "-", "_")
 	value = strings.ReplaceAll(value, "_", "")
@@ -472,7 +463,7 @@ func appendErrorFrames(frames *[]audit.ErrorFrame, err error) {
 	if err == nil || len(*frames) >= diagnosticErrorFrameLimit {
 		return
 	}
-	*frames = append(*frames, audit.ErrorFrame{Type: truncateDiagnosticText(reflect.TypeOf(err).String(), 256), Message: sanitizeDiagnosticText(err.Error(), 512)})
+	*frames = append(*frames, audit.ErrorFrame{Type: diagnosticpkg.Truncate(reflect.TypeOf(err).String(), 256), Message: diagnosticpkg.Text(err.Error(), 512)})
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
 		for _, nested := range joined.Unwrap() {
 			appendErrorFrames(frames, nested)
@@ -498,7 +489,7 @@ func sanitizeDiagnosticHeaders(headers http.Header) map[string][]string {
 			if len(cleanValues) == 8 || remaining <= len(name) {
 				break
 			}
-			cleanValue := sanitizeDiagnosticText(value, min(diagnosticHeaderValueLimit, remaining-len(name)))
+			cleanValue := diagnosticpkg.Text(value, min(diagnosticHeaderValueLimit, remaining-len(name)))
 			cleanValues = append(cleanValues, cleanValue)
 			remaining -= len(name) + len(cleanValue)
 		}
@@ -521,50 +512,15 @@ func isAllowedDiagnosticHeader(name string) bool {
 	}
 }
 
-func sanitizeDiagnosticText(value string, limit int) string {
-	value = diagnosticCookiePattern.ReplaceAllString(value, "$1: [REDACTED]")
-	value = diagnosticAuthorizationPattern.ReplaceAllString(value, "$1 [REDACTED]")
-	value = diagnosticSecretPattern.ReplaceAllString(value, "$1[REDACTED]")
-	value = diagnosticOpaqueFieldPattern.ReplaceAllString(value, "$1[REDACTED]$3")
-	value = diagnosticURLPattern.ReplaceAllStringFunc(value, sanitizeUpstreamURL)
-	return truncateDiagnosticText(value, limit)
-}
-
-func truncateDiagnosticText(value string, limit int) string {
-	if limit <= 0 {
-		return ""
-	}
-	if len(value) <= limit {
-		return value
-	}
-	for limit > 0 && !utf8.ValidString(value[:limit]) {
-		limit--
-	}
-	return value[:limit]
-}
-
 func sanitizeRequestPath(value string) string {
 	parsed, err := url.ParseRequestURI(value)
 	if err != nil {
-		return truncateDiagnosticText(strings.SplitN(value, "?", 2)[0], 2048)
+		return diagnosticpkg.Truncate(strings.SplitN(value, "?", 2)[0], 2048)
 	}
 	parsed.RawQuery = ""
 	parsed.ForceQuery = false
 	parsed.Fragment = ""
-	return truncateDiagnosticText(parsed.String(), 2048)
-}
-
-func sanitizeUpstreamURL(value string) string {
-	parsed, err := url.Parse(value)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return ""
-	}
-	parsed.User = nil
-	parsed.RawQuery = ""
-	parsed.ForceQuery = false
-	parsed.Fragment = ""
-	parsed.RawFragment = ""
-	return truncateDiagnosticText(parsed.String(), 4096)
+	return diagnosticpkg.Truncate(parsed.String(), 2048)
 }
 
 func errorUpstreamURL(err error) string {

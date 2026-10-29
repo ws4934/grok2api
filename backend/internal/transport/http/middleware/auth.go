@@ -148,11 +148,11 @@ func clientErrorMessage(err error) string {
 	return err.Error()
 }
 
-// WriteAPIError answers a /v1 request before its handler runs, in the error
+// WriteAPIError answers an inference request before its handler runs, in the error
 // shape its client expects: Anthropic's for the Messages API, OpenAI's otherwise.
 func WriteAPIError(c *gin.Context, status int, code, message string) {
 	NoteError(c, code, message)
-	if strings.HasPrefix(c.Request.URL.Path, "/v1/messages") {
+	if strings.HasPrefix(c.Request.URL.Path, "/v1/messages") || c.Request.URL.Path == "/api/admin/v1/creative/messages" {
 		errorType := "authentication_error"
 		if status == http.StatusTooManyRequests {
 			errorType = "rate_limit_error"

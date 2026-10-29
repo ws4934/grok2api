@@ -79,6 +79,9 @@ func TestWriteAPIErrorFollowsTheClientProtocol(t *testing.T) {
 		{"/v1/responses", http.StatusTooManyRequests, `"type":"rate_limit_error"`},
 		{"/v1/chat/completions", http.StatusServiceUnavailable, `"type":"server_error"`},
 		{"/v1/messages", http.StatusServiceUnavailable, `{"error":{"message":"busy","type":"api_error"},"type":"error"}`},
+		{"/api/admin/v1/creative/responses", http.StatusTooManyRequests, `"type":"rate_limit_error"`},
+		{"/api/admin/v1/creative/images/generations", http.StatusServiceUnavailable, `"type":"server_error"`},
+		{"/api/admin/v1/creative/messages", http.StatusServiceUnavailable, `{"error":{"message":"busy","type":"api_error"},"type":"error"}`},
 	} {
 		recorder := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(recorder)

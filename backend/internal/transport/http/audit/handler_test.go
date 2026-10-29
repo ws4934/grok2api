@@ -108,6 +108,18 @@ func TestAuditModerationSummaryDoesNotChangeOriginalEvidence(t *testing.T) {
 	}
 }
 
+func TestAuditBadRequestAPIKeySummaryKeepsRawEvidence(t *testing.T) {
+	status := http.StatusBadRequest
+	raw := `{"code":"invalid-argument","error":"Incorrect API key provided. You can obtain an API key from https://console.x.ai."}`
+	attempt := auditdomain.Attempt{UpstreamStatusCode: &status, ResponseBody: []byte(raw)}
+	if got := auditAttemptErrorMessage(attempt); got != provider.APIKeyRejectedMessage {
+		t.Fatalf("key refusal was misreported as invalid input: %s", got)
+	}
+	if *attempt.UpstreamStatusCode != http.StatusBadRequest || string(attempt.ResponseBody) != raw {
+		t.Fatal("raw upstream key refusal was changed")
+	}
+}
+
 func TestAuditResponseDerivesOutputThroughput(t *testing.T) {
 	firstTokenMS := int64(250)
 	response := newAuditResponse(auditdomain.Record{ClientIP: "203.0.113.8", StatusCode: http.StatusOK, Streaming: true, ReasoningEffort: "high", FirstTokenMS: &firstTokenMS, DurationMS: 1250, OutputTokens: 80}, nil)

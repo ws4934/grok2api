@@ -29,6 +29,7 @@ type selectionSession struct {
 	stickyTried      bool
 	staleCandidates  map[uint64]bool
 	materialFailures credentialMaterialFailureTracker
+	creativePinned   bool
 }
 
 func (s *Selector) beginSelectionSession(ctx context.Context, provider account.Provider, modelRouteID uint64, upstreamModel, quotaMode, affinityKey string, excluded map[uint64]bool, allowQuotaProbe bool) (*selectionSession, error) {
@@ -44,6 +45,16 @@ func (s *Selector) beginSelectionSessionOnNode(ctx context.Context, provider acc
 	defer annotateSelectionAccountScope(&err, accountScope)
 	if !scopeValid || !accountScope.AllowsProvider(provider) {
 		return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts, Scope: accountScope}
+	}
+	if accountID := creativeAccountID(ctx); accountID != 0 {
+		candidate, err := s.creativeCandidate(ctx, provider, accountID, modelRouteID, upstreamModel, quotaMode, accountScope)
+		if err != nil {
+			return nil, err
+		}
+		return &selectionSession{
+			selector: s, provider: provider, modelRouteID: modelRouteID, upstreamModel: upstreamModel, quotaMode: quotaMode,
+			values: []account.RoutingCandidate{candidate}, normalCandidates: []int{0}, creativePinned: true,
+		}, nil
 	}
 	now := time.Now().UTC()
 	values, err := s.loadCandidates(ctx, provider, modelRouteID, upstreamModel, quotaMode, now)
@@ -151,6 +162,13 @@ func (s *Selector) beginSelectionSessionOnNode(ctx context.Context, provider acc
 
 // Acquire 从请求级候选计划中获取下一个账号。被 excluded 的账号不会重新入选。
 func (session *selectionSession) Acquire(ctx context.Context, excluded map[uint64]bool, allowQuotaProbe bool) (*accountLease, error) {
+	if session.creativePinned {
+		candidate := session.values[0]
+		if excluded[candidate.Credential.ID] {
+			return nil, pinnedUnavailableError(candidate.Credential.ID, candidate.Credential.DisplayName())
+		}
+		return session.selector.acquireCreativeCandidate(ctx, candidate, session.quotaMode)
+	}
 	if session.retryAccountID != 0 {
 		accountID := session.retryAccountID
 		session.retryAccountID = 0

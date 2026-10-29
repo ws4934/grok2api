@@ -202,7 +202,7 @@ func applyAuditQuery(query *gorm.DB, search string, start, end time.Time, filter
 			query = query.Where("account_id = ?", id)
 		} else {
 			pattern := "%" + strings.ToLower(value) + "%"
-			query = query.Where("LOWER(account_name) LIKE ? OR CAST(account_id AS TEXT) LIKE ?", pattern, pattern)
+			query = query.Where("LOWER(account_name) LIKE ? OR CAST(account_id AS TEXT) LIKE ? OR account_id IN (?)", pattern, pattern, accountIdentitySearchIDs(query, pattern))
 		}
 	}
 	if value := strings.TrimSpace(filter.Provider); value != "" {

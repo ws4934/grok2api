@@ -79,6 +79,20 @@ func (s *Selector) AcquirePinned(ctx context.Context, provider account.Provider,
 }
 
 func (s *Selector) AcquirePinnedForKey(ctx context.Context, provider account.Provider, accountID, modelRouteID uint64, upstreamModel, quotaMode string, inference bool, scope clientkeydomain.AccountScope) (*accountLease, error) {
+	if pinned := creativeAccountID(ctx); pinned != 0 {
+		if pinned != accountID {
+			return nil, pinnedUnavailableError(pinned, "")
+		}
+		normalized, valid := clientkeydomain.NormalizeAccountScope(scope)
+		if !valid || !normalized.AllowsProvider(provider) {
+			return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts, Scope: normalized}
+		}
+		candidate, err := s.creativeCandidate(ctx, provider, accountID, modelRouteID, upstreamModel, quotaMode, normalized)
+		if err != nil {
+			return nil, err
+		}
+		return s.acquireCreativeCandidate(ctx, candidate, quotaMode)
+	}
 	return s.acquirePinned(ctx, provider, accountID, modelRouteID, upstreamModel, quotaMode, inference, false, scope)
 }
 
@@ -108,12 +122,12 @@ func (s *Selector) acquirePinned(ctx context.Context, provider account.Provider,
 	value := applyHealthSnapshot(candidate.Credential, healthOverrides)
 	if !s.accountScopeAllowsCandidate(provider, accountScope, candidate) {
 		if accountScope.IsRestricted() {
-			return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts, Scope: accountScope, AccountID: accountID, AccountName: value.Name}
+			return nil, &SelectionUnavailableError{Reason: SelectionNoAccounts, Scope: accountScope, AccountID: accountID, AccountName: value.DisplayName()}
 		}
-		return nil, pinnedUnavailableError(accountID, value.Name)
+		return nil, pinnedUnavailableError(accountID, value.DisplayName())
 	}
 	if !value.Enabled || value.AuthStatus != account.AuthStatusActive {
-		return nil, pinnedUnavailableError(accountID, value.Name)
+		return nil, pinnedUnavailableError(accountID, value.DisplayName())
 	}
 	if inference {
 		if !s.candidateSupportsModel(provider, upstreamModel, quotaMode, candidate) {
@@ -139,7 +153,7 @@ func (s *Selector) acquirePinned(ctx context.Context, provider account.Provider,
 			lease, err := s.acquirePinnedCapacity(ctx, value, nil)
 			if err != nil {
 				if errors.Is(err, errRoutingCredentialStale) {
-					return nil, pinnedUnavailableError(accountID, value.Name)
+					return nil, pinnedUnavailableError(accountID, value.DisplayName())
 				}
 				return nil, err
 			}
@@ -173,7 +187,7 @@ func (s *Selector) acquirePinned(ctx context.Context, provider account.Provider,
 	lease, err = s.acquirePinnedCapacity(ctx, value, nil)
 	if err != nil {
 		if errors.Is(err, errRoutingCredentialStale) {
-			return nil, pinnedUnavailableError(accountID, value.Name)
+			return nil, pinnedUnavailableError(accountID, value.DisplayName())
 		}
 		return nil, err
 	}

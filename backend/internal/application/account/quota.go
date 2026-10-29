@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	"github.com/chenyme/grok2api/backend/internal/pkg/diagnostic"
+	"github.com/chenyme/grok2api/backend/internal/pkg/requestmeta"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 )
 
@@ -24,9 +27,10 @@ const (
 )
 
 type quotaRefreshResult struct {
-	Credential accountdomain.Credential
-	Windows    []accountdomain.QuotaWindow
-	Modes      []string
+	failureStage string
+	Credential   accountdomain.Credential
+	Windows      []accountdomain.QuotaWindow
+	Modes        []string
 	// Complete marks a snapshot listing every mode the Provider still limits.
 	Complete bool
 }
@@ -96,17 +100,32 @@ func (s *Service) ExhaustWebQuota(ctx context.Context, id uint64, mode string, r
 }
 
 func (s *Service) RefreshQuota(ctx context.Context, id uint64) ([]accountdomain.QuotaWindow, error) {
+	startedAt := time.Now()
 	result, err, _ := s.quotaSyncs.Do("all:"+strconv.FormatUint(id, 10), func() (any, error) {
 		return s.refreshQuota(ctx, id)
 	})
+	refreshed, ok := result.(quotaRefreshResult)
 	if err != nil {
+		stage := refreshed.failureStage
+		if stage == "" {
+			stage = "quota_refresh"
+		}
+		source := refreshed.Credential.Provider
+		if source == "" && stage == "quota_refresh" && ctx.Err() == nil {
+			if value, loadErr := s.accounts.Get(ctx, id); loadErr == nil {
+				source = value.Provider
+			}
+		}
+		// Every waiter needs its own correlation event even when singleflight
+		// coalesces this manual call with a background refresh.
+		s.logQuotaFailure(ctx, id, source, stage, startedAt, err)
 		return nil, err
 	}
-	refreshed, ok := result.(quotaRefreshResult)
 	if !ok {
 		return nil, fmt.Errorf("Provider 额度同步返回类型无效")
 	}
 	if err := s.reconcileQuotaRecoveryWindows(ctx, refreshed.Credential.Provider, id, refreshed.Windows); err != nil {
+		s.logQuotaFailure(ctx, id, refreshed.Credential.Provider, "recovery", startedAt, err)
 		return refreshed.Windows, err
 	}
 	// 身份补全是非关键操作：只在额度落库和恢复任务调度完成后执行，
@@ -115,21 +134,34 @@ func (s *Service) RefreshQuota(ctx context.Context, id uint64) ([]accountdomain.
 		// SyncAccountIdentity 会自行判断身份是否完整。Web 账号必须具备合法
 		// Gateway UUID，不能因为旧记录里只有 email 就跳过迁移。
 		if identityErr := s.syncAccountIdentityBestEffort(ctx, id); errors.Is(identityErr, provider.ErrUnauthorized) {
+			s.logQuotaFailure(ctx, id, refreshed.Credential.Provider, "identity", startedAt, identityErr)
 			return refreshed.Windows, identityErr
 		}
 	}
 	return refreshed.Windows, nil
 }
 
-func (s *Service) refreshQuota(ctx context.Context, id uint64) (quotaRefreshResult, error) {
+func (s *Service) refreshQuota(ctx context.Context, id uint64) (result quotaRefreshResult, err error) {
+	startedAt := time.Now()
+	stage := "load_account"
+	var source accountdomain.Provider
+	defer func() {
+		if err != nil {
+			result.Credential.Provider = source
+			result.failureStage = stage
+		}
+	}()
 	value, err := s.accounts.Get(ctx, id)
 	if err != nil {
 		return quotaRefreshResult{}, mapRepositoryError(err)
 	}
+	source = value.Provider
+	stage = "adapter"
 	adapter, ok := s.providers.Quota(value.Provider)
 	if !ok {
 		return quotaRefreshResult{}, fmt.Errorf("%s Quota Provider 未注册", value.Provider)
 	}
+	stage = "upstream"
 	snapshot, err := adapter.SyncQuota(ctx, value)
 	if err != nil {
 		if errors.Is(err, provider.ErrUnauthorized) {
@@ -137,6 +169,7 @@ func (s *Service) refreshQuota(ctx context.Context, id uint64) (quotaRefreshResu
 		}
 		return quotaRefreshResult{}, err
 	}
+	stage = "persist"
 	quotaKind, _ := s.providers.QuotaKind(value.Provider)
 	if quotaKind == provider.QuotaLocalWindow {
 		existing, loadErr := s.accounts.GetQuotaWindows(ctx, []uint64{id})
@@ -148,6 +181,7 @@ func (s *Service) refreshQuota(ctx context.Context, id uint64) (quotaRefreshResu
 	if err := s.accounts.ReplaceQuotaWindows(ctx, id, snapshot.Tier, snapshot.SyncedAt, snapshot.Windows); err != nil {
 		return quotaRefreshResult{}, err
 	}
+	s.logger.InfoContext(ctx, "account_quota_synced", "account_id", id, "provider", source, "request_id", requestmeta.RequestID(ctx), "duration_ms", time.Since(startedAt).Milliseconds())
 	return quotaRefreshResult{Credential: value, Windows: snapshot.Windows}, nil
 }
 
@@ -671,4 +705,25 @@ func (s *Service) BatchRefreshQuota(ctx context.Context, ids []uint64) (int, int
 		_, err := s.RefreshQuota(workCtx, id)
 		return err
 	})
+}
+
+// Manual and batch refreshes share the same event, including failures hidden
+// from public responses. Never store an unredacted upstream error body.
+func (s *Service) logQuotaFailure(ctx context.Context, id uint64, source accountdomain.Provider, stage string, startedAt time.Time, err error) {
+	category := "unknown"
+	switch {
+	case errors.Is(err, provider.ErrEgressBlocked):
+		category = "egress_blocked"
+	case errors.Is(err, provider.ErrUnauthorized):
+		category = "unauthorized"
+	case errors.Is(err, context.Canceled):
+		category = "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		category = "timeout"
+	case stage == "upstream":
+		category = "upstream"
+	case stage != "quota_refresh":
+		category = "internal"
+	}
+	s.logger.WarnContext(ctx, "account_quota_sync_failed", "account_id", id, "provider", source, "request_id", requestmeta.RequestID(ctx), "stage", stage, "duration_ms", time.Since(startedAt).Milliseconds(), "category", category, "retry_after_seconds", int64(math.Ceil(provider.ErrorRetryAfter(err).Seconds())), "upstream_status", provider.ErrorHTTPStatusOrZero(err), "error", diagnostic.Text(err.Error(), 2048))
 }

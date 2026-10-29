@@ -225,15 +225,18 @@ func TestVideoRouteParametersFitConsoleReferenceLimits(t *testing.T) {
 	if _, err := grokPolicyService.videoRouteOptions(account.ProviderBuild, "grok-imagine-video-1.5", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 8, Duration: 15}); err != nil {
 		t.Fatalf("Build 1.5 references error = %v", err)
 	}
-	// Web 新协议只有文本生视频抓包证据；不能退回已删除的 media-post 旧链路。
+	// Web 已抓包验证首帧、单/多参考图及组合，使用新 mediaGenInput 协议。
 	if _, err := grokPolicyService.videoRouteOptions(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", Duration: 15}); err != nil {
 		t.Fatalf("Web text video error = %v", err)
 	}
-	if _, err := grokPolicyService.videoRouteOptions(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", HasImage: true, Duration: 6}); !errors.Is(err, ErrVideoOperationUnsupported) {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", HasImage: true, Duration: 6}); err != nil {
 		t.Fatalf("Web image video error = %v", err)
 	}
-	if _, err := grokPolicyService.videoRouteOptions(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 1, Duration: 6}); !errors.Is(err, ErrVideoOperationUnsupported) {
+	if _, err := grokPolicyService.videoRouteOptions(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "720p", ReferenceImages: 1, Duration: 6}); err != nil {
 		t.Fatalf("Web reference video error = %v", err)
+	}
+	if got, err := grokPolicyService.videoRouteOptions(account.ProviderWeb, "grok-imagine-video", provider.VideoRequestOptions{Operation: provider.VideoOperationGenerate, Resolution: "1080p", HasImage: true, ReferenceImages: 14, Duration: 15}); err != nil || !got.HasImage || got.ReferenceImages != 7 || got.Duration != 10 || got.Resolution != "720p" {
+		t.Fatalf("Web effective first frame/reference parameters = %+v, %v", got, err)
 	}
 }
 
@@ -1169,14 +1172,18 @@ func TestVideoAttemptPolicyStandaloneAndUnlimited(t *testing.T) {
 	service := &Service{}
 	service.UpdateMaxAttempts(3)
 	service.UpdateVideoMaxAttempts(-1)
-	policy := service.videoAttemptPolicy()
+	policy := service.videoAttemptPolicy(context.Background())
 	if !policy.unlimited {
 		t.Fatalf("unlimited video policy = %#v", policy)
 	}
 	service.UpdateVideoMaxAttempts(5)
-	policy = service.videoAttemptPolicy()
+	policy = service.videoAttemptPolicy(context.Background())
 	if policy.unlimited || policy.limit != 5 {
 		t.Fatalf("standalone policy = %#v", policy)
+	}
+	policy = service.videoAttemptPolicy(WithCreativeAccount(context.Background(), 42))
+	if policy.unlimited || policy.limit != 1 {
+		t.Fatalf("pinned policy = %#v", policy)
 	}
 }
 

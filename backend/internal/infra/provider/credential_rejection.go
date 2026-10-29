@@ -7,6 +7,24 @@ import (
 	"strings"
 )
 
+const APIKeyRejectedCode = "upstream_api_key_invalid"
+const APIKeyRejectedMessage = "上游账号的 API 密钥无效。"
+
+// IsBadRequestAPIKeyRejection distinguishes an upstream key rejection reported
+// as HTTP 400 from bad user input. A Console API key can fail while its SSO is
+// still valid, so this must not imply reauthorization of the whole account.
+func IsBadRequestAPIKeyRejection(status int, code, message string) bool {
+	if status != http.StatusBadRequest {
+		return false
+	}
+	code = strings.ToLower(strings.TrimSpace(code))
+	message = strings.ToLower(strings.TrimSpace(message))
+	if IsContentSafetyRejection(code + " " + message) {
+		return false
+	}
+	return code == "invalid_api_key" || code == "incorrect_api_key" || code == APIKeyRejectedCode || strings.HasPrefix(message, "incorrect api key provided")
+}
+
 // CredentialRejection 表示上游响应或错误是否构成「凭据被拒」的稳定判定。
 // 与网关 UpstreamFailure 的 CredentialRejected / PermanentAccountDenial / SpendingLimitBlocked 分类保持一致，
 // 供 account.Service 等非网关路径复用同一套失效收敛语义。

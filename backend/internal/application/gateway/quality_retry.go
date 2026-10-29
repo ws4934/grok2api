@@ -621,7 +621,7 @@ func (s *Service) recordQualityDegraded(ctx context.Context, base audit.Record, 
 	record.EventID = newAuditEventID()
 	accountID := credential.ID
 	record.AccountID = &accountID
-	record.AccountName = credential.Name
+	record.AccountName = credential.DisplayName()
 	record.StatusCode = http.StatusOK
 	record.ErrorCode = ErrorQualityDegraded
 	record.OutputTokens = usage.OutputTokens

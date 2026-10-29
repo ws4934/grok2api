@@ -19,17 +19,24 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/repository"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
+	"github.com/chenyme/grok2api/backend/internal/transport/http/accountnames"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/params"
 	"github.com/gin-gonic/gin"
 )
 
 type Handler struct {
+	accountNames            repository.AccountNameRepository
 	service                 *auditapp.Service
 	prices                  *pricingapp.Service
 	qualityGuardClientKeyID uint64
 }
 
 func NewHandler(service *auditapp.Service) *Handler { return &Handler{service: service} }
+
+func (h *Handler) WithAccountNames(reader repository.AccountNameRepository) *Handler {
+	h.accountNames = reader
+	return h
+}
 
 // WithPrices lets the billing breakdown reconstruct custom-priced audits.
 func (h *Handler) WithPrices(prices *pricingapp.Service) *Handler {
@@ -242,6 +249,21 @@ func (h *Handler) list(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "auditListFailed", "读取审计记录失败")
 		return
 	}
+	ids := make([]uint64, 0, len(result.Items))
+	for _, value := range result.Items {
+		if value.AccountID != nil {
+			ids = append(ids, *value.AccountID)
+		}
+	}
+	names, ok := accountnames.Load(c, h.accountNames, ids)
+	if !ok {
+		return
+	}
+	for i := range result.Items {
+		if result.Items[i].AccountID != nil {
+			result.Items[i].AccountName = accountnames.Name(names, *result.Items[i].AccountID, result.Items[i].AccountName)
+		}
+	}
 	prices := h.lookupPrices(c.Request.Context(), result.Items)
 	items := make([]auditResponse, 0, len(result.Items))
 	for _, value := range result.Items {
@@ -263,6 +285,27 @@ func (h *Handler) get(c *gin.Context) {
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "auditDetailFailed", "读取审计详情失败")
 		return
+	}
+	ids := make([]uint64, 0, len(value.Attempts)+1)
+	if value.AccountID != nil {
+		ids = append(ids, *value.AccountID)
+	}
+	for _, attempt := range value.Attempts {
+		if attempt.AccountID != nil {
+			ids = append(ids, *attempt.AccountID)
+		}
+	}
+	names, ok := accountnames.Load(c, h.accountNames, ids)
+	if !ok {
+		return
+	}
+	if value.AccountID != nil {
+		value.AccountName = accountnames.Name(names, *value.AccountID, value.AccountName)
+	}
+	for i := range value.Attempts {
+		if value.Attempts[i].AccountID != nil {
+			value.Attempts[i].AccountName = accountnames.Name(names, *value.Attempts[i].AccountID, value.Attempts[i].AccountName)
+		}
 	}
 	attempts := make([]auditAttemptResponse, 0, len(value.Attempts))
 	for _, attempt := range value.Attempts {

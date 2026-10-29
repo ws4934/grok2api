@@ -23,6 +23,7 @@ import (
 	providerstreamidle "github.com/chenyme/grok2api/backend/internal/infra/provider/streamidle"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
 	neterrorpkg "github.com/chenyme/grok2api/backend/internal/pkg/neterror"
+	"github.com/chenyme/grok2api/backend/internal/pkg/netguard"
 )
 
 type Config struct {
@@ -43,11 +44,23 @@ type Adapter struct {
 	breaker *egressBreaker
 	store   CredentialCacheStore
 	log     *slog.Logger
+	public  *http.Client
 }
 
 func NewAdapter(cfg Config, egress *infraegress.Manager, cipher *security.Cipher, assets provider.ImageAssetStore) *Adapter {
 	cfg = normalizedConfig(cfg)
-	return &Adapter{cfg: cfg, egress: egress, cipher: cipher, assets: assets, dpop: newDPoPSessionManager(), apiKeys: newConsoleAPIKeyCache(), breaker: newEgressBreaker()}
+	public := netguard.NewPublicClient()
+	redirect := public.CheckRedirect
+	public.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := redirect(req, via); err != nil {
+			return err
+		}
+		if !isPublicConsoleAssetHost(req.URL.Hostname()) {
+			return fmt.Errorf("资源下载重定向到不受信任的地址")
+		}
+		return nil
+	}
+	return &Adapter{cfg: cfg, egress: egress, cipher: cipher, assets: assets, dpop: newDPoPSessionManager(), apiKeys: newConsoleAPIKeyCache(), breaker: newEgressBreaker(), public: public}
 }
 
 func (a *Adapter) SetLogger(logger *slog.Logger) {

@@ -79,6 +79,7 @@ func TestGenerateVideoCapsBasicCredentialBeforeUpstream(t *testing.T) {
 		BaseURL: server.URL, StatsigMode: "manual", StatsigManualValue: "test",
 		VideoTimeoutSeconds: 5, FreeVideoDurationCap: 6,
 	}, infraegress.NewManager(egressRepositoryStub{}, cipher), cipher, nil, nil)
+	adapter.videoNow = sequentialVideoTestClock()
 
 	credential := account.Credential{
 		ID: 1, Provider: account.ProviderWeb, WebTier: account.WebTierBasic,

@@ -99,8 +99,18 @@ func (o *OpenAIImage) doAbsolute(ctx context.Context, method, endpoint string, a
 	if err := validatePublicHost(ctx, u.Hostname()); err != nil {
 		return nil, err
 	}
-	return o.doRequest(ctx, method, endpoint, u.Path, a, body, extra, stream, false)
+	response, err := o.doRequest(ctx, method, endpoint, u.Path, a, body, extra, stream, false)
+	if err != nil && (method == http.MethodGet || method == http.MethodHead) {
+		err = &publicDownloadError{cause: err}
+	}
+	return response, err
 }
+
+// A direct CDN failure must not cool the account's unrelated API proxy.
+type publicDownloadError struct{ cause error }
+
+func (e *publicDownloadError) Error() string { return e.cause.Error() }
+func (e *publicDownloadError) Unwrap() error { return e.cause }
 func (o *OpenAIImage) doRequest(ctx context.Context, method, endpoint, path string, a wireAccount, body io.Reader, extra map[string]string, stream, authenticated bool) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
@@ -134,7 +144,7 @@ func (o *OpenAIImage) doRequest(ctx context.Context, method, endpoint, path stri
 	} else if authenticated {
 		resp, err = o.Client.Do(req)
 	} else {
-		client, e := publicTransferClient(proxy)
+		client, e := publicTransferClient(method, proxy)
 		if e != nil {
 			return nil, e
 		}
@@ -154,7 +164,11 @@ func (o *OpenAIImage) doRequest(ctx context.Context, method, endpoint, path stri
 // Resolve and pin public addresses at dial time, including redirect targets.
 // Through a proxy only the target host is checked (before the request and on
 // redirects); the proxy itself may be on a private network.
-func publicTransferClient(proxy string) (*http.Client, error) {
+func publicTransferClient(method, proxy string) (*http.Client, error) {
+	// Signed CDN downloads carry no session. Uploads retain their API egress.
+	if method == http.MethodGet || method == http.MethodHead {
+		proxy = ""
+	}
 	egress, err := parseEgressProxy(proxy)
 	if err != nil {
 		return nil, err
@@ -196,6 +210,7 @@ func publicTransferClient(proxy string) (*http.Client, error) {
 		}
 		req.Header.Del("Authorization")
 		req.Header.Del("Cookie")
+		req.Header.Del("Referer")
 		return validatePublicHost(req.Context(), req.URL.Hostname())
 	}}, nil
 }

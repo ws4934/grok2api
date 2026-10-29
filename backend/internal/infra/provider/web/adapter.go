@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 	modeldomain "github.com/chenyme/grok2api/backend/internal/domain/model"
@@ -30,6 +31,7 @@ type Config struct {
 }
 
 type Adapter struct {
+	videoNow        func() time.Time
 	mu              sync.RWMutex
 	cfg             Config
 	accountsBaseURL string
@@ -43,7 +45,7 @@ type Adapter struct {
 
 func NewAdapter(cfg Config, egress *infraegress.Manager, cipher *security.Cipher, states repository.ResponseRepository, assets provider.ImageAssetStore) *Adapter {
 	cfg = normalizedConfig(cfg)
-	return &Adapter{cfg: cfg, accountsBaseURL: officialAccountsBaseURL, egress: egress, cipher: cipher, states: states, assets: assets, statsig: newStatsigSigner(), logger: slog.Default()}
+	return &Adapter{videoNow: time.Now, cfg: cfg, accountsBaseURL: officialAccountsBaseURL, egress: egress, cipher: cipher, states: states, assets: assets, statsig: newStatsigSigner(), logger: slog.Default()}
 }
 
 func (a *Adapter) SetLogger(logger *slog.Logger) {

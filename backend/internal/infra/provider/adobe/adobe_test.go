@@ -97,7 +97,7 @@ func TestClientSubmitPollDownload(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	c := &client{do: server.Client(), rc: requestContext{token: "t", sherlock: "s", apiKey: "k", userAgent: infraegress.DefaultUserAgent}}
+	c := &client{do: server.Client(), assets: server.Client(), rc: requestContext{token: "t", sherlock: "s", apiKey: "k", userAgent: infraegress.DefaultUserAgent}}
 	sub, err := c.submitJob(context.Background(), server.URL+"/v2/3p-images/generate-async", map[string]any{"prompt": "x"}, "x")
 	if err != nil {
 		t.Fatal(err)
@@ -384,6 +384,7 @@ func newFakeAdobe(t *testing.T) (*fakeAdobe, *Adapter, account.Credential) {
 		t.Fatal(err)
 	}
 	adapter := NewAdapter(Config{SherlockMintAPI: fake.URL}, infraegress.NewManager(egressRepositoryStub{}, cipher), cipher, nil, nil)
+	adapter.public = fake.Client()
 	return fake, adapter, account.Credential{ID: 1, Provider: account.ProviderAdobe, AuthType: account.AuthTypeOAuth, EncryptedAccessToken: token}
 }
 

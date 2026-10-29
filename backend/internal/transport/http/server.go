@@ -6,9 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/chenyme/grok2api/backend/internal/application/providercatalog"
-	providercataloghttp "github.com/chenyme/grok2api/backend/internal/transport/http/providercatalog"
-
 	_ "github.com/chenyme/grok2api/backend/docs"
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	accountsyncapp "github.com/chenyme/grok2api/backend/internal/application/accountsync"
@@ -21,8 +18,11 @@ import (
 	mediaapp "github.com/chenyme/grok2api/backend/internal/application/media"
 	modelapp "github.com/chenyme/grok2api/backend/internal/application/model"
 	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
+	"github.com/chenyme/grok2api/backend/internal/application/providercatalog"
 	settingsapp "github.com/chenyme/grok2api/backend/internal/application/settings"
+	systemlogapp "github.com/chenyme/grok2api/backend/internal/application/systemlog"
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
+	"github.com/chenyme/grok2api/backend/internal/repository"
 	accounthttp "github.com/chenyme/grok2api/backend/internal/transport/http/account"
 	adminauthhttp "github.com/chenyme/grok2api/backend/internal/transport/http/adminauth"
 	audithttp "github.com/chenyme/grok2api/backend/internal/transport/http/audit"
@@ -34,14 +34,18 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	modelhttp "github.com/chenyme/grok2api/backend/internal/transport/http/model"
 	pricinghttp "github.com/chenyme/grok2api/backend/internal/transport/http/pricing"
+	providercataloghttp "github.com/chenyme/grok2api/backend/internal/transport/http/providercatalog"
 	settingshttp "github.com/chenyme/grok2api/backend/internal/transport/http/settings"
 	systemhttp "github.com/chenyme/grok2api/backend/internal/transport/http/system"
+	systemloghttp "github.com/chenyme/grok2api/backend/internal/transport/http/systemlog"
 	"github.com/gin-gonic/gin"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 type Dependencies struct {
+	AccountNames       repository.AccountNameRepository
+	SystemLogs         *systemlogapp.Service
 	Providers          *providercatalog.Catalog
 	Logger             *slog.Logger
 	RequestTimeout     time.Duration
@@ -142,7 +146,7 @@ func New(deps Dependencies) *gin.Engine {
 	if deps.SwaggerEnabled {
 		router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	}
-	mediaHandler := mediahttp.NewHandler(deps.Media)
+	mediaHandler := mediahttp.NewHandler(deps.Media).WithAccountNames(deps.AccountNames)
 	if deps.Gateway != nil {
 		mediaHandler.WithJobControl(deps.Gateway)
 	}
@@ -163,13 +167,14 @@ func New(deps Dependencies) *gin.Engine {
 		pricinghttp.NewHandler(deps.Pricing).Register(adminProtected)
 	}
 	clientkeyhttp.NewHandler(deps.ClientKeys).Register(adminProtected)
-	auditHandler := audithttp.NewHandler(deps.Audits).WithPrices(deps.Pricing)
+	auditHandler := audithttp.NewHandler(deps.Audits).WithPrices(deps.Pricing).WithAccountNames(deps.AccountNames)
 	auditHandler.Register(adminProtected)
 	dashboardhttp.NewHandler(deps.Dashboard).Register(adminProtected)
 	mediaHandler.RegisterAdmin(adminProtected)
 	settingshttp.NewHandler(deps.Settings).Register(adminProtected)
 	egressHandler := egresshttp.NewHandler(deps.Egress, deps.QualityGuardStatePath, deps.QualityGuardConfigPath).WithQualityGuardProbe(deps.QualityGuardProbe)
 	egressHandler.Register(adminProtected)
+	systemloghttp.NewHandler(deps.SystemLogs).Register(adminProtected)
 	systemhttp.NewHandler(func() string {
 		if deps.Settings != nil {
 			return deps.Settings.PublicAPIBaseURL()
@@ -184,11 +189,9 @@ func New(deps Dependencies) *gin.Engine {
 		egressHandler.RegisterQualityGuard(qualityGuardInternal)
 	}
 
-	v1 := router.Group("/v1")
-	v1.Use(deps.ConcurrencyGate.Middleware())
-	v1.Use(middleware.ObserveBodyMemory())
+	inferenceGuards := gin.HandlersChain{deps.ConcurrencyGate.Middleware(), middleware.ObserveBodyMemory()}
 	if deps.TrafficReady != nil {
-		v1.Use(func(c *gin.Context) {
+		inferenceGuards = append(inferenceGuards, func(c *gin.Context) {
 			if deps.TrafficReady() {
 				c.Next()
 				return
@@ -196,12 +199,19 @@ func New(deps Dependencies) *gin.Engine {
 			middleware.WriteAPIError(c, http.StatusServiceUnavailable, "service_reconciling", "服务正在完成启动恢复，请稍后重试")
 		})
 	}
-	v1.Use(middleware.ClientAuth(deps.ClientKeys))
+	inferenceGuards = append(inferenceGuards, middleware.ClientAuth(deps.ClientKeys))
+	v1 := router.Group("/v1", inferenceGuards...)
 	inferenceHandler := inference.NewHandler(deps.Gateway, deps.Models, deps.MaxBodyBytes, deps.PublicAPIBaseURL)
 	if deps.Settings != nil {
 		inferenceHandler.SetPublicAPIBaseURLResolver(deps.Settings.PublicAPIBaseURL)
 	}
 	inferenceHandler.Register(v1)
+	// Keep administrator account tests separate from the public API. Both
+	// administrator authentication and the selected client key are required.
+	creative := adminProtected.Group("/creative")
+	creative.Use(middleware.CreativeAccount())
+	creative.Use(inferenceGuards...)
+	inferenceHandler.Register(creative)
 	registerFrontend(router, deps.FrontendStaticPath)
 	return router
 }

@@ -4,6 +4,7 @@ import { Spinner } from "@/components/ui/spinner";
 
 // Keyed by the first path segment, so preloadRoute can find a page by URL.
 const pageLoaders = {
+  "system-logs": () => import("@/features/system-logs/system-logs-page"),
   "accounts": () => import("@/features/accounts/accounts-page"),
   "request-audits": () => import("@/features/audits/request-audits-page"),
   "client-keys": () => import("@/features/client-keys/client-keys-page"),
@@ -18,6 +19,7 @@ const pageLoaders = {
 };
 const loadAppShell = () => import("@/app/app-shell");
 
+const SystemLogsPage = lazyNamed(pageLoaders["system-logs"], "SystemLogsPage");
 const AccountsPage = lazyNamed(pageLoaders["accounts"], "AccountsPage");
 const AppShell = lazyNamed(loadAppShell, "AppShell");
 const RequestAuditsPage = lazyNamed(pageLoaders["request-audits"], "RequestAuditsPage");
@@ -104,3 +106,5 @@ function PageLoadingFallback({ fullScreen = false }: { fullScreen?: boolean }) {
     </div>
   );
 }
+
+export function DeferredSystemLogsPage() { return <DeferredPage page={SystemLogsPage} />; }

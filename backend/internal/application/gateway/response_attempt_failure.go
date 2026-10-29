@@ -17,7 +17,7 @@ import (
 
 // canceledFailure is the 499 recorded when the client request was canceled.
 func (a *responseAttempt) canceledFailure(credential accountdomain.Credential, err error) *UpstreamFailure {
-	return &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.Name, Cause: firstError(a.ctx.Err(), err)}
+	return &UpstreamFailure{HTTPStatus: 499, Code: "request_canceled", PublicMessage: "请求已取消", AccountID: credential.ID, AccountName: credential.DisplayName(), Cause: firstError(a.ctx.Err(), err)}
 }
 
 // handleForwardError records an upstream call that returned no response and
@@ -32,10 +32,10 @@ func (a *responseAttempt) handleForwardError(lease *accountLease, credential acc
 	}
 	if isSSOCredentialRejected(err, credential) {
 		s.markSSOCredentialRejected(ctx, credential, fmt.Sprintf("%s SSO credential rejected", credential.Provider))
-		a.lastFailure = newHTTPUpstreamFailure(http.StatusUnauthorized, nil, credential.ID, credential.Name)
+		a.lastFailure = newHTTPUpstreamFailure(http.StatusUnauthorized, nil, credential.ID, credential.DisplayName())
 		return attemptNext
 	}
-	a.lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.Name)
+	a.lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.DisplayName())
 	if !isRetryableTransportFailure(a.failurePolicy, err) {
 		return attemptStop
 	}
@@ -74,7 +74,7 @@ func (a *responseAttempt) replayFailed(credential accountdomain.Credential, err 
 		a.lastFailure = a.canceledFailure(credential, err)
 		return attemptStop
 	}
-	a.lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.Name)
+	a.lastFailure = newTransportUpstreamFailure(err, credential.ID, credential.DisplayName())
 	if !isRetryableTransportFailure(a.failurePolicy, err) {
 		return attemptStop
 	}
@@ -97,13 +97,13 @@ func (a *responseAttempt) recoverUnauthorized(t *responseTry) attemptStep {
 		s.markSSOCredentialRejected(ctx, t.credential, fmt.Sprintf("%s SSO credential rejected", t.credential.Provider))
 		lease.Release()
 		a.lastErr = fmt.Errorf("%s SSO 凭据已失效", t.credential.Provider)
-		a.lastFailure = newHTTPUpstreamFailure(http.StatusUnauthorized, nil, t.credential.ID, t.credential.Name)
+		a.lastFailure = newHTTPUpstreamFailure(http.StatusUnauthorized, nil, t.credential.ID, t.credential.DisplayName())
 		return attemptNext
 	}
 	if s.markPermanentlyUnrefreshableCredentialRejected(ctx, t.credential) {
 		lease.Release()
 		a.lastErr = accountapp.ErrCredentialRefreshPermanent
-		a.lastFailure = newHTTPUpstreamFailure(http.StatusUnauthorized, nil, t.credential.ID, t.credential.Name)
+		a.lastFailure = newHTTPUpstreamFailure(http.StatusUnauthorized, nil, t.credential.ID, t.credential.DisplayName())
 		return attemptNext
 	}
 	a.authRecoveryAttempted[t.credential.ID] = true
@@ -121,7 +121,7 @@ func (a *responseAttempt) recoverUnauthorized(t *responseTry) attemptStep {
 		lease.Release()
 		a.lastErr = firstError(refreshErr, err)
 		if refreshErr != nil {
-			a.lastFailure = newCredentialUpstreamFailure(refreshErr, t.credential.ID, t.credential.Name)
+			a.lastFailure = newCredentialUpstreamFailure(refreshErr, t.credential.ID, t.credential.DisplayName())
 			return attemptNext
 		}
 		return a.replayFailed(t.credential, err)
@@ -131,7 +131,7 @@ func (a *responseAttempt) recoverUnauthorized(t *responseTry) attemptStep {
 		_ = s.accounts.MarkReauthRequired(ctx, t.credential.ID, fmt.Sprintf("%s OAuth credential rejected after refresh", t.credential.Provider))
 		lease.Release()
 		a.lastErr = fmt.Errorf("刷新后上游仍返回 401")
-		a.lastFailure = newHTTPUpstreamFailure(http.StatusUnauthorized, body, t.credential.ID, t.credential.Name)
+		a.lastFailure = newHTTPUpstreamFailure(http.StatusUnauthorized, body, t.credential.ID, t.credential.DisplayName())
 		return attemptNext
 	}
 	// The replayed response is classified on from here; like any response it
@@ -151,7 +151,7 @@ func (a *responseAttempt) classifyForbidden(t *responseTry, egressForbidden, fin
 	s, ctx, requestID, lease, credential, response := a.s, a.ctx, a.input.RequestID, t.lease, t.credential, t.response
 	retryAfter := parseRetryAfter(response.Header.Get("Retry-After"), time.Now().UTC())
 	body, _ := readRetryableBody(response.Body)
-	a.lastFailure = newHTTPUpstreamFailure(response.StatusCode, body, credential.ID, credential.Name)
+	a.lastFailure = newHTTPUpstreamFailure(response.StatusCode, body, credential.ID, credential.DisplayName())
 	if isTerminalRequestForbidden(a.failurePolicy, a.lastFailure) {
 		// Deterministic request-scoped 403: restore the original body and return it
 		// without OAuth refresh, account rotation, cooldown, or invalidation.
@@ -203,7 +203,7 @@ func (a *responseAttempt) handleRetryableResponse(t *responseTry) attemptStep {
 	s, ctx := a.s, a.ctx
 	retryAfter := parseRetryAfter(t.response.Header.Get("Retry-After"), time.Now().UTC())
 	body, _ := readRetryableBody(t.response.Body)
-	a.lastFailure = newHTTPUpstreamFailure(t.response.StatusCode, body, t.credential.ID, t.credential.Name)
+	a.lastFailure = newHTTPUpstreamFailure(t.response.StatusCode, body, t.credential.ID, t.credential.DisplayName())
 	if t.response.StatusCode == http.StatusTooManyRequests && t.response.RateLimit == nil {
 		if metadata := provider.ParseRateLimitMetadata(body); metadata != nil {
 			t.response.RateLimit = metadata
@@ -287,7 +287,7 @@ func (a *responseAttempt) refreshRejectedCredential(t *responseTry) attemptStep 
 		s.selector.MarkRefreshDeferred(a.ctx, t.credential, refreshErr)
 		t.lease.Release()
 		a.lastErr = refreshErr
-		a.lastFailure = newCredentialUpstreamFailure(refreshErr, t.credential.ID, t.credential.Name)
+		a.lastFailure = newCredentialUpstreamFailure(refreshErr, t.credential.ID, t.credential.DisplayName())
 		return attemptNext
 	}
 	var err error

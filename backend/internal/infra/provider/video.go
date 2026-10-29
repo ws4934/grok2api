@@ -31,6 +31,10 @@ const (
 	// no usable job identifier was obtained. Retrying could duplicate work.
 	VideoStageSubmitted VideoStage = "submitted"
 	VideoStagePoll      VideoStage = "poll"
+	// VideoStageResultRejected is an output rejected by an explicit result policy,
+	// with its checkpoint durably cleared. Only this quality rejection may
+	// retry after submission; ambiguous create/poll failures remain non-replayable.
+	VideoStageResultRejected VideoStage = "result_rejected"
 )
 
 // VideoStageError records the asynchronous video phase without treating every
@@ -254,7 +258,9 @@ func SaveVideoCheckpoint(request VideoRequest, checkpoint any) error {
 func VideoCreateFailed(request VideoRequest, err error) error {
 	stage := VideoCreateFailureStage(err)
 	if stage == VideoStageCreate && request.SaveCheckpoint != nil {
-		_ = request.SaveCheckpoint("")
+		if clearErr := request.SaveCheckpoint(""); clearErr != nil {
+			return WrapVideoStage(VideoStageSubmitted, 0, errors.Join(err, clearErr))
+		}
 	}
 	return WrapVideoStage(stage, 0, err)
 }

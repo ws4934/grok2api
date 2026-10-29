@@ -1,8 +1,8 @@
 package console
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,7 +23,8 @@ import (
 // Free Console accounts must send the team's apiKeyId as x-apikey on every
 // /v1 inference request; without it the upstream answers 429 "provision an API
 // key". The key is read from the Console home page SSR payload and created
-// only when the team has none, because CreateApiKey has no idempotency guard.
+// only when the team has no usable key, because CreateApiKey has no
+// idempotency guard.
 const (
 	consoleAPIKeyHeader       = "x-apikey"
 	consoleAPIKeyName         = "xAI Chat Playground"
@@ -39,9 +40,9 @@ const (
 var (
 	errConsoleAPIKeyUnavailable = errors.New("Console 首页未提供可用的 apiKeyId")
 	consoleAPIKeyIDPattern      = regexp.MustCompile(`"apiKeyId"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"`)
-	consoleDisabledPattern      = regexp.MustCompile(`"disabled"\s*:\s*true`)
 	consoleTeamPathPattern      = regexp.MustCompile(`/team/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})`)
 	consoleTeamIDPattern        = regexp.MustCompile(`"teamId"\s*:\s*"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"`)
+	consoleHomeUnescape         = strings.NewReplacer(`\\`, `\`, `\"`, `"`)
 )
 
 // CredentialCacheStore persists Console-only acceleration caches. Both values
@@ -94,12 +95,11 @@ func (c *consoleAPIKeyCache) invalidate(key, value string) {
 	}
 }
 
-// consoleAPIKey returns the x-apikey for the credential. refresh skips both
-// the persisted value and the process cache, used after the upstream rejected
-// the cached key.
-func (a *Adapter) consoleAPIKey(ctx context.Context, credential account.Credential, ssoToken string, lease *infraegress.Lease, refresh bool) (string, error) {
+// consoleAPIKey returns the current account's x-apikey. A rejected key skips
+// both caches and is excluded from the team's candidates during recovery.
+func (a *Adapter) consoleAPIKey(ctx context.Context, credential account.Credential, ssoToken string, lease *infraegress.Lease, rejectedKey string) (string, error) {
 	key := consoleAPIKeyCacheKey(credential, ssoToken)
-	if !refresh {
+	if rejectedKey == "" {
 		if value := a.apiKeys.get(key); value != "" {
 			return value, nil
 		}
@@ -110,12 +110,12 @@ func (a *Adapter) consoleAPIKey(ctx context.Context, credential account.Credenti
 	// Coalesce concurrent resolutions per account: two parallel misses must not
 	// both reach CreateApiKey and leave a stray key on the team.
 	value, err, _ := a.apiKeys.loads.Do(key, func() (any, error) {
-		if !refresh {
+		if rejectedKey == "" {
 			if cached := a.apiKeys.get(key); cached != "" {
 				return cached, nil
 			}
 		}
-		resolved, resolveErr := a.resolveConsoleAPIKey(ctx, credential, ssoToken, lease)
+		resolved, resolveErr := a.resolveConsoleAPIKey(ctx, credential, ssoToken, lease, rejectedKey)
 		if resolveErr != nil {
 			return "", resolveErr
 		}
@@ -129,7 +129,7 @@ func (a *Adapter) consoleAPIKey(ctx context.Context, credential account.Credenti
 		return "", err
 	}
 	resolved, _ := value.(string)
-	if resolved == "" {
+	if resolved == "" || resolved == rejectedKey {
 		return "", errConsoleAPIKeyUnavailable
 	}
 	return resolved, nil
@@ -149,14 +149,14 @@ func (a *Adapter) saveConsoleAPIKeyID(ctx context.Context, accountID uint64, api
 	}
 }
 
-// resolveConsoleAPIKey is the read-then-create sequence: reuse any enabled
-// team key from the Console home page and create one only when none exists.
-func (a *Adapter) resolveConsoleAPIKey(ctx context.Context, credential account.Credential, ssoToken string, lease *infraegress.Lease) (string, error) {
+// Reuse an enabled key of the selected team, excluding one explicitly refused
+// upstream. Create only when no usable key remains, then confirm its id.
+func (a *Adapter) resolveConsoleAPIKey(ctx context.Context, credential account.Credential, ssoToken string, lease *infraegress.Lease, rejectedKey string) (string, error) {
 	home, err := a.readConsoleHome(ctx, ssoToken, lease)
 	if err != nil {
 		return "", err
 	}
-	if keyID := home.apiKeyID; keyID != "" {
+	if keyID := home.availableAPIKey(rejectedKey); keyID != "" {
 		return keyID, nil
 	}
 	if home.teamID == "" {
@@ -171,15 +171,28 @@ func (a *Adapter) resolveConsoleAPIKey(ctx context.Context, credential account.C
 	if err != nil {
 		return "", err
 	}
-	if confirmed.apiKeyID == "" {
+	if confirmed.teamID != home.teamID {
+		return "", fmt.Errorf("%w: 创建后回读的 teamId 已改变", errConsoleAPIKeyUnavailable)
+	}
+	keyID := confirmed.availableAPIKey(rejectedKey)
+	if keyID == "" {
 		return "", fmt.Errorf("%w: 创建后回读未找到", errConsoleAPIKeyUnavailable)
 	}
-	return confirmed.apiKeyID, nil
+	return keyID, nil
 }
 
 type consoleHome struct {
-	apiKeyID string
-	teamID   string
+	apiKeyIDs []string
+	teamID    string
+}
+
+func (h consoleHome) availableAPIKey(rejectedKey string) string {
+	for _, id := range h.apiKeyIDs {
+		if id != rejectedKey {
+			return id
+		}
+	}
+	return ""
 }
 
 // readConsoleHome loads the Console landing page, which 307-redirects to
@@ -247,45 +260,74 @@ func (a *Adapter) readConsoleHome(ctx context.Context, ssoToken string, lease *i
 		if err != nil {
 			return consoleHome{}, err
 		}
-		home := parseConsoleHome(data)
+		teamID := ""
 		if match := consoleTeamPathPattern.FindStringSubmatch(current.Path); match != nil {
-			home.teamID = strings.ToLower(match[1])
+			teamID = match[1]
 		}
-		return home, nil
+		return parseConsoleHome(data, teamID), nil
 	}
 	return consoleHome{}, fmt.Errorf("Console 首页跳转次数超过 %d", consoleHomeMaxRedirects)
 }
 
-// parseConsoleHome extracts the first enabled apiKeyId and the team id from
-// the Next.js SSR payload. The payload embeds JSON as escaped string literals
-// (\"apiKeyId\":\"…\", sometimes escaped twice); UUIDs never contain
-// backslashes, so dropping them yields plain JSON fragments to scan.
-func parseConsoleHome(data []byte) consoleHome {
-	text := string(bytes.ReplaceAll(data, []byte(`\`), nil))
-	result := consoleHome{}
-	matches := consoleAPIKeyIDPattern.FindAllStringSubmatchIndex(text, -1)
-	for index, match := range matches {
-		end := len(text)
-		if index+1 < len(matches) {
-			end = matches[index+1][0]
+// The Next.js payload contains raw JSON or JSON string literals escaped once
+// or twice. Decode one escape level at a time so quotes inside key names stay
+// valid while the containing key object is parsed.
+func parseConsoleHome(data []byte, activeTeamID string) consoleHome {
+	text := string(data)
+	result := consoleHome{teamID: strings.ToLower(strings.TrimSpace(activeTeamID))}
+	seen := make(map[string]bool)
+	for depth := 0; depth <= 2; depth++ {
+		if result.teamID == "" {
+			if match := consoleTeamPathPattern.FindStringSubmatch(text); match != nil {
+				result.teamID = strings.ToLower(match[1])
+			} else if match := consoleTeamIDPattern.FindStringSubmatch(text); match != nil {
+				result.teamID = strings.ToLower(match[1])
+			}
 		}
-		if end-match[1] > consoleAPIKeyScanDistance {
-			end = match[1] + consoleAPIKeyScanDistance
+		matches := consoleAPIKeyIDPattern.FindAllStringSubmatchIndex(text, -1)
+		for _, match := range matches {
+			key, ok := parseConsoleHomeKey(text, match)
+			if !ok || key.Disabled || (key.TeamID != "" && result.teamID != "" && !strings.EqualFold(key.TeamID, result.teamID)) {
+				continue
+			}
+			id := strings.ToLower(key.APIKeyID)
+			if !seen[id] {
+				result.apiKeyIDs = append(result.apiKeyIDs, id)
+				seen[id] = true
+			}
 		}
-		// Console serializes disabled after apiKeyId in each key object, so the
-		// span up to the next key belongs to this key.
-		if consoleDisabledPattern.MatchString(text[match[1]:end]) {
-			continue
+		next := consoleHomeUnescape.Replace(text)
+		if next == text {
+			break
 		}
-		result.apiKeyID = strings.ToLower(text[match[2]:match[3]])
-		break
-	}
-	if match := consoleTeamIDPattern.FindStringSubmatch(text); match != nil {
-		result.teamID = strings.ToLower(match[1])
-	} else if match := consoleTeamPathPattern.FindStringSubmatch(text); match != nil {
-		result.teamID = strings.ToLower(match[1])
+		text = next
 	}
 	return result
+}
+
+type consoleHomeAPIKey struct {
+	APIKeyID string `json:"apiKeyId"`
+	TeamID   string `json:"teamId"`
+	Disabled bool   `json:"disabled"`
+}
+
+// Decode the containing key object, not a span extending into the next key:
+// teamId and disabled can appear before or after apiKeyId.
+func parseConsoleHomeKey(text string, match []int) (consoleHomeAPIKey, bool) {
+	left, right := max(0, match[0]-consoleAPIKeyScanDistance), min(len(text), match[1]+consoleAPIKeyScanDistance)
+	for end := match[0]; end > left; {
+		start := strings.LastIndexByte(text[left:end], '{')
+		if start < 0 {
+			break
+		}
+		start += left
+		var key consoleHomeAPIKey
+		if json.NewDecoder(strings.NewReader(text[start:right])).Decode(&key) == nil && strings.EqualFold(key.APIKeyID, text[match[2]:match[3]]) {
+			return key, true
+		}
+		end = start
+	}
+	return consoleHomeAPIKey{}, false
 }
 
 func (a *Adapter) createConsoleAPIKey(ctx context.Context, credential account.Credential, ssoToken string, lease *infraegress.Lease, teamID string) error {
@@ -329,9 +371,16 @@ func consoleCreateAPIKeyBody(teamID string) []byte {
 	return append(envelope, payload...)
 }
 
-// isConsoleMissingAPIKeyBody reports the 429 Console returns when x-apikey is
-// absent or no longer belongs to the team. It is repairable, not a rate limit.
-func isConsoleMissingAPIKeyBody(body []byte) bool {
+// Key provisioning failures (429/403) and explicitly rejected keys (400) are
+// repairable by resolving the team's key again. Other 400s remain terminal.
+func isConsoleRepairableAPIKeyBody(status int, body []byte) bool {
+	code, _, message := provider.ExtractUpstreamErrorMetadata(body)
+	if provider.IsBadRequestAPIKeyRejection(status, code, message) {
+		return true
+	}
+	if status != http.StatusTooManyRequests && status != http.StatusForbidden {
+		return false
+	}
 	text := strings.ToLower(string(body))
 	return strings.Contains(text, "provision an api key") || strings.Contains(text, "not the owner")
 }

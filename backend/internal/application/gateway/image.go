@@ -302,7 +302,7 @@ func (s *Service) executeImage(
 	}()
 	quotaMode := s.providers.ImageQuotaMode(route.Provider, route.UpstreamModel, options.Edit)
 	quotaRefreshGroup := s.providers.QuotaRefreshGroup(route.Provider, route.UpstreamModel)
-	attemptPolicy := newRoutingAttemptPolicy(int(s.maxAttempts.Load()))
+	attemptPolicy := newRequestRoutingAttemptPolicy(int(s.maxAttempts.Load()), creativeAccountID(ctx) != 0)
 	excluded := make(map[uint64]bool)
 	authRetried := make(map[uint64]bool)
 	selection := preselectedSession
@@ -380,7 +380,7 @@ func (s *Service) executeImage(
 		// Assets the provider saves for this attempt carry its provenance.
 		originCtx := mediadomain.WithOrigin(ctx, mediadomain.Origin{
 			Provider: string(route.Provider), Model: externalModel, UpstreamModel: auditBase.ModelUpstreamModel,
-			ClientKeyID: key.ID, ClientKeyName: key.Name, AccountID: credential.ID, AccountName: credential.Name,
+			ClientKeyID: key.ID, ClientKeyName: key.Name, AccountID: credential.ID, AccountName: credential.DisplayName(),
 			Operation: string(operation), RequestID: requestID, Prompt: prompt,
 		})
 		attemptStarted = time.Now()
@@ -407,7 +407,7 @@ func (s *Service) executeImage(
 				releaseAttempt()
 				continue
 			}
-			failure := ProviderUpstreamFailure(err, credential.ID, credential.Name)
+			failure := ProviderUpstreamFailure(err, credential.ID, credential.DisplayName())
 			if !provider.IsMediaPostProcessingError(err) && !provider.IsRequestScopedError(err) && (failure == nil || (!failure.SafetyRejection && !failure.RequestScopedForbidden)) {
 				if failure != nil && failure.HTTPStatus == http.StatusTooManyRequests && s.providers.Failure(credential.Provider).SoftRateLimit {
 					// A typed error may follow an accepted generation or a result
@@ -429,6 +429,20 @@ func (s *Service) executeImage(
 			}
 			writeFailureAudit(status, errorCode, &credential)
 			return nil, err
+		}
+		if failure := apiKeyRejectedResponse(response, credential); failure != nil {
+			lastUpstreamFailure, lastCredentialError = failure, nil
+			failedCredential := credential
+			lastCredentialFailure = &failedCredential
+			s.selector.MarkFailure(ctx, credential, response.StatusCode, 0)
+			_ = response.Body.Close()
+			response = nil
+			releaseAttempt()
+			if !attemptPolicy.hasNext(attempt) {
+				writeFailureAudit(failure.HTTPStatus, failure.Code, &credential)
+				return nil, failure
+			}
+			continue
 		}
 		if response.StatusCode == http.StatusUnauthorized && credential.AuthType == accountdomain.AuthTypeSSO {
 			_, _ = readRetryableBody(response.Body)
@@ -489,7 +503,7 @@ func (s *Service) executeImage(
 			s.applyRateLimitReconciliation(ctx, credential, response.StatusCode, retryAfter, state, reconcileErr)
 			if attemptPolicy.hasNext(attempt) {
 				body, _ := readRetryableBody(response.Body)
-				lastUpstreamFailure = newHTTPUpstreamFailure(response.StatusCode, body, credential.ID, credential.Name)
+				lastUpstreamFailure = newHTTPUpstreamFailure(response.StatusCode, body, credential.ID, credential.DisplayName())
 				lastUpstreamFailure.RetryAfter = retryAfter
 				failedCredential := credential
 				lastCredentialFailure, lastCredentialError = &failedCredential, nil
@@ -578,7 +592,7 @@ func (s *Service) executeImage(
 			successful := auditRequestSucceeded(response.StatusCode, errorCode)
 			budget := newFinalizationBudget(string(operation), string(route.Provider))
 			record := auditBase
-			record.AccountID, record.AccountName, record.StatusCode = &accountID, credential.Name, response.StatusCode
+			record.AccountID, record.AccountName, record.StatusCode = &accountID, credential.DisplayName(), response.StatusCode
 			record.ErrorCode = errorCode
 			// Earlier failed attempts (other accounts, rejected responses) stay visible on the final record.
 			record.Attempts = failureAttempts.snapshot()

@@ -21,6 +21,7 @@ import (
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/conversation"
 	"github.com/chenyme/grok2api/backend/internal/infra/security"
+	"github.com/chenyme/grok2api/backend/internal/pkg/netguard"
 	"github.com/chenyme/grok2api/backend/internal/pkg/reasoningreplay"
 )
 
@@ -47,6 +48,7 @@ type Adapter struct {
 	cfgMu          sync.RWMutex
 	cfg            Config
 	http           *http.Client
+	public         *http.Client
 	oauth          *oauthClient
 	cipher         *security.Cipher
 	base           *buildDirectTransport
@@ -75,6 +77,7 @@ func NewAdapter(cfg Config, cipher *security.Cipher) *Adapter {
 	agentID := uuid.NewString()
 	adapter := &Adapter{
 		cfg: cfg, http: httpClient, cipher: cipher, base: transport,
+		public:  netguard.NewPublicClient(),
 		agentID: agentID, modelsETags: make(map[uint64]string),
 		conversationReasoningCache: conversation.NewReasoningCache(0, 0),
 		compaction:                 newGatewayCompactionCodec(cipher), logger: slog.Default(),

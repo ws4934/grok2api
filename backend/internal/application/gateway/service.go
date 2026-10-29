@@ -233,7 +233,8 @@ func (s *Service) ProviderDefinition(value accountdomain.Provider) (provider.Def
 	return s.providers.Definition(value)
 }
 
-// UpdateVideoMaxAttempts configures create-phase account failover for video jobs.
+// UpdateVideoMaxAttempts bounds account failover for explicit create failures
+// and rejected video results; uncertain submissions and polling never fail over.
 func (s *Service) UpdateVideoMaxAttempts(maxAttempts int) {
 	s.videoMaxAttempts.Store(int64(maxAttempts))
 }

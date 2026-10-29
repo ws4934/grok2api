@@ -1552,7 +1552,7 @@ func TestParseVideoStreamFixture(t *testing.T) {
 }
 
 func TestTextToVideoPayloadMatchesCapturedMediaGenInputShape(t *testing.T) {
-	payload := videoCreatePayload("雨后天晴！", "9:16", "480p", 6)
+	payload := videoCreatePayload("雨后天晴！", "9:16", "480p", 6, "", nil)
 	if len(payload) != 8 || payload["modelName"] != "imagine-video-gen" ||
 		payload["message"] != "雨后天晴！ --mode=custom" ||
 		payload["enableImageStreaming"] != true || payload["enableSideBySide"] != true ||
@@ -1661,6 +1661,7 @@ func TestGenerateVideoRefreshesOnlyReloadStatsigForbidden(t *testing.T) {
 				return "current-page-meta", nil
 			}
 			adapter.statsig.validateEndpoint = func(context.Context, string) error { return nil }
+			adapter.videoNow = sequentialVideoTestClock()
 
 			result, err := adapter.GenerateVideo(context.Background(), provider.VideoRequest{
 				Credential: account.Credential{ID: 1, Provider: account.ProviderWeb, EncryptedAccessToken: encryptedToken},
@@ -1739,6 +1740,7 @@ func TestGenerateVideoClassifiesOnlyExplicitHTTPRejectionAsCreateFailure(t *test
 		Prompt:     "test",
 		Duration:   5,
 	}
+	adapter.videoNow = sequentialVideoTestClock()
 
 	_, err = adapter.GenerateVideo(context.Background(), request)
 	if stage, ok := provider.VideoErrorStage(err); !ok || stage != provider.VideoStagePoll {

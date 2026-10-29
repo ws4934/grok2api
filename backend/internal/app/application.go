@@ -30,6 +30,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/application/providercatalog"
 	quotarecoveryapp "github.com/chenyme/grok2api/backend/internal/application/quotarecovery"
 	settingsapp "github.com/chenyme/grok2api/backend/internal/application/settings"
+	systemlogapp "github.com/chenyme/grok2api/backend/internal/application/systemlog"
 	updatecheckapp "github.com/chenyme/grok2api/backend/internal/application/updatecheck"
 	"github.com/chenyme/grok2api/backend/internal/buildinfo"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
@@ -38,6 +39,7 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/infra/config"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	inframedia "github.com/chenyme/grok2api/backend/internal/infra/media"
+	"github.com/chenyme/grok2api/backend/internal/infra/observability"
 	"github.com/chenyme/grok2api/backend/internal/infra/persistence/relational"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider/adobe"
@@ -72,6 +74,7 @@ const (
 type Application struct {
 	chatgpt         *chatgpt.Adapter
 	logger          *slog.Logger
+	systemLogs      *systemlogapp.Service
 	database        *relational.Database
 	server          *http.Server
 	inferenceGate   *httpmiddleware.ConcurrencyGate
@@ -120,6 +123,7 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 	if err != nil {
 		return nil, err
 	}
+	var systemLogs *systemlogapp.Service
 	var runtimeStore io.Closer
 	var chatgptAdapter *chatgpt.Adapter
 	// A failed New releases what it opened, in Application.Close order.
@@ -133,11 +137,16 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 		if runtimeStore != nil {
 			_ = runtimeStore.Close()
 		}
+		if systemLogs != nil {
+			systemLogs.Close()
+		}
 		database.Close()
 	}()
 	if err := database.InitializeSchema(ctx); err != nil {
 		return nil, err
 	}
+	systemLogs = systemlogapp.NewService(relational.NewSystemLogRepository(database))
+	logger = observability.WithSystemLogs(logger, systemLogs, cfg.Deployment.InstanceID)
 	cipher, err := security.NewCipher(cfg.Secrets.CredentialEncryptionKey)
 	if err != nil {
 		return nil, err
@@ -467,10 +476,10 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (_ *Applic
 		}
 	}
 	egressdomain.SetExtensionScopes(extensionScopes)
-	router := httpserver.New(httpserver.Dependencies{Providers: providerCatalog, Pricing: pricingService, Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
+	router := httpserver.New(httpserver.Dependencies{AccountNames: accountRepo, SystemLogs: systemLogs, Providers: providerCatalog, Pricing: pricingService, Logger: logger, RequestTimeout: cfg.Server.RequestTimeout.Value(), MaxBodyBytes: cfg.Server.MaxBodyBytes, TrustedProxies: cfg.Server.TrustedProxies, ConcurrencyGate: inferenceConcurrency, SecureCookies: cfg.Auth.SecureCookies, SwaggerEnabled: cfg.Server.SwaggerEnabled, PublicAPIBaseURL: cfg.Frontend.EffectivePublicAPIBaseURL(), FrontendStaticPath: cfg.Frontend.StaticPath, Readiness: readiness, TrafficReady: startup.acceptsTraffic, AdminAuth: adminService, Accounts: accountService, AccountSync: accountSyncService, Models: modelService, ClientKeys: clientKeyService, Audits: auditService, Dashboard: dashboardService, Gateway: gatewayService, Media: mediaService, Settings: settingsService, Egress: egressService, QualityGuardStatePath: qualityGuardPath("state.json"), QualityGuardConfigPath: qualityGuardPath("runtime-config.json"), QualityGuardToken: qualityGuardToken, QualityGuardProbe: qualityGuardProbe, Updates: updateService})
 	server := &http.Server{Addr: cfg.Server.Listen, Handler: router, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: cfg.Server.ReadTimeout.Value(), IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 64 << 10}
 	return &Application{chatgpt: chatgptAdapter,
-		logger: logger, database: database, server: server, inferenceGate: inferenceConcurrency,
+		logger: logger, systemLogs: systemLogs, database: database, server: server, inferenceGate: inferenceConcurrency,
 		audits: auditService, responses: responseRepo, cleanupLock: refreshLock, runtime: runtimeStore,
 		settingsBus: settingsBus, invalidationBus: invalidationBus, settings: settingsService, gateway: gatewayService, media: mediaService, quotaRecovery: quotaRecoveryService, accounts: accountService, models: modelService, clientKeys: clientKeyService, updates: updateService, invalidations: invalidationService,
 		accountRepo: accountRepo, modelRepo: modelRepo, providers: providers, web: webAdapter, egress: egressManager, egressOps: egressService, startup: startup,
@@ -925,6 +934,9 @@ func (a *Application) Close() error {
 	var runtimeErr error
 	if a.runtime != nil {
 		runtimeErr = a.runtime.Close()
+	}
+	if a.systemLogs != nil {
+		a.systemLogs.Close()
 	}
 	return errors.Join(runtimeErr, a.database.Close())
 }

@@ -283,14 +283,14 @@ func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credenti
 	if err != nil || parsed.Scheme != "https" || parsed.User != nil || !trustedBuildVideoAssetHost(parsed.Hostname()) {
 		return nil, "", 0, fmt.Errorf("视频内容 URL 不受信任")
 	}
-	requestCtx := infraegress.WithCredential(ctx, credential)
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, parsed.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return nil, "", 0, err
 	}
-	// 仅保留 egress 路径上的匿名 GET；禁止 Authorization / Token-Auth / 会话身份头。
+	// Public result downloads are anonymous and independent of API egress.
 	req.Header.Set("Accept", "*/*")
-	response, err := a.http.Do(req)
+	response, err := a.public.Do(req)
+	infraegress.RecordDirectPhysicalCall(ctx, response, err)
 	if err != nil {
 		return nil, "", 0, err
 	}

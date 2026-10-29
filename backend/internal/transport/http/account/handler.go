@@ -3,13 +3,16 @@ package account
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
+	"strconv"
 	"time"
 
 	accountapp "github.com/chenyme/grok2api/backend/internal/application/account"
 	accountsyncapp "github.com/chenyme/grok2api/backend/internal/application/accountsync"
 	accountdomain "github.com/chenyme/grok2api/backend/internal/domain/account"
 	admindomain "github.com/chenyme/grok2api/backend/internal/domain/admin"
+	"github.com/chenyme/grok2api/backend/internal/infra/provider"
 	"github.com/chenyme/grok2api/backend/internal/shared/response"
 	"github.com/chenyme/grok2api/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
@@ -81,12 +84,17 @@ func (h *Handler) Register(router *gin.RouterGroup) {
 	router.POST("/accounts/:id/clear-cooldown", h.clearCooldown)
 	router.POST("/accounts/:id/refresh-token", h.refreshToken)
 	router.POST("/accounts/:id/refresh-billing", h.refreshBilling)
-	router.POST("/accounts/:id/refresh-quota", h.refreshWebQuota)
+	router.POST("/accounts/:id/refresh-quota", h.refreshQuota)
 }
 
 // writeServiceError 仅暴露明确的账号业务错误，未知内部错误使用稳定文案。
 func (h *Handler) writeServiceError(c *gin.Context, code string, err error, fallbackStatus int, fallbackMessage string) {
 	switch {
+	case errors.Is(err, provider.ErrEgressBlocked):
+		if delay := provider.ErrorRetryAfter(err); delay > 0 {
+			c.Header("Retry-After", strconv.FormatInt(int64(math.Ceil(delay.Seconds())), 10))
+		}
+		response.Error(c, http.StatusServiceUnavailable, "quotaSyncEgressBlocked", "出口被 Cloudflare 拦截，额度同步暂时暂停；请更新 Clearance 或更换出口后重试")
 	case errors.Is(err, accountapp.ErrImportLimit):
 		response.Error(c, http.StatusBadRequest, "accountImportLimitExceeded", err.Error())
 	case errors.Is(err, accountapp.ErrExportLimit):

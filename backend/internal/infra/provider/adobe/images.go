@@ -195,13 +195,12 @@ func (a *Adapter) FetchImage(ctx context.Context, request provider.ImageJobReque
 	if len(cp.Outputs) == 0 {
 		return nil, errors.New("image checkpoint has no output")
 	}
-	var data []byte
-	err := a.withClient(ctx, request.Credential, func(ctx context.Context, c *client) error {
-		var err error
-		data, err = c.download(ctx, cp.Outputs[0])
-		return err
-	})
-	return data, err
+	// The generation is already complete; fetching its signed output neither
+	// needs the account token nor holds an API-proxy concurrency slot.
+	c := &client{assets: a.public, rc: requestContext{
+		userAgent: a.userAgentOf(request.Credential), timeout: a.config().requestTimeout(),
+	}}
+	return c.download(ctx, cp.Outputs[0])
 }
 
 // ImageUsage 估算交付图像的 usage 对象。Adobe 媒体按模型计价，这里只给出占位值。

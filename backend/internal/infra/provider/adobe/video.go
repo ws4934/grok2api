@@ -268,44 +268,29 @@ func preSubmitFailure(err error) error {
 	return provider.WrapVideoStage(stage, 0, err)
 }
 
-// DownloadVideo 用创建任务的凭据读取完成的视频内容。调用方必须先校验任务归属。
+// DownloadVideo 直连读取预签名成品，不复用 API 代理或凭据；调用方先校验任务归属。
 func (a *Adapter) DownloadVideo(ctx context.Context, credential account.Credential, rawURL string) (io.ReadCloser, string, int64, error) {
-	lease, err := a.egress.AcquireCredential(infraegress.WithUserAgent(ctx, a.userAgentOf(credential)), scope, credential)
-	if err != nil {
-		return nil, "", 0, err
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		lease.Release()
-		return nil, "", 0, err
+		return nil, "", 0, withoutURL(err)
 	}
-	for k, v := range browserHeaders(lease.UserAgent) {
+	for k, v := range browserHeaders(a.userAgentOf(credential)) {
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("Accept", "*/*")
-	resp, err := lease.Do(req)
+	resp, err := a.public.Do(req)
+	infraegress.RecordDirectPhysicalCall(ctx, resp, err)
 	if err != nil {
 		err = &transportError{err: withoutURL(err)}
-		a.report(ctx, lease, err)
-		lease.Release()
 		return nil, "", 0, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
-		lease.Release()
 		return nil, "", 0, classifyUpstream("download", resp.StatusCode, "")
 	}
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "video/mp4"
 	}
-	// 读完或关闭时反馈出口健康度并释放租约。
-	body := provider.NewCompletionReadCloser(resp.Body, func(readErr error, _ bool) {
-		if readErr != nil {
-			readErr = &transportError{err: readErr}
-		}
-		a.report(ctx, lease, readErr)
-		lease.Release()
-	})
-	return body, contentType, resp.ContentLength, nil
+	return resp.Body, contentType, resp.ContentLength, nil
 }

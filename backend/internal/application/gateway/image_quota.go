@@ -12,6 +12,9 @@ import (
 // erase in-flight work. A Console budget is cents, not a number of images.
 func (s *Service) reserveImageQuota(lease *accountLease, options provider.ImageRequestOptions) (provider.ImageRequestOptions, func(), error) {
 	noop := func() {}
+	if lease.creativePinned {
+		return options, noop, nil
+	}
 	if _, known := s.providers.ImageQuotaUnits(lease.Credential.Provider, lease.QuotaMode, options); !known {
 		return options, noop, nil
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	clientkeyapp "github.com/chenyme/grok2api/backend/internal/application/clientkey"
 	pricingapp "github.com/chenyme/grok2api/backend/internal/application/pricing"
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
+	"github.com/chenyme/grok2api/backend/internal/domain/audit"
 	"github.com/chenyme/grok2api/backend/internal/domain/clientkey"
 	"github.com/chenyme/grok2api/backend/internal/domain/media"
 	"github.com/chenyme/grok2api/backend/internal/domain/model"
@@ -26,9 +28,10 @@ import (
 // checkpointVideoAdapter persists an upstream ID like Console and resumes
 // from it instead of creating another job.
 type checkpointVideoAdapter struct {
-	mu    sync.Mutex
-	calls []string
-	fail  error
+	rejectedOutputs int
+	mu              sync.Mutex
+	calls           []string
+	fail            error
 	// submitted, when set, runs after the submission checkpoint is saved.
 	submitted func()
 	// seconds is the shortened duration the result reports.
@@ -57,11 +60,25 @@ func (a *checkpointVideoAdapter) GenerateVideo(_ context.Context, request provid
 		if a.fail != nil {
 			return provider.VideoResult{}, a.fail
 		}
+		if a.rejectedOutputs > 0 {
+			a.rejectedOutputs--
+			if err := request.SaveCheckpoint(""); err != nil {
+				return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageSubmitted, 0, err)
+			}
+			return provider.VideoResult{}, provider.WrapVideoStage(provider.VideoStageResultRejected, 502, checkpointRejectedResult{})
+		}
 		if err := request.SaveCheckpoint(`{"request_id":"created"}`); err != nil {
 			return provider.VideoResult{}, err
 		}
 	}
 	return provider.VideoResult{URL: "https://assets.example/video.mp4", ContentType: "video/mp4", AssetID: "video_asset_checkpoint", Seconds: a.seconds}, nil
+}
+
+type checkpointRejectedResult struct{}
+
+func (checkpointRejectedResult) Error() string { return "视频生成结果异常" }
+func (checkpointRejectedResult) UpstreamDiagnostic() (string, provider.DiagnosticResponse) {
+	return "https://grok.com/rest/app-chat/conversations/new", provider.DiagnosticResponse{StatusCode: 200, Status: "OK", Body: []byte("视频生成结果异常")}
 }
 
 // videoJobFixture serves grok-imagine-video from two Web accounts through
@@ -70,6 +87,7 @@ type videoJobFixture struct {
 	service  *Service
 	jobs     *relational.MediaJobRepository
 	adapter  *checkpointVideoAdapter
+	audits   *relational.AuditRepository
 	prices   *pricingapp.Service
 	key      clientkey.Key
 	accounts []account.Credential
@@ -133,7 +151,7 @@ func newVideoJobFixture(t *testing.T) *videoJobFixture {
 	}
 	service.SetPricing(prices)
 	service.ConfigureMedia(mediaRepo, 1)
-	return &videoJobFixture{service: service, jobs: mediaRepo, adapter: adapter, prices: prices, key: key, accounts: accounts, route: route}
+	return &videoJobFixture{service: service, jobs: mediaRepo, adapter: adapter, audits: auditRepo, prices: prices, key: key, accounts: accounts, route: route}
 }
 
 func (f *videoJobFixture) create(t *testing.T, id string) media.Job {
@@ -159,6 +177,42 @@ func (f *videoJobFixture) job(t *testing.T, id string) media.Job {
 		t.Fatal(err)
 	}
 	return stored
+}
+
+func (f *videoJobFixture) videoAudit(t *testing.T, job media.Job) audit.Record {
+	t.Helper()
+	records, _, err := f.audits.List(context.Background(), 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if record.RequestID == job.RequestID {
+			full, err := f.audits.Get(context.Background(), record.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return full
+		}
+	}
+	t.Fatal("video audit missing")
+	return audit.Record{}
+}
+
+func (f *videoJobFixture) pricedJob(t *testing.T, id string) media.Job {
+	t.Helper()
+	if _, err := f.prices.Put(context.Background(), pricingapp.Input{Provider: string(account.ProviderWeb), PricingModel: "grok-imagine-video", Operation: string(pricingdomain.OperationVideo), Rates: map[pricingdomain.Component]string{pricingdomain.OutputSecond: "0.1"}}); err != nil {
+		t.Fatal(err)
+	}
+	job := f.create(t, id)
+	price, ok := f.prices.QuoteVideo(account.ProviderWeb, "grok-imagine-video", job.Quality, job.Seconds, 0)
+	if !ok {
+		t.Fatal("video price missing")
+	}
+	job.Price = &price
+	if err := f.jobs.UpdateMediaJob(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	return job
 }
 
 func TestVideoJobResumesCheckpointOnSubmittingAccountAndMarksUnknownSubmissionUncertain(t *testing.T) {
@@ -241,5 +295,52 @@ func TestShortenedVideoIsBilledAtItsDuration(t *testing.T) {
 	stored := f.job(t, job.ID)
 	if !ok || stored.Status != media.StatusCompleted || stored.Seconds != 3 || stored.Price == nil || stored.Price.CostInUSDTicks != want.CostInUSDTicks {
 		t.Fatalf("job = %s %ds price %+v, want completed 3s at %+v (priced %t)", stored.Status, stored.Seconds, stored.Price, want, ok)
+	}
+}
+
+func TestRejectedVideoOutputSwitchesAccountInSameJob(t *testing.T) {
+	f := newVideoJobFixture(t)
+	f.adapter.rejectedOutputs = 1
+	f.service.UpdateVideoMaxAttempts(3)
+	job := f.pricedJob(t, "video_rejected_result_failover")
+	f.service.processMediaJob(context.Background(), job.ID)
+	stored := f.job(t, job.ID)
+	if stored.Status != media.StatusCompleted || stored.AccountID != f.accounts[0].ID || stored.ErrorCode != "" || len(f.adapter.calls) != 2 {
+		t.Fatalf("job=%+v calls=%v", stored, f.adapter.calls)
+	}
+	first := strings.SplitN(f.adapter.calls[0], ":", 2)
+	second := strings.SplitN(f.adapter.calls[1], ":", 2)
+	if first[0] == second[0] || strings.Contains(second[1], "submitting") {
+		t.Fatalf("calls=%v", f.adapter.calls)
+	}
+	record := f.videoAudit(t, job)
+	if record.StatusCode != http.StatusOK || record.MediaOutputSeconds != int64(job.Seconds) || record.CostInUSDTicks+record.EstimatedCostInUSDTicks != job.Price.CostInUSDTicks || len(record.Attempts) != 1 || record.Attempts[0].Stage != "video_result_rejected" || record.Attempts[0].UpstreamStatusCode == nil || *record.Attempts[0].UpstreamStatusCode != http.StatusOK {
+		t.Fatalf("failover audit=%+v", record)
+	}
+}
+func TestRepeatedRejectedVideoOutputExhaustsCandidatesWithoutDelivery(t *testing.T) {
+	f := newVideoJobFixture(t)
+	f.adapter.rejectedOutputs = 10
+	f.service.UpdateVideoMaxAttempts(3)
+	job := f.pricedJob(t, "video_rejected_result_exhausted")
+	f.service.processMediaJob(context.Background(), job.ID)
+	stored := f.job(t, job.ID)
+	if stored.Status != media.StatusFailed || stored.ErrorCode != "video_result_invalid" || stored.UpstreamURL != "" || stored.ResultAssetID != "" || stored.Submitted || len(f.adapter.calls) != 2 || stored.UsagePending() {
+		t.Fatalf("job=%+v calls=%v", stored, f.adapter.calls)
+	}
+	record := f.videoAudit(t, job)
+	if record.StatusCode != http.StatusBadGateway || record.CostInUSDTicks != 0 || record.EstimatedCostInUSDTicks != 0 || record.MediaOutputSeconds != 0 || len(record.Attempts) != 2 {
+		t.Fatalf("rejected result billed or marked successful: %+v", record)
+	}
+}
+
+func TestRejectedVideoOutputHonorsAttemptBudget(t *testing.T) {
+	f := newVideoJobFixture(t)
+	f.adapter.rejectedOutputs = 10
+	f.service.UpdateVideoMaxAttempts(1)
+	job := f.create(t, "video_rejected_result_budget")
+	f.service.processMediaJob(context.Background(), job.ID)
+	if stored := f.job(t, job.ID); stored.Status != media.StatusFailed || stored.ErrorCode != "video_result_invalid" || len(f.adapter.calls) != 1 {
+		t.Fatalf("job=%+v calls=%v", stored, f.adapter.calls)
 	}
 }

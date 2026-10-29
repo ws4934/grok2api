@@ -21,6 +21,9 @@ func videoJobQuotaOptions(job media.Job, upstreamModel string, inputs videoInput
 // remain callable under their existing contract.
 func (s *Selector) reserveVideoQuota(lease *accountLease, units int) (func(), error) {
 	noop := func() {}
+	if lease.creativePinned {
+		return noop, nil
+	}
 	candidate := lease.routingCandidate
 	if units <= 0 || candidate == nil || candidate.QuotaWindow == nil || candidate.QuotaWindow.Source != account.QuotaSourceUpstream {
 		return noop, nil

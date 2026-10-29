@@ -12,6 +12,7 @@ import { useModelRoutes } from "@/entities/model/model-api";
 import { useProviders, type ProviderDTO } from "@/entities/provider/provider-api";
 import { providerLabel, providerShortLabel } from "@/entities/provider/provider-presentation";
 import { listClientKeys } from "@/features/client-keys/client-keys-api";
+import { accountDisplayName } from "@/features/accounts/account-identity";
 import { listAccounts } from "@/features/accounts/accounts-api";
 import { RequestAuditDetailDialog } from "@/features/audits/request-audit-detail-dialog";
 import { buildAuditUsageView, fallbackBillingBreakdown } from "@/features/audits/audit-usage";
@@ -95,7 +96,7 @@ export function RequestAuditsPage() {
   // 选中的密钥/账号以 #ID 精确筛选；名称或数字 ID 的文字仍按模糊匹配。
   const keyFilterOption = useLookupFilter("client-keys", t("audits.key"), t("audits.keyFilterPlaceholder"), listClientKeys, (key) => ({ value: `#${key.id}`, label: key.name || key.prefix, description: `#${key.id} · ${key.prefix}` }));
   // 账号范围覆盖全部 provider，审计记录可能来自任一 provider 的账号。
-  const accountFilterOption = useLookupFilter("accounts", t("audits.account"), t("audits.accountFilterPlaceholder"), listAccounts, (account) => ({ value: `#${account.id}`, label: account.name || account.email || `#${account.id}`, description: `#${account.id}`, badge: providerShortLabel(account.provider, providers) }));
+  const accountFilterOption = useLookupFilter("accounts", t("audits.account"), t("audits.accountFilterPlaceholder"), listAccounts, (account) => ({ value: `#${account.id}`, label: accountDisplayName(account), description: `#${account.id}`, badge: providerShortLabel(account.provider, providers) }));
   const result = auditsQuery.data;
   const nextCursor = result?.nextCursor ?? "";
   const summary = summaryQuery.data;

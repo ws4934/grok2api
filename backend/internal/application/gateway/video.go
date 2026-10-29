@@ -133,7 +133,8 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		Input                                  [sha256.Size]byte
 		Operation                              provider.VideoOperation
 		Duration                               int
-	}{input.PublicModel, input.Prompt, input.AspectRatio, input.Resolution, sha256.Sum256([]byte(inputJSON)), operation, input.Duration})
+		PinnedAccountID                        uint64 `json:",omitempty"`
+	}{input.PublicModel, input.Prompt, input.AspectRatio, input.Resolution, sha256.Sum256([]byte(inputJSON)), operation, input.Duration, creativeAccountID(ctx)})
 	if existing, found, err := s.idempotentJob(ctx, input.ClientKey.ID, input.IdempotencyKey, hash); err != nil || found {
 		return existing, err
 	}
@@ -193,11 +194,12 @@ func (s *Service) CreateVideo(ctx context.Context, input VideoInput) (media.Job,
 		ID: "video_" + token, Kind: media.KindVideo, RequestID: input.RequestID,
 		ClientKeyID: input.ClientKey.ID, ClientKeyName: input.ClientKey.Name,
 		ClientIP:  requestmeta.ClientIP(ctx),
-		AccountID: accountID, AccountName: lease.Credential.Name,
+		AccountID: accountID, AccountName: lease.Credential.DisplayName(),
 		Provider: string(route.Provider), Model: externalModel, ModelRouteID: route.ID, UpstreamModel: model.DisplayUpstreamModel(route.Provider, route.UpstreamModel), Operation: operation, Prompt: input.Prompt,
 		Seconds: input.Duration, Size: input.AspectRatio, Quality: input.Resolution,
 		Status: media.StatusQueued, Progress: 0, InputJSON: inputJSON, InputImageCount: len(inputs.imageRefs()), CreatedAt: now, UpdatedAt: now,
 		Price: &pricing, IdempotencyKey: input.IdempotencyKey, PayloadHash: hash,
+		Params:            media.JobParams{PinnedAccountID: creativeAccountID(ctx)},
 		RequestParameters: parameters.Freeze(),
 	}
 	reserved := false

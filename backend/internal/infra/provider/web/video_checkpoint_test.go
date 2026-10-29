@@ -51,6 +51,7 @@ func TestWebVideoCheckpointNeverGeneratesASubmittedVideoAgain(t *testing.T) {
 		SaveCheckpoint: func(value string) error { saved = append(saved, value); return nil },
 	}
 	const videoURL = "https://assets.grok.com/videos/final.mp4"
+	adapter.videoNow = sequentialVideoTestClock()
 
 	// The marker is saved before the irreversible send, the URL once the stream delivers it.
 	if result, err := adapter.GenerateVideo(context.Background(), request); err != nil || result.URL != videoURL {

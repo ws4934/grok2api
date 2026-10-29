@@ -7,6 +7,11 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/account"
 )
 
+// AccountNameRepository resolves current admin labels without loading credentials.
+type AccountNameRepository interface {
+	DisplayNames(context.Context, []uint64) (map[uint64]string, error)
+}
+
 // AccountUpdates 表示批量账号更新中允许持久化的字段。
 type AccountUpdates struct {
 	Enabled          *bool

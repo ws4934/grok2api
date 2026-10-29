@@ -15,9 +15,11 @@ import (
 	"github.com/chenyme/grok2api/backend/internal/domain/model"
 	infraegress "github.com/chenyme/grok2api/backend/internal/infra/egress"
 	"github.com/chenyme/grok2api/backend/internal/infra/provider"
+	diagnosticpkg "github.com/chenyme/grok2api/backend/internal/pkg/diagnostic"
 )
 
 func (s *Service) runVideoJob(parent context.Context, job media.Job, route model.Route) {
+	parent = WithCreativeAccount(parent, job.Params.PinnedAccountID)
 	ctx, lose := context.WithCancelCause(parent)
 	defer lose(nil)
 	ctx, cancel := context.WithTimeout(ctx, videoJobTimeout)
@@ -73,7 +75,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		}
 		accountScope = key.AccountScope()
 	}
-	attemptPolicy := s.videoAttemptPolicy()
+	attemptPolicy := s.videoAttemptPolicy(ctx)
 	excluded := make(map[uint64]bool)
 	forbiddenEgressRetried := make(map[uint64]bool)
 	var retryPinnedAccountID uint64
@@ -150,6 +152,14 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			if lastErr == nil {
 				lastErr = err
 			}
+			if failure := ProviderUpstreamFailure(lastErr, job.AccountID, job.AccountName); failure != nil && failure.APIKeyRejected {
+				s.failVideoJob(parent, job, provider.APIKeyRejectedCode, errors.New(provider.APIKeyRejectedMessage), failure.HTTPStatus, failureAttempts.snapshot())
+				return
+			}
+			if stage, ok := provider.VideoErrorStage(lastErr); ok && stage == provider.VideoStageResultRejected {
+				s.failVideoJob(parent, job, "video_result_invalid", lastErr, http.StatusBadGateway, failureAttempts.snapshot())
+				return
+			}
 			s.failVideoJob(parent, job, "account_unavailable", lastErr, 0, failureAttempts.snapshot())
 			return
 		}
@@ -175,8 +185,8 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 				continue
 			}
 		}
-		if job.AccountID != credential.ID || job.AccountName != credential.Name {
-			job.AccountID, job.AccountName = credential.ID, credential.Name
+		if job.AccountID != credential.ID || job.AccountName != credential.DisplayName() {
+			job.AccountID, job.AccountName = credential.ID, credential.DisplayName()
 			_ = s.saveMediaJob(ctx, &job)
 		}
 
@@ -191,8 +201,13 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			ReferenceVideoURLs: inputs.referenceVideoURLs, ReferenceAudios: inputs.referenceAudios, VideoURL: inputs.videoURL,
 			Checkpoint: job.Checkpoint,
 			SaveCheckpoint: func(value string) error {
-				job.Checkpoint, job.Submitted = value, value != ""
-				return s.saveMediaJob(ctx, &job)
+				next := job
+				next.Checkpoint, next.Submitted = value, value != ""
+				if err := s.saveMediaJob(ctx, &next); err != nil {
+					return err
+				}
+				job = next
+				return nil
 			},
 			Progress: func(value int) {
 				value = min(99, max(1, value))
@@ -250,8 +265,18 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 		stage, hasStage := provider.VideoErrorStage(err)
 		safeCreateFailure := hasStage && stage == provider.VideoStageCreate
 		status, hasStatus := provider.ErrorHTTPStatus(err)
-		classifiedFailure := ProviderUpstreamFailure(err, lease.Credential.ID, lease.Credential.Name)
-		if errors.Is(err, provider.ErrUnauthorized) {
+		classifiedFailure := ProviderUpstreamFailure(err, lease.Credential.ID, lease.Credential.DisplayName())
+		if hasStage && stage == provider.VideoStageResultRejected && !job.Submitted {
+			s.selector.MarkFailure(failureCtx, lease.Credential, http.StatusBadGateway, 0)
+			if lease.QuotaMode != "" {
+				s.accounts.QueueQuotaRefresh(lease.Credential.ID, lease.QuotaMode)
+			}
+			failureHandled, retriableCreate = true, true
+			job.Progress = 1
+		} else if classifiedFailure != nil && classifiedFailure.APIKeyRejected {
+			s.selector.MarkFailure(failureCtx, lease.Credential, status, 0)
+			failureHandled, retriableCreate = true, safeCreateFailure
+		} else if errors.Is(err, provider.ErrUnauthorized) {
 			if lease.Credential.AuthType == account.AuthTypeSSO {
 				s.markSSOCredentialRejected(failureCtx, lease.Credential, fmt.Sprintf("%s SSO credential rejected", lease.Credential.Provider))
 			}
@@ -326,7 +351,11 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			if hasStatus {
 				upstreamStatus = status
 			}
-			if classifiedFailure != nil && classifiedFailure.SafetyRejection {
+			if hasStage && stage == provider.VideoStageResultRejected {
+				failureCode = "video_result_invalid"
+			} else if classifiedFailure != nil && classifiedFailure.APIKeyRejected {
+				failureCode, publicErr = provider.APIKeyRejectedCode, errors.New(provider.APIKeyRejectedMessage)
+			} else if classifiedFailure != nil && classifiedFailure.SafetyRejection {
 				failureCode = provider.ContentPolicyViolation
 			} else if errors.Is(err, provider.ErrUnauthorized) || (hasStatus && (status == http.StatusUnauthorized || status == http.StatusForbidden)) {
 				failureCode, publicErr = "provider_unavailable", errors.New("上游服务暂不可用")
@@ -336,7 +365,7 @@ func (s *Service) runVideoJob(parent context.Context, job media.Job, route model
 			s.failVideoJob(parent, job, failureCode, publicErr, upstreamStatus, failureAttempts.snapshot())
 			return
 		}
-		// Create-stage failure: switch account according to runtime attempt policy.
+		// Explicit refusal or rejected output: switch within the existing attempt budget.
 		continue
 	}
 	if lease == nil {
@@ -449,8 +478,8 @@ func (s *Service) endVideoJob(ctx context.Context, job media.Job, status media.S
 	}
 }
 
-func (s *Service) videoAttemptPolicy() routingAttemptPolicy {
-	return newRoutingAttemptPolicy(int(s.videoMaxAttempts.Load()))
+func (s *Service) videoAttemptPolicy(ctx context.Context) routingAttemptPolicy {
+	return newRequestRoutingAttemptPolicy(int(s.videoMaxAttempts.Load()), creativeAccountID(ctx) != 0)
 }
 
 func (s *Service) logVideoGenerationFailure(job media.Job, credential account.Credential, err error) {
@@ -466,7 +495,7 @@ func (s *Service) logVideoGenerationFailure(job media.Job, credential account.Cr
 		"model", job.UpstreamModel,
 		"egress_scope", job.EgressScope,
 		"egress_mode", job.EgressMode,
-		"error", sanitizeDiagnosticText(err.Error(), 512),
+		"error", diagnosticpkg.Text(err.Error(), 512),
 	}
 	if status, ok := provider.ErrorHTTPStatus(err); ok {
 		attributes = append(attributes, "upstream_status", status)
