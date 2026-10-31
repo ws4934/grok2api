@@ -296,11 +296,11 @@ func (q *quotaRefreshQueue) refresh(parent context.Context, request quotaRefresh
 		// deleted, disabled or reauth-required account would be retried forever.
 		if credential, err := q.accounts.Get(ctx, request.accountID); errors.Is(err, repository.ErrNotFound) || (err == nil && (!credential.Enabled || credential.AuthStatus != accountdomain.AuthStatusActive)) {
 			cancel()
-			q.mu.Lock()
-			if current := q.states[request.key]; current != nil && current.generation == localGeneration {
-				delete(q.states, request.key)
+			outcome := "account_inactive"
+			if errors.Is(err, repository.ErrNotFound) {
+				outcome = "account_missing"
 			}
-			q.mu.Unlock()
+			q.discard(parent, request, localGeneration, sharedGeneration, outcome)
 			return
 		}
 		refreshMode := request.mode
@@ -365,6 +365,12 @@ func (q *quotaRefreshQueue) refresh(parent context.Context, request quotaRefresh
 		}
 		cancel()
 		if refreshErr != nil || !acquired {
+			// The account may be deleted after preflight but before a sync
+			// lookup or snapshot write. A missing row cannot recover on retry.
+			if errors.Is(refreshErr, ErrNotFound) || errors.Is(refreshErr, repository.ErrNotFound) {
+				q.discard(parent, request, localGeneration, sharedGeneration, "account_missing")
+				return
+			}
 			if errors.Is(refreshErr, provider.ErrEgressBlocked) {
 				// The adapter already logged the egress block once; every
 				// account behind it waits for the shared cool-down.
@@ -441,6 +447,35 @@ func (q *quotaRefreshQueue) refresh(parent context.Context, request quotaRefresh
 			return
 		}
 		q.mu.Unlock()
+	}
+}
+
+// discard ends a terminal refresh in both queues. Clearing only local state
+// lets shared recovery resurrect it. Generation checks retain newer signals.
+func (q *quotaRefreshQueue) discard(parent context.Context, request quotaRefreshRequest, localGeneration, sharedGeneration uint64, outcome string) {
+	if q.coordinator != nil && sharedGeneration > 0 {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 3*time.Second)
+		_, err := q.coordinator.ClearQuotaRefreshDirty(ctx, request.accountID, request.mode, sharedGeneration)
+		cancel()
+		if err != nil {
+			q.deferRetry(request.key)
+			q.logger.Warn("quota_refresh_dirty_clear_failed", "account_id", request.accountID, "mode", request.mode, "error", err)
+			return
+		}
+	}
+	q.mu.Lock()
+	state := q.states[request.key]
+	changed := state != nil && state.generation != localGeneration
+	if changed {
+		state.running = false
+		state.pending = true
+	} else {
+		delete(q.states, request.key)
+	}
+	q.mu.Unlock()
+	perfmetrics.Default.Inc("quota_refresh_events", perfmetrics.Labels{Subsystem: "quota", Stage: "refresh", Outcome: outcome})
+	if changed {
+		q.wakeRecovery()
 	}
 }
 

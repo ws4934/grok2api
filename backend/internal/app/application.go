@@ -908,8 +908,10 @@ func (a *Application) logPerformanceMetrics() {
 		perfmetrics.Default.SetGauge("quota_refresh_queued", labels, int64(quota.Queued))
 		perfmetrics.Default.SetGauge("quota_refresh_running", labels, int64(quota.Running))
 	}
+	// Periodic samples are diagnostic data, not operational events. Keep
+	// collecting/resetting counters without flooding normal logs or storage.
 	for _, sample := range perfmetrics.Default.CollectAndReset() {
-		a.logger.Info("performance_metric",
+		a.logger.Debug("performance_metric",
 			"name", sample.Name,
 			"subsystem", sample.Labels.Subsystem,
 			"operation", sample.Labels.Operation,

@@ -150,10 +150,15 @@ func AccessLog(logger *slog.Logger) gin.HandlerFunc {
 	}
 }
 
-// Routine admin reads, successful static page loads and session renewal are UI
-// plumbing. Keep real client API calls, administrative actions and failures.
+// Routine admin reads and session renewal can return 401 during normal token
+// expiry. Keep login failures, exports, writes, client APIs and other failures.
 func skipAccessLog(method, path string, status int, matched bool) bool {
 	if path == "/api/admin/v1/system/logs" || path == "/healthz" || path == "/readyz" {
+		return true
+	}
+	routineRead := matched && (method == http.MethodGet || method == http.MethodHead) && strings.HasPrefix(path, "/api/admin/v1/") && !strings.Contains(path, "/export")
+	sessionRefresh := method == http.MethodPost && path == "/api/admin/v1/auth/refresh"
+	if status == http.StatusUnauthorized && (routineRead || sessionRefresh) {
 		return true
 	}
 	if status >= 400 {
@@ -162,7 +167,7 @@ func skipAccessLog(method, path string, status int, matched bool) bool {
 	if method == http.MethodOptions {
 		return true
 	}
-	if method == http.MethodPost && path == "/api/admin/v1/auth/refresh" {
+	if sessionRefresh {
 		return true
 	}
 	if method != http.MethodGet && method != http.MethodHead {
@@ -171,5 +176,5 @@ func skipAccessLog(method, path string, status int, matched bool) bool {
 	if !matched {
 		return true
 	}
-	return strings.HasPrefix(path, "/api/admin/v1/") && !strings.Contains(path, "/export")
+	return routineRead
 }

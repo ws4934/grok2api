@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
 	"testing"
@@ -24,8 +25,15 @@ func TestAccessLogOmitsRoutineSelfTrafficButKeepsActionsAndFailures(t *testing.T
 		{"GET", "/assets/missing.js", 404, false, true}, {"GET", "/api/admin/v1/accounts", 503, true, true},
 		{"POST", "/api/admin/v1/accounts/42/refresh-quota", 503, true, true}, {"POST", "/api/admin/v1/accounts/42/refresh-quota", 200, true, true},
 		{"GET", "/api/admin/v1/accounts/export", 200, true, true}, {"GET", "/v1/models", 200, true, true},
+		{"GET", "/api/admin/v1/request-audits", 401, true, false}, {"GET", "/api/admin/v1/models", 401, true, false},
+		{"GET", "/api/admin/v1/providers", 401, true, false}, {"HEAD", "/api/admin/v1/accounts", 401, true, false},
+		{"POST", "/api/admin/v1/auth/refresh", 401, true, false}, {"POST", "/api/admin/v1/auth/refresh", 503, true, true},
+		{"POST", "/api/admin/v1/auth/login", 401, true, true}, {"POST", "/api/admin/v1/accounts/42/refresh-quota", 401, true, true},
+		{"GET", "/api/admin/v1/accounts/export", 401, true, true}, {"GET", "/v1/models", 401, true, true},
+		{"GET", "/api/admin/v1/accounts", 400, true, true}, {"GET", "/api/admin/v1/accounts", 403, true, true},
+		{"GET", "/api/admin/v1/unknown", 401, false, true},
 	} {
-		t.Run(test.method+test.path, func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s %s %d", test.method, test.path, test.status), func(t *testing.T) {
 			var logs bytes.Buffer
 			router := gin.New()
 			router.Use(AccessLog(slog.New(slog.NewJSONHandler(&logs, nil))))
@@ -40,5 +48,19 @@ func TestAccessLogOmitsRoutineSelfTrafficButKeepsActionsAndFailures(t *testing.T
 				t.Fatalf("logged=%t wanted=%t: %s", logs.Len() > 0, test.logged, logs.String())
 			}
 		})
+	}
+}
+
+func TestAccessLogOmitsRoutineReadsAbortedByAdminAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var logs bytes.Buffer
+	router := gin.New()
+	router.Use(AccessLog(slog.New(slog.NewJSONHandler(&logs, nil))))
+	admin := router.Group("/api/admin/v1", AdminAuth(nil))
+	admin.GET("/accounts/:id", func(*gin.Context) { t.Fatal("unauthenticated handler ran") })
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest("GET", "/api/admin/v1/accounts/42", nil))
+	if recorder.Code != 401 || logs.Len() != 0 {
+		t.Fatalf("status=%d logs=%s", recorder.Code, logs.String())
 	}
 }
